@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    The hardened runtime is what notarisation requires, and it switches off
+    exactly the things Electron and a terminal need. Each exception below is
+    here for a reason, not copied from a template:
+  -->
+
+  <!-- V8 compiles JavaScript at run time. Without this the renderer will not start. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+
+  <!--
+    node-pty spawns real shells, and every session is launched with a
+    CLAUDE_CONFIG_DIR of its own. A hardened process refuses to inherit an
+    environment like that unless it says so here.
+  -->
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+
+  <!--
+    node-pty is a native module unpacked outside the asar, so it is not covered
+    by the app's own signature the way bundled code is.
+  -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+
+  <!-- A shell in a pane can run anything the person could run in Terminal. -->
+  <key>com.apple.security.inherit</key>
+  <true/>
+</dict>
+</plist>
