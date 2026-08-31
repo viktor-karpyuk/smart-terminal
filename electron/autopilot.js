@@ -105,6 +105,9 @@ class Autopilot {
       idleNudges: 0,
       lastSeenTurn: null,
       screen: existing?.screen ?? '',
+      // Switching it on is what starts a run, so it is also what starts a new one
+      // after the last finished.
+      finished: false,
       state: 'watching',
     });
     this.emit(sessionId, { on: true, state: 'watching' });
@@ -154,6 +157,16 @@ class Autopilot {
     const now = Date.now();
     for (const [sessionId, entry] of this.watched) {
       if (!entry.on) continue;
+      /*
+       * A finished run stays finished.
+       *
+       * Reaching `done` used to only change what the tab said: the session was
+       * still watched, so the next turn — a turn the person had started
+       * themselves, after reading the result — was met with "Continue with the
+       * plan", which is the one thing this must never do. Ending the run has to
+       * end the driving too. Switching the checkbox off and on starts another.
+       */
+      if (entry.finished) continue;
       // Still printing, or Claude is not even running: nothing to decide yet.
       if (now - entry.lastOutputAt < QUIET_MS) {
         this.#move(sessionId, entry, 'working');
@@ -189,16 +202,22 @@ class Autopilot {
         continue;
       }
       if (turn.said?.includes(DONE_MARKER)) {
+        entry.finished = true;
         this.#move(sessionId, entry, 'done');
         continue;
       }
 
       // A finished turn we have already answered means the nudge produced another
       // answer and no work. Two of those and there is nothing left to drive.
-      if (turn.id && turn.id === entry.lastSeenTurn) continue;
+      // Transcripts carry a uuid per entry, but a turn without one must still be
+      // recognisable as one already nudged, or the same finished turn is driven
+      // again every few seconds.
+      const turnKey = turn.id ?? `said:${turn.said ?? ''}`;
+      if (turnKey === entry.lastSeenTurn) continue;
       if (entry.nudges > 0 && !turn.didWork) {
         entry.idleNudges += 1;
         if (entry.idleNudges >= IDLE_NUDGES_BEFORE_STOPPING) {
+          entry.finished = true;
           this.#move(sessionId, entry, 'done');
           continue;
         }
@@ -212,7 +231,7 @@ class Autopilot {
         if (this.watched.get(sessionId)?.on) this.send(sessionId, '\r');
       }, SUBMIT_DELAY_MS);
       entry.nudges += 1;
-      entry.lastSeenTurn = turn.id;
+      entry.lastSeenTurn = turnKey;
       // Give it room to start before the quiet clock says it stopped again.
       entry.lastOutputAt = Date.now() + SUBMIT_DELAY_MS;
       if (process.env.SMART_TERMINAL_DEV === '1') {
