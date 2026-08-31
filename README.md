@@ -21,7 +21,7 @@ Two problems it solves:
 npm install     # also rebuilds node-pty against Electron
 npm run dev     # Vite + Electron with hot reload
 npm start       # production build, then launch
-npm run dist    # package a .dmg
+npm run dist    # package a .dmg (unsigned unless the Apple variables are set)
 npm test        # split-tree engine, transcript reading, autopilot's stop/go rules
 npm run typecheck
 ```
@@ -254,6 +254,7 @@ electron/
   database.js     SQLite: sessions, groups, handoffs, transcript search
   usage.js        weekly and session limits, via `claude -p /usage`
   menu.js         accelerators (defined here so they fire while xterm has focus)
+  restore.js      which sessions a window brings back after a restart
   store.js        atomic JSON files under userData
 src/
   state/layout.ts    the split tree: split, drop, prune, resize, collapse
@@ -263,6 +264,27 @@ src/
                      Popover (viewport-clamped, portalled), SessionContextMenu,
                      HandoffBanner…
 ```
+
+## Building a release
+
+`npm run dist` puts an unsigned `.dmg` in `release/`. Unsigned means macOS asks for
+right-click → Open the first time, once per machine.
+
+Removing that prompt takes a notarised build, which takes a paid Apple Developer account and
+a **Developer ID Application** certificate. With one in the keychain the same command signs
+and notarises:
+
+```bash
+APPLE_TEAM_ID=XXXXXXXXXX APPLE_ID=you@example.com \
+  APPLE_APP_SPECIFIC_PASSWORD=abcd-efgh-ijkl-mnop npm run dist
+```
+
+## Working on it
+
+[CONTRIBUTING.md](CONTRIBUTING.md) is the other half of this file: how to run a development
+copy without disturbing a real one, how to see inside a running instance, what had to be
+learned about Claude Code by experiment, and the handful of rules in this codebase that are
+load-bearing.
 
 ## License
 
