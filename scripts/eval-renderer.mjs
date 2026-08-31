@@ -8,12 +8,15 @@
  * neither is visible from the DOM or from the outside. This is how a change gets
  * checked against the running app instead of against a guess about it.
  *
- * Needs the dev instance started with --remote-debugging-port=9333.
+ * Needs the dev instance started with --remote-debugging-port=9333. A second
+ * instance on another port is reachable with EVAL_PORT=9334, which is how two
+ * builds get compared side by side.
  */
-const list = await (await fetch('http://127.0.0.1:9333/json/list')).json();
+const port = process.env.EVAL_PORT || '9333';
+const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
 const page = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl);
 if (!page) {
-  console.error('No renderer on port 9333 — is the dev instance running?');
+  console.error(`No renderer on port ${port} — is the dev instance running?`);
   process.exit(1);
 }
 

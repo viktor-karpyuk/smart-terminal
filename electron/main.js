@@ -15,6 +15,7 @@ const { buildMenu } = require('./menu');
 const { CwdWatcher } = require('./cwd-watcher');
 const { ContextStore, transcriptPath, locateTranscript, readTurnState } = require('./context-store');
 const { Autopilot } = require('./autopilot');
+const { tabsInLayout, sessionsToRestore, unaccountedTabs } = require('./restore');
 
 /**
  * What this build is. Written at package time, so the answer comes from the app
@@ -41,6 +42,33 @@ const isDev = process.env.SMART_TERMINAL_DEV === '1';
 // one without the two fighting over the same sessions and database.
 if (process.env.SMART_TERMINAL_USER_DATA) {
   app.setPath('userData', process.env.SMART_TERMINAL_USER_DATA);
+}
+
+/*
+ * One database, one app.
+ *
+ * Installing a new build launches it while the old one is still up, and the two
+ * share `smart-terminal.db`. The second copy reads the windows and sessions of
+ * the first, and then the first writes its own shutdown over them: rows marked
+ * ended, windows marked closed. A window marked closed does not come back, and
+ * its sessions have nowhere to come back to — they survive only in History.
+ * That is how a window's worth of live sessions was lost once.
+ *
+ * The lock file lives in `userData`, which was just repointed above, so a
+ * development copy running on its own data directory still starts normally.
+ */
+const isPrimaryInstance = app.requestSingleInstanceLock();
+if (!isPrimaryInstance) {
+  // Not `app.quit()`: this copy has opened nothing, and quitting would run the
+  // shutdown that is the whole problem.
+  app.exit(0);
+} else {
+  app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (!win) return;
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  });
 }
 
 /** Every open window, by the id its workspace is stored under. */
@@ -391,15 +419,27 @@ function registerIpc() {
     const windowId = windowIdOf(event);
     const stored = windowId ? db.loadWorkspace(windowId) : null;
     if (!stored?.layout) return workspace.get();
+    // Asked for by id rather than by a page of history: the layout is the record
+    // of what this window had, and a session it is not handed back is a pane the
+    // renderer prunes out of the layout and then saves without.
+    const rows = db.sessionsForRestore(tabsInLayout(stored.layout), windowId);
+    const missing = unaccountedTabs(stored.layout, rows);
+    if (missing.length) {
+      console.log(`[workspace] ${missing.length} pane(s) name a session with no row left`);
+    }
     return {
       layout: stored.layout,
       settings: stored.settings,
       groups: stored.groups ?? [],
       // Which sessions to bring back, and what each was in the middle of.
-      sessions: db
-        .listSessions({ includeOpen: true, limit: 200 })
-        .filter((row) => !row.windowId || row.windowId === windowId)
-        .map((row) => ({
+      sessions: sessionsToRestore({
+        windowId,
+        layout: stored.layout,
+        rows,
+        // Every window this launch is bringing back, so a session held by one of
+        // the others is left to it instead of being started twice.
+        openWindowIds: [...windows.keys()],
+      }).map((row) => ({
           id: row.id,
           profileId: row.profileId,
           // Where the shell actually was, not where it started: a session that was
@@ -604,7 +644,7 @@ app.setAboutPanelOptions({
   credits: `Electron ${buildInfo.electron} · Node ${buildInfo.node}`,
 });
 
-app.whenReady().then(() => {
+if (isPrimaryInstance) app.whenReady().then(() => {
   profiles = new ProfileStore();
   db = new Database();
   // Anything still marked running belongs to a previous launch that did not get

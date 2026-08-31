@@ -316,6 +316,31 @@ class Database {
    * History, newest first. `query` matches the name, folder or account; when
    * transcript search is on it also matches what was said inside stored sessions.
    */
+  /**
+   * The rows a window needs to come back: the sessions its layout names, plus
+   * anything still filed under it. Asked for by id and uncapped on purpose —
+   * `listSessions` hands back a page of recent history, and once history is
+   * longer than that page an older session simply stops being offered, which the
+   * renderer reads as "that pane is gone".
+   */
+  sessionsForRestore(ids = [], windowId = null) {
+    const clauses = [];
+    const values = [];
+    if (ids.length) {
+      clauses.push(`id IN (${ids.map(() => '?').join(',')})`);
+      values.push(...ids);
+    }
+    if (windowId) {
+      clauses.push('window_id = ?');
+      values.push(windowId);
+    }
+    if (!clauses.length) return [];
+    return this.db
+      .prepare(`SELECT * FROM sessions WHERE ${clauses.join(' OR ')} ORDER BY started_at`)
+      .all(...values)
+      .map(decorate);
+  }
+
   listSessions({ query = '', profileId = null, includeOpen = true, limit = 200 } = {}) {
     const where = [];
     const values = [];
