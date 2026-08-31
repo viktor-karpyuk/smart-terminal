@@ -1,0 +1,194 @@
+/**
+ * Tests for the split-tree engine — the part of the app where a subtle bug shows
+ * up as panes vanishing or dividers drifting. Run with `npm test`.
+ */
+const assert = require('node:assert');
+const L = require('../.test-build/layout');
+
+let passed = 0;
+function test(name, fn) {
+  try { fn(); passed++; console.log(`  ok   ${name}`); }
+  catch (e) { console.log(`  FAIL ${name}\n       ${e.message}`); process.exitCode = 1; }
+}
+
+const shape = (n) =>
+  n.type === 'leaf'
+    ? n.tabs.join(',') || '∅'
+    : `${n.direction === 'row' ? 'H' : 'V'}[${n.children.map(shape).join(' | ')}]`;
+
+// --- splitting -------------------------------------------------------------
+test('split right nests a horizontal split', () => {
+  const root = L.makeLeaf(['a']);
+  const { root: next } = L.splitLeaf(root, root.id, 'row', 'b');
+  assert.equal(shape(next), 'H[a | b]');
+});
+
+test('splitting a sibling along the same axis joins the existing split', () => {
+  let root = L.makeLeaf(['a']);
+  let r = L.splitLeaf(root, root.id, 'row', 'b');
+  const leafB = r.leafId;
+  r = L.splitLeaf(r.root, leafB, 'row', 'c');
+  assert.equal(shape(r.root), 'H[a | b | c]', 'should stay flat, not nest H[a | H[b | c]]');
+  assert.equal(r.root.sizes.length, 3);
+  assert.ok(Math.abs(r.root.sizes.reduce((x, y) => x + y) - 1) < 1e-9, 'sizes normalize to 1');
+});
+
+test('cross-axis split nests', () => {
+  const root = L.makeLeaf(['a']);
+  const r1 = L.splitLeaf(root, root.id, 'row', 'b');
+  const r2 = L.splitLeaf(r1.root, r1.leafId, 'column', 'c');
+  assert.equal(shape(r2.root), 'H[a | V[b | c]]');
+});
+
+// --- drag & drop -----------------------------------------------------------
+test('drop on centre moves the tab into the target pane', () => {
+  const root = L.makeLeaf(['a']);
+  const { root: split } = L.splitLeaf(root, root.id, 'row', 'b');
+  const targetLeaf = split.children[0].id;
+  const moved = L.dropTab(split, 'b', targetLeaf, 'center');
+  assert.equal(shape(moved), 'a,b', 'the emptied pane collapses away');
+});
+
+test('drop on an edge re-splits around the target', () => {
+  const root = L.makeLeaf(['a', 'b']);
+  const moved = L.dropTab(root, 'b', root.id, 'bottom');
+  assert.equal(shape(moved), 'V[a | b]');
+});
+
+test('drop on the left edge puts the tab first', () => {
+  const root = L.makeLeaf(['a', 'b']);
+  const moved = L.dropTab(root, 'b', root.id, 'left');
+  assert.equal(shape(moved), 'H[b | a]');
+});
+
+test('dropping a pane\'s only tab back on its own edge is a no-op', () => {
+  const root = L.makeLeaf(['a']);
+  assert.equal(shape(L.dropTab(root, 'a', root.id, 'right')), 'a');
+});
+
+test('moving the last tab out of a pane does not destroy the drop target', () => {
+  let root = L.makeLeaf(['a']);
+  const r = L.splitLeaf(root, root.id, 'row', 'b');           // H[a | b]
+  const targetLeaf = r.root.children[0].id;                    // the pane holding 'a'
+  const moved = L.dropTab(r.root, 'b', targetLeaf, 'bottom');  // b leaves its own pane
+  assert.equal(shape(moved), 'V[a | b]');
+});
+
+test('cross-pane edge drop joins a matching parent axis instead of nesting', () => {
+  const base = L.makeLeaf(['a']);
+  const r = L.splitLeaf(base, base.id, 'row', 'b');             // H[a | b]
+  const r2 = L.splitLeaf(r.root, r.leafId, 'row', 'c');         // H[a | b | c]
+  const paneA = r2.root.children[0].id;
+  const moved = L.dropTab(r2.root, 'c', paneA, 'left');         // c to the far left
+  assert.equal(shape(moved), 'H[c | a | b]');
+});
+
+// --- removal and pruning ---------------------------------------------------
+test('closing a tab collapses the split it emptied', () => {
+  const base = L.makeLeaf(['a']);
+  const r = L.splitLeaf(base, base.id, 'row', 'b');
+  assert.equal(shape(L.removeTab(r.root, 'b')), 'a');
+});
+
+test('closing the last tab leaves one empty pane', () => {
+  const root = L.makeLeaf(['a']);
+  const empty = L.removeTab(root, 'a');
+  assert.equal(empty.type, 'leaf');
+  assert.deepEqual(empty.tabs, []);
+});
+
+test('removal redistributes sizes so they still sum to 1', () => {
+  const base = L.makeLeaf(['a']);
+  const r1 = L.splitLeaf(base, base.id, 'row', 'b');
+  const r2 = L.splitLeaf(r1.root, r1.leafId, 'row', 'c');
+  const after = L.removeTab(r2.root, 'b');
+  assert.equal(shape(after), 'H[a | c]');
+  assert.ok(Math.abs(after.sizes.reduce((x, y) => x + y) - 1) < 1e-9);
+});
+
+test('prune flattens a nested split sharing its parent axis', () => {
+  const inner = { id: 'i', type: 'split', direction: 'row', children: [L.makeLeaf(['b']), L.makeLeaf(['c'])], sizes: [0.5, 0.5] };
+  const outer = { id: 'o', type: 'split', direction: 'row', children: [L.makeLeaf(['a']), inner], sizes: [0.5, 0.5] };
+  const pruned = L.prune(outer);
+  assert.equal(shape(pruned), 'H[a | b | c]');
+  assert.deepEqual(pruned.sizes.map((s) => +s.toFixed(3)), [0.5, 0.25, 0.25]);
+});
+
+test('keepOnly drops tabs whose sessions are gone', () => {
+  const base = L.makeLeaf(['a']);
+  const r = L.splitLeaf(base, base.id, 'row', 'b');
+  assert.equal(shape(L.keepOnly(r.root, new Set(['a']))), 'a');
+});
+
+test('evenOut resets every level', () => {
+  const base = L.makeLeaf(['a']);
+  const r1 = L.splitLeaf(base, base.id, 'row', 'b');
+  const r2 = L.splitLeaf(r1.root, r1.leafId, 'row', 'c');
+  const skewed = L.setSizes(r2.root, r2.root.id, [0.8, 0.1, 0.1]);
+  assert.deepEqual(L.evenOut(skewed).sizes.map((s) => +s.toFixed(4)), [0.3333, 0.3333, 0.3333]);
+});
+
+test('reordering within a pane keeps every tab exactly once', () => {
+  const root = L.makeLeaf(['a', 'b', 'c']);
+  const moved = L.insertTab(root, root.id, 'c', 0);
+  assert.deepEqual(moved.tabs, ['c', 'a', 'b']);
+});
+
+// --- regressions ---------------------------------------------------------
+test('moving a tab keeps every other pane the size it was', () => {
+  const a = L.makeLeaf(['a']), b = L.makeLeaf(['b']), c = L.makeLeaf(['c']), d = L.makeLeaf(['d']);
+  const inner = { id: 'inner', type: 'split', direction: 'row', children: [b, c], sizes: [0.5, 0.5] };
+  const root = { id: 'root', type: 'split', direction: 'column', children: [a, inner, d], sizes: [0.6, 0.2, 0.2] };
+
+  // Dragging b out collapses the inner split; c inherits its slot, a and d must not move.
+  const after = L.dropTab(root, 'b', a.id, 'center');
+  assert.equal(shape(after), 'V[a,b | c | d]');
+  assert.equal(after.children.length, after.sizes.length, 'a size per child');
+  assert.deepEqual(after.sizes.map((s) => +s.toFixed(4)), [0.6, 0.2, 0.2]);
+});
+
+test('a collapsing nested split hands its share to the survivor', () => {
+  const a = L.makeLeaf(['a']), b = L.makeLeaf(['b']), c = L.makeLeaf(['c']);
+  const inner = { id: 'inner', type: 'split', direction: 'row', children: [b, c], sizes: [0.5, 0.5] };
+  const root = { id: 'root', type: 'split', direction: 'column', children: [a, inner], sizes: [0.7, 0.3] };
+  const after = L.dropTab(root, 'b', a.id, 'center');
+  assert.deepEqual(after.sizes.map((s) => +s.toFixed(4)), [0.7, 0.3]);
+});
+
+test('reordering tabs leaves the selected one selected', () => {
+  const leaf = L.makeLeaf(['a', 'b', 'c']);       // 'a' is active
+  const reordered = L.insertTab(L.removeTab(leaf, 'c'), leaf.id, 'c', 0, false);
+  assert.deepEqual(reordered.tabs, ['c', 'a', 'b']);
+  assert.equal(reordered.active, 'a', 'dragging a background tab must not focus it');
+});
+
+test('dropping a tab into a pane does focus it', () => {
+  const leaf = L.makeLeaf(['a', 'b']);
+  assert.equal(L.insertTab(leaf, leaf.id, 'b', 0).active, 'b');
+});
+
+test('splitting leaves an empty pane that survives pruning', () => {
+  const root = L.makeLeaf(['a']);
+  const { root: split, leafId } = L.splitEmpty(root, root.id, 'row');
+  assert.equal(shape(split), 'H[a | ∅]');
+  // Any later operation prunes; the deliberate empty pane must still be there.
+  assert.equal(shape(L.prune(split)), 'H[a | ∅]');
+  assert.ok(leafId, 'returns the pane it made');
+});
+
+test('a pane emptied by closing its last tab still collapses', () => {
+  const base = L.makeLeaf(['a']);
+  const { root } = L.splitLeaf(base, base.id, 'row', 'b');
+  assert.equal(shape(L.removeTab(root, 'b')), 'a');
+});
+
+test('putting a tab in an empty pane makes it an ordinary pane', () => {
+  const root = L.makeLeaf(['a']);
+  const { root: split, leafId } = L.splitEmpty(root, root.id, 'row');
+  const filled = L.insertTab(split, leafId, 'b');
+  assert.equal(shape(filled), 'H[a | b]');
+  // No longer deliberate, so emptying it again collapses it.
+  assert.equal(shape(L.removeTab(filled, 'b')), 'a');
+});
+
+console.log(`\n${passed} passing`);
