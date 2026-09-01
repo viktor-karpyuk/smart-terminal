@@ -84,6 +84,50 @@ test('the caret on a numbered option is a menu', () => {
 });
 
 /*
+ * Prose questions. The screen veto is meant for dialogs, and a question typed in
+ * a sentence is not automatically one — "should I continue?" is the exact
+ * question this feature exists to answer, and Claude ends turns with it
+ * constantly. So the prose branch defaults to refusing and makes one exception,
+ * with two overrides on top of it.
+ */
+
+test('asking leave to carry on is what a nudge answers, not a reason to stop', () => {
+  assert.strictEqual(looksLikeADecision('Should I continue?'), false);
+  assert.strictEqual(looksLikeADecision('Do you want me to continue with the remaining files?'), false);
+  assert.strictEqual(looksLikeADecision('Would you like me to keep going?'), false);
+});
+
+test('the same question in Spanish reads the same way', () => {
+  // These sessions are worked in Spanish; an English-only rule would simply
+  // never fire for them.
+  assert.strictEqual(looksLikeADecision('¿Querés que siga?'), false);
+  assert.strictEqual(looksLikeADecision('¿Continúo con el paso 3?'), false);
+  assert.strictEqual(looksLikeADecision('¿Borro la tabla vieja?'), true);
+});
+
+test('alternatives on the table are a decision, however politely worded', () => {
+  assert.strictEqual(looksLikeADecision('Would you like me to use Postgres or SQLite?'), true);
+  assert.strictEqual(looksLikeADecision('¿Preferís que lo haga con Vite o con esbuild?'), true);
+  // Carry-on wording does not rescue a question that still offers a choice.
+  assert.strictEqual(looksLikeADecision('Should I continue with the migration or start over?'), true);
+});
+
+test('a carry-on wording does not get to destroy something', () => {
+  assert.strictEqual(looksLikeADecision('Would you like me to go ahead and drop the column?'), true);
+  assert.strictEqual(looksLikeADecision('¿Sigo y borro las carpetas viejas?'), true);
+  assert.strictEqual(looksLikeADecision('Should I continue and force-push?'), true);
+});
+
+test('a question that is not addressed to the person is not a question', () => {
+  // xterm's own placeholder line carries a question mark and always has.
+  assert.strictEqual(looksLikeADecision('❯ Try "how does <filepath> work?"'), false);
+});
+
+test('a y/n prompt is a prompt wherever it appears', () => {
+  assert.strictEqual(looksLikeADecision('Overwrite the file? (y/n)'), true);
+});
+
+/*
  * The rules above are about reading a screen. The ones below are about what the
  * run then does, driven through the injected dependencies rather than a real
  * session. `watched` is reached into directly to move the quiet clock back —

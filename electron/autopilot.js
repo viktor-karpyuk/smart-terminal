@@ -42,9 +42,74 @@ function looksLikeADecision(screen) {
   // enough: Claude writes numbered lists in ordinary answers all the time, and
   // stopping for those would make this useless.
   if (/❯\s*\d+\.\s*\S/.test(text)) return true;
-  if (/\bDo you want\b|\bWould you like\b|\(y\/n\)/i.test(text)) return true;
-  return false;
+  // A y/n prompt is a prompt, wherever it appears.
+  if (/\(y\/n\)/i.test(text)) return true;
+
+  /*
+   * What is left is a question written in prose, and those are not all the same
+   * thing. "Should I continue?" is precisely the question autopilot exists to
+   * answer — stopping there would make it useless, since Claude ends turns that
+   * way constantly. "Do you want Postgres or SQLite?" is a decision, and
+   * answering it would be answering for the person.
+   *
+   * So the prose branch defaults to refusing, and only lets a nudge through for
+   * a question that asks nothing but leave to carry on. Two things override
+   * that, because a carry-on wording can still carry a decision: alternatives on
+   * the table, and anything destructive named in the same breath.
+   */
+  const question = lastQuestion(text);
+  if (!question) return false;
+  if (!ASKS_THE_PERSON.test(question)) return false;
+  if (OFFERS_A_CHOICE.test(question)) return true;
+  if (NAMES_SOMETHING_DESTRUCTIVE.test(question)) return true;
+  if (ASKS_TO_CARRY_ON.test(question)) return false;
+  return true;
 }
+
+/**
+ * The last question on screen, as a sentence rather than as the whole tail.
+ *
+ * Wrapping is flattened rather than split on: a narrow pane breaks a sentence
+ * across lines mid-word, so a newline is not the end of anything. Sentences are.
+ */
+function lastQuestion(text) {
+  const mark = text.lastIndexOf('?');
+  if (mark === -1) return null;
+  const chunk = text.slice(Math.max(0, mark - 240), mark + 1).replace(/\s+/g, ' ');
+  const start = Math.max(
+    chunk.lastIndexOf('\u00bf'),
+    chunk.lastIndexOf('. ') + 1,
+    chunk.lastIndexOf('! ') + 1,
+    0,
+  );
+  return chunk.slice(start).trim();
+}
+
+/** Wording that makes a sentence a question put to the person, in either language. */
+const ASKS_THE_PERSON =
+  /\b(do you want|would you like|should i|shall i|do you prefer|what would you)\b|\u00bf/i;
+
+/**
+ * Alternatives on offer. That is a decision however politely it is phrased, so
+ * it outranks the carry-on wording: "shall I continue with X or start over?" is
+ * not a request to carry on.
+ */
+const OFFERS_A_CHOICE = /\bor\b|\bwhich\b|\bcu[a\u00e1]l\b|\bqu[e\u00e9] prefer|\s+o\s+/i;
+
+/**
+ * Asking nothing but leave to go on — the one prose question a nudge answers
+ * correctly. Kept deliberately narrow; "go ahead" is not on it, because it is
+ * how a request to do something irreversible is usually worded.
+ */
+const ASKS_TO_CARRY_ON =
+  /\b(continue|carry on|keep going|proceed|go on|move on)\b|\b(sigo|siga|sigamos|seguimos|segu[i\u00ed]|contin[u\u00fa]o|contin[u\u00fa]a|contin[u\u00fa]amos|avanzo|avanzamos|procedo)\b/i;
+
+/**
+ * The safety net. A question can ask for leave to carry on and still be asking
+ * to destroy something — "sigo y borro las viejas?" — and that is a decision.
+ */
+const NAMES_SOMETHING_DESTRUCTIVE =
+  /\b(delete|remove|drop|overwrite|reset|revert|discard|force[- ]push|rm -rf|truncate|wipe)\b|\b(borr[ao]|elimin[ao]|sobrescrib|descart|revert)/i;
 
 /** How long a session must be quiet before it counts as stopped rather than slow. */
 const QUIET_MS = 6000;

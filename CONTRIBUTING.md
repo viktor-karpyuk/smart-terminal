@@ -143,7 +143,17 @@ and on starts another.
 
 Do not widen the screen patterns carelessly. A bare `1. … 2. …` matches ordinary prose —
 Claude writes numbered lists constantly — so the rule requires the selection caret (`❯ 1.`)
-or a confirm/cancel affordance. The tests in `test/autopilot.test.js` use screens captured
+or a confirm/cancel affordance.
+
+A question written in prose is judged separately from a dialog, because the two are not the
+same thing. *"Should I continue?"* is the exact question autopilot exists to answer, and
+Claude ends turns with it constantly; refusing there would leave the feature refusing almost
+every time it was needed. So the prose branch defaults to refusing, makes one exception for a
+question asking nothing but leave to carry on, and takes that exception back twice over: when
+the sentence offers alternatives (*"continue, or start over?"* is a decision), and when it
+names something destructive (*"sigo y borro las viejas?"* is a decision too). Both languages
+are matched — these sessions are worked in Spanish, and an English-only rule would simply
+never fire for them. The tests in `test/autopilot.test.js` use screens captured
 verbatim from a narrow pane, wrapping and all, because the wrapping is what breaks naive
 matching.
 
