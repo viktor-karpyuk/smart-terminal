@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { app } = require('electron');
+const { resolvedPath } = require('./cli-env');
 
 const DEFAULT_SHELL = process.env.SHELL || '/bin/zsh';
 
@@ -11,12 +12,16 @@ const DEFAULT_SHELL = process.env.SHELL || '/bin/zsh';
  * Run a command through a login shell so it resolves the same `claude` the user
  * gets in their terminal, even when the app was launched from Finder with a bare PATH.
  */
-function runInLoginShell(command, env, timeout = 25000) {
+async function runInLoginShell(command, env, timeout = 25000) {
+  // Launched from Finder the app has launchd's bare PATH, and a non-interactive
+  // login shell does not read the file that usually fixes that. Without this the
+  // CLI is not found and the account reads as signed out.
+  const withPath = { ...env, PATH: await resolvedPath(DEFAULT_SHELL) };
   return new Promise((resolve) => {
     execFile(
       DEFAULT_SHELL,
       ['-lc', command],
-      { env, timeout, maxBuffer: 4 * 1024 * 1024 },
+      { env: withPath, timeout, maxBuffer: 4 * 1024 * 1024 },
       (error, stdout, stderr) => resolve({ error, stdout: stdout || '', stderr: stderr || '' }),
     );
   });

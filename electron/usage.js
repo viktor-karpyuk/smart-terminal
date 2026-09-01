@@ -1,6 +1,7 @@
 'use strict';
 const os = require('node:os');
 const { execFile } = require('node:child_process');
+const { resolvedPath } = require('./cli-env');
 
 const DEFAULT_SHELL = process.env.SHELL || '/bin/zsh';
 const TIMEOUT = 60000;
@@ -21,6 +22,8 @@ async function readUsage(profile) {
   for (const key of Object.keys(env)) if (key.startsWith('CLAUDE_')) delete env[key];
   delete env.ANTHROPIC_API_KEY;
   if (profile.configDir) env.CLAUDE_CONFIG_DIR = profile.configDir;
+  // Same reason as in auth.js: from a Finder launch the CLI is not on PATH at all.
+  env.PATH = await resolvedPath(profile.shell || DEFAULT_SHELL);
 
   const bin = profile.claudeCommand || 'claude';
   // `command` bypasses a user-defined `claude` shell function, which would pick

@@ -23,10 +23,19 @@ export function UsageGauge({ profileId }: { profileId: string | undefined }) {
     return () => window.clearInterval(timer);
   }, [profileId, signedIn, refreshUsage]);
 
-  if (!profileId || !signedIn) return null;
-  if (!report?.ok) {
+  if (!profileId) return null;
+  // An account that reads as signed out still gets the placeholder. Rendering
+  // nothing is what let a broken reading look like a feature that was never
+  // there: when the CLI could not be found, the gauge and the panel both went
+  // silently blank with nowhere to see why. The button opens the panel, which
+  // says what happened.
+  if (!signedIn || !report?.ok) {
     return (
-      <button className="gauge gauge-empty" onClick={() => openPanel(true)}>
+      <button
+        className="gauge gauge-empty"
+        onClick={() => openPanel(true)}
+        title={signedIn ? 'Open usage limits (⌘U)' : 'This account reads as signed out — open for details'}
+      >
         {loading ? 'reading usage…' : 'usage —'}
       </button>
     );

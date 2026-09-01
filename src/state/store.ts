@@ -92,6 +92,9 @@ const ptyIndex = new Map<string, string>();
 const busyTimers = new Map<string, number>();
 /** Poll timers watching for a `claude auth login` to complete, keyed by profile id. */
 const loginPolls = new Map<string, number>();
+/** How often to ask again whether each account is signed in. The check is local and cheap. */
+const AUTH_RECHECK_EVERY = 5 * 60 * 1000;
+
 /** React StrictMode mounts effects twice in dev; the workspace must only boot once. */
 let initStarted = false;
 
@@ -440,6 +443,11 @@ export const useStore = create<State>((set, get) => ({
 
     window.api.history.setRecordDefault(settings.recordConversations);
     get().refreshAllAuth();
+    // Asked again now and then, not only at startup. This runs while a restored
+    // workspace is spawning every one of its sessions, and a check that loses
+    // that race used to leave the account marked signed out for the life of the
+    // window — with the usage gauge and panel blank and no way to retry.
+    window.setInterval(() => get().refreshAllAuth(true), AUTH_RECHECK_EVERY);
     get().refreshSessionSizes();
     window.setInterval(() => get().refreshSessionSizes(), 20000);
   },

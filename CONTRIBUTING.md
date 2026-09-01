@@ -159,6 +159,38 @@ matching.
 
 ---
 
+## Reading the CLI when the app was not started from a terminal
+
+`electron/cli-env.js` resolves a PATH before running `claude` for anything that is
+not a session — the auth check and `/usage`.
+
+Launched from Finder (or by `open`, which is what an installer does) the app inherits
+launchd's environment, and its PATH is the bare system one. Running the CLI through
+`zsh -lc` does not rescue that: a **non-interactive login shell reads `.zshenv`,
+`.zprofile` and `.zlogin`, and never `.zshrc`** — which is where PATH additions
+overwhelmingly live. The CLI is then not found at all.
+
+What that looked like was nothing like "command not found". The account reported
+itself signed out, and the usage gauge and the usage panel are both gated on being
+signed in, so they rendered nothing — no error, no placeholder, no clue. Started
+from a terminal the very same build worked, because it inherited a PATH that already
+had the CLI on it, which is why it never showed up in testing.
+
+So the PATH is asked for once from an *interactive* login shell and merged into what
+the app has, with the usual install directories as a fallback. Only the PATH is
+taken: the command itself still runs in a non-interactive shell, which stays quiet
+and cannot block on a prompt. Sessions are unaffected — a pty runs an interactive
+shell already, which is why they always worked.
+
+Two habits came out of it, both worth keeping. **A reading that failed should not be
+rendered as absence**: the gauge now shows its placeholder when an account reads as
+signed out, and the placeholder opens the panel that explains why. And **a check
+that runs once at startup runs at the worst possible moment** — the account check
+fires while a restored workspace is spawning every one of its sessions, so it is
+repeated on a timer rather than trusted the first time.
+
+---
+
 ## Traps
 
 - **Zustand selectors that build something new.** `useStore((s) => ids.map(...))` returns a
