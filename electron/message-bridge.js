@@ -1,0 +1,249 @@
+'use strict';
+
+/**
+ * The app's side of the session-to-session channel.
+ *
+ * Every MCP server spawned beside a Claude session connects here over a unix
+ * socket in the app's own data directory — local, unreachable from the network,
+ * and gone when the app is. It answers three questions: who can I reach, say
+ * this to them, and what has been said to me.
+ *
+ * **Delivery is the part worth being careful about.** A message is typed into the
+ * recipient's terminal, which is the same act as the user typing it, so it is
+ * only ever done to a session that is genuinely idle at its prompt. A session
+ * that is mid-turn, or sitting on a dialog, is left alone and the message waits.
+ * Typing into a dialog does not deliver a message — it answers a question on the
+ * user's behalf, and `looksLikeADecision` is the veto that already knows what
+ * that looks like.
+ *
+ * Nothing is dropped. A message that cannot be delivered now is in the database,
+ * and it is delivered when the session is next free or read on demand.
+ */
+
+const fs = require('node:fs');
+const net = require('node:net');
+const { audienceFor, normalizeReach, resolveRecipient, formatMessage } = require('./messaging');
+
+/** How often the queue is retried against sessions that were busy. */
+const SWEEP_MS = 4000;
+
+/**
+ * Claude's input box does not submit when the text and the Return arrive in the
+ * same write. The same 700ms autopilot learned the hard way applies here, for the
+ * same reason — and getting it wrong means the message is typed and never sent.
+ */
+const SUBMIT_DELAY_MS = 700;
+
+class MessageBridge {
+  /**
+   * @param {object} deps
+   * @param {string} deps.socketPath          where the MCP servers connect
+   * @param {() => string} deps.reach         'off' | 'group' | 'all'
+   * @param {() => Array} deps.roster         live sessions, with group and state
+   * @param {(id: string, text: string) => boolean} deps.write   type into a session
+   * @param {(id: string) => boolean} deps.isFree   idle at a Claude prompt, no dialog up
+   * @param {object} deps.store               the queue: queue/pending/markDelivered/markRead
+   */
+  constructor({ socketPath, reach, roster, write, isFree, store }) {
+    this.socketPath = socketPath;
+    this.reach = reach;
+    this.roster = roster;
+    this.write = write;
+    this.isFree = isFree;
+    this.store = store;
+    this.server = null;
+    this.sweep = null;
+  }
+
+  start() {
+    // A socket file left by a crash would refuse the bind; it names nothing that
+    // can still be listening, since the listener died with the app that made it.
+    try {
+      fs.unlinkSync(this.socketPath);
+    } catch {
+      /* not there, which is the normal case */
+    }
+    this.server = net.createServer((socket) => this.#serve(socket));
+    this.server.on('error', (error) => {
+      console.log(`[messages] the channel could not open: ${error.message}`);
+    });
+    this.server.listen(this.socketPath);
+    this.sweep = setInterval(() => this.flush(), SWEEP_MS);
+    this.sweep.unref?.();
+  }
+
+  stop() {
+    if (this.sweep) clearInterval(this.sweep);
+    this.sweep = null;
+    try {
+      this.server?.close();
+    } catch {
+      /* already down */
+    }
+    try {
+      fs.unlinkSync(this.socketPath);
+    } catch {
+      /* already gone */
+    }
+  }
+
+  #serve(socket) {
+    let buffer = '';
+    socket.on('error', () => socket.destroy());
+    socket.on('data', async (chunk) => {
+      buffer += chunk.toString('utf8');
+      const cut = buffer.indexOf('\n');
+      if (cut === -1) return;
+      const line = buffer.slice(0, cut);
+      buffer = '';
+      let request;
+      try {
+        request = JSON.parse(line);
+      } catch {
+        socket.end(`${JSON.stringify({ ok: false, error: 'unreadable request' })}\n`);
+        return;
+      }
+      let answer;
+      try {
+        answer = await this.handle(request);
+      } catch (error) {
+        answer = { ok: false, error: String(error?.message ?? error) };
+      }
+      socket.end(`${JSON.stringify(answer)}\n`);
+    });
+  }
+
+  /** Every request, resolved against the live roster. Kept separate so it is testable. */
+  async handle(request) {
+    const { op, from } = request ?? {};
+    if (!from) return { ok: false, error: 'This session did not identify itself.' };
+
+    const reach = normalizeReach(this.reach());
+    const roster = this.roster();
+    const me = roster.find((entry) => entry.id === from);
+    if (!me) return { ok: false, error: 'Smart Terminal does not have this session as running.' };
+    const audience = audienceFor(from, roster, reach);
+
+    if (op === 'roster') {
+      return {
+        ok: true,
+        reach,
+        group: me.groupName ?? null,
+        sessions: audience.map((entry) => ({
+          id: entry.id,
+          name: entry.name,
+          profile: entry.profile,
+          cwd: entry.cwd,
+          group: entry.groupName ?? null,
+          state: entry.state,
+        })),
+      };
+    }
+
+    if (op === 'inbox') {
+      const waiting = this.store.pending(from, { unreadOnly: true });
+      if (request.peek !== true && waiting.length) {
+        this.store.markRead(waiting.map((m) => m.id));
+      }
+      return {
+        ok: true,
+        messages: waiting.map((m) => ({ from: m.fromName, at: m.at, text: m.body })),
+      };
+    }
+
+    if (op === 'send' || op === 'broadcast') {
+      if (reach === 'off') {
+        return { ok: false, error: 'Session messaging is turned off in Smart Terminal.' };
+      }
+      const body = String(request.message ?? '').trim();
+      if (!body) return { ok: false, error: 'A message needs something in it.' };
+
+      let targets;
+      if (op === 'broadcast') {
+        targets = audience;
+      } else {
+        const found = resolveRecipient(request.to, audience);
+        if (found?.ambiguous) {
+          return {
+            ok: false,
+            error:
+              `More than one session you can reach is called that: ` +
+              `${found.ambiguous.map((s) => `${s.name} (${s.id.slice(0, 8)})`).join(', ')}. ` +
+              'Use the id.',
+          };
+        }
+        if (!found) {
+          return {
+            ok: false,
+            error:
+              `No session you can reach is called "${request.to}". ` +
+              'Call list_sessions to see who is there.',
+          };
+        }
+        targets = [found];
+      }
+
+      if (!targets.length) {
+        return {
+          ok: false,
+          error:
+            reach === 'group'
+              ? 'There is nobody else in your group to tell.'
+              : 'There are no other sessions running.',
+        };
+      }
+
+      const text = formatMessage({
+        fromName: me.name,
+        fromProfile: me.profile,
+        groupName: me.groupName,
+        text: body,
+        broadcast: op === 'broadcast',
+      });
+      for (const target of targets) {
+        this.store.queue({ from, to: target.id, fromName: me.name, body: text });
+      }
+      const delivered = this.flush();
+
+      const who =
+        op === 'broadcast'
+          ? `${targets.length} session${targets.length === 1 ? '' : 's'}`
+          : targets[0].name;
+      const waiting = targets.length - delivered.filter((id) => targets.some((t) => t.id === id)).length;
+      return {
+        ok: true,
+        detail:
+          `Sent to ${who}.` +
+          (waiting > 0
+            ? ` ${waiting === targets.length ? (targets.length === 1 ? 'It is' : 'They are') : `${waiting} of them are`} ` +
+              'not free to take it right now — working, or stopped on a question — so it is ' +
+              'waiting in their inbox and arrives the moment they are.'
+            : ' It arrived in their conversation.'),
+      };
+    }
+
+    return { ok: false, error: `Unknown request: ${op}` };
+  }
+
+  /**
+   * Deliver everything queued for a session that is free to receive it.
+   *
+   * Returns the sessions written to, so a caller can tell the sender whether the
+   * message landed or is waiting.
+   */
+  flush() {
+    const landed = [];
+    for (const message of this.store.pending(null, { undeliveredOnly: true })) {
+      if (!this.isFree(message.to)) continue;
+      if (!this.write(message.to, message.body)) continue;
+      // The Return goes separately, or Claude's input box takes the text and
+      // never submits it — the message would sit in the box looking delivered.
+      setTimeout(() => this.write(message.to, '\r'), SUBMIT_DELAY_MS);
+      this.store.markDelivered([message.id]);
+      landed.push(message.to);
+    }
+    return landed;
+  }
+}
+
+module.exports = { MessageBridge, SUBMIT_DELAY_MS };

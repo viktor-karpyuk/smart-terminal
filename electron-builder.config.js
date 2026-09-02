@@ -47,7 +47,9 @@ module.exports = {
     buildResources: 'resources',
   },
   files: ['dist/**', 'electron/**', 'package.json'],
-  asarUnpack: ['**/node_modules/node-pty/**'],
+  // node-pty is native; the MCP server has to be a real file on disk because the
+  // Claude CLI spawns it as a plain-node child, and plain node cannot read an asar.
+  asarUnpack: ['**/node_modules/node-pty/**', 'electron/group-mcp.js'],
   mac: {
     target: [
       { target: 'dmg', arch: ['arm64'] },

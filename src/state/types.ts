@@ -166,4 +166,13 @@ export interface Settings {
   terminalPalette: string;
   /** Hand-picked colours layered over the chosen palette. */
   terminalOverrides: Record<string, string>;
+  /**
+   * How far a session can reach when it talks to other sessions through MCP.
+   *
+   * `group` — the default — is the other sessions in its own group, which is the
+   * app's word for "the same piece of work". `all` is every running session.
+   * `off` closes the channel. An ungrouped session reaches nobody on `group`:
+   * not being in a group is not a group.
+   */
+  sessionMessaging: 'off' | 'group' | 'all';
 }

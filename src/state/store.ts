@@ -48,6 +48,7 @@ const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
   terminalPalette: FOLLOW_APP,
   terminalOverrides: {},
+  sessionMessaging: 'group',
 };
 
 /** Whether the interface is currently dark, resolving `system` against the OS. */

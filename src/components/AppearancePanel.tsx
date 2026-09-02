@@ -212,6 +212,37 @@ function ConversationStorage() {
 
   return (
     <section className="form-section">
+      <h3>Sessions talking to each other</h3>
+      <label className="field">
+        <span>How far a session can reach</span>
+        <div className="segmented">
+          {(
+            [
+              ['group', 'Its group'],
+              ['all', 'Every session'],
+              ['off', 'Off'],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              className={settings.sessionMessaging === value ? 'is-on' : ''}
+              onClick={() => updateSettings({ sessionMessaging: value })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </label>
+      <p className="form-hint">
+        Sessions get tools for seeing each other and passing messages along, so two working on the
+        same thing can hand over a finding instead of you carrying it across. A message arrives in
+        the other session as a note saying who sent it, once that session is next waiting at its
+        prompt — never while it is working, and never onto a question it is asking you.{' '}
+        <strong>Its group</strong> keeps that to sessions in the same group, which is the safe
+        default; a session in no group reaches nobody. <strong>Every session</strong> opens it to
+        everything running. Changing this takes effect at once, on sessions already open.
+      </p>
+
       <h3>Conversations</h3>
       <label className="checkbox">
         <input

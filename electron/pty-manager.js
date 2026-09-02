@@ -18,7 +18,7 @@ function shellArgs(shell) {
  * Environment for a session. The profile's CLAUDE_CONFIG_DIR is what makes one
  * terminal "user X" and another "user Y" — each config dir holds its own credentials.
  */
-function buildEnv(profile) {
+function buildEnv(profile, extra = {}) {
   const env = { ...process.env };
   // Drop anything Claude-related inherited from the process that launched the app,
   // so a profile always starts from a known state.
@@ -43,6 +43,19 @@ function buildEnv(profile) {
   for (const [k, v] of Object.entries(profile.env || {})) {
     if (v === null || v === undefined) delete env[k];
     else env[k] = String(v);
+  }
+  /*
+   * Who this session is, and where the app is listening.
+   *
+   * The MCP server that lets sessions talk to each other is a grandchild of this
+   * shell — the shell runs Claude, Claude spawns the server — and it learns which
+   * session it belongs to by inheriting it from here. That is why the MCP config
+   * itself can be one static file shared by every session: the identity travels
+   * in the environment, not in the config.
+   */
+  for (const [k, v] of Object.entries(extra)) {
+    if (v === null || v === undefined || v === '') continue;
+    env[k] = String(v);
   }
   return env;
 }
@@ -79,7 +92,16 @@ class PtyManager {
     this.sessions = new Map();
   }
 
-  create({ profile, cwd, kind = 'claude', cols = 80, rows = 24, extraArgs = [], command = null }) {
+  create({
+    profile,
+    cwd,
+    kind = 'claude',
+    cols = 80,
+    rows = 24,
+    extraArgs = [],
+    command = null,
+    env: extraEnv = {},
+  }) {
     const id = randomUUID();
     const shell = profile.shell || DEFAULT_SHELL;
     // Landing somewhere other than where you asked is worth saying out loud: a
@@ -92,7 +114,7 @@ class PtyManager {
     const proc = pty.spawn(shell, shellArgs(shell), {
       name: 'xterm-256color',
       cwd: workdir,
-      env: buildEnv(profile),
+      env: buildEnv(profile, extraEnv),
       cols,
       rows,
       encoding: 'utf8',

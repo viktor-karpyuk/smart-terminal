@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
-const { randomUUID } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 
 const { PtyManager, claudeLaunchLine } = require('./pty-manager');
 const { readUsage } = require('./usage');
@@ -14,8 +14,9 @@ const { Database } = require('./database');
 const { buildMenu } = require('./menu');
 const { CwdWatcher } = require('./cwd-watcher');
 const { ContextStore, transcriptPath, locateTranscript, readTurnState } = require('./context-store');
-const { Autopilot } = require('./autopilot');
+const { Autopilot, looksLikeADecision } = require('./autopilot');
 const { tabsInLayout, minimizedIds, sessionsToRestore, unaccountedTabs } = require('./restore');
+const { MessageBridge } = require('./message-bridge');
 
 /**
  * What this build is. Written at package time, so the answer comes from the app
@@ -86,6 +87,17 @@ let quitConfirmed = false;
 const closingWindows = new Set();
 /** Latest foreground reading per pty, so adoption can keep trying. */
 const foregroundByPty = new Map();
+/**
+ * The last screen and the last output time per session, kept for anyone deciding
+ * whether it is safe to type into one. Autopilot keeps its own copy for the
+ * sessions it drives; a session can receive a message without being driven.
+ */
+const screenBySession = new Map();
+const lastOutputBySession = new Map();
+/** What the renderer last said about how far a session may reach. Narrow until told. */
+let messagingReach = 'group';
+let messages = null;
+let mcpConfigPath = null;
 
 /** Keeps sessions moving when the only thing stopping them is nobody saying "go". */
 let autopilot = null;
@@ -232,6 +244,14 @@ function registerIpc() {
       else if (pinned) extraArgs.unshift('--session-id', pinned);
     }
 
+    // The channel to the other sessions. Attached to every Claude session, not
+    // only to grouped ones: a session can be put in a group at any time, and
+    // adding its tools would otherwise mean restarting it. What it may reach is
+    // decided when it asks, never here.
+    if (kind === 'claude' && mcpConfigPath && options.sessionId) {
+      extraArgs.push('--mcp-config', mcpConfigPath);
+    }
+
     const result = ptys.create({
       profile,
       cwd: workdir,
@@ -240,6 +260,7 @@ function registerIpc() {
       rows: options.rows,
       extraArgs,
       command: options.command || null,
+      env: { SMART_TERMINAL_SESSION_ID: options.sessionId || '' },
     });
 
     const claudeSessionId = options.resumeSessionId || options.claudeSessionId;
@@ -467,6 +488,9 @@ function registerIpc() {
   ipcMain.on('workspace:save', (event, state) => {
     const windowId = windowIdOf(event);
     if (!windowId) return;
+    // Reach is read at the moment a session asks, not when it started, so changing
+    // it takes effect on every running session without restarting any of them.
+    if (state.settings?.sessionMessaging) messagingReach = state.settings.sessionMessaging;
     // Written on every change: a crash then costs at most the last few hundred ms.
     db.saveWorkspace(windowId, {
       layout: state.layout,
@@ -617,13 +641,22 @@ function registerIpc() {
   ipcMain.on('db:end-session', (_e, { sessionId, exitCode }) => {
     liveSessions.delete(sessionId);
     autopilot?.forget(sessionId);
+    // Anything still queued for it would be delivered to nobody.
+    db.dropMessagesFor(sessionId);
+    screenBySession.delete(sessionId);
+    lastOutputBySession.delete(sessionId);
     for (const [ptyId, owner] of sessionByPty) if (owner === sessionId) sessionByPty.delete(ptyId);
     db.endSession(sessionId, exitCode ?? null);
     announceRoster();
   });
   ipcMain.on('db:handoff', (_e, entry) => db.recordHandoff(entry));
 
-  ipcMain.on('autopilot:screen', (_e, { sessionId, text }) => autopilot.setScreen(sessionId, text));
+  ipcMain.on('autopilot:screen', (_e, { sessionId, text }) => {
+    // Kept for the message bridge too: the screen is the only place some questions
+    // ever appear, and typing a message into one of those answers it instead.
+    screenBySession.set(sessionId, text || '');
+    autopilot.setScreen(sessionId, text);
+  });
 
   ipcMain.handle('autopilot:set', (_e, { sessionId, on }) => {
     autopilot.set(sessionId, Boolean(on));
@@ -670,7 +703,10 @@ if (isPrimaryInstance) app.whenReady().then(() => {
     // tells a session that is still thinking from one that has stopped.
     if (channel === 'pty:data') {
       const owner = sessionByPty.get(payload.id);
-      if (owner) autopilot.noteOutput(owner);
+      if (owner) {
+        autopilot.noteOutput(owner);
+        lastOutputBySession.set(owner, Date.now());
+      }
     }
     send(channel, payload);
   });
@@ -720,6 +756,7 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   }, 5000);
   adoptionSweep.unref?.();
   cwdWatcher.start();
+  startMessaging();
   context = new ContextStore(db);
   context.start();
   // Saved conversations whose session row is gone are dead weight from a crash.
@@ -743,6 +780,162 @@ app.on('window-all-closed', () => {
   ptys?.killAll();
   if (process.platform !== 'darwin') app.quit();
 });
+
+/**
+ * Open the channel sessions talk to each other on, and write the MCP config that
+ * points them at it.
+ *
+ * The config is one static file for the whole app. It can be, because the only
+ * thing that differs between sessions — which session this is — reaches the MCP
+ * server through the environment it inherits. Attaching it to every Claude
+ * session regardless of the current reach is deliberate: the reach is enforced
+ * when a tool is called, so turning messaging on or off is immediate instead of
+ * something that only applies to sessions started afterwards.
+ */
+function startMessaging() {
+  const dir = app.getPath('userData');
+  mcpConfigPath = path.join(dir, 'mcp-sessions.json');
+
+  // Packaged, the app's own files live inside an asar that a plain-node child
+  // cannot read, so the server script is unpacked beside it.
+  const script = path.join(__dirname, 'group-mcp.js').replace(
+    `app.asar${path.sep}`,
+    `app.asar.unpacked${path.sep}`,
+  );
+  const socketPath = socketPathFor(dir);
+
+  try {
+    fs.writeFileSync(
+      mcpConfigPath,
+      `${JSON.stringify(
+        {
+          mcpServers: {
+            'smart-terminal': {
+              command: process.execPath,
+              args: [script],
+              // Electron's own binary is the only node this app is sure to have.
+              env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  } catch (error) {
+    console.log(`[messages] could not write the MCP config: ${error.message}`);
+    mcpConfigPath = null;
+  }
+
+  messages = new MessageBridge({
+    socketPath,
+    reach: () => messagingReach,
+    roster: liveRoster,
+    write: (sessionId, text) => {
+      for (const [ptyId, owner] of sessionByPty) {
+        if (owner !== sessionId) continue;
+        ptys.write(ptyId, text);
+        return true;
+      }
+      return false;
+    },
+    isFree: sessionIsFree,
+    store: {
+      queue: (message) => db.queueMessage(message),
+      pending: (to, options) => db.messagesFor(to, options),
+      markDelivered: (ids) => db.markMessagesDelivered(ids),
+      markRead: (ids) => db.markMessagesRead(ids),
+    },
+  });
+  messages.start();
+}
+
+/**
+ * Where the channel listens.
+ *
+ * A unix socket path is capped at around 104 bytes on macOS, and the cap counts
+ * the whole path. The app's data directory is normally well inside it, but it is
+ * chosen by whoever launches the app — the isolated-instance recipe points it at
+ * a temp folder — and one character over the line makes `listen` fail with a bare
+ * EINVAL, leaving every session with tools that cannot reach anything. So a long
+ * one falls back to a short name in the temp directory, keyed by the data
+ * directory it belongs to: two instances must never share a socket, or a session
+ * in one would be addressable from the other.
+ */
+function socketPathFor(dir) {
+  const preferred = path.join(dir, 'sessions.sock');
+  if (Buffer.byteLength(preferred) <= 100) return preferred;
+  const key = createHash('sha1').update(dir).digest('hex').slice(0, 10);
+  const fallback = path.join(os.tmpdir(), `smart-terminal-${key}.sock`);
+  console.log(`[messages] ${preferred} is too long for a socket; using ${fallback}`);
+  return fallback;
+}
+
+/** Every live session, as the thing on the other end of the channel sees it. */
+function liveRoster() {
+  const groupNames = new Map(db.listGroups({ limit: 500 }).map((group) => [group.id, group.name]));
+  const roster = [];
+  for (const sessionId of liveSessions) {
+    const row = db.getSession(sessionId);
+    if (!row) continue;
+    const cwd = row.lastCwd || row.startCwd || '';
+    roster.push({
+      id: sessionId,
+      name: row.title || path.basename(cwd) || 'session',
+      profile: profiles.get(row.profileId)?.name ?? 'account',
+      cwd,
+      groupId: row.groupId ?? null,
+      groupName: row.groupId ? (groupNames.get(row.groupId) ?? null) : null,
+      state: describeSession(sessionId),
+    });
+  }
+  return roster;
+}
+
+/** A short, honest word for what a session is doing, for the roster. */
+function describeSession(sessionId) {
+  if (!claudeIsUp(sessionId)) return 'not running Claude right now';
+  if (Date.now() - (lastOutputBySession.get(sessionId) ?? 0) < 2500) return 'working';
+  if (looksLikeADecision(screenBySession.get(sessionId))) return 'stopped, waiting on the user';
+  const turn = turnStateOf(sessionId);
+  if (turn?.state === 'awaiting-decision') return 'stopped, waiting on the user';
+  if (turn?.state === 'turn-finished') return 'idle at its prompt';
+  return 'busy';
+}
+
+function claudeIsUp(sessionId) {
+  for (const [ptyId, owner] of sessionByPty) {
+    if (owner !== sessionId) continue;
+    return Boolean(foregroundByPty.get(ptyId)?.foreground?.includes('claude'));
+  }
+  return false;
+}
+
+function turnStateOf(sessionId) {
+  const row = db.getSession(sessionId);
+  if (!row?.claudeSessionId) return null;
+  const profile = profiles.get(row.profileId);
+  const found = locateTranscript(profile?.configDir ?? null, row.claudeSessionId, [
+    row.lastCwd,
+    row.startCwd,
+  ]);
+  return found ? readTurnState(found.file) : null;
+}
+
+/**
+ * Whether a message may be typed into this session right now.
+ *
+ * Every one of these is a veto, and the order is the order autopilot learned:
+ * the screen first, because a dialog leaves no trace in the transcript and
+ * typing into one answers it rather than delivering anything.
+ */
+function sessionIsFree(sessionId) {
+  if (!claudeIsUp(sessionId)) return false;
+  // Still printing: the input box is not where the keystrokes would land.
+  if (Date.now() - (lastOutputBySession.get(sessionId) ?? 0) < 2500) return false;
+  if (looksLikeADecision(screenBySession.get(sessionId))) return false;
+  return turnStateOf(sessionId)?.state === 'turn-finished';
+}
 
 /** One-time move of the old JSON workspace into the database. */
 function migrateWorkspaceIntoDb() {

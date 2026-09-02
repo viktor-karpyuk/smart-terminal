@@ -83,6 +83,18 @@ class Database {
       );
       CREATE INDEX IF NOT EXISTS chunks_session ON transcript_chunks (session_id, seq);
 
+      CREATE TABLE IF NOT EXISTS session_messages (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_session  TEXT NOT NULL,
+        to_session    TEXT NOT NULL,
+        from_name     TEXT,
+        body          TEXT NOT NULL,
+        at            INTEGER NOT NULL,
+        delivered_at  INTEGER,
+        read_at       INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS session_messages_to ON session_messages (to_session);
+
       CREATE TABLE IF NOT EXISTS windows (
         id          TEXT PRIMARY KEY,
         layout      TEXT,
@@ -533,6 +545,81 @@ class Database {
 
   listHandoffs(limit = 100) {
     return this.db.prepare('SELECT * FROM handoffs ORDER BY at DESC LIMIT ?').all(limit);
+  }
+
+  // --- messages between sessions -------------------------------------------
+
+  /**
+   * A message waiting for its recipient.
+   *
+   * Queued before any attempt to deliver it, never after: a message typed into a
+   * terminal and only then recorded is a message lost to any crash in between,
+   * and the sender was already told it was sent.
+   */
+  queueMessage({ from, to, fromName, body }) {
+    const at = Date.now();
+    const { lastInsertRowid } = this.db
+      .prepare(
+        `INSERT INTO session_messages (from_session, to_session, from_name, body, at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(from, to, fromName ?? null, body, at);
+    return Number(lastInsertRowid);
+  }
+
+  /**
+   * Messages for one session, or for every session when `to` is null.
+   *
+   * `undeliveredOnly` is the delivery queue — what has not yet been typed into a
+   * terminal. `unreadOnly` is the inbox as the session sees it: delivered counts
+   * as read, because it is already in the conversation.
+   */
+  messagesFor(to = null, { undeliveredOnly = false, unreadOnly = false, limit = 200 } = {}) {
+    const where = [];
+    const values = [];
+    if (to) {
+      where.push('to_session = ?');
+      values.push(to);
+    }
+    if (undeliveredOnly) where.push('delivered_at IS NULL');
+    if (unreadOnly) where.push('read_at IS NULL AND delivered_at IS NULL');
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    return this.db
+      .prepare(`SELECT * FROM session_messages ${clause} ORDER BY at LIMIT ?`)
+      .all(...values, limit)
+      .map((row) => ({
+        id: row.id,
+        from: row.from_session,
+        to: row.to_session,
+        fromName: row.from_name,
+        body: row.body,
+        at: row.at,
+        deliveredAt: row.delivered_at,
+        readAt: row.read_at,
+      }));
+  }
+
+  markMessagesDelivered(ids = []) {
+    if (!ids.length) return;
+    const now = Date.now();
+    const statement = this.db.prepare(
+      'UPDATE session_messages SET delivered_at = ?, read_at = COALESCE(read_at, ?) WHERE id = ?',
+    );
+    for (const id of ids) statement.run(now, now, id);
+  }
+
+  markMessagesRead(ids = []) {
+    if (!ids.length) return;
+    const now = Date.now();
+    const statement = this.db.prepare('UPDATE session_messages SET read_at = ? WHERE id = ?');
+    for (const id of ids) statement.run(now, id);
+  }
+
+  /** Anything still queued for a session that is gone would be delivered to nobody. */
+  dropMessagesFor(sessionId) {
+    this.db
+      .prepare('DELETE FROM session_messages WHERE to_session = ? AND delivered_at IS NULL')
+      .run(sessionId);
   }
 
   // --- workspace -----------------------------------------------------------
