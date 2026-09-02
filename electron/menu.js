@@ -82,6 +82,8 @@ function buildMenu(send, newWindow) {
         { label: 'Close Pane', accelerator: 'CmdOrCtrl+Alt+W', click: action('close-pane') },
         { label: 'Even Out Splits', accelerator: 'CmdOrCtrl+Alt+0', click: action('even-splits') },
         { label: 'Maximize Pane', accelerator: 'CmdOrCtrl+Alt+Enter', click: action('toggle-zoom') },
+        { label: 'Set Section Aside', accelerator: 'CmdOrCtrl+Alt+M', click: action('minimize-pane') },
+        { label: 'Bring Back Last Set Aside', accelerator: 'CmdOrCtrl+Alt+Shift+M', click: action('restore-last') },
         { label: 'Toggle Sidebar', accelerator: 'CmdOrCtrl+B', click: action('toggle-sidebar') },
       ],
     },

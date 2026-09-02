@@ -139,6 +139,105 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .grid { flex: 1; min-width: 0; display: flex; }
 .boot { margin: auto; color: var(--text-faint); }
 
+/* ---------- the dock: what has been set aside ---------- */
+
+/*
+ * It takes only the height it needs and never scrolls the page: a long row of
+ * set-aside work scrolls inside itself, so the terminals above keep their space
+ * no matter how much has been put down here.
+ */
+.dock {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: var(--bg-panel);
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.dock::-webkit-scrollbar { display: none; }
+
+.dock-label {
+  flex: 0 0 auto;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  padding-right: 2px;
+}
+
+.dock-item {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 3px 6px 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  font-size: 12px;
+  color: var(--text-dim);
+  /* The tint is the group's colour, or the session's account — the same code the
+     tab it came from was wearing, so it is recognisable on the way back. */
+  box-shadow: inset 2px 0 0 var(--dock-tint, transparent);
+}
+
+.dock-item:hover { color: var(--text); border-color: var(--border-strong); }
+
+/* Set aside is not asleep: something down here can still be the thing waiting. */
+.dock-item.needs-you {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.dock-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+
+.dock-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dock-count {
+  flex: 0 0 auto;
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-faint);
+}
+
+.dock-busy {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid;
+  border-radius: 50%;
+  animation: spin 900ms linear infinite;
+}
+
+.dock-flag { flex: 0 0 auto; font-size: 10px; }
+.dock-unread { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+
+.dock-close {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.dock-close:hover { background: rgba(247, 118, 142, 0.16); color: var(--danger); }
+
 /* ---------- sidebar ---------- */
 
 .sidebar {
@@ -320,7 +419,7 @@ input:focus, textarea:focus { border-color: var(--accent); }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.tab-close {
+.tab-close, .tab-min {
   color: var(--text-faint);
   font-size: 14px;
   line-height: 1;
@@ -330,11 +429,27 @@ input:focus, textarea:focus { border-color: var(--accent); }
 }
 
 .tab:hover .tab-close, .tab-selected .tab-close, .sidebar-item:hover .tab-close { opacity: 1; }
+.tab:hover .tab-min, .tab-selected .tab-min { opacity: 1; }
 .tab-close:hover { background: var(--border-strong); color: var(--text); }
+/* Setting a tab aside is reversible, so it reads as an ordinary control rather
+   than wearing the warning colour the close button earns. */
+.tab-min:hover { background: var(--accent-soft); color: var(--accent); }
 
 .tab-tail { flex: 1 1 24px; min-width: 12px; }
-/* Sits right after the last tab inside the scrolling strip, not pinned to the edge. */
-.tabstrip-actions { display: flex; align-items: center; gap: 1px; padding: 0 4px; flex: 0 0 auto; }
+/*
+ * Outside the scrolling tab strip on purpose, pinned to the right edge of the
+ * frame where window controls are looked for. Inside it, the cluster sat against
+ * the last tab and drifted along as tabs were opened — and scrolled out of reach
+ * entirely once there were enough of them.
+ */
+.tabstrip-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 0 4px 0 6px;
+  flex: 0 0 auto;
+  border-left: 1px solid var(--border);
+}
 .icon-btn.caret { min-width: 16px; font-size: 10px; }
 
 .pane-body { position: relative; flex: 1; min-height: 0; display: flex; }

@@ -3,7 +3,7 @@ import { FOLLOW_APP, resolveTerminalTheme } from '../terminals/themes';
 import { generateSessionName } from '../lib/names';
 import { arrangeGroup, moveGroupTo } from './groups';
 import { closePane, movePane, splitEmpty, splitOffTabs } from './layout';
-import type { GroupArrangement, PendingClose, SessionGroup } from './types';
+import type { GroupArrangement, MinimizedTab, PendingClose, SessionGroup } from './types';
 import type { DropSide, LayoutNode, Profile, Session, SessionKind, Settings } from './types';
 import type { AuthStatus, UsageReport } from '../global';
 import {
@@ -133,6 +133,8 @@ interface State {
   appearanceOpen: boolean;
   /** Session waiting on a close confirmation, if any. */
   pendingClose: PendingClose | null;
+  /** Tabs set aside into the dock, in the order they were put there. */
+  minimized: MinimizedTab[];
 
   init(): Promise<void>;
   newSession(options?: {
@@ -161,6 +163,13 @@ interface State {
   resizeSplit(splitId: string, sizes: number[]): void;
   evenSplits(): void;
   toggleZoom(): void;
+  /** Maximize a named pane, from its own frame rather than from the title bar. */
+  toggleZoomOf(leafId: string): void;
+  minimizeSession(sessionId: string): void;
+  minimizePane(leafId: string): void;
+  minimizeGroup(groupId: string): void;
+  restoreMinimized(sessionId: string): void;
+  restoreMinimizedGroup(groupId: string): void;
   focusDirection(direction: 'left' | 'right' | 'up' | 'down'): void;
   cycleTab(delta: number): void;
   sendInput(sessionId: string, data: string): void;
@@ -223,13 +232,18 @@ let persistTimer: number | undefined;
 function schedulePersist(get: () => State) {
   window.clearTimeout(persistTimer);
   persistTimer = window.setTimeout(() => {
-    const { layout, sessions, settings } = get();
+    const { layout, sessions, settings, minimized } = get();
+    // A minimized tab is not in the layout, so its descriptor has to be gathered
+    // from the dock too — otherwise it comes back as an id with nothing behind it
+    // and is dropped as a pane that cannot be revived.
+    const saving = [...allTabs(layout), ...minimized.map((entry) => entry.sessionId)];
     window.api.workspace.save({
       layout,
       settings,
       activeLeaf: get().activeLeafId,
       groups: get().groups,
-      sessions: allTabs(layout)
+      minimized,
+      sessions: saving
         .map((id) => sessions[id])
         .filter(Boolean)
         .map(
@@ -289,6 +303,7 @@ export const useStore = create<State>((set, get) => ({
   historyOpen: false,
   appearanceOpen: false,
   pendingClose: null,
+  minimized: [],
 
   async init() {
     if (initStarted) return;
@@ -305,11 +320,13 @@ export const useStore = create<State>((set, get) => ({
 
     const settings = { ...DEFAULT_SETTINGS, ...(saved.settings || {}) };
     const baseLayout = saved.layout ?? makeLeaf();
+    const baseMinimized = (saved.minimized ?? []).filter((entry) => entry?.sessionId);
     set({
       profiles,
       settings,
       homedir,
       layout: baseLayout,
+      minimized: baseMinimized,
       activeLeafId: allLeaves(baseLayout)[0]?.id ?? '',
       ready: true,
     });
@@ -410,7 +427,10 @@ export const useStore = create<State>((set, get) => ({
     });
 
     // Bring the saved workspace back to life: same panes, same profiles, fresh processes.
-    const restorable = (saved.sessions || []).filter((s) => allTabs(baseLayout).includes(s.id));
+    // Docked sessions are restored exactly like the ones in panes: they are still
+    // running work, and the only difference is that no pane is showing them.
+    const wanted = new Set([...allTabs(baseLayout), ...baseMinimized.map((entry) => entry.sessionId)]);
+    const restorable = (saved.sessions || []).filter((s) => wanted.has(s.id));
     if (restorable.length) {
       for (const descriptor of restorable) {
         const profile =
@@ -434,10 +454,18 @@ export const useStore = create<State>((set, get) => ({
           handoffFrom: descriptor.handoffFrom ?? null,
         });
       }
-      set((state) => ({ layout: keepOnly(state.layout, new Set(Object.keys(get().sessions))) }));
+      const alive = new Set(Object.keys(get().sessions));
+      set((state) => ({
+        layout: keepOnly(state.layout, alive),
+        // The dock is pruned by the same rule as the panes: an entry whose session
+        // never came back is a button with nothing behind it.
+        minimized: state.minimized.filter((entry) => alive.has(entry.sessionId)),
+      }));
     }
 
-    if (!allTabs(get().layout).length && profiles.length) {
+    // A workspace whose tabs are all in the dock is not an empty one, and giving
+    // it an unasked-for session would be a surprise on top of a restart.
+    if (!allTabs(get().layout).length && !get().minimized.length && profiles.length) {
       await get().newSession({ kind: 'claude' });
     }
 
@@ -540,6 +568,9 @@ export const useStore = create<State>((set, get) => ({
         layout,
         activeLeafId,
         zoomedLeafId: leaves.some((l) => l.id === state.zoomedLeafId) ? state.zoomedLeafId : null,
+        // A closed tab leaves the dock as well, or it stays there as a button
+        // pointing at a session that is gone.
+        minimized: state.minimized.filter((entry) => entry.sessionId !== sessionId),
       };
     });
     schedulePersist(get);
@@ -701,6 +732,83 @@ export const useStore = create<State>((set, get) => ({
     set((state) => ({
       zoomedLeafId: state.zoomedLeafId ? null : state.activeLeafId,
     }));
+  },
+
+  /**
+   * The same thing, aimed at a named pane. The title bar's button can only ever
+   * mean "whichever pane is active", which is a detour when the section you want
+   * to fill the screen is the one already under the pointer.
+   */
+  toggleZoomOf(leafId) {
+    set((state) => ({
+      zoomedLeafId: state.zoomedLeafId === leafId ? null : leafId,
+      activeLeafId: leafId,
+    }));
+  },
+
+  /**
+   * Set a tab aside. Nothing about the session changes — it keeps running, keeps
+   * its conversation, keeps its place in history. What it gives up is its pane,
+   * and an emptied pane is pruned, which is how the space goes back to the panes
+   * around it.
+   */
+  minimizeSession(sessionId) {
+    const state = get();
+    if (!state.sessions[sessionId]) return;
+    if (state.minimized.some((entry) => entry.sessionId === sessionId)) return;
+    const from = leafOfTab(state.layout, sessionId);
+
+    set((prev) => {
+      const layout = removeTab(prev.layout, sessionId);
+      const leaves = allLeaves(layout);
+      return {
+        layout,
+        minimized: [
+          ...prev.minimized,
+          {
+            sessionId,
+            leafId: from?.id ?? null,
+            groupId: prev.sessions[sessionId]?.groupId ?? null,
+          },
+        ],
+        activeLeafId: leaves.some((leaf) => leaf.id === prev.activeLeafId)
+          ? prev.activeLeafId
+          : (leaves[0]?.id ?? ''),
+        // The pane may have been the maximized one, and a maximized pane that no
+        // longer exists leaves the workspace showing nothing at all.
+        zoomedLeafId: leaves.some((leaf) => leaf.id === prev.zoomedLeafId)
+          ? prev.zoomedLeafId
+          : null,
+      };
+    });
+    schedulePersist(get);
+  },
+
+  /** Set aside a whole section at once, so the pane it held is handed back entire. */
+  minimizePane(leafId) {
+    const leaf = findLeaf(get().layout, leafId);
+    if (!leaf) return;
+    for (const sessionId of [...leaf.tabs]) get().minimizeSession(sessionId);
+  },
+
+  /** Set aside a group wherever its sessions happen to be sitting. */
+  minimizeGroup(groupId) {
+    for (const sessionId of get().membersOf(groupId)) get().minimizeSession(sessionId);
+  },
+
+  restoreMinimized(sessionId) {
+    restoreTabs(set, get, [sessionId]);
+  },
+
+  /** A group went into the dock as one thing, so it comes back as one thing. */
+  restoreMinimizedGroup(groupId) {
+    restoreTabs(
+      set,
+      get,
+      get()
+        .minimized.filter((entry) => entry.groupId === groupId)
+        .map((entry) => entry.sessionId),
+    );
   },
 
   focusDirection(direction) {
@@ -1471,7 +1579,17 @@ export const useStore = create<State>((set, get) => ({
    * handful of sessions that happen to share a name.
    */
   requestCloseGroup(groupId) {
-    const members = get().membersOf(groupId);
+    // A group can be part in the layout and part in the dock. Closing it means all
+    // of it: gathering only what a pane shows would leave the set-aside half
+    // running with no group left to close it from.
+    const members = [
+      ...new Set([
+        ...get().membersOf(groupId),
+        ...get()
+          .minimized.filter((entry) => entry.groupId === groupId)
+          .map((entry) => entry.sessionId),
+      ]),
+    ];
     if (!members.length) return;
     const alive = members.filter((id) => get().sessions[id]?.status !== 'exited');
     if (!alive.length) {
@@ -1542,6 +1660,61 @@ export const useStore = create<State>((set, get) => ({
 }));
 
 /** Start a pty for a session id that already exists (or is about to) in the layout. */
+/**
+ * Bring docked tabs back into the layout.
+ *
+ * Where they land is the whole question. A tab goes back to the pane it came
+ * from whenever that pane is still there. Usually it is not — minimizing a
+ * section is what freed it — and then a set of more than one is given a pane of
+ * its own beside the active one, so a group comes back as the section it was
+ * instead of being poured in as tabs among somebody else's work. A single tab has
+ * no section to rebuild, so it simply joins the pane in front.
+ */
+function restoreTabs(
+  set: (fn: (state: State) => Partial<State>) => void,
+  get: () => State,
+  sessionIds: string[],
+) {
+  const state = get();
+  const entries = state.minimized.filter(
+    (entry) => sessionIds.includes(entry.sessionId) && state.sessions[entry.sessionId],
+  );
+  if (!entries.length) return;
+
+  let layout = state.layout;
+  const home = entries[0].leafId;
+  let target = home && findLeaf(layout, home) ? home : null;
+
+  if (!target) {
+    const landing = findLeaf(layout, state.activeLeafId) ?? allLeaves(layout)[0];
+    if (!landing) return;
+    // An empty pane is already somewhere to go; splitting it would leave a spare.
+    if (entries.length > 1 && landing.tabs.length > 0) {
+      const made = splitEmpty(layout, landing.id, 'row');
+      layout = made.root;
+      target = made.leafId;
+    } else {
+      target = landing.id;
+    }
+  }
+
+  for (const entry of entries) layout = insertTab(layout, target, entry.sessionId);
+
+  const restored = new Set(entries.map((entry) => entry.sessionId));
+  const landed = target;
+  set((prev) => ({
+    layout,
+    minimized: prev.minimized.filter((entry) => !restored.has(entry.sessionId)),
+    activeLeafId: landed,
+    // Same rule the panes already follow: while one is maximized, arriving
+    // somewhere else shows where you arrived rather than hiding it.
+    zoomedLeafId: prev.zoomedLeafId ? landed : null,
+  }));
+
+  get().focusSession(entries[entries.length - 1].sessionId);
+  schedulePersist(get);
+}
+
 async function spawnInto(
   set: (fn: (state: State) => Partial<State>) => void,
   get: () => State,

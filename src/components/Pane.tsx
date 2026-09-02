@@ -63,6 +63,22 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
   const reorderTab = useStore((s) => s.reorderTab);
   const newSession = useStore((s) => s.newSession);
   const closeThisPane = useStore((s) => s.closePane);
+  const toggleZoomOf = useStore((s) => s.toggleZoomOf);
+  const minimizePane = useStore((s) => s.minimizePane);
+  const zoomed = useStore((s) => s.zoomedLeafId === leaf.id);
+  /**
+   * The group this whole pane belongs to, if one owns it outright. The frame's
+   * buttons then speak about the group rather than about a rectangle, which is
+   * how it reads to someone looking at it.
+   */
+  const sectionGroup = useStore((s) => {
+    if (!leaf.tabs.length) return null;
+    const owner = s.sessions[leaf.tabs[0]]?.groupId ?? null;
+    if (!owner) return null;
+    return leaf.tabs.every((id) => s.sessions[id]?.groupId === owner)
+      ? (s.groups.find((g) => g.id === owner) ?? null)
+      : null;
+  });
 
   useEffect(() => {
     const strip = stripRef.current;
@@ -206,46 +222,77 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
             );
           })}
           {dropIndex === leaf.tabs.length && <span className="drop-caret" aria-hidden="true" />}
-          <div className="tabstrip-actions">
-            {leaf.tabs.length === 0 && (
-              <button
-                className="icon-btn"
-                title="Close this empty pane"
-                onClick={() => closeThisPane(leaf.id)}
-              >
-                &times;
-              </button>
-            )}
-            <GroupTheseTabs leafId={leaf.id} tabs={leaf.tabs} />
+          <div className="tab-tail" onDoubleClick={quickNewTab} />
+        </div>
+
+        <div className="tabstrip-actions">
+          {leaf.tabs.length === 0 && (
             <button
               className="icon-btn"
-              onClick={quickNewTab}
-              title={
-                activeProfile
-                  ? `New tab as ${activeProfile.name} (⌘T)`
-                  : 'New tab (⌘T)'
-              }
+              title="Close this empty pane"
+              onClick={() => closeThisPane(leaf.id)}
             >
-              +
+              &times;
             </button>
-            <button
-              ref={caretRef}
-              className="icon-btn caret"
-              onClick={() => setMenuOpen((open) => !open)}
-              title="New session as another account…"
-            >
-              ⌄
-            </button>
-            {menuOpen && (
-              <NewSessionMenu
-                leafId={leaf.id}
-                anchorEl={caretRef.current}
-                cwdHint={activeSession?.cwd}
-                onClose={() => setMenuOpen(false)}
-              />
-            )}
-          </div>
-          <div className="tab-tail" onDoubleClick={quickNewTab} />
+          )}
+          <GroupTheseTabs leafId={leaf.id} tabs={leaf.tabs} />
+          <button
+            className="icon-btn"
+            onClick={quickNewTab}
+            title={
+              activeProfile
+                ? `New tab as ${activeProfile.name} (⌘T)`
+                : 'New tab (⌘T)'
+            }
+          >
+            +
+          </button>
+          <button
+            ref={caretRef}
+            className="icon-btn caret"
+            onClick={() => setMenuOpen((open) => !open)}
+            title="New session as another account…"
+          >
+            ⌄
+          </button>
+          {leaf.tabs.length > 0 && (
+            <>
+              <button
+                className="icon-btn"
+                onClick={() => minimizePane(leaf.id)}
+                title={
+                  sectionGroup
+                    ? `Set ${sectionGroup.name} aside — it keeps running, and this space goes back`
+                    : 'Set this section aside — it keeps running, and this space goes back'
+                }
+                aria-label="Minimize this section"
+              >
+                &#8211;
+              </button>
+              <button
+                className={`icon-btn${zoomed ? ' is-on' : ''}`}
+                onClick={() => toggleZoomOf(leaf.id)}
+                title={
+                  zoomed
+                    ? 'Back to the other panes (⌥⌘⏎)'
+                    : sectionGroup
+                      ? `Fill the window with ${sectionGroup.name} (⌥⌘⏎)`
+                      : 'Fill the window with this section (⌥⌘⏎)'
+                }
+                aria-label={zoomed ? 'Restore this section' : 'Maximize this section'}
+              >
+                ⤢
+              </button>
+            </>
+          )}
+          {menuOpen && (
+            <NewSessionMenu
+              leafId={leaf.id}
+              anchorEl={caretRef.current}
+              cwdHint={activeSession?.cwd}
+              onClose={() => setMenuOpen(false)}
+            />
+          )}
         </div>
 
       </header>

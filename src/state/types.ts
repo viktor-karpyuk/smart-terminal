@@ -27,6 +27,22 @@ export type LayoutNode = LeafNode | SplitNode;
 
 export type DropSide = 'left' | 'right' | 'top' | 'bottom' | 'center';
 
+/**
+ * A tab set aside. It is out of the layout — which is exactly what hands its pane
+ * back to its neighbours — but its session keeps running, so this is only about
+ * where it is shown, never about what it is doing.
+ *
+ * Because it is not in the layout, the window has to name it somewhere else or a
+ * restart would lose it; `electron/restore.js` reads this list alongside the tree.
+ */
+export interface MinimizedTab {
+  sessionId: string;
+  /** The pane it came from, so it goes back there if that pane is still around. */
+  leafId: string | null;
+  /** Minimized together, and restored together: one click brings the set back. */
+  groupId: string | null;
+}
+
 /** `login` runs `claude auth login` so a profile can be signed in from inside the app. */
 export type SessionKind = 'claude' | 'shell' | 'login';
 

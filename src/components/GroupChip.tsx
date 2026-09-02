@@ -28,6 +28,8 @@ export function GroupChip({ groupId, leafId }: { groupId: string; leafId: string
   const arrangeGroupAs = useStore((s) => s.arrangeGroupAs);
   const moveGroup = useStore((s) => s.moveGroup);
   const requestCloseGroup = useStore((s) => s.requestCloseGroup);
+  const minimizeGroup = useStore((s) => s.minimizeGroup);
+  const toggleZoomOf = useStore((s) => s.toggleZoomOf);
   const setDraggingGroupId = useStore((s) => s.setDraggingGroupId);
   const ownsSection = useStore((s) => s.groupSection(groupId) !== null);
   const draggingSession = useStore((s) => s.draggingSessionId);
@@ -177,6 +179,33 @@ export function GroupChip({ groupId, leafId }: { groupId: string; leafId: string
               ? 'This group has the pane to itself, so it travels as one section. Drag its label onto another pane to move it there.'
               : 'Its tabs share a pane with others, so they are gathered where they land. Give it a section of its own to move it whole.'}
           </p>
+
+          <div className="menu-separator" />
+          {/* Two ways to give the group the room it needs: all of it, or none of
+              it. Both are here because both are about the group as a whole. */}
+          <button
+            className="menu-item"
+            onClick={() => {
+              setOpen(false);
+              minimizeGroup(groupId);
+            }}
+          >
+            <span>Set the group aside</span>
+            <kbd>keeps running</kbd>
+          </button>
+          {ownsSection && (
+            <button
+              className="menu-item"
+              onClick={() => {
+                const section = useStore.getState().groupSection(groupId);
+                setOpen(false);
+                if (section) toggleZoomOf(section);
+              }}
+            >
+              <span>Fill the window with it</span>
+              <kbd>⌥⌘⏎</kbd>
+            </button>
+          )}
 
           <div className="menu-separator" />
           <button

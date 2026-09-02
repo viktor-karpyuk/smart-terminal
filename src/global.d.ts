@@ -1,4 +1,4 @@
-import type { LayoutNode, Profile, Session, SessionGroup, Settings } from './state/types';
+import type { LayoutNode, MinimizedTab, Profile, Session, SessionGroup, Settings } from './state/types';
 
 export interface PtyCreateOptions {
   profileId: string;
@@ -56,6 +56,8 @@ export interface PersistedWorkspace {
   /** Which pane had focus, so a crash restores it too. */
   activeLeaf?: string | null;
   groups?: SessionGroup[];
+  /** Tabs set aside in the dock. Saved apart from the layout because they are not in it. */
+  minimized?: MinimizedTab[];
 }
 
 export interface ContextInfo {

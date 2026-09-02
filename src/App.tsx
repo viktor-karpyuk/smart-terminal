@@ -12,6 +12,7 @@ import { UsagePanel } from './components/UsagePanel';
 import { AppearancePanel } from './components/AppearancePanel';
 import { HistoryPanel } from './components/HistoryPanel';
 import { CloseConfirm } from './components/CloseConfirm';
+import { MinimizedDock } from './components/MinimizedDock';
 
 export function App() {
   const ready = useStore((s) => s.ready);
@@ -64,6 +65,9 @@ export function App() {
           )}
         </main>
       </div>
+      {/* Below the workbench, so what was set aside is out of the way of the work
+          but never out of sight. */}
+      <MinimizedDock />
       <SessionContextMenu />
       {profileEditorOpen && <ProfileEditor />}
       {usagePanelOpen && <UsagePanel />}
@@ -167,6 +171,16 @@ function handleMenuAction(id: string) {
     case 'toggle-zoom':
       store.toggleZoom();
       break;
+    case 'minimize-pane':
+      store.minimizePane(store.activeLeafId);
+      break;
+    case 'restore-last': {
+      // Last in, first out: undoing a minimize you just made is what this is for.
+      const last = store.minimized[store.minimized.length - 1];
+      if (last?.groupId) store.restoreMinimizedGroup(last.groupId);
+      else if (last) store.restoreMinimized(last.sessionId);
+      break;
+    }
     case 'toggle-sidebar':
       store.updateSettings({ sidebarVisible: !store.settings.sidebarVisible });
       break;

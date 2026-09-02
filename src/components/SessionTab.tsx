@@ -45,6 +45,7 @@ export function SessionTab({ sessionId, selected, tight, grouped }: Props) {
   const requestClose = useStore((s) => s.requestClose);
   const renameSession = useStore((s) => s.renameSession);
   const openContextMenu = useStore((s) => s.openContextMenu);
+  const minimizeSession = useStore((s) => s.minimizeSession);
 
   if (!session) return null;
   const color = profile?.color ?? '#5c6370';
@@ -137,6 +138,20 @@ export function SessionTab({ sessionId, selected, tight, grouped }: Props) {
         </span>
       )}
       {session.unread && !selected && <span className="tab-unread" />}
+      {/* Set aside, then closed: the reversible one comes first, so the reach for
+          it is never a reach past the one that ends the conversation. */}
+      <button
+        className="tab-min"
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          minimizeSession(sessionId);
+        }}
+        title="Set this tab aside — it keeps running, and you get its space back"
+        aria-label="Minimize session"
+      >
+        &#8211;
+      </button>
       <button
         className="tab-close"
         onMouseDown={(event) => event.stopPropagation()}

@@ -15,7 +15,7 @@ const { buildMenu } = require('./menu');
 const { CwdWatcher } = require('./cwd-watcher');
 const { ContextStore, transcriptPath, locateTranscript, readTurnState } = require('./context-store');
 const { Autopilot } = require('./autopilot');
-const { tabsInLayout, sessionsToRestore, unaccountedTabs } = require('./restore');
+const { tabsInLayout, minimizedIds, sessionsToRestore, unaccountedTabs } = require('./restore');
 
 /**
  * What this build is. Written at package time, so the answer comes from the app
@@ -422,8 +422,14 @@ function registerIpc() {
     // Asked for by id rather than by a page of history: the layout is the record
     // of what this window had, and a session it is not handed back is a pane the
     // renderer prunes out of the layout and then saves without.
-    const rows = db.sessionsForRestore(tabsInLayout(stored.layout), windowId);
-    const missing = unaccountedTabs(stored.layout, rows);
+    // The dock is asked for by the same call: a minimized session has no pane to
+    // name it, so leaving it out here is the whole of losing it.
+    const minimized = stored.minimized ?? [];
+    const rows = db.sessionsForRestore(
+      [...tabsInLayout(stored.layout), ...minimizedIds(minimized)],
+      windowId,
+    );
+    const missing = unaccountedTabs(stored.layout, rows, minimized);
     if (missing.length) {
       console.log(`[workspace] ${missing.length} pane(s) name a session with no row left`);
     }
@@ -431,10 +437,12 @@ function registerIpc() {
       layout: stored.layout,
       settings: stored.settings,
       groups: stored.groups ?? [],
+      minimized,
       // Which sessions to bring back, and what each was in the middle of.
       sessions: sessionsToRestore({
         windowId,
         layout: stored.layout,
+        minimized,
         rows,
         // Every window this launch is bringing back, so a session held by one of
         // the others is left to it instead of being started twice.
@@ -465,6 +473,7 @@ function registerIpc() {
       settings: state.settings,
       activeLeaf: state.activeLeaf ?? null,
       groups: state.groups ?? [],
+      minimized: state.minimized ?? [],
     });
     db.saveGroups(windowId, state.groups ?? []);
     for (const session of state.sessions ?? []) {
@@ -911,6 +920,7 @@ app.on('before-quit', (event) => {
       settings: stored?.settings ?? {},
       activeLeaf: stored?.activeLeaf ?? null,
       groups: stored?.groups ?? [],
+      minimized: stored?.minimized ?? [],
       bounds: win.getBounds(),
     });
   }

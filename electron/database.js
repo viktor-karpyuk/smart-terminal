@@ -90,6 +90,7 @@ class Database {
         active_leaf TEXT,
         bounds      TEXT,
         groups      TEXT,
+        minimized   TEXT,
         opened_at   INTEGER NOT NULL,
         closed_at   INTEGER,
         updated_at  INTEGER
@@ -115,6 +116,13 @@ class Database {
     );
     if (windowColumns.size && !windowColumns.has('groups')) {
       this.db.exec('ALTER TABLE windows ADD COLUMN groups TEXT');
+    }
+
+    // The tabs a window set aside. They are not in its layout — that is the point
+    // of minimizing — so without a column of their own they would be lost on the
+    // next launch, which is the one failure this whole area exists to prevent.
+    if (windowColumns.size && !windowColumns.has('minimized')) {
+      this.db.exec('ALTER TABLE windows ADD COLUMN minimized TEXT');
     }
 
     // How a group was laid out, so closing it and bringing it back is not the same
@@ -529,16 +537,17 @@ class Database {
 
   // --- workspace -----------------------------------------------------------
 
-  saveWorkspace(windowId, { layout, settings, activeLeaf, bounds, groups }) {
+  saveWorkspace(windowId, { layout, settings, activeLeaf, bounds, groups, minimized }) {
     this.db
       .prepare(
-        `INSERT INTO windows (id, layout, settings, active_leaf, bounds, groups, opened_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO windows (id, layout, settings, active_leaf, bounds, groups, minimized, opened_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            layout = excluded.layout, settings = excluded.settings,
            active_leaf = excluded.active_leaf,
            bounds = COALESCE(excluded.bounds, windows.bounds),
            groups = COALESCE(excluded.groups, windows.groups),
+           minimized = COALESCE(excluded.minimized, windows.minimized),
            closed_at = NULL,
            updated_at = excluded.updated_at`,
       )
@@ -549,6 +558,9 @@ class Database {
         activeLeaf ?? null,
         bounds ? JSON.stringify(bounds) : null,
         groups ? JSON.stringify(groups) : null,
+        // An empty dock still has to be written, or restoring the last minimized
+        // tab could never be recorded. Only an absent one is left as it was.
+        minimized === undefined || minimized === null ? null : JSON.stringify(minimized),
         Date.now(),
         Date.now(),
       );
@@ -669,6 +681,7 @@ class Database {
       settings: parse(row.settings, {}),
       activeLeaf: row.active_leaf,
       groups: parse(row.groups, []),
+      minimized: parse(row.minimized, []) ?? [],
       updatedAt: row.updated_at,
     };
   }

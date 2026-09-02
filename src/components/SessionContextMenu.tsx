@@ -165,6 +165,11 @@ function Menu({
       <LookSection session={session} />
       <GroupSection session={session} onClose={onClose} />
       <div className="menu-separator" />
+      <MenuItem
+        label="Set aside"
+        hint="keeps running"
+        onClick={run(() => store.minimizeSession(sessionId))}
+      />
       <MenuItem label="Rename…" hint="⌘E" onClick={run(() => store.setRenamingSessionId(sessionId))} />
       <MenuItem label="Duplicate" hint="⇧⌘K" onClick={run(() => store.duplicateSession(sessionId))} />
       {!exited && (

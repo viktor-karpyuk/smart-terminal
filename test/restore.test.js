@@ -1,7 +1,13 @@
 const assert = require('node:assert');
 const test = require('node:test');
 
-const { tabsInLayout, sessionsToRestore, unaccountedTabs } = require('../electron/restore');
+const {
+  tabsInLayout,
+  minimizedIds,
+  windowTabs,
+  sessionsToRestore,
+  unaccountedTabs,
+} = require('../electron/restore');
 
 const leaf = (id, tabs) => ({ id, type: 'leaf', tabs, active: tabs[0] ?? null });
 const split = (...children) => ({
@@ -91,4 +97,78 @@ test('a session belonging to no window at all is still restorable', () => {
 test('panes naming a session with no row left are reported, not silently dropped', () => {
   const layout = split(leaf('l1', ['a']), leaf('l2', ['deleted']));
   assert.deepStrictEqual(unaccountedTabs(layout, [{ id: 'a', windowId: WIN_A }]), ['deleted']);
+});
+
+/*
+ * A minimized session is on purpose absent from the layout — that is what gave
+ * its pane back. So the layout alone can no longer be the whole record of what a
+ * window had, and every one of these guards a way the dock could quietly vanish.
+ */
+
+test('the dock is read whether it stores entries or bare ids', () => {
+  assert.deepStrictEqual(minimizedIds([{ sessionId: 'a', leafId: 'l1' }, 'b']), ['a', 'b']);
+  assert.deepStrictEqual(minimizedIds([{ leafId: 'l1' }, null, undefined]), []);
+  assert.deepStrictEqual(minimizedIds(undefined), []);
+  assert.deepStrictEqual(minimizedIds('not a list'), []);
+});
+
+test('a window answers for its panes and its dock together', () => {
+  const layout = split(leaf('l1', ['a']), leaf('l2', ['b']));
+  assert.deepStrictEqual(
+    windowTabs(layout, [{ sessionId: 'docked', leafId: 'l1' }]).sort(),
+    ['a', 'b', 'docked'],
+  );
+});
+
+test('a minimized session comes back even though no pane names it', () => {
+  const layout = leaf('l1', ['a']);
+  const rows = [{ id: 'a', windowId: WIN_A }, { id: 'docked', windowId: WIN_A }];
+  const restored = sessionsToRestore({
+    windowId: WIN_A,
+    layout,
+    minimized: [{ sessionId: 'docked', leafId: 'l1' }],
+    rows,
+    openWindowIds: [WIN_A],
+  });
+  assert.deepStrictEqual(restored.map((r) => r.id).sort(), ['a', 'docked']);
+});
+
+/*
+ * The 31 Aug loss, replayed against the dock. A session whose window id points at
+ * a window that is not coming back has only the naming to save it — and a
+ * minimized session is named by the dock, never by a pane.
+ */
+test('a minimized session whose window is gone is restored by the dock that names it', () => {
+  const restored = sessionsToRestore({
+    windowId: WIN_A,
+    layout: leaf('l1', []),
+    minimized: [{ sessionId: 'docked', leafId: null }],
+    rows: [{ id: 'docked', windowId: WIN_B }],
+    openWindowIds: [WIN_A],
+  });
+  assert.deepStrictEqual(restored.map((r) => r.id), ['docked']);
+});
+
+test('a minimized session held by another live window is left to it', () => {
+  const restored = sessionsToRestore({
+    windowId: WIN_A,
+    layout: leaf('l1', []),
+    minimized: [{ sessionId: 'docked', leafId: null }],
+    rows: [{ id: 'docked', windowId: WIN_B }],
+    openWindowIds: [WIN_A, WIN_B],
+  });
+  assert.deepStrictEqual(restored, []);
+});
+
+test('a dock entry with no row left is reported like a pane with none', () => {
+  assert.deepStrictEqual(
+    unaccountedTabs(leaf('l1', ['a']), [{ id: 'a', windowId: WIN_A }], [{ sessionId: 'gone' }]),
+    ['gone'],
+  );
+});
+
+test('a window with no dock behaves exactly as before', () => {
+  const layout = split(leaf('l1', ['a']), leaf('l2', ['b']));
+  assert.deepStrictEqual(windowTabs(layout).sort(), ['a', 'b']);
+  assert.deepStrictEqual(unaccountedTabs(layout, [{ id: 'a' }, { id: 'b' }]), []);
 });
