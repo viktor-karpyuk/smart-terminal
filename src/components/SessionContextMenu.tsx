@@ -117,7 +117,9 @@ function Menu({
                       <i className="group-dot" style={{ background: target.color, marginRight: 7 }} />
                       {target.name}
                     </span>
-                    <kbd>{authByProfile[target.id]?.email ?? 'signed in'}</kbd>
+                    <kbd title={authByProfile[target.id]?.email ?? 'signed in'}>
+                      {authByProfile[target.id]?.email ?? 'signed in'}
+                    </kbd>
                   </button>
                 ))}
                 <p className="form-hint">
@@ -148,7 +150,7 @@ function Menu({
           <span>
             <i className="check">{session.autopilot ? '☑' : '☐'}</i> Keep working on its own
           </span>
-          <kbd>{autopilotHint(session)}</kbd>
+          <kbd title={autopilotHint(session)}>{autopilotHint(session)}</kbd>
         </button>
       )}
 
@@ -332,7 +334,7 @@ function GroupSection({
             }}
           >
             <span>Remove from {current.name}</span>
-            <kbd>leaves it open</kbd>
+            <kbd title="leaves it open">leaves it open</kbd>
           </button>
           <button
             className="menu-item"
@@ -342,7 +344,7 @@ function GroupSection({
             }}
           >
             <span>Close all of {current.name}</span>
-            <kbd>reopen from History</kbd>
+            <kbd title="reopen from History">reopen from History</kbd>
           </button>
         </>
       )}
@@ -382,7 +384,8 @@ function MenuItem({
   return (
     <button className={`menu-item${danger ? ' is-danger' : ''}`} onClick={onClick}>
       <span>{label}</span>
-      {hint && <kbd>{hint}</kbd>}
+      {/* The hint is trimmed before the label is, so hovering is how the rest of it is read. */}
+      {hint && <kbd title={hint}>{hint}</kbd>}
     </button>
   );
 }

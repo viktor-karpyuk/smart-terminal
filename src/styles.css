@@ -19,6 +19,10 @@
   --ok: #9ece6a;
   --radius: 7px;
   --titlebar-h: 38px;
+  /* One width for every floating menu: the session menu and the group menu sit
+     side by side in the same title bar, so a difference between them reads as a
+     mistake rather than as a distinction. */
+  --popover-w: 300px;
   color-scheme: dark;
 }
 
@@ -403,13 +407,16 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .popover {
   position: fixed;
   z-index: 400;
-  width: 300px;
+  width: var(--popover-w);
   padding: 10px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
   display: grid;
+  /* A bare grid column is sized by its content, so one long row would widen the
+     whole menu past the width set above instead of being trimmed inside it. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
 }
 
@@ -725,7 +732,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 /* ---------- context menu ---------- */
 
-.popover.popover-menu { width: 232px; padding: 5px; gap: 1px; }
+.popover.popover-menu { width: var(--popover-w); padding: 5px; gap: 1px; }
 
 .menu-heading {
   display: flex;
@@ -757,7 +764,23 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .menu-item:hover { background: var(--accent-soft); }
 .menu-item.is-danger:hover { background: rgba(247, 118, 142, 0.14); color: var(--danger); }
-.menu-item kbd { font: inherit; font-size: 11px; color: var(--text-faint); }
+
+/*
+ * A row is one line. The right-hand label is a status, and autopilot's grows
+ * with whatever it is waiting on, so given the chance it wraps and the row
+ * becomes two lines tall — which is what made the menu look broken next to the
+ * group's. Both halves are held to one line and both may be trimmed, but the
+ * label gives up its space first: the action is the part worth reading.
+ */
+.menu-item > span,
+.menu-item kbd {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu-item kbd { font: inherit; font-size: 11px; color: var(--text-faint); flex-shrink: 100; }
 .menu-separator { height: 1px; background: var(--border); margin: 4px 2px; }
 
 /* ---------- usage-limit handoff ---------- */
