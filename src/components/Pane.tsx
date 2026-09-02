@@ -11,6 +11,9 @@ import { GROUP_MIME, SESSION_MIME, sideFromPoint, type Side } from '../lib/drag'
 import { PathLabel } from './PathLabel';
 import { SessionTab } from './SessionTab';
 import { GroupChip, GroupTheseTabs } from './GroupChip';
+import { FilesPanel } from './FilesPanel';
+import { GitPanel } from './GitPanel';
+import { PanelTab } from './PanelTab';
 
 export function Pane({ leaf }: { leaf: LeafNode }) {
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -33,6 +36,13 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
   const homedir = useStore((s) => s.homedir);
   // A plain array compared shallowly: a selector returning a fresh function or
   // object every render makes the store look changed on every render.
+  /** Which of this pane's tabs are file panels rather than sessions. */
+  const panelIds = useStore(
+    useShallow((s) => leaf.tabs.filter((id) => Boolean(s.panels[id]))),
+  );
+  const gitPanelIds = useStore(
+    useShallow((s) => leaf.tabs.filter((id) => s.panels[id]?.kind === 'git')),
+  );
   const tabGroups = useStore(
     useShallow((s) => leaf.tabs.map((id) => s.sessions[id]?.groupId ?? null)),
   );
@@ -212,12 +222,16 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
               <Fragment key={sessionId}>
                 {dropIndex === index && <span className="drop-caret" aria-hidden="true" />}
                 {startsRun && <GroupChip groupId={group} leafId={leaf.id} />}
-                <SessionTab
-                  sessionId={sessionId}
-                  selected={leaf.active === sessionId}
-                  tight={tight}
-                  grouped={group !== null}
-                />
+                {panelIds.includes(sessionId) ? (
+                  <PanelTab panelId={sessionId} selected={leaf.active === sessionId} leafId={leaf.id} />
+                ) : (
+                  <SessionTab
+                    sessionId={sessionId}
+                    selected={leaf.active === sessionId}
+                    tight={tight}
+                    grouped={group !== null}
+                  />
+                )}
               </Fragment>
             );
           })}
@@ -298,7 +312,11 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
       </header>
 
       <div className="pane-body" ref={bodyRef}>
-        {leaf.active && activeSession ? (
+        {leaf.active && gitPanelIds.includes(leaf.active) ? (
+          <GitPanel key={leaf.active} panelId={leaf.active} />
+        ) : leaf.active && panelIds.includes(leaf.active) ? (
+          <FilesPanel key={leaf.active} panelId={leaf.active} />
+        ) : leaf.active && activeSession ? (
           <>
             <TerminalSlot key={leaf.active} sessionId={leaf.active} />
             {activeSession.limitHit && <HandoffBanner sessionId={leaf.active} />}
@@ -323,7 +341,7 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
       </div>
 
 
-      {activeSession && (
+      {activeSession && !panelIds.includes(leaf.active ?? '') && (
         <footer className="pane-status">
           <span className="status-profile" style={{ color: activeProfile?.color }}>
             ● {activeProfile?.name ?? 'account'}

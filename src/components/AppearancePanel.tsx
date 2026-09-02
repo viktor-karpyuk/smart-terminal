@@ -3,6 +3,7 @@ import { useStore } from '../state/store';
 import { formatBytes } from '../lib/labels';
 import { currentTerminalTheme } from '../state/store';
 import { FOLLOW_APP, OVERRIDABLE, PALETTES, type OverridableKey } from '../terminals/themes';
+import { FileIcon, colourFor } from '../lib/fileIcons';
 
 const FONTS = [
   '"JetBrains Mono", "SF Mono", Menlo, "Fira Code", ui-monospace, monospace',
@@ -47,6 +48,58 @@ export function AppearancePanel() {
                 >
                   {option === 'system' ? 'Match system' : option === 'light' ? 'Light' : 'Dark'}
                 </button>
+              ))}
+            </div>
+          </section>
+
+          <section className="form-section">
+            <h3>File icons</h3>
+            <div className="segmented">
+              {(
+                [
+                  ['colour', 'By kind'],
+                  ['outline', 'Outline'],
+                  ['solid', 'Solid'],
+                  ['none', 'None'],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  className={settings.fileIcons === value ? 'is-on' : ''}
+                  onClick={() => updateSettings({ fileIcons: value })}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="form-hint">
+              How the file tree draws folders and files. <strong>By kind</strong> tints each one by
+              what it is, so a folder reads as groups rather than as forty separate names;{' '}
+              <strong>Outline</strong> is the plainer, quieter version of the same shapes.
+            </p>
+            <div className="icon-preview">
+              {[
+                ['src', true],
+                ['store.ts', false],
+                ['styles.css', false],
+                ['main.js', false],
+                ['package.json', false],
+                ['README.md', false],
+                ['schema.sql', false],
+                ['icon.png', false],
+              ].map(([name, isDir]) => (
+                <span key={name as string} className="icon-preview-item">
+                  <FileIcon name={name as string} isDirectory={isDir as boolean} style={settings.fileIcons} />
+                  <span
+                    style={
+                      settings.fileIcons === 'colour' && !isDir
+                        ? { color: colourFor(name as string, false, 'colour') }
+                        : undefined
+                    }
+                  >
+                    {name as string}
+                  </span>
+                </span>
               ))}
             </div>
           </section>

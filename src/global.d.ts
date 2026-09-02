@@ -1,4 +1,13 @@
-import type { LayoutNode, MinimizedTab, Profile, Session, SessionGroup, Settings } from './state/types';
+import type {
+  FilePanel,
+  GitPanelState,
+  LayoutNode,
+  MinimizedTab,
+  Profile,
+  Session,
+  SessionGroup,
+  Settings,
+} from './state/types';
 
 export interface PtyCreateOptions {
   profileId: string;
@@ -58,6 +67,107 @@ export interface PersistedWorkspace {
   groups?: SessionGroup[];
   /** Tabs set aside in the dock. Saved apart from the layout because they are not in it. */
   minimized?: MinimizedTab[];
+  /** Panels that occupy tabs in the layout but are not sessions. */
+  panels?: Array<FilePanel | GitPanelState>;
+}
+
+/** Everything `git:call` can hand back, in one shape. */
+export interface GitResult {
+  ok: boolean;
+  error?: string;
+  value?: unknown;
+  stdout?: string;
+  branch?: string | null;
+  upstream?: string | null;
+  ahead?: number;
+  behind?: number;
+  detached?: boolean;
+  files?: GitFile[];
+  commits?: GitCommit[];
+  width?: number;
+  current?: string | null;
+  local?: GitBranch[];
+  remote?: Array<{ name: string; sha: string; date: string }>;
+  tags?: Array<{ name: string; sha: string; date: string }>;
+  stashes?: Array<{ ref: string; subject: string; date: string }>;
+  patch?: string;
+}
+
+export interface GitFile {
+  path: string;
+  absolute: string;
+  dir: string;
+  name: string;
+  index: string;
+  worktree: string;
+  untracked: boolean;
+  conflicted: boolean;
+  staged: boolean;
+  partial: boolean;
+  letter: string;
+  from?: string;
+  added?: number | null;
+  removed?: number | null;
+}
+
+export interface GitRef {
+  kind: 'local' | 'remote' | 'tag' | 'head' | 'other';
+  name: string;
+  head: boolean;
+}
+
+export interface GitCommit {
+  sha: string;
+  parents: string[];
+  author: string;
+  date: string;
+  subject: string;
+  refs: GitRef[];
+  /** Filled in by the lane layout: where this commit's dot and lines go. */
+  lane: number;
+  colour: string;
+  through: Array<{ lane: number; colour: string }>;
+  edges: Array<{ sha: string; from: number; to: number; kind: string; colour: string }>;
+  merge: boolean;
+  root: boolean;
+}
+
+export interface GitBranch {
+  name: string;
+  sha: string;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  gone: boolean;
+  date: string;
+}
+
+/** One entry in a folder listing. */
+export interface DirEntry {
+  name: string;
+  path: string;
+  isDirectory: boolean;
+  /** Build output, dot-files, node_modules — shown, but dimmed. */
+  noise: boolean;
+}
+
+export interface FileRead {
+  ok: boolean;
+  text?: string;
+  mtimeMs?: number;
+  size?: number;
+  error?: string;
+  binary?: boolean;
+}
+
+export interface FileWrite {
+  ok: boolean;
+  mtimeMs?: number;
+  size?: number;
+  /** The file moved on disk since it was read; `text` is what is there now. */
+  conflict?: boolean;
+  text?: string | null;
+  error?: string;
 }
 
 export interface ContextInfo {
@@ -307,6 +417,24 @@ declare global {
       workspace: {
         load(): Promise<PersistedWorkspace>;
         save(state: PersistedWorkspace): void;
+      };
+      git: {
+        call(name: string, root: string, args?: unknown): Promise<GitResult>;
+      };
+      files: {
+        list(dir: string): Promise<{ ok: boolean; entries?: DirEntry[]; error?: string }>;
+        read(file: string): Promise<FileRead>;
+        write(
+          file: string,
+          text: string,
+          options?: { expectedMtimeMs?: number | null; force?: boolean },
+        ): Promise<FileWrite>;
+        watch(file: string, mtimeMs: number): void;
+        unwatch(file: string): void;
+        onChanged(
+          handler: (changes: Array<{ path: string; mtimeMs: number; gone?: boolean }>) => void,
+        ): () => void;
+        reveal(file: string): void;
       };
       system: {
         pickDirectory(startIn?: string): Promise<string | null>;

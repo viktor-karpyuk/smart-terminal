@@ -17,6 +17,9 @@ const { ContextStore, transcriptPath, locateTranscript, readTurnState } = requir
 const { Autopilot, looksLikeADecision } = require('./autopilot');
 const { tabsInLayout, minimizedIds, sessionsToRestore, unaccountedTabs } = require('./restore');
 const { MessageBridge } = require('./message-bridge');
+const { listDir, readTextFile, writeTextFile, FileWatcher } = require('./files');
+const git = require('./git');
+const { layout: layoutGraph } = require('./git-graph');
 
 /**
  * What this build is. Written at package time, so the answer comes from the app
@@ -97,6 +100,7 @@ const lastOutputBySession = new Map();
 /** What the renderer last said about how far a session may reach. Narrow until told. */
 let messagingReach = 'group';
 let messages = null;
+let fileWatcher = null;
 let mcpConfigPath = null;
 
 /** Keeps sessions moving when the only thing stopping them is nobody saying "go". */
@@ -505,6 +509,111 @@ function registerIpc() {
     }
   });
 
+  // --- the file tree and the editor -----------------------------------------
+  //
+  // Errors come back as values rather than as thrown exceptions: a folder that
+  // cannot be read is something the tree has to draw, not something that should
+  // reject a promise in the renderer and leave a pane blank.
+  ipcMain.handle('files:list', async (_e, dir) => {
+    try {
+      return { ok: true, entries: await listDir(dir) };
+    } catch (error) {
+      return { ok: false, error: error.code === 'ENOENT' ? 'That folder is not there any more.' : error.message };
+    }
+  });
+
+  ipcMain.handle('files:read', async (_e, file) => {
+    try {
+      return await readTextFile(file);
+    } catch (error) {
+      return { ok: false, error: error.code === 'ENOENT' ? 'That file is not there any more.' : error.message };
+    }
+  });
+
+  ipcMain.handle('files:write', async (_e, { file, text, expectedMtimeMs = null, force = false }) => {
+    try {
+      return await writeTextFile(file, text, { expectedMtimeMs, force });
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
+
+  ipcMain.on('files:watch', (_e, { file, mtimeMs }) => fileWatcher?.watch(file, mtimeMs ?? 0));
+  ipcMain.on('files:unwatch', (_e, { file }) => fileWatcher?.forget(file));
+  ipcMain.on('files:reveal', (_e, file) => shell.showItemInFolder(file));
+
+  /*
+   * Git, as one call with a name.
+   *
+   * The names are a fixed table rather than anything derived from the argument —
+   * a renderer bug must not be able to reach a git subcommand nobody wrote a
+   * handler for, and every one of these takes its arguments as an array that
+   * never touches a shell.
+   */
+  const GIT = {
+    root: (root) => git.repoRoot(root),
+    status: async (root) => {
+      const [state, unstaged, staged] = await Promise.all([
+        git.status(root),
+        git.stat(root, { staged: false }),
+        git.stat(root, { staged: true }),
+      ]);
+      if (!state.ok) return state;
+      // A file's line counts live in whichever diff it is actually in.
+      for (const file of state.files) {
+        const counts = staged[file.path] ?? unstaged[file.path] ?? null;
+        file.added = counts?.added ?? null;
+        file.removed = counts?.removed ?? null;
+      }
+      return state;
+    },
+    graph: async (root, { limit = 200 } = {}) => {
+      const result = await git.log(root, { limit });
+      if (!result.ok) return result;
+      const { rows, width } = layoutGraph(result.commits);
+      // The lane belongs beside its commit, not in a parallel array the renderer
+      // has to keep lined up.
+      return {
+        ok: true,
+        width,
+        commits: result.commits.map((commit, index) => ({ ...commit, ...rows[index] })),
+      };
+    },
+    refs: (root) => git.refs(root),
+    compare: (root, { a, b }) => git.compare(root, a, b),
+    commitFiles: (root, { sha }) => git.commitFiles(root, sha),
+    diff: (root, options) => git.diff(root, options ?? {}),
+    stage: (root, { paths }) => git.stage(root, paths),
+    unstage: (root, { paths }) => git.unstage(root, paths),
+    commit: (root, { message, amend }) => git.commit(root, message, { amend }),
+    push: (root, options) => git.push(root, options ?? {}),
+    pull: (root, options) => git.pull(root, options ?? {}),
+    fetch: (root) => git.fetch(root),
+    checkout: (root, { ref }) => git.checkout(root, ref),
+    createBranch: (root, { name, from }) => git.createBranch(root, name, from),
+    deleteBranch: (root, { name, force }) => git.deleteBranch(root, name, { force }),
+    merge: (root, { ref }) => git.merge(root, ref),
+    rebase: (root, { ref }) => git.rebase(root, ref),
+    abortMerge: (root) => git.abortMerge(root),
+    revert: (root, { sha }) => git.revertCommit(root, sha),
+    stash: (root, { message }) => git.stashPush(root, message),
+    stashPop: (root, { ref }) => git.stashPop(root, ref),
+  };
+
+  ipcMain.handle('git:call', async (_e, { name, root, args }) => {
+    const handler = GIT[name];
+    if (!handler) return { ok: false, error: `No such git action: ${name}` };
+    if (!root) return { ok: false, error: 'No folder.' };
+    try {
+      const result = await handler(root, args ?? {});
+      // The plain verbs come back as a run() result; give them all one shape.
+      if (result && typeof result === 'object') return result;
+      return { ok: true, value: result ?? null };
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  });
+
   ipcMain.handle('db:sessions', (_e, options) => db.listSessions(options || {}));
   ipcMain.handle('db:session', (_e, id) => db.getSession(id));
   ipcMain.handle('db:handoffs', (_e, limit) => db.listHandoffs(limit || 100));
@@ -757,6 +866,7 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   adoptionSweep.unref?.();
   cwdWatcher.start();
   startMessaging();
+  fileWatcher = new FileWatcher((changes) => send('files:changed', changes));
   context = new ContextStore(db);
   context.start();
   // Saved conversations whose session row is gone are dead weight from a crash.

@@ -3,9 +3,17 @@ import { FOLLOW_APP, resolveTerminalTheme } from '../terminals/themes';
 import { generateSessionName } from '../lib/names';
 import { arrangeGroup, moveGroupTo } from './groups';
 import { closePane, movePane, splitEmpty, splitOffTabs } from './layout';
-import type { GroupArrangement, MinimizedTab, PendingClose, SessionGroup } from './types';
+import type {
+  Buffer,
+  FilePanel,
+  GitPanelState,
+  GroupArrangement,
+  MinimizedTab,
+  PendingClose,
+  SessionGroup,
+} from './types';
 import type { DropSide, LayoutNode, Profile, Session, SessionKind, Settings } from './types';
-import type { AuthStatus, UsageReport } from '../global';
+import type { AuthStatus, DirEntry, GitBranch, GitCommit, GitFile, GitResult, UsageReport } from '../global';
 import {
   allLeaves,
   allTabs,
@@ -49,6 +57,7 @@ const DEFAULT_SETTINGS: Settings = {
   terminalPalette: FOLLOW_APP,
   terminalOverrides: {},
   sessionMessaging: 'group',
+  fileIcons: 'colour',
 };
 
 /** Whether the interface is currently dark, resolving `system` against the OS. */
@@ -99,6 +108,28 @@ const AUTH_RECHECK_EVERY = 5 * 60 * 1000;
 /** React StrictMode mounts effects twice in dev; the workspace must only boot once. */
 let initStarted = false;
 
+/** One repository's picture, refreshed rather than assumed to still be true. */
+interface RepoState {
+  loading: boolean;
+  error: string | null;
+  branch: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  detached: boolean;
+  files: GitFile[];
+  commits: GitCommit[];
+  graphWidth: number;
+  current: string | null;
+  local: GitBranch[];
+  remote: Array<{ name: string; sha: string; date: string }>;
+  tags: Array<{ name: string; sha: string; date: string }>;
+  stashes: Array<{ ref: string; subject: string; date: string }>;
+  /** What a long-running verb is doing, and what it said when it finished. */
+  busy: string | null;
+  notice: { kind: 'ok' | 'warn' | 'bad'; text: string } | null;
+}
+
 interface State {
   ready: boolean;
   profiles: Profile[];
@@ -136,6 +167,17 @@ interface State {
   pendingClose: PendingClose | null;
   /** Tabs set aside into the dock, in the order they were put there. */
   minimized: MinimizedTab[];
+  /** Panels that are not sessions — a folder with its editor, or a Git view. */
+  panels: Record<string, FilePanel | GitPanelState>;
+  /**
+   * What git last told us, per repository. Held apart from the panels so two
+   * panels on the same repository never disagree about what is changed.
+   */
+  repos: Record<string, RepoState>;
+  /** Open files, by path. Shared by every panel showing the same file. */
+  buffers: Record<string, Buffer>;
+  /** Folder listings, by path. Kept so re-opening a folder does not flicker. */
+  dirs: Record<string, { entries: DirEntry[]; error: string | null; loading: boolean }>;
 
   init(): Promise<void>;
   newSession(options?: {
@@ -167,6 +209,27 @@ interface State {
   /** Maximize a named pane, from its own frame rather than from the title bar. */
   toggleZoomOf(leafId: string): void;
   minimizeSession(sessionId: string): void;
+  /** Open a folder as a tab: tree on the left, whatever you open on the right. */
+  openFilePanel(options?: { leafId?: string; side?: DropSide; root?: string; sessionId?: string }): string | null;
+  closePanel(panelId: string): void;
+  setPanelRoot(panelId: string, root: string): void;
+  /** Open a Git tab beside the files, on the repository that folder is in. */
+  openGitPanel(options?: { leafId?: string; side?: DropSide; root?: string }): Promise<string | null>;
+  setGitView(panelId: string, view: GitPanelState['view']): void;
+  setGitGrouping(panelId: string, grouping: GitPanelState['grouping']): void;
+  patchGitPanel(panelId: string, patch: Partial<GitPanelState>): void;
+  refreshRepo(root: string, what?: 'status' | 'graph' | 'refs' | 'all'): Promise<void>;
+  gitDo(root: string, name: string, args?: unknown, label?: string): Promise<GitResult>;
+  focusPanel(leafId: string, panelId: string): void;
+  loadDir(path: string): Promise<void>;
+  toggleDir(panelId: string, path: string): void;
+  openFile(panelId: string, path: string): Promise<void>;
+  closeFile(panelId: string, path: string): void;
+  setActiveFile(panelId: string, path: string): void;
+  editBuffer(path: string, text: string): void;
+  saveBuffer(path: string, options?: { force?: boolean }): Promise<boolean>;
+  revertBuffer(path: string): void;
+  sendSelectionTo(sessionId: string, path: string, text: string, from: number, to: number): void;
   minimizePane(leafId: string): void;
   minimizeGroup(groupId: string): void;
   restoreMinimized(sessionId: string): void;
@@ -233,7 +296,7 @@ let persistTimer: number | undefined;
 function schedulePersist(get: () => State) {
   window.clearTimeout(persistTimer);
   persistTimer = window.setTimeout(() => {
-    const { layout, sessions, settings, minimized } = get();
+    const { layout, sessions, settings, minimized, panels } = get();
     // A minimized tab is not in the layout, so its descriptor has to be gathered
     // from the dock too — otherwise it comes back as an id with nothing behind it
     // and is dropped as a pane that cannot be revived.
@@ -244,6 +307,10 @@ function schedulePersist(get: () => State) {
       activeLeaf: get().activeLeafId,
       groups: get().groups,
       minimized,
+      // Only the panels the layout still names; one closed a moment ago is gone.
+      panels: allTabs(layout)
+        .map((id) => panels[id])
+        .filter(Boolean),
       sessions: saving
         .map((id) => sessions[id])
         .filter(Boolean)
@@ -305,6 +372,10 @@ export const useStore = create<State>((set, get) => ({
   appearanceOpen: false,
   pendingClose: null,
   minimized: [],
+  panels: {},
+  repos: {},
+  buffers: {},
+  dirs: {},
 
   async init() {
     if (initStarted) return;
@@ -322,12 +393,18 @@ export const useStore = create<State>((set, get) => ({
     const settings = { ...DEFAULT_SETTINGS, ...(saved.settings || {}) };
     const baseLayout = saved.layout ?? makeLeaf();
     const baseMinimized = (saved.minimized ?? []).filter((entry) => entry?.sessionId);
+    // A panel is a tab with no session behind it, so it has to be put back before
+    // anything prunes the layout — otherwise its tab looks like a dead session.
+    const basePanels = Object.fromEntries(
+      (saved.panels ?? []).filter((panel) => panel?.id).map((panel) => [panel.id, panel]),
+    );
     set({
       profiles,
       settings,
       homedir,
       layout: baseLayout,
       minimized: baseMinimized,
+      panels: basePanels,
       activeLeafId: allLeaves(baseLayout)[0]?.id ?? '',
       ready: true,
     });
@@ -338,6 +415,61 @@ export const useStore = create<State>((set, get) => ({
       writeToTerminal(sessionId, data);
       get().markActivity(sessionId);
       get().inspectForLimit(sessionId, data);
+    });
+
+    /*
+     * A file the editor has open changed on disk — almost always a session that
+     * has just rewritten it.
+     *
+     * With nothing unsaved, the editor simply takes it: there is nothing to
+     * decide, and an editor showing a stale file is worse than one that moves.
+     * With an edit in the buffer, nothing is touched and the panel is given both
+     * versions to offer — choosing for the person is the one thing that would
+     * lose work here.
+     */
+    window.api.files.onChanged((changes) => {
+      for (const change of changes) {
+        const buffer = get().buffers[change.path];
+        if (!buffer || buffer.loading) continue;
+        if (Math.abs(buffer.mtimeMs - change.mtimeMs) <= 1) continue;
+        if (change.gone) {
+          set((prev) => ({
+            buffers: { ...prev.buffers, [change.path]: { ...prev.buffers[change.path], error: 'This file is gone.' } },
+          }));
+          continue;
+        }
+        if (buffer.text !== buffer.savedText) {
+          window.api.files.read(change.path).then((result) => {
+            if (!result.ok) return;
+            set((prev) => ({
+              buffers: {
+                ...prev.buffers,
+                [change.path]: {
+                  ...prev.buffers[change.path],
+                  conflict: { text: result.text ?? '', mtimeMs: result.mtimeMs ?? 0 },
+                },
+              },
+            }));
+          });
+          continue;
+        }
+        window.api.files.read(change.path).then((result) => {
+          if (!result.ok) return;
+          set((prev) => ({
+            buffers: {
+              ...prev.buffers,
+              [change.path]: {
+                ...prev.buffers[change.path],
+                text: result.text ?? '',
+                savedText: result.text ?? '',
+                mtimeMs: result.mtimeMs ?? 0,
+                reloadedAt: Date.now(),
+                error: null,
+              },
+            },
+          }));
+        });
+      }
     });
 
     // Groups and the session roster belong to the workspace, not to this window.
@@ -455,7 +587,7 @@ export const useStore = create<State>((set, get) => ({
           handoffFrom: descriptor.handoffFrom ?? null,
         });
       }
-      const alive = new Set(Object.keys(get().sessions));
+      const alive = new Set([...Object.keys(get().sessions), ...Object.keys(get().panels)]);
       set((state) => ({
         layout: keepOnly(state.layout, alive),
         // The dock is pruned by the same rule as the panes: an entry whose session
@@ -466,6 +598,18 @@ export const useStore = create<State>((set, get) => ({
 
     // A workspace whose tabs are all in the dock is not an empty one, and giving
     // it an unasked-for session would be a surprise on top of a restart.
+    // Re-open the folders the panels had, the files they were showing, and ask
+    // git again for anything a Git tab was looking at.
+    for (const panel of Object.values(get().panels)) {
+      if (panel.kind === 'git') {
+        get().refreshRepo(panel.root, 'all');
+        continue;
+      }
+      for (const dir of panel.expanded) get().loadDir(dir);
+      if (panel.active) get().openFile(panel.id, panel.active);
+      for (const file of panel.open) if (file !== panel.active) get().openFile(panel.id, file);
+    }
+
     if (!allTabs(get().layout).length && !get().minimized.length && profiles.length) {
       await get().newSession({ kind: 'claude' });
     }
@@ -795,6 +939,524 @@ export const useStore = create<State>((set, get) => ({
   /** Set aside a group wherever its sessions happen to be sitting. */
   minimizeGroup(groupId) {
     for (const sessionId of get().membersOf(groupId)) get().minimizeSession(sessionId);
+  },
+
+  /**
+   * Open a folder as a tab of its own.
+   *
+   * It goes into the layout exactly where a new session would, and from that
+   * moment the app treats it like any other tab — which is the entire reason it
+   * is a tab and not a panel bolted to the side of the window.
+   */
+  openFilePanel(options = {}) {
+    const state = get();
+    const session = options.sessionId ? state.sessions[options.sessionId] : null;
+    // No root means the folder has not been chosen yet, and the panel opens on a
+    // chooser. Opening straight into somebody's home folder is a worse guess than
+    // asking, and the folders worth offering are the ones sessions are in.
+    const root = options.root || session?.cwd || '';
+
+    const panelId = crypto.randomUUID();
+    const panel: FilePanel = {
+      id: panelId,
+      kind: 'files',
+      root,
+      followsSessionId: options.sessionId ?? null,
+      expanded: root ? [root] : [],
+      open: [],
+      active: null,
+    };
+
+    const targetLeafId = options.leafId || state.activeLeafId || allLeaves(state.layout)[0]?.id;
+    const side = options.side || 'center';
+
+    set((prev) => {
+      const panels = { ...prev.panels, [panelId]: panel };
+      let layout = prev.layout;
+      if (!targetLeafId || !findLeaf(layout, targetLeafId)) {
+        const leaf = makeLeaf([panelId]);
+        return { panels, layout: leaf, activeLeafId: leaf.id };
+      }
+      if (side === 'center') {
+        layout = insertTab(layout, targetLeafId, panelId);
+        return { panels, layout, activeLeafId: targetLeafId };
+      }
+      const direction = side === 'left' || side === 'right' ? 'row' : 'column';
+      const result = splitLeaf(layout, targetLeafId, direction, panelId);
+      return { panels, layout: result.root, activeLeafId: result.leafId, zoomedLeafId: null };
+    });
+
+    if (root) get().loadDir(root);
+    schedulePersist(get);
+    return panelId;
+  },
+
+  closePanel(panelId) {
+    const panel = get().panels[panelId];
+    if (!panel) return;
+    // Its buffers are not closed with it: another panel may be showing the same
+    // file, and an unsaved edit must never be discarded by closing a view of it.
+    set((prev) => {
+      const panels = { ...prev.panels };
+      delete panels[panelId];
+      const layout = removeTab(prev.layout, panelId);
+      const leaves = allLeaves(layout);
+      return {
+        panels,
+        layout,
+        activeLeafId: leaves.some((leaf) => leaf.id === prev.activeLeafId)
+          ? prev.activeLeafId
+          : (leaves[0]?.id ?? ''),
+        zoomedLeafId: leaves.some((leaf) => leaf.id === prev.zoomedLeafId) ? prev.zoomedLeafId : null,
+        minimized: prev.minimized.filter((entry) => entry.sessionId !== panelId),
+      };
+    });
+    schedulePersist(get);
+  },
+
+  /** Bring a panel's tab to the front of its pane. */
+  focusPanel(leafId, panelId) {
+    set((state) => ({ layout: setActiveTab(state.layout, leafId, panelId), activeLeafId: leafId }));
+    schedulePersist(get);
+  },
+
+  /**
+   * Open a Git tab.
+   *
+   * It is pointed at the repository the folder is *in*, not at the folder — a
+   * session working in `src/state` still wants the whole repository's changes,
+   * and a tree rooted halfway down one is a tree that hides things.
+   */
+  async openGitPanel(options = {}) {
+    const state = get();
+    const from =
+      options.root ||
+      Object.values(state.panels).find((panel) => panel.kind === 'files')?.root ||
+      state.sessions[state.activeSessionId ?? '']?.cwd ||
+      '';
+    if (!from) return null;
+
+    const found = await window.api.git.call('root', from);
+    const root = typeof found.value === 'string' ? found.value : null;
+    if (!root) return null;
+
+    // One Git tab per repository is enough; a second would only ever say the
+    // same thing, and bringing the existing one forward is what was meant.
+    const existing = Object.values(get().panels).find(
+      (panel) => panel.kind === 'git' && panel.root === root,
+    );
+    if (existing) {
+      const leaf = leafOfTab(get().layout, existing.id);
+      if (leaf) get().focusPanel(leaf.id, existing.id);
+      return existing.id;
+    }
+
+    const panelId = crypto.randomUUID();
+    const panel: GitPanelState = {
+      id: panelId,
+      kind: 'git',
+      root,
+      view: 'changes',
+      grouping: 'directory',
+      collapsed: [],
+      message: '',
+      amend: false,
+      selectedSha: null,
+      selectedBranch: null,
+    };
+
+    const targetLeafId = options.leafId || state.activeLeafId || allLeaves(state.layout)[0]?.id;
+    const side = options.side || 'center';
+    set((prev) => {
+      const panels = { ...prev.panels, [panelId]: panel };
+      let layout = prev.layout;
+      if (!targetLeafId || !findLeaf(layout, targetLeafId)) {
+        const leaf = makeLeaf([panelId]);
+        return { panels, layout: leaf, activeLeafId: leaf.id };
+      }
+      if (side === 'center') {
+        return { panels, layout: insertTab(layout, targetLeafId, panelId), activeLeafId: targetLeafId };
+      }
+      const direction = side === 'left' || side === 'right' ? 'row' : 'column';
+      const result = splitLeaf(layout, targetLeafId, direction, panelId);
+      layout = result.root;
+      return { panels, layout, activeLeafId: result.leafId, zoomedLeafId: null };
+    });
+
+    get().refreshRepo(root, 'all');
+    schedulePersist(get);
+    return panelId;
+  },
+
+  setGitView(panelId, view) {
+    get().patchGitPanel(panelId, { view });
+    const panel = get().panels[panelId];
+    if (panel?.kind !== 'git') return;
+    // Each view is a different question for git; ask it when it is opened rather
+    // than keeping all three answers fresh for a panel nobody is looking at.
+    get().refreshRepo(panel.root, view === 'history' ? 'graph' : view === 'branches' ? 'refs' : 'status');
+  },
+
+  setGitGrouping(panelId, grouping) {
+    get().patchGitPanel(panelId, { grouping });
+  },
+
+  patchGitPanel(panelId, patch) {
+    set((prev) => {
+      const panel = prev.panels[panelId];
+      if (panel?.kind !== 'git') return prev;
+      return { panels: { ...prev.panels, [panelId]: { ...panel, ...patch } } };
+    });
+    schedulePersist(get);
+  },
+
+  /**
+   * Ask git again.
+   *
+   * Always after a verb, and on opening a view — never trusting the last answer,
+   * because a session in the same folder commits and branches without telling
+   * anyone, and a panel showing a stale picture is worse than a slow one.
+   */
+  async refreshRepo(root, what = 'status') {
+    if (!root) return;
+    const base: RepoState = get().repos[root] ?? {
+      loading: false, error: null, branch: null, upstream: null, ahead: 0, behind: 0,
+      detached: false, files: [], commits: [], graphWidth: 1, current: null,
+      local: [], remote: [], tags: [], stashes: [], busy: null, notice: null,
+    };
+    set((prev) => ({ repos: { ...prev.repos, [root]: { ...base, loading: true } } }));
+
+    const wants = (kind: string) => what === 'all' || what === kind;
+    const [status, graph, refs] = await Promise.all([
+      wants('status') ? window.api.git.call('status', root) : Promise.resolve(null),
+      wants('graph') ? window.api.git.call('graph', root, { limit: 200 }) : Promise.resolve(null),
+      wants('refs') ? window.api.git.call('refs', root) : Promise.resolve(null),
+    ]);
+
+    set((prev) => {
+      const current = prev.repos[root] ?? base;
+      const error = [status, graph, refs].find((r) => r && !r.ok)?.error ?? null;
+      return {
+        repos: {
+          ...prev.repos,
+          [root]: {
+            ...current,
+            loading: false,
+            error,
+            ...(status?.ok
+              ? {
+                  branch: status.branch ?? null,
+                  upstream: status.upstream ?? null,
+                  ahead: status.ahead ?? 0,
+                  behind: status.behind ?? 0,
+                  detached: status.detached ?? false,
+                  files: status.files ?? [],
+                }
+              : {}),
+            ...(graph?.ok ? { commits: graph.commits ?? [], graphWidth: graph.width ?? 1 } : {}),
+            ...(refs?.ok
+              ? {
+                  current: refs.current ?? null,
+                  local: refs.local ?? [],
+                  remote: refs.remote ?? [],
+                  tags: refs.tags ?? [],
+                  stashes: refs.stashes ?? [],
+                }
+              : {}),
+          },
+        },
+      };
+    });
+  },
+
+  /**
+   * Run one git verb and say what happened.
+   *
+   * A failure is kept as git's own words. Every paraphrase this could write —
+   * "push failed" — throws away the line that says *why*, which is the only part
+   * that tells someone what to do next.
+   */
+  async gitDo(root, name, args, label) {
+    set((prev) =>
+      prev.repos[root]
+        ? { repos: { ...prev.repos, [root]: { ...prev.repos[root], busy: label ?? name, notice: null } } }
+        : prev,
+    );
+    const result = await window.api.git.call(name, root, args);
+    set((prev) =>
+      prev.repos[root]
+        ? {
+            repos: {
+              ...prev.repos,
+              [root]: {
+                ...prev.repos[root],
+                busy: null,
+                notice: result.ok
+                  ? { kind: 'ok', text: `${label ?? name} — done.` }
+                  : { kind: 'bad', text: result.error ?? 'git failed' },
+              },
+            },
+          }
+        : prev,
+    );
+    await get().refreshRepo(root, 'all');
+    return result;
+  },
+
+  /** Point an open panel at another folder, keeping the files already open. */
+  setPanelRoot(panelId, root) {
+    if (!root) return;
+    set((prev) => {
+      const panel = filesPanel(prev, panelId);
+      return panel
+        ? { panels: { ...prev.panels, [panelId]: { ...panel, root, expanded: [root] } } }
+        : prev;
+    });
+    get().loadDir(root);
+    schedulePersist(get);
+  },
+
+  async loadDir(path) {
+    if (get().dirs[path]?.loading) return;
+    set((prev) => ({
+      dirs: { ...prev.dirs, [path]: { entries: prev.dirs[path]?.entries ?? [], error: null, loading: true } },
+    }));
+    const result = await window.api.files.list(path);
+    set((prev) => ({
+      dirs: {
+        ...prev.dirs,
+        [path]: {
+          entries: (result.entries ?? []) as DirEntry[],
+          error: result.ok ? null : (result.error ?? 'Could not read that folder.'),
+          loading: false,
+        },
+      },
+    }));
+  },
+
+  toggleDir(panelId, path) {
+    const panel = filesPanel(get(), panelId);
+    if (!panel) return;
+    const open = panel.expanded.includes(path);
+    set((prev) => {
+      const current = filesPanel(prev, panelId);
+      if (!current) return prev;
+      return {
+        panels: {
+          ...prev.panels,
+          [panelId]: {
+            ...current,
+            expanded: open
+              ? current.expanded.filter((entry) => entry !== path)
+              : [...current.expanded, path],
+          },
+        },
+      };
+    });
+    if (!open) get().loadDir(path);
+    schedulePersist(get);
+  },
+
+  async openFile(panelId, path) {
+    if (!filesPanel(get(), panelId)) return;
+
+    set((prev) => {
+      const current = filesPanel(prev, panelId);
+      if (!current) return prev;
+      return {
+        panels: {
+          ...prev.panels,
+          [panelId]: {
+            ...current,
+            open: current.open.includes(path) ? current.open : [...current.open, path],
+            active: path,
+          },
+        },
+      };
+    });
+
+    // Already loaded, and possibly edited — re-reading would throw that away.
+    if (get().buffers[path]) return;
+
+    set((prev) => ({
+      buffers: {
+        ...prev.buffers,
+        [path]: {
+          path,
+          text: '',
+          savedText: '',
+          mtimeMs: 0,
+          conflict: null,
+          reloadedAt: null,
+          loading: true,
+          error: null,
+          readOnly: false,
+        },
+      },
+    }));
+
+    const result = await window.api.files.read(path);
+    set((prev) => ({
+      buffers: {
+        ...prev.buffers,
+        [path]: {
+          ...prev.buffers[path],
+          text: result.text ?? '',
+          savedText: result.text ?? '',
+          mtimeMs: result.mtimeMs ?? 0,
+          loading: false,
+          error: result.ok ? null : (result.error ?? 'Could not open that file.'),
+          readOnly: !result.ok,
+        },
+      },
+    }));
+    if (result.ok) window.api.files.watch(path, result.mtimeMs ?? 0);
+    schedulePersist(get);
+  },
+
+  closeFile(panelId, path) {
+    set((prev) => {
+      const panel = filesPanel(prev, panelId);
+      if (!panel) return prev;
+      const open = panel.open.filter((entry) => entry !== path);
+      const at = Math.min(panel.open.indexOf(path), open.length - 1);
+      return {
+        panels: {
+          ...prev.panels,
+          [panelId]: {
+            ...panel,
+            open,
+            active: panel.active === path ? (open[at] ?? null) : panel.active,
+          },
+        },
+      };
+    });
+    // The buffer only goes when no panel is showing it any more — and never while
+    // it holds an edit nobody has saved.
+    const stillOpen = Object.values(get().panels).some(
+      (panel) => panel.kind === 'files' && panel.open.includes(path),
+    );
+    const buffer = get().buffers[path];
+    if (!stillOpen && buffer && buffer.text === buffer.savedText) {
+      window.api.files.unwatch(path);
+      set((prev) => {
+        const buffers = { ...prev.buffers };
+        delete buffers[path];
+        return { buffers };
+      });
+    }
+    schedulePersist(get);
+  },
+
+  setActiveFile(panelId, path) {
+    set((prev) => {
+      const panel = filesPanel(prev, panelId);
+      return panel ? { panels: { ...prev.panels, [panelId]: { ...panel, active: path } } } : prev;
+    });
+    schedulePersist(get);
+  },
+
+  editBuffer(path, text) {
+    set((prev) =>
+      prev.buffers[path]
+        ? { buffers: { ...prev.buffers, [path]: { ...prev.buffers[path], text, reloadedAt: null } } }
+        : prev,
+    );
+  },
+
+  /**
+   * Write the buffer back — over the version it was read from, and no other.
+   *
+   * The main process compares modification times and refuses a write whose file
+   * has moved on. That refusal is not an error to report and forget: it is a
+   * session having edited this file while it was open here, and it becomes the
+   * conflict the panel shows.
+   */
+  async saveBuffer(path, options = {}) {
+    const buffer = get().buffers[path];
+    if (!buffer || buffer.loading || buffer.readOnly) return false;
+    if (!options.force && buffer.text === buffer.savedText && !buffer.conflict) return true;
+
+    const text = buffer.text;
+    const result = await window.api.files.write(path, text, {
+      expectedMtimeMs: buffer.mtimeMs,
+      force: options.force === true,
+    });
+
+    if (result.conflict) {
+      set((prev) => ({
+        buffers: {
+          ...prev.buffers,
+          [path]: {
+            ...prev.buffers[path],
+            conflict: { text: result.text ?? '', mtimeMs: result.mtimeMs ?? 0 },
+          },
+        },
+      }));
+      return false;
+    }
+    if (!result.ok) {
+      set((prev) => ({
+        buffers: { ...prev.buffers, [path]: { ...prev.buffers[path], error: result.error ?? 'Could not save.' } },
+      }));
+      return false;
+    }
+
+    set((prev) => ({
+      buffers: {
+        ...prev.buffers,
+        [path]: {
+          ...prev.buffers[path],
+          savedText: text,
+          mtimeMs: result.mtimeMs ?? 0,
+          conflict: null,
+          error: null,
+        },
+      },
+    }));
+    window.api.files.watch(path, result.mtimeMs ?? 0);
+    return true;
+  },
+
+  /** Throw the edit away and take what is on disk. */
+  async revertBuffer(path) {
+    const result = await window.api.files.read(path);
+    if (!result.ok) return;
+    set((prev) =>
+      prev.buffers[path]
+        ? {
+            buffers: {
+              ...prev.buffers,
+              [path]: {
+                ...prev.buffers[path],
+                text: result.text ?? '',
+                savedText: result.text ?? '',
+                mtimeMs: result.mtimeMs ?? 0,
+                conflict: null,
+                error: null,
+              },
+            },
+          }
+        : prev,
+    );
+    window.api.files.watch(path, result.mtimeMs ?? 0);
+  },
+
+  /**
+   * Put a piece of a file into a session's prompt.
+   *
+   * The one thing this editor can do that no other editor can: the session it
+   * goes to is already working in this folder, so the reference is enough — the
+   * lines are named rather than pasted, and Claude reads them itself.
+   */
+  sendSelectionTo(sessionId, path, text, from, to) {
+    const relative = path.startsWith(`${get().sessions[sessionId]?.cwd ?? ''}/`)
+      ? path.slice((get().sessions[sessionId]?.cwd ?? '').length + 1)
+      : path;
+    const where = from === to ? `${relative}:${from}` : `${relative}:${from}-${to}`;
+    get().focusSession(sessionId);
+    get().sendInput(sessionId, `@${where} `);
+    void text;
   },
 
   restoreMinimized(sessionId) {
@@ -1661,6 +2323,12 @@ export const useStore = create<State>((set, get) => ({
 }));
 
 /** Start a pty for a session id that already exists (or is about to) in the layout. */
+/** The files panel with this id, or null — a Git tab is not one. */
+function filesPanel(state: State, panelId: string): FilePanel | null {
+  const found = state.panels[panelId];
+  return found?.kind === 'files' ? found : null;
+}
+
 /**
  * Bring docked tabs back into the layout.
  *

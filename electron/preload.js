@@ -108,6 +108,23 @@ contextBridge.exposeInMainWorld('api', {
     save: (state) => ipcRenderer.send('workspace:save', state),
   },
 
+  files: {
+    list: (dir) => ipcRenderer.invoke('files:list', dir),
+    read: (file) => ipcRenderer.invoke('files:read', file),
+    // `expectedMtimeMs` is what the editor loaded; the main process refuses the
+    // write if disk has moved on, unless `force` says to go over it anyway.
+    write: (file, text, options) => ipcRenderer.invoke('files:write', { file, text, ...options }),
+    watch: (file, mtimeMs) => ipcRenderer.send('files:watch', { file, mtimeMs }),
+    unwatch: (file) => ipcRenderer.send('files:unwatch', { file }),
+    onChanged: (handler) => on('files:changed', handler),
+    reveal: (file) => ipcRenderer.send('files:reveal', file),
+  },
+
+  git: {
+    /** One call, named. The names are an allowlist on the other side. */
+    call: (name, root, args) => ipcRenderer.invoke('git:call', { name, root, args }),
+  },
+
   system: {
     pickDirectory: (startIn) => ipcRenderer.invoke('system:pick-directory', startIn),
     homedir: () => ipcRenderer.invoke('system:homedir'),

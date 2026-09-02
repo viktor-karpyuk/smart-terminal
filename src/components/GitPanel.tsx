@@ -1,0 +1,641 @@
+import { useEffect, useMemo, useState } from 'react';
+import { useStore } from '../state/store';
+import type { GitBranch, GitCommit, GitFile } from '../global';
+
+/**
+ * Git, as a tab beside the files.
+ *
+ * Three views on one repository: what is about to be committed, what has
+ * happened, and the branches. It runs git in the panel's folder rather than in a
+ * session's terminal, so committing never interrupts whatever Claude is doing —
+ * and because a session can commit without telling anyone, every view asks git
+ * again rather than trusting the picture it already has.
+ */
+export function GitPanel({ panelId }: { panelId: string }) {
+  const panel = useStore((s) => {
+    const found = s.panels[panelId];
+    return found?.kind === 'git' ? found : null;
+  });
+  const repo = useStore((s) => (panel ? s.repos[panel.root] : undefined));
+  const setGitView = useStore((s) => s.setGitView);
+  const refreshRepo = useStore((s) => s.refreshRepo);
+
+  useEffect(() => {
+    if (panel && !repo) refreshRepo(panel.root, 'all');
+  }, [panel, repo, refreshRepo]);
+
+  if (!panel) return null;
+
+  return (
+    <div className="git-panel">
+      <BranchBar panelId={panelId} root={panel.root} />
+
+      <div className="git-views">
+        {(['changes', 'history', 'branches'] as const).map((view) => (
+          <button
+            key={view}
+            className={panel.view === view ? 'is-on' : ''}
+            onClick={() => setGitView(panelId, view)}
+          >
+            {view === 'changes' ? 'Changes' : view === 'history' ? 'History' : 'Branches'}
+            {view === 'changes' && repo?.files.length ? (
+              <span className="git-count">{repo.files.length}</span>
+            ) : null}
+          </button>
+        ))}
+        <span style={{ flex: 1 }} />
+        <button
+          className="icon-btn"
+          title="Ask git again"
+          onClick={() => refreshRepo(panel.root, 'all')}
+        >
+          ↻
+        </button>
+      </div>
+
+      {repo?.notice && (
+        <div className={`git-notice is-${repo.notice.kind}`}>
+          <span className="file-bar-dot" />
+          <span className="file-bar-text">{repo.notice.text}</span>
+        </div>
+      )}
+      {repo?.busy && (
+        <div className="git-notice is-busy">
+          <span className="git-spinner" />
+          <span className="file-bar-text">{repo.busy}…</span>
+        </div>
+      )}
+      {repo?.error && !repo.busy && (
+        <div className="git-notice is-bad">
+          <span className="file-bar-dot" />
+          <span className="file-bar-text">{repo.error}</span>
+        </div>
+      )}
+
+      {panel.view === 'changes' && <Changes panelId={panelId} />}
+      {panel.view === 'history' && <History panelId={panelId} />}
+      {panel.view === 'branches' && <Branches panelId={panelId} />}
+    </div>
+  );
+}
+
+function BranchBar({ panelId, root }: { panelId: string; root: string }) {
+  const repo = useStore((s) => s.repos[root]);
+  const gitDo = useStore((s) => s.gitDo);
+  const setGitView = useStore((s) => s.setGitView);
+
+  return (
+    <div className="git-branchbar">
+      <button className="git-branch" onClick={() => setGitView(panelId, 'branches')} title="Branches">
+        <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="#e0af68" strokeWidth="1.3">
+          <circle cx="3.6" cy="3.2" r="1.7" />
+          <circle cx="3.6" cy="10.8" r="1.7" />
+          <circle cx="10.4" cy="6.4" r="1.7" />
+          <path d="M3.6 4.9v4.2M5.2 3.9c2.6.4 3.8 1.3 4 2.3" />
+        </svg>
+        <span>{repo?.detached ? 'detached HEAD' : (repo?.branch ?? '…')}</span>
+      </button>
+      {(repo?.ahead ?? 0) > 0 && <span className="git-ahead">↑{repo?.ahead}</span>}
+      {(repo?.behind ?? 0) > 0 && <span className="git-behind">↓{repo?.behind}</span>}
+      <span style={{ flex: 1 }} />
+      <button className="ghost-btn" onClick={() => gitDo(root, 'fetch', {}, 'Fetching')}>
+        Fetch
+      </button>
+      <button className="ghost-btn" onClick={() => gitDo(root, 'pull', {}, 'Updating')}>
+        Update
+      </button>
+      <button
+        className="ghost-btn"
+        onClick={() =>
+          gitDo(
+            root,
+            'push',
+            // A branch with no upstream needs one, and saying so is better than
+            // failing with git's advice text and making someone read it.
+            repo?.upstream ? {} : { setUpstream: repo?.branch },
+            'Pushing',
+          )
+        }
+      >
+        Push
+      </button>
+    </div>
+  );
+}
+
+// --- Changes ---------------------------------------------------------------
+
+/** A node of the changes tree: a folder that holds more, or one changed file. */
+type Node = { kind: 'dir'; key: string; label: string; children: Node[]; count: number } | { kind: 'file'; key: string; file: GitFile };
+
+/**
+ * Group the changed files the way the panel is set to.
+ *
+ * Directories with a single child are folded into one row — `src/state`, not
+ * `src` then `state` — because otherwise a deep tree is mostly indentation.
+ */
+function group(files: GitFile[], grouping: string): Node[] {
+  if (grouping === 'files') {
+    return [...files]
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((file) => ({ kind: 'file' as const, key: file.path, file }));
+  }
+
+  const byDir = new Map<string, GitFile[]>();
+  for (const file of files) {
+    const key = file.dir;
+    byDir.set(key, [...(byDir.get(key) ?? []), file]);
+  }
+  return [...byDir.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([dir, kids]) => ({
+      kind: 'dir' as const,
+      key: dir || '/',
+      label: dir || '(root)',
+      count: kids.length,
+      children: kids
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((file) => ({ kind: 'file' as const, key: file.path, file })),
+    }));
+}
+
+const LETTER_COLOUR: Record<string, string> = {
+  A: '#9ece6a', M: '#7aa2f7', D: '#f7768e', R: '#bb9af7', C: '#bb9af7', '?': '#e0af68', '!': '#f7768e',
+};
+
+function Changes({ panelId }: { panelId: string }) {
+  const panel = useStore((s) => {
+    const found = s.panels[panelId];
+    return found?.kind === 'git' ? found : null;
+  });
+  const repo = useStore((s) => (panel ? s.repos[panel.root] : undefined));
+  const patch = useStore((s) => s.patchGitPanel);
+  const setGitGrouping = useStore((s) => s.setGitGrouping);
+  const gitDo = useStore((s) => s.gitDo);
+
+  const files = repo?.files ?? [];
+  const tree = useMemo(() => group(files, panel?.grouping ?? 'directory'), [files, panel?.grouping]);
+  const staged = files.filter((file) => file.staged || file.partial);
+
+  if (!panel) return null;
+  const root = panel.root;
+
+  const toggle = (file: GitFile) =>
+    gitDo(root, file.staged || file.partial ? 'unstage' : 'stage', { paths: [file.path] }, 'Staging');
+
+  return (
+    <>
+      <div className="git-toolbar">
+        <span className="git-toolbar-label">Group by</span>
+        <div className="segmented git-grouping">
+          {(['directory', 'module', 'both', 'files'] as const).map((mode) => (
+            <button
+              key={mode}
+              className={panel.grouping === mode ? 'is-on' : ''}
+              onClick={() => setGitGrouping(panelId, mode)}
+            >
+              {mode === 'directory' ? 'Directory' : mode === 'module' ? 'Module' : mode === 'both' ? 'Both' : 'Files'}
+            </button>
+          ))}
+        </div>
+        <span style={{ flex: 1 }} />
+        <button
+          className="icon-btn"
+          title="Expand everything"
+          onClick={() => patch(panelId, { collapsed: [] })}
+        >
+          +
+        </button>
+        <button
+          className="icon-btn"
+          title="Collapse everything"
+          onClick={() =>
+            patch(panelId, { collapsed: tree.filter((n) => n.kind === 'dir').map((n) => n.key) })
+          }
+        >
+          –
+        </button>
+      </div>
+
+      <div className="git-list">
+        {files.length === 0 && <p className="files-note">Nothing changed.</p>}
+        {tree.map((node) =>
+          node.kind === 'file' ? (
+            <FileRow key={node.key} file={node.file} depth={0} onToggle={toggle} root={root} />
+          ) : (
+            <div key={node.key}>
+              <div
+                className="git-row is-dir"
+                onClick={() =>
+                  patch(panelId, {
+                    collapsed: panel.collapsed.includes(node.key)
+                      ? panel.collapsed.filter((k) => k !== node.key)
+                      : [...panel.collapsed, node.key],
+                  })
+                }
+              >
+                <svg
+                  className={`files-chevron${panel.collapsed.includes(node.key) ? '' : ' is-open'}`}
+                  width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"
+                >
+                  <path d="M4.5 2.5L8 6l-3.5 3.5" />
+                </svg>
+                <span className="git-dir-name">{node.label}</span>
+                <span className="git-count">{node.count}</span>
+              </div>
+              {!panel.collapsed.includes(node.key) &&
+                node.children.map((child) =>
+                  child.kind === 'file' ? (
+                    <FileRow key={child.key} file={child.file} depth={1} onToggle={toggle} root={root} />
+                  ) : null,
+                )}
+            </div>
+          ),
+        )}
+      </div>
+
+      <div className="git-commit">
+        <textarea
+          className="git-message"
+          placeholder="What changed, and why"
+          value={panel.message}
+          onChange={(event) => patch(panelId, { message: event.target.value })}
+        />
+        <div className="git-commit-actions">
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={panel.amend}
+              onChange={(event) => patch(panelId, { amend: event.target.checked })}
+            />
+            <span>Amend</span>
+          </label>
+          <span className="form-hint">
+            {staged.length} of {files.length} staged
+          </span>
+          <span style={{ flex: 1 }} />
+          <button
+            className="ghost-btn"
+            disabled={!panel.message.trim() || (!staged.length && !panel.amend)}
+            onClick={async () => {
+              const result = await gitDo(root, 'commit', { message: panel.message, amend: panel.amend }, 'Committing');
+              if (result.ok) patch(panelId, { message: '', amend: false });
+            }}
+          >
+            Commit
+          </button>
+          <button
+            className="primary-btn"
+            disabled={!panel.message.trim() || (!staged.length && !panel.amend)}
+            onClick={async () => {
+              const result = await gitDo(root, 'commit', { message: panel.message, amend: panel.amend }, 'Committing');
+              if (!result.ok) return;
+              patch(panelId, { message: '', amend: false });
+              await gitDo(root, 'push', repo?.upstream ? {} : { setUpstream: repo?.branch }, 'Pushing');
+            }}
+          >
+            Commit and Push
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function FileRow({
+  file,
+  depth,
+  onToggle,
+  root,
+}: {
+  file: GitFile;
+  depth: number;
+  onToggle(file: GitFile): void;
+  root: string;
+}) {
+  const openFilePanel = useStore((s) => s.openFilePanel);
+  const openFile = useStore((s) => s.openFile);
+  const panels = useStore((s) => s.panels);
+
+  return (
+    <div className="git-row" style={{ paddingLeft: 8 + depth * 16 }}>
+      <button
+        className={`git-box${file.staged ? ' is-on' : file.partial ? ' is-partial' : ''}`}
+        onClick={() => onToggle(file)}
+        title={file.staged ? 'Staged — click to take it out' : 'Not staged — click to stage it'}
+        aria-label="Stage"
+      />
+      <span className="git-letter" style={{ color: LETTER_COLOUR[file.letter] ?? '#7b849c' }}>
+        {file.letter}
+      </span>
+      <span
+        className={`git-file-name${file.letter === 'D' ? ' is-gone' : ''}`}
+        title={file.from ? `${file.from} → ${file.path}` : file.path}
+        onClick={() => {
+          // Open it in a files panel on this repository, making one if needed.
+          const existing = Object.values(panels).find(
+            (panel) => panel.kind === 'files' && root.startsWith(panel.root),
+          );
+          if (existing) openFile(existing.id, file.absolute);
+          else openFilePanel({ side: 'right', root });
+        }}
+      >
+        {depth === 0 && file.dir ? `${file.dir}/` : ''}
+        {file.name}
+      </span>
+      {(file.added !== null || file.removed !== null) && (
+        <span className="git-numstat">
+          {file.added ? <i className="is-add">+{file.added}</i> : null}
+          {file.removed ? <i className="is-del">−{file.removed}</i> : null}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// --- History ---------------------------------------------------------------
+
+/** One row of the graph is one commit, so both use the same height. */
+const ROW = 26;
+const LANE_W = 16;
+
+function History({ panelId }: { panelId: string }) {
+  const panel = useStore((s) => {
+    const found = s.panels[panelId];
+    return found?.kind === 'git' ? found : null;
+  });
+  const repo = useStore((s) => (panel ? s.repos[panel.root] : undefined));
+  const patch = useStore((s) => s.patchGitPanel);
+  const refreshRepo = useStore((s) => s.refreshRepo);
+
+  useEffect(() => {
+    if (panel && repo && !repo.commits.length && !repo.loading) refreshRepo(panel.root, 'graph');
+  }, [panel, repo, refreshRepo]);
+
+  if (!panel) return null;
+  const commits = repo?.commits ?? [];
+  const width = Math.max(1, repo?.graphWidth ?? 1) * LANE_W + 16;
+
+  return (
+    <div className="git-history">
+      <div className="git-graph" style={{ minHeight: commits.length * ROW }}>
+        <svg
+          className="git-lanes"
+          width={width}
+          height={commits.length * ROW}
+          fill="none"
+          strokeWidth="1.8"
+        >
+          {commits.map((commit, index) => (
+            <Lanes key={commit.sha} commit={commit} index={index} commits={commits} />
+          ))}
+        </svg>
+
+        <div className="git-commits" style={{ marginLeft: width }}>
+          {commits.map((commit) => (
+            <div
+              key={commit.sha}
+              className={`git-commit-row${panel.selectedSha === commit.sha ? ' is-selected' : ''}`}
+              onClick={() => patch(panelId, { selectedSha: commit.sha })}
+            >
+              {commit.refs.map((ref) => (
+                <span
+                  key={ref.kind + ref.name}
+                  className={`git-ref is-${ref.kind}${ref.head ? ' is-head' : ''}`}
+                  title={ref.kind}
+                >
+                  {ref.name}
+                </span>
+              ))}
+              <span className="git-subject">{commit.subject}</span>
+              <span className="git-who">{commit.author}</span>
+              <span className="git-sha">{commit.sha.slice(0, 7)}</span>
+            </div>
+          ))}
+          {!commits.length && <p className="files-note">No commits yet.</p>}
+        </div>
+      </div>
+
+      {panel.selectedSha && <CommitDetail root={panel.root} sha={panel.selectedSha} />}
+    </div>
+  );
+}
+
+/** The lines and the dot for one commit, on the shared row rhythm. */
+function Lanes({ commit, index, commits }: { commit: GitCommit; index: number; commits: GitCommit[] }) {
+  const y = index * ROW + ROW / 2;
+  const x = (lane: number) => 10 + lane * LANE_W;
+  const rowOf = (sha: string) => commits.findIndex((other) => other.sha === sha);
+
+  return (
+    <g>
+      {/* lanes that only pass this row keep their line unbroken */}
+      {commit.through.map((lane) => (
+        <line
+          key={`t${lane.lane}`}
+          x1={x(lane.lane)}
+          y1={y - ROW / 2}
+          x2={x(lane.lane)}
+          y2={y + ROW / 2}
+          stroke={lane.colour}
+        />
+      ))}
+
+      {commit.edges.map((edge) => {
+        const target = rowOf(edge.sha);
+        // A parent off the end of the page still gets a stub, so the line does
+        // not simply stop in mid-air at the bottom of the list.
+        const endY = target === -1 ? y + ROW : target * ROW + ROW / 2;
+        return edge.from === edge.to ? (
+          <line key={edge.sha + edge.to} x1={x(edge.from)} y1={y} x2={x(edge.to)} y2={endY} stroke={edge.colour} />
+        ) : (
+          <path
+            key={edge.sha + edge.to}
+            d={`M${x(edge.from)} ${y} C ${x(edge.from)} ${y + ROW * 0.6}, ${x(edge.to)} ${endY - ROW * 0.6}, ${x(edge.to)} ${endY}`}
+            stroke={edge.colour}
+          />
+        );
+      })}
+
+      <circle cx={x(commit.lane)} cy={y} r={commit.merge ? 5 : 4} fill={commit.merge ? commit.colour : '#0b0d13'} stroke={commit.colour} />
+    </g>
+  );
+}
+
+function CommitDetail({ root, sha }: { root: string; sha: string }) {
+  const [files, setFiles] = useState<Array<{ path: string; name: string; added: number | null; removed: number | null }>>([]);
+  const gitDo = useStore((s) => s.gitDo);
+  const refreshRepo = useStore((s) => s.refreshRepo);
+
+  useEffect(() => {
+    let alive = true;
+    window.api.git.call('commitFiles', root, { sha }).then((result) => {
+      if (alive && result.ok) setFiles((result.value as never) ?? (result as { files?: never }).files ?? []);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [root, sha]);
+
+  return (
+    <div className="git-detail">
+      <div className="git-detail-head">
+        <span className="git-sha">{sha.slice(0, 7)}</span>
+        <span style={{ flex: 1 }} />
+        <button className="ghost-btn" onClick={() => gitDo(root, 'checkout', { ref: sha }, 'Checking out')}>
+          Check out
+        </button>
+        <button className="ghost-btn" onClick={() => gitDo(root, 'revert', { sha }, 'Reverting')}>
+          Revert
+        </button>
+        <button
+          className="ghost-btn"
+          onClick={() => {
+            navigator.clipboard?.writeText(sha);
+            refreshRepo(root, 'status');
+          }}
+        >
+          Copy SHA
+        </button>
+      </div>
+      <div className="git-detail-files">
+        {files.map((file) => (
+          <div key={file.path} className="git-row">
+            <span className="git-file-name" title={file.path}>{file.path}</span>
+            <span className="git-numstat">
+              {file.added ? <i className="is-add">+{file.added}</i> : null}
+              {file.removed ? <i className="is-del">−{file.removed}</i> : null}
+            </span>
+          </div>
+        ))}
+        {!files.length && <p className="files-note">Reading…</p>}
+      </div>
+    </div>
+  );
+}
+
+// --- Branches --------------------------------------------------------------
+
+function Branches({ panelId }: { panelId: string }) {
+  const panel = useStore((s) => {
+    const found = s.panels[panelId];
+    return found?.kind === 'git' ? found : null;
+  });
+  const repo = useStore((s) => (panel ? s.repos[panel.root] : undefined));
+  const patch = useStore((s) => s.patchGitPanel);
+  const gitDo = useStore((s) => s.gitDo);
+  const refreshRepo = useStore((s) => s.refreshRepo);
+
+  useEffect(() => {
+    if (panel && repo && !repo.local.length && !repo.loading) refreshRepo(panel.root, 'refs');
+  }, [panel, repo, refreshRepo]);
+
+  if (!panel) return null;
+  const root = panel.root;
+  const current = repo?.current ?? null;
+  const picked: GitBranch | null =
+    repo?.local.find((branch) => branch.name === panel.selectedBranch) ?? null;
+
+  return (
+    <div className="git-branches">
+      <div className="git-reflist">
+        <div className="git-caption">Local · {repo?.local.length ?? 0}</div>
+        {repo?.local.map((branch) => (
+          <div
+            key={branch.name}
+            className={`git-row${branch.name === panel.selectedBranch ? ' is-selected' : ''}`}
+            onClick={() => patch(panelId, { selectedBranch: branch.name })}
+          >
+            <span className="git-tick">{branch.name === current ? '✓' : ''}</span>
+            <span className="git-file-name">{branch.name}</span>
+            {branch.ahead > 0 && <span className="git-ahead">↑{branch.ahead}</span>}
+            {branch.behind > 0 && <span className="git-behind">↓{branch.behind}</span>}
+            {branch.gone && <span className="git-gone">gone</span>}
+            {!branch.upstream && <span className="git-gone">no remote</span>}
+          </div>
+        ))}
+
+        <div className="git-caption">Remote · {repo?.remote.length ?? 0}</div>
+        {repo?.remote.map((branch) => (
+          <div key={branch.name} className="git-row is-quiet">
+            <span className="git-tick" />
+            <span className="git-file-name">{branch.name}</span>
+          </div>
+        ))}
+
+        {(repo?.tags.length ?? 0) > 0 && <div className="git-caption">Tags · {repo?.tags.length}</div>}
+        {repo?.tags.slice(0, 20).map((tag) => (
+          <div key={tag.name} className="git-row is-quiet">
+            <span className="git-tick" />
+            <span className="git-file-name" style={{ color: '#e0af68' }}>{tag.name}</span>
+          </div>
+        ))}
+
+        {(repo?.stashes.length ?? 0) > 0 && <div className="git-caption">Stashes · {repo?.stashes.length}</div>}
+        {repo?.stashes.map((stash) => (
+          <div key={stash.ref} className="git-row is-quiet">
+            <span className="git-tick" />
+            <span className="git-file-name">{stash.subject}</span>
+            <button className="link-btn" onClick={() => gitDo(root, 'stashPop', { ref: stash.ref }, 'Restoring')}>
+              Pop
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div className="git-branch-detail">
+        {!picked ? (
+          <p className="files-note">Pick a branch.</p>
+        ) : (
+          <>
+            <div className="git-branch-title">{picked.name}</div>
+            <div className="form-hint">
+              {picked.upstream ? `tracks ${picked.upstream}` : 'no upstream'}
+            </div>
+            <div className="git-standings">
+              <div>
+                <strong className="is-ahead">{picked.ahead}</strong>
+                <span>commits it has that its remote does not</span>
+              </div>
+              <div>
+                <strong className="is-behind">{picked.behind}</strong>
+                <span>commits its remote has that it does not</span>
+              </div>
+            </div>
+            <div className="git-branch-actions">
+              <button
+                className="primary-btn"
+                disabled={picked.name === current}
+                onClick={() => gitDo(root, 'checkout', { ref: picked.name }, `Checking out ${picked.name}`)}
+              >
+                Check out
+              </button>
+              {/* Both sides named. A bare "Merge" is the one everyone gets backwards. */}
+              <button
+                className="ghost-btn"
+                disabled={picked.name === current}
+                onClick={() => gitDo(root, 'merge', { ref: picked.name }, `Merging ${picked.name} into ${current}`)}
+              >
+                Merge into {current}
+              </button>
+              <button
+                className="ghost-btn"
+                disabled={picked.name === current}
+                onClick={() => gitDo(root, 'rebase', { ref: picked.name }, `Rebasing ${current} onto ${picked.name}`)}
+              >
+                Rebase {current} onto it
+              </button>
+              <button
+                className="ghost-btn is-danger"
+                disabled={picked.name === current}
+                onClick={() => gitDo(root, 'deleteBranch', { name: picked.name }, `Deleting ${picked.name}`)}
+              >
+                Delete
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

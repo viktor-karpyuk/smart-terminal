@@ -137,6 +137,72 @@ export interface SessionGroup {
 /** How a group's sessions are arranged when it is laid out as a unit. */
 export type GroupArrangement = 'tabs' | 'columns' | 'rows' | 'grid';
 
+/**
+ * A tab that is not a session: a folder on the left, the file you are looking at
+ * on the right.
+ *
+ * It is a tab rather than a sidebar on purpose. Everything the app can already do
+ * to a section — split it, drag it somewhere else, fill the window with it, set
+ * it aside — it can then do to this, for free and without a single special case.
+ */
+export interface FilePanel {
+  id: string;
+  kind: 'files';
+  /** The folder the tree is rooted at. */
+  root: string;
+  /** Which session's folder this followed, if it was opened from one. */
+  followsSessionId: string | null;
+  /** Folders opened in the tree, so it keeps its shape across a restart. */
+  expanded: string[];
+  /** Files open in the editor, in tab order. */
+  open: string[];
+  /** The one in front. */
+  active: string | null;
+}
+
+/**
+ * A Git tab. It sits beside a Files tab in the same section, and shows one of
+ * three things: what is about to be committed, what has happened, or the branches.
+ */
+export interface GitPanelState {
+  id: string;
+  kind: 'git';
+  root: string;
+  view: 'changes' | 'history' | 'branches';
+  /** How the changed files are grouped, remembered per panel. */
+  grouping: 'directory' | 'module' | 'both' | 'files';
+  /** Folders the person has collapsed in the changes tree. */
+  collapsed: string[];
+  /** Paths ticked for the next commit, on top of what git already has staged. */
+  message: string;
+  amend: boolean;
+  /** Whichever commit or branch is selected in the History and Branches views. */
+  selectedSha: string | null;
+  selectedBranch: string | null;
+}
+
+/**
+ * A file being edited. Held apart from the panels because two panels showing the
+ * same file must show the same unsaved text — the buffer belongs to the file, not
+ * to the pane looking at it.
+ */
+export interface Buffer {
+  path: string;
+  /** What is in the editor now. */
+  text: string;
+  /** What was last read from or written to disk; equal to `text` means saved. */
+  savedText: string;
+  /** The modification time the text was read at, which is what a save is checked against. */
+  mtimeMs: number;
+  /** Set when the file changed on disk under an edit that is not saved yet. */
+  conflict: { text: string; mtimeMs: number } | null;
+  /** True while the file changed on disk and the editor took it silently. */
+  reloadedAt: number | null;
+  loading: boolean;
+  error: string | null;
+  readOnly: boolean;
+}
+
 /** What a close confirmation is about: one session, or a whole group of them. */
 export interface PendingClose {
   sessionIds: string[];
@@ -175,4 +241,10 @@ export interface Settings {
    * not being in a group is not a group.
    */
   sessionMessaging: 'off' | 'group' | 'all';
+  /**
+   * How the file tree draws its icons. `colour` tints each one by what the file
+   * is, which is the difference between finding a stylesheet by looking and
+   * finding it by reading forty names.
+   */
+  fileIcons: 'outline' | 'solid' | 'colour' | 'none';
 }

@@ -29,6 +29,8 @@ export function NewSessionMenu({ leafId, anchorEl, cwdHint, side = 'center', onC
   const newSession = useStore((s) => s.newSession);
   const updateSettings = useStore((s) => s.updateSettings);
   const setProfileEditorOpen = useStore((s) => s.setProfileEditorOpen);
+  const openFilePanel = useStore((s) => s.openFilePanel);
+  const openGitPanel = useStore((s) => s.openGitPanel);
 
   const [cwd, setCwd] = useState(cwdHint || '');
   const [recent, setRecent] = useState<string[]>([]);
@@ -128,6 +130,42 @@ export function NewSessionMenu({ leafId, anchorEl, cwdHint, side = 'center', onC
         A terminal is only a shell. Start Claude in it yourself and the app picks the conversation
         up from there.
       </p>
+
+      <div className="menu-separator" />
+      {/* Not a session at all: a folder, its files, and an editor for them. */}
+      <button
+        className="menu-item"
+        onClick={() => {
+          onClose();
+          openFilePanel({ leafId, side, root: cwd || undefined });
+        }}
+      >
+        <span>
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="#7aa2f7" strokeWidth="1.3" style={{ marginRight: 7, verticalAlign: -1 }}>
+            <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
+          </svg>
+          File system
+        </span>
+        <kbd>{cwd ? compactPath(cwd, homedir) : 'pick a folder'}</kbd>
+      </button>
+      <button
+        className="menu-item"
+        onClick={() => {
+          onClose();
+          openGitPanel({ leafId, side, root: cwd || undefined });
+        }}
+      >
+        <span>
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="#e0af68" strokeWidth="1.3" style={{ marginRight: 7, verticalAlign: -1 }}>
+            <circle cx="3.6" cy="3.2" r="1.7" />
+            <circle cx="3.6" cy="10.8" r="1.7" />
+            <circle cx="10.4" cy="6.4" r="1.7" />
+            <path d="M3.6 4.9v4.2M5.2 3.9c2.6.4 3.8 1.3 4 2.3" />
+          </svg>
+          Git
+        </span>
+        <kbd>changes, history, branches</kbd>
+      </button>
 
       <div className="menu-separator" />
       <button className="menu-item" onClick={() => { onClose(); setProfileEditorOpen(true); }}>
