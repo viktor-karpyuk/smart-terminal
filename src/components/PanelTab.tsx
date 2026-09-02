@@ -21,17 +21,12 @@ export function PanelTab({
   const setActiveLeaf = useStore((s) => s.setActiveLeaf);
   const focusPanel = useStore((s) => s.focusPanel);
   const unsaved = useStore((s) =>
-    s.panels[panelId]?.kind === 'files' &&
     Object.values(s.buffers).some((buffer) => buffer.text !== buffer.savedText),
   );
 
   if (!panel) return null;
-  const isGit = panel.kind === 'git';
-  const name = isGit
-    ? 'Git'
-    : panel.root
-      ? (panel.root.split('/').filter(Boolean).pop() ?? 'Files')
-      : 'Files';
+  const isGit = panel.mode === 'git';
+  const name = panel.root ? (panel.root.split('/').filter(Boolean).pop() ?? 'Files') : 'Files';
 
   return (
     <div

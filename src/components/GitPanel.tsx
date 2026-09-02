@@ -12,29 +12,51 @@ import type { GitBranch, GitCommit, GitFile } from '../global';
  * again rather than trusting the picture it already has.
  */
 export function GitPanel({ panelId }: { panelId: string }) {
-  const panel = useStore((s) => {
-    const found = s.panels[panelId];
-    return found?.kind === 'git' ? found : null;
-  });
-  const repo = useStore((s) => (panel ? s.repos[panel.root] : undefined));
+  const panel = useStore((s) => s.panels[panelId] ?? null);
+  const root = panel?.gitRoot ?? null;
+  const repo = useStore((s) => (root ? s.repos[root] : undefined));
   const setGitView = useStore((s) => s.setGitView);
   const refreshRepo = useStore((s) => s.refreshRepo);
+  const setPanelMode = useStore((s) => s.setPanelMode);
 
   useEffect(() => {
-    if (panel && !repo) refreshRepo(panel.root, 'all');
-  }, [panel, repo, refreshRepo]);
+    if (root && !repo) refreshRepo(root, 'all');
+  }, [root, repo, refreshRepo]);
 
   if (!panel) return null;
+  if (!root) {
+    return (
+      <div className="git-panel">
+        <div className="files-empty">
+          <p>This folder is not in a git repository.</p>
+          <button className="ghost-btn" onClick={() => setPanelMode(panelId, 'files')}>
+            Back to the files
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="git-panel">
-      <BranchBar panelId={panelId} root={panel.root} />
+      <BranchBar panelId={panelId} root={root} />
 
       <div className="git-views">
+        <button
+          className="files-git is-back"
+          onClick={() => setPanelMode(panelId, 'files')}
+          title="Back to the files"
+        >
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3">
+            <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
+          </svg>
+          <span>Files</span>
+        </button>
+        <span className="git-views-sep" />
         {(['changes', 'history', 'branches'] as const).map((view) => (
           <button
             key={view}
-            className={panel.view === view ? 'is-on' : ''}
+            className={panel.gitView === view ? 'is-on' : ''}
             onClick={() => setGitView(panelId, view)}
           >
             {view === 'changes' ? 'Changes' : view === 'history' ? 'History' : 'Branches'}
@@ -47,7 +69,7 @@ export function GitPanel({ panelId }: { panelId: string }) {
         <button
           className="icon-btn"
           title="Ask git again"
-          onClick={() => refreshRepo(panel.root, 'all')}
+          onClick={() => refreshRepo(root, 'all')}
         >
           ↻
         </button>
@@ -72,9 +94,9 @@ export function GitPanel({ panelId }: { panelId: string }) {
         </div>
       )}
 
-      {panel.view === 'changes' && <Changes panelId={panelId} />}
-      {panel.view === 'history' && <History panelId={panelId} />}
-      {panel.view === 'branches' && <Branches panelId={panelId} />}
+      {panel.gitView === 'changes' && <Changes panelId={panelId} />}
+      {panel.gitView === 'history' && <History panelId={panelId} />}
+      {panel.gitView === 'branches' && <Branches panelId={panelId} />}
     </div>
   );
 }
@@ -164,21 +186,17 @@ const LETTER_COLOUR: Record<string, string> = {
 };
 
 function Changes({ panelId }: { panelId: string }) {
-  const panel = useStore((s) => {
-    const found = s.panels[panelId];
-    return found?.kind === 'git' ? found : null;
-  });
-  const repo = useStore((s) => (panel ? s.repos[panel.root] : undefined));
-  const patch = useStore((s) => s.patchGitPanel);
-  const setGitGrouping = useStore((s) => s.setGitGrouping);
+  const panel = useStore((s) => s.panels[panelId] ?? null);
+  const root = panel?.gitRoot ?? '';
+  const repo = useStore((s) => (root ? s.repos[root] : undefined));
+  const patch = useStore((s) => s.patchPanel);
   const gitDo = useStore((s) => s.gitDo);
 
   const files = repo?.files ?? [];
-  const tree = useMemo(() => group(files, panel?.grouping ?? 'directory'), [files, panel?.grouping]);
+  const tree = useMemo(() => group(files, panel?.gitGrouping ?? 'directory'), [files, panel?.gitGrouping]);
   const staged = files.filter((file) => file.staged || file.partial);
 
-  if (!panel) return null;
-  const root = panel.root;
+  if (!panel || !root) return null;
 
   const toggle = (file: GitFile) =>
     gitDo(root, file.staged || file.partial ? 'unstage' : 'stage', { paths: [file.path] }, 'Staging');
@@ -191,8 +209,8 @@ function Changes({ panelId }: { panelId: string }) {
           {(['directory', 'module', 'both', 'files'] as const).map((mode) => (
             <button
               key={mode}
-              className={panel.grouping === mode ? 'is-on' : ''}
-              onClick={() => setGitGrouping(panelId, mode)}
+              className={panel.gitGrouping === mode ? 'is-on' : ''}
+              onClick={() => patch(panelId, { gitGrouping: mode })}
             >
               {mode === 'directory' ? 'Directory' : mode === 'module' ? 'Module' : mode === 'both' ? 'Both' : 'Files'}
             </button>
@@ -202,7 +220,7 @@ function Changes({ panelId }: { panelId: string }) {
         <button
           className="icon-btn"
           title="Expand everything"
-          onClick={() => patch(panelId, { collapsed: [] })}
+          onClick={() => patch(panelId, { gitCollapsed: [] })}
         >
           +
         </button>
@@ -210,7 +228,7 @@ function Changes({ panelId }: { panelId: string }) {
           className="icon-btn"
           title="Collapse everything"
           onClick={() =>
-            patch(panelId, { collapsed: tree.filter((n) => n.kind === 'dir').map((n) => n.key) })
+            patch(panelId, { gitCollapsed: tree.filter((n) => n.kind === 'dir').map((n) => n.key) })
           }
         >
           –
@@ -221,21 +239,21 @@ function Changes({ panelId }: { panelId: string }) {
         {files.length === 0 && <p className="files-note">Nothing changed.</p>}
         {tree.map((node) =>
           node.kind === 'file' ? (
-            <FileRow key={node.key} file={node.file} depth={0} onToggle={toggle} root={root} />
+            <FileRow key={node.key} file={node.file} depth={0} onToggle={toggle} panelId={panelId} />
           ) : (
             <div key={node.key}>
               <div
                 className="git-row is-dir"
                 onClick={() =>
                   patch(panelId, {
-                    collapsed: panel.collapsed.includes(node.key)
-                      ? panel.collapsed.filter((k) => k !== node.key)
-                      : [...panel.collapsed, node.key],
+                    gitCollapsed: panel.gitCollapsed.includes(node.key)
+                      ? panel.gitCollapsed.filter((k) => k !== node.key)
+                      : [...panel.gitCollapsed, node.key],
                   })
                 }
               >
                 <svg
-                  className={`files-chevron${panel.collapsed.includes(node.key) ? '' : ' is-open'}`}
+                  className={`files-chevron${panel.gitCollapsed.includes(node.key) ? '' : ' is-open'}`}
                   width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"
                 >
                   <path d="M4.5 2.5L8 6l-3.5 3.5" />
@@ -243,10 +261,10 @@ function Changes({ panelId }: { panelId: string }) {
                 <span className="git-dir-name">{node.label}</span>
                 <span className="git-count">{node.count}</span>
               </div>
-              {!panel.collapsed.includes(node.key) &&
+              {!panel.gitCollapsed.includes(node.key) &&
                 node.children.map((child) =>
                   child.kind === 'file' ? (
-                    <FileRow key={child.key} file={child.file} depth={1} onToggle={toggle} root={root} />
+                    <FileRow key={child.key} file={child.file} depth={1} onToggle={toggle} panelId={panelId} />
                   ) : null,
                 )}
             </div>
@@ -306,16 +324,15 @@ function FileRow({
   file,
   depth,
   onToggle,
-  root,
+  panelId,
 }: {
   file: GitFile;
   depth: number;
   onToggle(file: GitFile): void;
-  root: string;
+  panelId: string;
 }) {
-  const openFilePanel = useStore((s) => s.openFilePanel);
   const openFile = useStore((s) => s.openFile);
-  const panels = useStore((s) => s.panels);
+  const setPanelMode = useStore((s) => s.setPanelMode);
 
   return (
     <div className="git-row" style={{ paddingLeft: 8 + depth * 16 }}>
@@ -331,13 +348,10 @@ function FileRow({
       <span
         className={`git-file-name${file.letter === 'D' ? ' is-gone' : ''}`}
         title={file.from ? `${file.from} → ${file.path}` : file.path}
+        // Back to the files, with this one open — the same tab, so nothing moves.
         onClick={() => {
-          // Open it in a files panel on this repository, making one if needed.
-          const existing = Object.values(panels).find(
-            (panel) => panel.kind === 'files' && root.startsWith(panel.root),
-          );
-          if (existing) openFile(existing.id, file.absolute);
-          else openFilePanel({ side: 'right', root });
+          openFile(panelId, file.absolute);
+          setPanelMode(panelId, 'files');
         }}
       >
         {depth === 0 && file.dir ? `${file.dir}/` : ''}
@@ -360,19 +374,17 @@ const ROW = 26;
 const LANE_W = 16;
 
 function History({ panelId }: { panelId: string }) {
-  const panel = useStore((s) => {
-    const found = s.panels[panelId];
-    return found?.kind === 'git' ? found : null;
-  });
-  const repo = useStore((s) => (panel ? s.repos[panel.root] : undefined));
-  const patch = useStore((s) => s.patchGitPanel);
+  const panel = useStore((s) => s.panels[panelId] ?? null);
+  const root = panel?.gitRoot ?? '';
+  const repo = useStore((s) => (root ? s.repos[root] : undefined));
+  const patch = useStore((s) => s.patchPanel);
   const refreshRepo = useStore((s) => s.refreshRepo);
 
   useEffect(() => {
-    if (panel && repo && !repo.commits.length && !repo.loading) refreshRepo(panel.root, 'graph');
-  }, [panel, repo, refreshRepo]);
+    if (root && repo && !repo.commits.length && !repo.loading) refreshRepo(root, 'graph');
+  }, [root, repo, refreshRepo]);
 
-  if (!panel) return null;
+  if (!panel || !root) return null;
   const commits = repo?.commits ?? [];
   const width = Math.max(1, repo?.graphWidth ?? 1) * LANE_W + 16;
 
@@ -416,7 +428,7 @@ function History({ panelId }: { panelId: string }) {
         </div>
       </div>
 
-      {panel.selectedSha && <CommitDetail root={panel.root} sha={panel.selectedSha} />}
+      {panel.selectedSha && <CommitDetail root={root} sha={panel.selectedSha} />}
     </div>
   );
 }
@@ -517,21 +529,18 @@ function CommitDetail({ root, sha }: { root: string; sha: string }) {
 // --- Branches --------------------------------------------------------------
 
 function Branches({ panelId }: { panelId: string }) {
-  const panel = useStore((s) => {
-    const found = s.panels[panelId];
-    return found?.kind === 'git' ? found : null;
-  });
-  const repo = useStore((s) => (panel ? s.repos[panel.root] : undefined));
-  const patch = useStore((s) => s.patchGitPanel);
+  const panel = useStore((s) => s.panels[panelId] ?? null);
+  const root = panel?.gitRoot ?? '';
+  const repo = useStore((s) => (root ? s.repos[root] : undefined));
+  const patch = useStore((s) => s.patchPanel);
   const gitDo = useStore((s) => s.gitDo);
   const refreshRepo = useStore((s) => s.refreshRepo);
 
   useEffect(() => {
-    if (panel && repo && !repo.local.length && !repo.loading) refreshRepo(panel.root, 'refs');
-  }, [panel, repo, refreshRepo]);
+    if (root && repo && !repo.local.length && !repo.loading) refreshRepo(root, 'refs');
+  }, [root, repo, refreshRepo]);
 
-  if (!panel) return null;
-  const root = panel.root;
+  if (!panel || !root) return null;
   const current = repo?.current ?? null;
   const picked: GitBranch | null =
     repo?.local.find((branch) => branch.name === panel.selectedBranch) ?? null;

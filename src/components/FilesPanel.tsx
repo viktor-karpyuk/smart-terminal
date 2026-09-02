@@ -4,6 +4,7 @@ import { useStore } from '../state/store';
 import { Editor } from './Editor';
 import { Popover } from './Popover';
 import { FileIcon, colourFor } from '../lib/fileIcons';
+import { GitPanel } from './GitPanel';
 
 /**
  * A folder on the left, the file you are looking at on the right.
@@ -30,6 +31,7 @@ export function FilesPanel({ panelId }: { panelId: string }) {
   // Opened without a folder. Asking is better than guessing: the folders worth
   // offering are the ones sessions are actually working in.
   if (!panel.root) return <ChooseFolder panelId={panelId} />;
+  if (panel.mode === 'git') return <GitPanel panelId={panelId} />;
 
   return (
     <div className="files-panel">
@@ -143,7 +145,10 @@ function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string;
         <span className="files-root-name">{root.split('/').filter(Boolean).pop() ?? root}</span>
         <span className="files-caret">⌄</span>
       </button>
-      <span className="files-root-path" title={root}>{short}</span>
+      <div className="files-root-line">
+        <span className="files-root-path" title={root}>{short}</span>
+        <GitButton panelId={panelId} />
+      </div>
       {open && (
         <Popover anchorEl={buttonRef.current} onClose={() => setOpen(false)}>
           <div className="popover-header"><span>Show the folder of</span></div>
@@ -181,6 +186,59 @@ function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string;
         </Popover>
       )}
     </div>
+  );
+}
+
+/**
+ * The way into Git, in the tree's own corner.
+ *
+ * Not a tab of its own: Git here is the repository *of the folder you are looking
+ * at*, so it belongs to this tab rather than beside it. It carries the number of
+ * changed files, which is also what makes it findable — an icon with a count on
+ * it is read; a bare glyph in a corner is not.
+ */
+function GitButton({ panelId }: { panelId: string }) {
+  const root = useStore((s) => s.panels[panelId]?.root ?? '');
+  const gitRoot = useStore((s) => s.panels[panelId]?.gitRoot ?? null);
+  const changed = useStore((s) => (gitRoot ? (s.repos[gitRoot]?.files.length ?? 0) : 0));
+  const branch = useStore((s) => (gitRoot ? (s.repos[gitRoot]?.branch ?? null) : null));
+  const setPanelMode = useStore((s) => s.setPanelMode);
+  const [known, setKnown] = useState<boolean | null>(null);
+
+  // Ask once whether this folder is even in a repository; offering Git where
+  // there is none is a button that can only ever disappoint.
+  useEffect(() => {
+    if (!root) return;
+    if (gitRoot) {
+      setKnown(true);
+      return;
+    }
+    let alive = true;
+    window.api.git.call('root', root).then((result) => {
+      if (alive) setKnown(typeof result.value === 'string' && Boolean(result.value));
+    });
+    return () => {
+      alive = false;
+    };
+  }, [root, gitRoot]);
+
+  if (known === false) return null;
+
+  return (
+    <button
+      className={`files-git${changed ? ' has-changes' : ''}`}
+      onClick={() => setPanelMode(panelId, 'git')}
+      title={branch ? `Git — on ${branch}${changed ? `, ${changed} changed` : ''}` : 'Git'}
+    >
+      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3">
+        <circle cx="3.6" cy="3.2" r="1.7" />
+        <circle cx="3.6" cy="10.8" r="1.7" />
+        <circle cx="10.4" cy="6.4" r="1.7" />
+        <path d="M3.6 4.9v4.2M5.2 3.9c2.6.4 3.8 1.3 4 2.3" />
+      </svg>
+      <span>Git</span>
+      {changed > 0 && <span className="files-git-count">{changed}</span>}
+    </button>
   );
 }
 

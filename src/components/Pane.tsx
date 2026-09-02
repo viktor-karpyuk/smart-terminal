@@ -12,7 +12,6 @@ import { PathLabel } from './PathLabel';
 import { SessionTab } from './SessionTab';
 import { GroupChip, GroupTheseTabs } from './GroupChip';
 import { FilesPanel } from './FilesPanel';
-import { GitPanel } from './GitPanel';
 import { PanelTab } from './PanelTab';
 
 export function Pane({ leaf }: { leaf: LeafNode }) {
@@ -39,9 +38,6 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
   /** Which of this pane's tabs are file panels rather than sessions. */
   const panelIds = useStore(
     useShallow((s) => leaf.tabs.filter((id) => Boolean(s.panels[id]))),
-  );
-  const gitPanelIds = useStore(
-    useShallow((s) => leaf.tabs.filter((id) => s.panels[id]?.kind === 'git')),
   );
   const tabGroups = useStore(
     useShallow((s) => leaf.tabs.map((id) => s.sessions[id]?.groupId ?? null)),
@@ -312,9 +308,7 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
       </header>
 
       <div className="pane-body" ref={bodyRef}>
-        {leaf.active && gitPanelIds.includes(leaf.active) ? (
-          <GitPanel key={leaf.active} panelId={leaf.active} />
-        ) : leaf.active && panelIds.includes(leaf.active) ? (
+        {leaf.active && panelIds.includes(leaf.active) ? (
           <FilesPanel key={leaf.active} panelId={leaf.active} />
         ) : leaf.active && activeSession ? (
           <>

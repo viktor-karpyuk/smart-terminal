@@ -1679,3 +1679,34 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .git-branch-actions button { padding: 4px 11px; border: 1px solid var(--border); border-radius: 5px; font-size: 11.5px; }
 .git-branch-actions .is-danger { color: var(--danger); border-color: rgba(247, 118, 142, 0.35); }
 .git-branch-actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* The way into Git: in the tree's own corner, with the count that makes it findable. */
+.files-root-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.files-root-line .files-root-path { flex: 1; }
+
+.files-git {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  background: var(--bg-input);
+}
+
+.files-git:hover { color: #e0af68; border-color: #e0af68; }
+.files-git.has-changes { color: #e0af68; border-color: rgba(224, 175, 104, 0.45); }
+.files-git-count {
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: rgba(224, 175, 104, 0.2);
+}
+
+.files-git.is-back { background: none; }
+.files-git.is-back:hover { color: var(--accent); border-color: var(--accent); }
+.git-views-sep { width: 1px; height: 16px; background: var(--border); margin: 0 4px; }

@@ -6,7 +6,7 @@ import { closePane, movePane, splitEmpty, splitOffTabs } from './layout';
 import type {
   Buffer,
   FilePanel,
-  GitPanelState,
+  GitView,
   GroupArrangement,
   MinimizedTab,
   PendingClose,
@@ -167,8 +167,8 @@ interface State {
   pendingClose: PendingClose | null;
   /** Tabs set aside into the dock, in the order they were put there. */
   minimized: MinimizedTab[];
-  /** Panels that are not sessions — a folder with its editor, or a Git view. */
-  panels: Record<string, FilePanel | GitPanelState>;
+  /** Panels that are not sessions: a folder, its editor, and its repository. */
+  panels: Record<string, FilePanel>;
   /**
    * What git last told us, per repository. Held apart from the panels so two
    * panels on the same repository never disagree about what is changed.
@@ -213,11 +213,10 @@ interface State {
   openFilePanel(options?: { leafId?: string; side?: DropSide; root?: string; sessionId?: string }): string | null;
   closePanel(panelId: string): void;
   setPanelRoot(panelId: string, root: string): void;
-  /** Open a Git tab beside the files, on the repository that folder is in. */
-  openGitPanel(options?: { leafId?: string; side?: DropSide; root?: string }): Promise<string | null>;
-  setGitView(panelId: string, view: GitPanelState['view']): void;
-  setGitGrouping(panelId: string, grouping: GitPanelState['grouping']): void;
-  patchGitPanel(panelId: string, patch: Partial<GitPanelState>): void;
+  /** Show the folder, or the repository it is in. Both live in the same tab. */
+  setPanelMode(panelId: string, mode: 'files' | 'git'): Promise<void>;
+  setGitView(panelId: string, view: GitView): void;
+  patchPanel(panelId: string, patch: Partial<FilePanel>): void;
   refreshRepo(root: string, what?: 'status' | 'graph' | 'refs' | 'all'): Promise<void>;
   gitDo(root: string, name: string, args?: unknown, label?: string): Promise<GitResult>;
   focusPanel(leafId: string, panelId: string): void;
@@ -601,10 +600,7 @@ export const useStore = create<State>((set, get) => ({
     // Re-open the folders the panels had, the files they were showing, and ask
     // git again for anything a Git tab was looking at.
     for (const panel of Object.values(get().panels)) {
-      if (panel.kind === 'git') {
-        get().refreshRepo(panel.root, 'all');
-        continue;
-      }
+      if (panel.gitRoot) get().refreshRepo(panel.gitRoot, 'all');
       for (const dir of panel.expanded) get().loadDir(dir);
       if (panel.active) get().openFile(panel.id, panel.active);
       for (const file of panel.open) if (file !== panel.active) get().openFile(panel.id, file);
@@ -965,6 +961,15 @@ export const useStore = create<State>((set, get) => ({
       expanded: root ? [root] : [],
       open: [],
       active: null,
+      mode: 'files',
+      gitRoot: null,
+      gitView: 'changes',
+      gitGrouping: 'directory',
+      gitCollapsed: [],
+      message: '',
+      amend: false,
+      selectedSha: null,
+      selectedBranch: null,
     };
 
     const targetLeafId = options.leafId || state.activeLeafId || allLeaves(state.layout)[0]?.id;
@@ -1021,91 +1026,44 @@ export const useStore = create<State>((set, get) => ({
   },
 
   /**
-   * Open a Git tab.
+   * Switch a panel between its folder and its repository.
    *
-   * It is pointed at the repository the folder is *in*, not at the folder — a
-   * session working in `src/state` still wants the whole repository's changes,
-   * and a tree rooted halfway down one is a tree that hides things.
+   * The first time it is asked for git, it finds the repository the folder is
+   * *in* — a session working in `src/state` still wants the whole repository's
+   * changes, and a view rooted halfway down one hides things.
    */
-  async openGitPanel(options = {}) {
-    const state = get();
-    const from =
-      options.root ||
-      Object.values(state.panels).find((panel) => panel.kind === 'files')?.root ||
-      state.sessions[state.activeSessionId ?? '']?.cwd ||
-      '';
-    if (!from) return null;
-
-    const found = await window.api.git.call('root', from);
-    const root = typeof found.value === 'string' ? found.value : null;
-    if (!root) return null;
-
-    // One Git tab per repository is enough; a second would only ever say the
-    // same thing, and bringing the existing one forward is what was meant.
-    const existing = Object.values(get().panels).find(
-      (panel) => panel.kind === 'git' && panel.root === root,
-    );
-    if (existing) {
-      const leaf = leafOfTab(get().layout, existing.id);
-      if (leaf) get().focusPanel(leaf.id, existing.id);
-      return existing.id;
+  async setPanelMode(panelId, mode) {
+    const panel = filesPanel(get(), panelId);
+    if (!panel) return;
+    if (mode === 'files') {
+      get().patchPanel(panelId, { mode });
+      return;
     }
 
-    const panelId = crypto.randomUUID();
-    const panel: GitPanelState = {
-      id: panelId,
-      kind: 'git',
-      root,
-      view: 'changes',
-      grouping: 'directory',
-      collapsed: [],
-      message: '',
-      amend: false,
-      selectedSha: null,
-      selectedBranch: null,
-    };
-
-    const targetLeafId = options.leafId || state.activeLeafId || allLeaves(state.layout)[0]?.id;
-    const side = options.side || 'center';
-    set((prev) => {
-      const panels = { ...prev.panels, [panelId]: panel };
-      let layout = prev.layout;
-      if (!targetLeafId || !findLeaf(layout, targetLeafId)) {
-        const leaf = makeLeaf([panelId]);
-        return { panels, layout: leaf, activeLeafId: leaf.id };
-      }
-      if (side === 'center') {
-        return { panels, layout: insertTab(layout, targetLeafId, panelId), activeLeafId: targetLeafId };
-      }
-      const direction = side === 'left' || side === 'right' ? 'row' : 'column';
-      const result = splitLeaf(layout, targetLeafId, direction, panelId);
-      layout = result.root;
-      return { panels, layout, activeLeafId: result.leafId, zoomedLeafId: null };
-    });
-
-    get().refreshRepo(root, 'all');
-    schedulePersist(get);
-    return panelId;
+    let gitRoot = panel.gitRoot;
+    if (!gitRoot && panel.root) {
+      const found = await window.api.git.call('root', panel.root);
+      gitRoot = typeof found.value === 'string' ? found.value : null;
+    }
+    get().patchPanel(panelId, { mode, gitRoot });
+    if (gitRoot) get().refreshRepo(gitRoot, 'all');
   },
 
   setGitView(panelId, view) {
-    get().patchGitPanel(panelId, { view });
-    const panel = get().panels[panelId];
-    if (panel?.kind !== 'git') return;
+    const panel = filesPanel(get(), panelId);
+    if (!panel) return;
+    get().patchPanel(panelId, { gitView: view });
     // Each view is a different question for git; ask it when it is opened rather
     // than keeping all three answers fresh for a panel nobody is looking at.
-    get().refreshRepo(panel.root, view === 'history' ? 'graph' : view === 'branches' ? 'refs' : 'status');
+    if (panel.gitRoot) {
+      get().refreshRepo(panel.gitRoot, view === 'history' ? 'graph' : view === 'branches' ? 'refs' : 'status');
+    }
   },
 
-  setGitGrouping(panelId, grouping) {
-    get().patchGitPanel(panelId, { grouping });
-  },
-
-  patchGitPanel(panelId, patch) {
+  patchPanel(panelId, patch) {
     set((prev) => {
-      const panel = prev.panels[panelId];
-      if (panel?.kind !== 'git') return prev;
-      return { panels: { ...prev.panels, [panelId]: { ...panel, ...patch } } };
+      const panel = filesPanel(prev, panelId);
+      return panel ? { panels: { ...prev.panels, [panelId]: { ...panel, ...patch } } } : prev;
     });
     schedulePersist(get);
   },
@@ -1172,9 +1130,9 @@ export const useStore = create<State>((set, get) => ({
   /**
    * Run one git verb and say what happened.
    *
-   * A failure is kept as git's own words. Every paraphrase this could write —
-   * "push failed" — throws away the line that says *why*, which is the only part
-   * that tells someone what to do next.
+   * A failure keeps git's own words. Every paraphrase this could write — "push
+   * failed" — throws away the line that says *why*, which is the only part that
+   * tells someone what to do next.
    */
   async gitDo(root, name, args, label) {
     set((prev) =>

@@ -150,6 +150,23 @@ export interface FilePanel {
   kind: 'files';
   /** The folder the tree is rooted at. */
   root: string;
+  /**
+   * Git is not a tab of its own — it is the same tab looking at the same folder
+   * a different way, reached from the icon in the tree's own corner. A second
+   * tab would have meant choosing between them in the strip, when what is
+   * wanted is the repository *of the folder you are already in*.
+   */
+  mode: PanelMode;
+  /** The repository `root` is inside, once git has been asked. */
+  gitRoot: string | null;
+  gitView: GitView;
+  gitGrouping: GitGrouping;
+  /** Folders collapsed in the changes tree. */
+  gitCollapsed: string[];
+  message: string;
+  amend: boolean;
+  selectedSha: string | null;
+  selectedBranch: string | null;
   /** Which session's folder this followed, if it was opened from one. */
   followsSessionId: string | null;
   /** Folders opened in the tree, so it keeps its shape across a restart. */
@@ -160,26 +177,10 @@ export interface FilePanel {
   active: string | null;
 }
 
-/**
- * A Git tab. It sits beside a Files tab in the same section, and shows one of
- * three things: what is about to be committed, what has happened, or the branches.
- */
-export interface GitPanelState {
-  id: string;
-  kind: 'git';
-  root: string;
-  view: 'changes' | 'history' | 'branches';
-  /** How the changed files are grouped, remembered per panel. */
-  grouping: 'directory' | 'module' | 'both' | 'files';
-  /** Folders the person has collapsed in the changes tree. */
-  collapsed: string[];
-  /** Paths ticked for the next commit, on top of what git already has staged. */
-  message: string;
-  amend: boolean;
-  /** Whichever commit or branch is selected in the History and Branches views. */
-  selectedSha: string | null;
-  selectedBranch: string | null;
-}
+/** The two things a files tab can be showing. */
+export type PanelMode = 'files' | 'git';
+export type GitView = 'changes' | 'history' | 'branches';
+export type GitGrouping = 'directory' | 'module' | 'both' | 'files';
 
 /**
  * A file being edited. Held apart from the panels because two panels showing the
