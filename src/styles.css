@@ -92,25 +92,46 @@ input:focus, textarea:focus { border-color: var(--accent); }
 
 .app { display: flex; flex-direction: column; height: 100%; }
 
+/*
+ * Three columns, not two ends. `space-between` would put the middle wherever the
+ * left half happened to end; a grid with equal outer columns puts it in the
+ * middle of the window, which is where it is meant to be.
+ */
 .titlebar {
   height: var(--titlebar-h);
   flex: 0 0 var(--titlebar-h);
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: space-between;
-  padding-left: 78px;
-  padding-right: 8px;
+  /*
+   * The inset for the traffic lights belongs to the left column, not to the bar.
+   * As padding on the bar it shifted the whole grid, and the middle column ended
+   * up 35px right of the window's actual middle — which is precisely half of it.
+   */
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;
 }
 
+.titlebar-centre {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-actions { justify-content: flex-end; }
+
 .titlebar-drag, .titlebar-actions {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   -webkit-app-region: no-drag;
 }
+
+.titlebar-drag { padding-left: 78px; }
+.titlebar-actions { padding-right: 8px; }
 
 .app-name { font-size: 12px; color: var(--text-dim); letter-spacing: 0.02em; }
 
@@ -240,6 +261,66 @@ input:focus, textarea:focus { border-color: var(--accent); }
 
 /* ---------- sidebar ---------- */
 
+/* The rail and the lists together. The rail never goes; the lists can. */
+.sidebar-dock { flex: 0 0 auto; display: flex; min-height: 0; }
+
+/*
+ * The strip that is always there. Narrow enough to cost nothing, wide enough
+ * that an icon is a target rather than a dot.
+ */
+.activity-bar {
+  flex: 0 0 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 0 8px;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+}
+
+.activity {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  color: var(--text-faint);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.activity:hover { color: var(--text); background: var(--bg-elevated); }
+/* On, not merely hovered: the bar on the left is what says which list you are
+   looking at, the way a tab strip says which tab. */
+.activity.is-on { color: var(--accent); background: var(--accent-soft); }
+.activity.is-on::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+}
+
+.activity-count {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 999px;
+  background: var(--bg-panel);
+  color: var(--text-dim);
+}
+
+.activity.is-on .activity-count { background: var(--accent); color: var(--bg); }
+.activity-spacer { flex: 1; }
+
 .sidebar {
   container-type: inline-size;
   flex: 0 0 auto;
@@ -253,9 +334,14 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .sidebar-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px 6px;
+  gap: 6px;
+  padding: 8px 8px 6px;
+  min-width: 0;
 }
+
+/* The switches share whatever is left and trim their own labels, so a narrow
+   sidebar shows two smaller buttons rather than one and a half. */
+.sidebar-header .icon-btn { flex: 0 0 auto; }
 
 .sidebar-header .sidebar-count { margin-left: auto; }
 
@@ -1006,6 +1092,21 @@ select {
   .tool span { font-size: 9.5px; letter-spacing: -0.2px; }
 }
 
+/*
+ * Narrowing drops things in order of what they are worth, and never half of
+ * anything: the heading's spare verb first — "+ Open" is also in the ⌄ menu and
+ * on every empty pane — then the counts, which the tooltips still carry.
+ */
+@container (max-width: 200px) {
+  .sidebar-section-actions .link-btn { display: none; }
+}
+
+@container (max-width: 180px) {
+  .sidebar-header { gap: 4px; padding: 8px 6px 6px; }
+  .sidebar-toggle-count { display: none; }
+  .sidebar-section { letter-spacing: 0.04em; gap: 5px; }
+}
+
 @container (max-width: 215px) {
   .tool span { display: none; }
   .tool { padding: 8px 2px; }
@@ -1093,15 +1194,15 @@ select {
 .usage-window p { margin: 4px 0 0 14px; font-size: 11px; color: var(--text-faint); }
 .usage-window p b { color: var(--text-dim); font-weight: 600; }
 
-/* With the sidebar hidden this is the only way back, so it reads as a control. */
+/* With the sidebar hidden this is the only way back, so it reads as a control
+   rather than as decoration — square now that it carries no word. */
 .icon-btn.show-sidebar {
-  gap: 6px;
-  padding: 0 9px;
+  padding: 0;
+  width: 26px;
   border: 1px solid var(--border-strong);
   color: var(--text);
 }
-.icon-btn.show-sidebar span { font-size: 11px; }
-.icon-btn.show-sidebar:hover { border-color: var(--accent); color: var(--accent); }
+.icon-btn.icon-btn.show-sidebar:hover { border-color: var(--accent); color: var(--accent); }
 
 .ghost-btn.is-primary { border-color: var(--accent); color: var(--accent); }
 .ghost-btn.is-primary:hover { background: var(--accent-soft); }
@@ -1846,12 +1947,18 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .sidebar-toggle {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
-  padding: 2px 8px;
+  padding: 3px 8px;
   border-radius: 5px;
   border: 1px solid transparent;
   font-size: 11px;
   color: var(--text-faint);
+  /* Both shrink together, so neither is the one that gets cut. */
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .sidebar-toggle:hover { color: var(--text-dim); }
@@ -1859,18 +1966,33 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .sidebar-toggle-count { font-size: 9.5px; padding: 0 4px; border-radius: 999px; background: var(--bg); color: var(--text-faint); }
 .sidebar-toggle.is-on .sidebar-toggle-count { background: var(--bg-panel); }
 
+/* A heading you can fold, the way an editor's sidebar has them. */
 .sidebar-section {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 8px 4px;
+  gap: 6px;
+  padding: 7px 8px 5px;
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-faint);
+  cursor: default;
+  user-select: none;
+  position: sticky;
+  top: 0;
+  background: var(--bg-panel);
+  z-index: 1;
 }
 
-.sidebar-section .link-btn { margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 11px; }
+.sidebar-section:hover { color: var(--text-dim); }
+.sidebar-section-label { flex: 0 0 auto; }
+.sidebar-section-count { font-size: 9.5px; letter-spacing: 0; padding: 0 5px; border-radius: 999px; background: var(--bg-input); }
+.sidebar-section-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.sidebar-section-actions .link-btn { text-transform: none; letter-spacing: 0; font-size: 11px; }
+.sidebar-section .tab-close { opacity: 0; font-size: 13px; }
+.sidebar-section:hover .tab-close { opacity: 1; }
+/* A folded section still shows its count, which is most of why it is there. */
+.sidebar-section.is-collapsed { color: var(--text-dim); }
 .sidebar-item-path { font-size: 10.5px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-changed {
   flex: 0 0 auto;
@@ -1908,3 +2030,50 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .files-row.is-up { color: var(--text-faint); }
 .files-row.is-up:hover { color: var(--text-dim); }
 .files-up-name { font-size: 10.5px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A heading being dragged to a new place says where it will land. */
+.sidebar-section.is-drop-target { box-shadow: inset 0 2px 0 var(--accent); color: var(--accent); }
+.sidebar-section[draggable='true'] { cursor: grab; }
+
+
+/*
+ * Tooltips that appear when you look at them.
+ *
+ * The system's own take about a second, which is fine for a label you might
+ * want and useless for a strip of icons you are reading. These take 120ms —
+ * long enough not to flash while the pointer crosses the bar, short enough to
+ * feel like the icon simply has a name.
+ */
+[data-tip] { position: relative; }
+
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 3px 8px;
+  border-radius: 5px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.3;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 500;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  transition: opacity 80ms ease-out;
+  transition-delay: 0s;
+}
+
+[data-tip]:hover::after { opacity: 1; transition-delay: 120ms; }
+
+/* Along the bottom strip there is no room to the right, so it goes above. */
+.dock [data-tip]::after {
+  left: 50%;
+  top: auto;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+}

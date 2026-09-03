@@ -298,4 +298,13 @@ export interface Settings {
    */
   sidebarShowSessions: boolean;
   sidebarShowFolders: boolean;
+  /**
+   * Folded away rather than closed. Two different acts: collapsing keeps the
+   * heading, so you can see the count and open it again without remembering it
+   * was ever there; closing takes the whole thing off the sidebar.
+   */
+  sidebarSessionsCollapsed: boolean;
+  sidebarFoldersCollapsed: boolean;
+  /** Which of the sidebar's lists comes first. Dragging a heading changes it. */
+  sidebarOrder: Array<'sessions' | 'folders'>;
 }

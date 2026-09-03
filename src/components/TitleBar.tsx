@@ -19,18 +19,36 @@ export function TitleBar() {
     return leaf?.active ? (s.sessions[leaf.active] ?? null) : null;
   });
   const activeProfile = profiles.find((p) => p.id === activeSession?.profileId);
+  /*
+   * The limits belong to an account, not to whichever tab is in front — and with
+   * a folder or a Git view in front there is no session to ask. Falling back to
+   * the default account keeps the gauge where it is instead of blinking out
+   * every time you look at a file.
+   */
+  const gaugeProfile =
+    activeProfile ??
+    profiles.find((p) => p.id === settings.defaultProfileId) ??
+    profiles[0];
 
   return (
     <header className="titlebar">
       <div className="titlebar-drag">
-        {/* The toggle lives in the sidebar's own header; this is only the way back. */}
+        {/*
+          The way back to the sidebar, and nothing else. It said "Sessions" when
+          the sidebar held only sessions; it holds folders too now, and a menu
+          button that names one of the things behind it is worse than one that
+          names none.
+        */}
         {!settings.sidebarVisible && (
           <button
             className="icon-btn show-sidebar"
-            title="Show sidebar (⌘B)"
+            title="Show the sidebar (⌘B)"
+            aria-label="Show the sidebar"
             onClick={() => updateSettings({ sidebarVisible: true })}
           >
-            &#9636; <span>Sessions</span>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4">
+              <path d="M2 3.5h10M2 7h10M2 10.5h10" />
+            </svg>
           </button>
         )}
         <span className="app-name">Smart Terminal</span>
@@ -50,8 +68,16 @@ export function TitleBar() {
             )}
           </span>
         )}
-        {activeProfile && <UsageGauge profileId={activeProfile.id} />}
         <WaitingOnYou />
+      </div>
+
+      {/*
+        The middle of the window, centred on the window itself rather than on
+        whatever happens to be to its left. It is the one thing here you look at
+        rather than press, and the middle is where the eye goes.
+      */}
+      <div className="titlebar-centre">
+        {gaugeProfile && <UsageGauge profileId={gaugeProfile.id} />}
       </div>
 
       <div className="titlebar-actions">

@@ -4,7 +4,7 @@ import { findLeaf } from './state/layout';
 import { copySelection, getTerminal, selectAllIn } from './terminals/registry';
 import { LayoutView } from './components/LayoutView';
 import { Pane } from './components/Pane';
-import { Sidebar } from './components/Sidebar';
+import { Sidebar, SIDEBAR_MIN } from './components/Sidebar';
 import { TitleBar } from './components/TitleBar';
 import { ProfileEditor } from './components/ProfileEditor';
 import { SessionContextMenu } from './components/SessionContextMenu';
@@ -78,19 +78,37 @@ export function App() {
   );
 }
 
+/** Narrower than this and the lists are unreadable, so it hides instead. */
+const HIDE_BELOW = 132;
+/** The floor lives with the sidebar, which is what has to fit inside it. */
+const MIN_WIDTH = SIDEBAR_MIN;
+
 function SidebarResizer() {
   const updateSettings = useStore((s) => s.updateSettings);
   return (
     <div
       className="sidebar-resizer"
+      onDoubleClick={() => updateSettings({ sidebarVisible: false })}
       onPointerDown={(event) => {
         event.preventDefault();
         const startX = event.clientX;
         const startWidth = useStore.getState().settings.sidebarWidth;
-        const onMove = (move: PointerEvent) =>
-          updateSettings({
-            sidebarWidth: Math.min(520, Math.max(180, startWidth + move.clientX - startX)),
-          });
+
+        const onMove = (move: PointerEvent) => {
+          const wanted = startWidth + move.clientX - startX;
+          /*
+           * Dragged in past the point where the sidebar can say anything useful,
+           * it goes away rather than being squeezed into a column of half-words.
+           * The width it had is kept, so bringing it back with ⌘B gives back the
+           * sidebar you were using and not a stub.
+           */
+          if (wanted < HIDE_BELOW) {
+            updateSettings({ sidebarVisible: false });
+            onUp();
+            return;
+          }
+          updateSettings({ sidebarWidth: Math.min(520, Math.max(MIN_WIDTH, wanted)) });
+        };
         const onUp = () => {
           window.removeEventListener('pointermove', onMove);
           window.removeEventListener('pointerup', onUp);

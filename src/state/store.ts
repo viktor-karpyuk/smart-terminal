@@ -64,6 +64,9 @@ const DEFAULT_SETTINGS: Settings = {
   folderStyle: 'open-shut',
   sidebarShowSessions: true,
   sidebarShowFolders: true,
+  sidebarSessionsCollapsed: false,
+  sidebarFoldersCollapsed: false,
+  sidebarOrder: ['sessions', 'folders'],
 };
 
 /** Whether the interface is currently dark, resolving `system` against the OS. */

@@ -11,6 +11,10 @@ const REFRESH_EVERY = 10 * 60 * 1000;
  */
 export function UsageGauge({ profileId }: { profileId: string | undefined }) {
   const report = useStore((s) => (profileId ? s.usageByProfile[profileId] : undefined));
+  // Standing on its own in the middle of the title bar, it has to say whose
+  // limits these are — beside the account chip that was obvious, and here it
+  // is not.
+  const account = useStore((s) => s.profiles.find((p) => p.id === profileId)?.name ?? 'this account');
   const loading = useStore((s) => (profileId ? s.usageLoading[profileId] : false));
   const signedIn = useStore((s) => (profileId ? s.authByProfile[profileId]?.loggedIn : false));
   const refreshUsage = useStore((s) => s.refreshUsage);
@@ -34,7 +38,11 @@ export function UsageGauge({ profileId }: { profileId: string | undefined }) {
       <button
         className="gauge gauge-empty"
         onClick={() => openPanel(true)}
-        title={signedIn ? 'Open usage limits (⌘U)' : 'This account reads as signed out — open for details'}
+        title={
+          signedIn
+            ? `${account} — open usage limits (⌘U)`
+            : `${account} reads as signed out — open for details`
+        }
       >
         {loading ? 'reading usage…' : 'usage —'}
       </button>
@@ -42,7 +50,7 @@ export function UsageGauge({ profileId }: { profileId: string | undefined }) {
   }
 
   return (
-    <button className="gauge" onClick={() => openPanel(true)} title="Open usage limits (⌘U)">
+    <button className="gauge" onClick={() => openPanel(true)} title={`${account} — open usage limits (⌘U)`}>
       {report.session && <Pill label="session" percent={report.session.percentUsed} />}
       {report.week && <Pill label="week" percent={report.week.percentUsed} />}
     </button>

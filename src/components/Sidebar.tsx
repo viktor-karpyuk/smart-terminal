@@ -10,6 +10,100 @@ import { PathLabel } from './PathLabel';
 import { AccountsIcon, AppearanceIcon, HistoryIcon, UsageIcon } from './icons';
 
 /**
+ * The narrowest the sidebar will sit at. With the switches down to icons what
+ * sets the floor is the headings below them; narrower than this it hides.
+ */
+export const SIDEBAR_MIN = 150;
+
+/** Its own kind, so dragging a session onto a heading is not mistaken for this. */
+const SECTION_MIME = 'application/x-smart-terminal-section';
+
+/**
+ * A foldable heading, the way an editor's sidebar has them.
+ *
+ * Two different acts, and they are not the same thing: the chevron folds the
+ * list away but keeps the heading, so the count is still visible and opening it
+ * again takes one click; the × takes the whole section off the sidebar, and it
+ * comes back from the switches at the top. Collapsing is for "not now"; closing
+ * is for "not at all".
+ */
+function SectionHeader({
+  id,
+  label,
+  count,
+  collapsed,
+  onToggle,
+  onClose,
+  extra,
+}: {
+  id: 'sessions' | 'folders';
+  label: string;
+  count: number;
+  collapsed: boolean;
+  onToggle(): void;
+  onClose(): void;
+  extra?: React.ReactNode;
+}) {
+  const updateSettings = useStore((s) => s.updateSettings);
+  const order = useStore((s) => s.settings.sidebarOrder ?? ['sessions', 'folders']);
+  const [over, setOver] = useState(false);
+
+  /** Dropping one heading on another swaps them; with two lists that is the whole of it. */
+  const moveHere = (dragged: string) => {
+    if (dragged === id) return;
+    const next = order.filter((entry) => entry !== dragged);
+    next.splice(next.indexOf(id), 0, dragged as 'sessions' | 'folders');
+    updateSettings({ sidebarOrder: next });
+  };
+
+  return (
+    <div
+      className={`sidebar-section${collapsed ? ' is-collapsed' : ''}${over ? ' is-drop-target' : ''}`}
+      onClick={onToggle}
+      draggable
+      onDragStart={(event) => {
+        event.dataTransfer.setData(SECTION_MIME, id);
+        event.dataTransfer.effectAllowed = 'move';
+      }}
+      onDragOver={(event) => {
+        if (!event.dataTransfer.types.includes(SECTION_MIME)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(event) => {
+        const dragged = event.dataTransfer.getData(SECTION_MIME);
+        setOver(false);
+        if (!dragged) return;
+        event.preventDefault();
+        moveHere(dragged);
+      }}
+    >
+      <svg
+        className={`files-chevron${collapsed ? '' : ' is-open'}`}
+        width="11"
+        height="11"
+        viewBox="0 0 12 12"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+      >
+        <path d="M4.5 2.5L8 6l-3.5 3.5" />
+      </svg>
+      <span className="sidebar-section-label">{label}</span>
+      <span className="sidebar-section-count">{count}</span>
+      <span className="sidebar-section-actions" onClick={(event) => event.stopPropagation()}>
+        {extra}
+        <button className="tab-close" onClick={onClose} aria-label={`Close ${label}`} title={`Close ${label}`}>
+          ×
+        </button>
+      </span>
+    </div>
+  );
+}
+
+/**
  * The folders that are open, grouped by the repository they belong to.
  *
  * Sessions group by account because that is what makes two of them different
@@ -21,6 +115,8 @@ function Folders() {
   const panelIds = useStore(useShallow((s) => Object.keys(s.panels).filter((id) => s.panels[id].root)));
   const openFilePanel = useStore((s) => s.openFilePanel);
   const activeLeafId = useStore((s) => s.activeLeafId);
+  const collapsed = useStore((s) => s.settings.sidebarFoldersCollapsed);
+  const updateSettings = useStore((s) => s.updateSettings);
 
   const groups = useMemo(() => {
     const panels = useStore.getState().panels;
@@ -36,18 +132,30 @@ function Folders() {
 
   return (
     <>
-      <div className="sidebar-section">
-        Folders
-        <button
-          className="link-btn"
-          title="Open another folder"
-          onClick={() => openFilePanel({ leafId: activeLeafId })}
-        >
-          + Open
-        </button>
-      </div>
-      {panelIds.length === 0 && <p className="sidebar-empty">No folders open.</p>}
-      {groups.map(([repo, ids]) => (
+      <SectionHeader
+        id="folders"
+        label="Folders"
+        count={panelIds.length}
+        collapsed={collapsed}
+        onToggle={() => updateSettings({ sidebarFoldersCollapsed: !collapsed })}
+        onClose={() => updateSettings({ sidebarShowFolders: false })}
+        extra={
+          <button
+            className="link-btn"
+            title="Open another folder"
+            onClick={(event) => {
+              event.stopPropagation();
+              openFilePanel({ leafId: activeLeafId });
+            }}
+          >
+            + Open
+          </button>
+        }
+      />
+      {collapsed ? null : panelIds.length === 0 ? (
+        <p className="sidebar-empty">No folders open.</p>
+      ) : null}
+      {!collapsed && groups.map(([repo, ids]) => (
         <div className="sidebar-group" key={repo || 'loose'}>
           <div className="sidebar-group-header" title={repo || 'Not in a git repository'}>
             <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke={repo ? '#e0af68' : '#565f79'} strokeWidth="1.3">
@@ -133,11 +241,7 @@ export function Sidebar() {
   const settings = useStore((s) => s.settings);
   const authByProfile = useStore((s) => s.authByProfile);
   const activeLeafId = useStore((s) => s.activeLeafId);
-  const setProfileEditorOpen = useStore((s) => s.setProfileEditorOpen);
   const newSession = useStore((s) => s.newSession);
-  const setUsagePanelOpen = useStore((s) => s.setUsagePanelOpen);
-  const setHistoryOpen = useStore((s) => s.setHistoryOpen);
-  const setAppearanceOpen = useStore((s) => s.setAppearanceOpen);
   const updateSettings = useStore((s) => s.updateSettings);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
@@ -154,10 +258,13 @@ export function Sidebar() {
   const membership = useStore(
     useShallow((s) => allTabs(s.layout).map((id) => id + ' ' + (s.sessions[id]?.profileId ?? ''))),
   );
-  const folderCount = useStore((s) => Object.values(s.panels).filter((p) => p.root).length);
   const runningCount = useStore(
     (s) => allTabs(s.layout).filter((id) => s.sessions[id]?.status === 'running').length,
   );
+
+  // With both switched off there is no panel at all — just the rail, which is
+  // the whole point of the rail.
+  const showsSomething = settings.sidebarShowSessions || settings.sidebarShowFolders;
 
   const grouped = useMemo(() => {
     const pairs = membership.map((entry) => entry.split(' ') as [string, string]);
@@ -170,71 +277,60 @@ export function Sidebar() {
   }, [profiles, membership]);
 
   return (
-    <aside className="sidebar" style={{ width: settings.sidebarWidth }}>
-      <div className="sidebar-header">
-        <button
-          className="icon-btn"
-          title="Hide sidebar (⌘B)"
-          onClick={() => updateSettings({ sidebarVisible: false })}
-        >
-          &#9636;
-        </button>
-        {/*
-          Two switches rather than one control that picks a list. They are
-          different things — a session is work going on, a folder is a place — and
-          someone with twenty sessions and one folder wants a different sidebar
-          from someone reading four repositories. Both on is the default.
-        */}
-        <button
-          className={`sidebar-toggle${settings.sidebarShowSessions ? ' is-on' : ''}`}
-          title="Show sessions"
-          onClick={() => updateSettings({ sidebarShowSessions: !settings.sidebarShowSessions })}
-        >
-          Sessions
-          <span className="sidebar-toggle-count">{runningCount}</span>
-        </button>
-        <button
-          className={`sidebar-toggle${settings.sidebarShowFolders ? ' is-on' : ''}`}
-          title="Show folders"
-          onClick={() => updateSettings({ sidebarShowFolders: !settings.sidebarShowFolders })}
-        >
-          Folders
-          <span className="sidebar-toggle-count">{folderCount}</span>
-        </button>
-      </div>
-
+    <aside className="sidebar-dock">
+      <ActivityBar />
+      {/*
+        The lists. Clamped where the width is applied, not only where it is
+        dragged: a width can also arrive from a saved workspace or an older
+        build, and a sidebar too narrow to read its own headings is the one
+        shape it must never take.
+      */}
+      {showsSomething && (
+      <div className="sidebar" style={{ width: Math.min(520, Math.max(SIDEBAR_MIN, settings.sidebarWidth)) }}>
       <div className="sidebar-scroll">
-        {!settings.sidebarShowSessions && !settings.sidebarShowFolders && (
-          <p className="sidebar-empty">Both lists are switched off.</p>
-        )}
-
-        {settings.sidebarShowSessions && (
-          <>
-            <div className="sidebar-section">Sessions</div>
-            {grouped.length === 0 && <p className="sidebar-empty">No sessions yet.</p>}
-          </>
-        )}
-        {settings.sidebarShowSessions && grouped.map(({ profile, ids }) => {
-          const auth = authByProfile[profile.id];
-          return (
-            <div className="sidebar-group" key={profile.id}>
-              <div
-                className="sidebar-group-header"
-                title={auth?.loggedIn ? `Signed in as ${auth.email}` : 'Not signed in'}
-              >
-                <span className="tab-dot" style={{ background: profile.color }} />
-                <span style={{ color: profile.color }}>{profile.name}</span>
-                <span className="sidebar-group-account">{auth?.loggedIn ? auth.email : ''}</span>
-                <span className="sidebar-group-count">{ids.length}</span>
+        {(settings.sidebarOrder ?? ['sessions', 'folders']).map((which) =>
+          which === 'sessions' ? (
+            settings.sidebarShowSessions && (
+              <div key="sessions">
+                <SectionHeader
+                  id="sessions"
+                  label="Sessions"
+                  count={runningCount}
+                  collapsed={settings.sidebarSessionsCollapsed}
+                  onToggle={() =>
+                    updateSettings({ sidebarSessionsCollapsed: !settings.sidebarSessionsCollapsed })
+                  }
+                  onClose={() => updateSettings({ sidebarShowSessions: false })}
+                />
+                {!settings.sidebarSessionsCollapsed && grouped.length === 0 && (
+                  <p className="sidebar-empty">No sessions yet.</p>
+                )}
+                {!settings.sidebarSessionsCollapsed &&
+                  grouped.map(({ profile, ids }) => {
+                    const auth = authByProfile[profile.id];
+                    return (
+                      <div className="sidebar-group" key={profile.id}>
+                        <div
+                          className="sidebar-group-header"
+                          title={auth?.loggedIn ? `Signed in as ${auth.email}` : 'Not signed in'}
+                        >
+                          <span className="tab-dot" style={{ background: profile.color }} />
+                          <span style={{ color: profile.color }}>{profile.name}</span>
+                          <span className="sidebar-group-account">{auth?.loggedIn ? auth.email : ''}</span>
+                          <span className="sidebar-group-count">{ids.length}</span>
+                        </div>
+                        {ids.map((id) => (
+                          <SidebarItem key={id} sessionId={id} />
+                        ))}
+                      </div>
+                    );
+                  })}
               </div>
-              {ids.map((id) => (
-                <SidebarItem key={id} sessionId={id} />
-              ))}
-            </div>
-          );
-        })}
-
-        {settings.sidebarShowFolders && <Folders />}
+            )
+          ) : (
+            settings.sidebarShowFolders && <Folders key="folders" />
+          ),
+        )}
       </div>
 
       <div className="sidebar-footer">
@@ -262,27 +358,78 @@ export function Sidebar() {
             onClose={() => setMenuOpen(false)}
           />
         )}
-        <div className="tool-row">
-          <button className="tool" onClick={() => setProfileEditorOpen(true)} title="Accounts (⌘,)">
-            <AccountsIcon />
-            <span>Accounts</span>
-          </button>
-          <button className="tool" onClick={() => setUsagePanelOpen(true)} title="Usage limits (⌘U)">
-            <UsageIcon />
-            <span>Usage</span>
-          </button>
-          <button className="tool" onClick={() => setHistoryOpen(true)} title="History (⌘Y)">
-            <HistoryIcon />
-            <span>History</span>
-          </button>
-          <button className="tool" onClick={() => setAppearanceOpen(true)} title="Appearance (⇧⌘,)">
-            <AppearanceIcon />
-            <span>Theme</span>
-          </button>
-        </div>
         <BuildLine />
       </div>
+      </div>
+      )}
     </aside>
+  );
+}
+
+/**
+ * The strip of icons that never goes away.
+ *
+ * It is the one part of the sidebar that is always on screen, so it is always
+ * the way back: the lists beside it can all be switched off and there is still
+ * something to press. The two at the top choose what the panel shows; the four
+ * at the bottom open the things that are not lists at all.
+ */
+function ActivityBar() {
+  const settings = useStore((s) => s.settings);
+  const updateSettings = useStore((s) => s.updateSettings);
+  const runningCount = useStore(
+    (s) => allTabs(s.layout).filter((id) => s.sessions[id]?.status === 'running').length,
+  );
+  const folderCount = useStore((s) => Object.values(s.panels).filter((p) => p.root).length);
+  const setProfileEditorOpen = useStore((s) => s.setProfileEditorOpen);
+  const setUsagePanelOpen = useStore((s) => s.setUsagePanelOpen);
+  const setHistoryOpen = useStore((s) => s.setHistoryOpen);
+  const setAppearanceOpen = useStore((s) => s.setAppearanceOpen);
+
+  return (
+    <nav className="activity-bar" aria-label="Sidebar">
+      <button
+        className={`activity${settings.sidebarShowSessions ? ' is-on' : ''}`}
+        data-tip={`Sessions — ${runningCount} running`}
+        aria-label="Sessions"
+        aria-pressed={settings.sidebarShowSessions}
+        onClick={() => updateSettings({ sidebarShowSessions: !settings.sidebarShowSessions })}
+      >
+        <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2">
+          <rect x="1.4" y="2.4" width="11.2" height="9.2" rx="1.6" />
+          <path d="M4 6.2l1.8 1.6L4 9.4M7.6 9.6h2.6" />
+        </svg>
+        {runningCount > 0 && <span className="activity-count">{runningCount}</span>}
+      </button>
+
+      <button
+        className={`activity${settings.sidebarShowFolders ? ' is-on' : ''}`}
+        data-tip={`Folders — ${folderCount} open`}
+        aria-label="Folders"
+        aria-pressed={settings.sidebarShowFolders}
+        onClick={() => updateSettings({ sidebarShowFolders: !settings.sidebarShowFolders })}
+      >
+        <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2">
+          <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
+        </svg>
+        {folderCount > 0 && <span className="activity-count">{folderCount}</span>}
+      </button>
+
+      <span className="activity-spacer" />
+
+      <button className="activity" onClick={() => setProfileEditorOpen(true)} data-tip="Accounts (⌘,)" aria-label="Accounts">
+        <AccountsIcon />
+      </button>
+      <button className="activity" onClick={() => setUsagePanelOpen(true)} data-tip="Usage limits (⌘U)" aria-label="Usage">
+        <UsageIcon />
+      </button>
+      <button className="activity" onClick={() => setHistoryOpen(true)} data-tip="History (⌘Y)" aria-label="History">
+        <HistoryIcon />
+      </button>
+      <button className="activity" onClick={() => setAppearanceOpen(true)} data-tip="Appearance (⇧⌘,)" aria-label="Appearance">
+        <AppearanceIcon />
+      </button>
+    </nav>
   );
 }
 
