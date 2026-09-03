@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../state/store';
+import type { DirEntry } from '../global';
 import { GIT_TAB } from '../state/types';
+import { leafOfTab } from '../state/layout';
 import { Editor } from './Editor';
 import { Popover } from './Popover';
 import { FileIcon, colourFor } from '../lib/fileIcons';
@@ -36,12 +38,15 @@ export function FilesPanel({ panelId }: { panelId: string }) {
   return (
     <div className="files-panel">
       {/* The tree never moves, whatever is open on the right. */}
-      <div className="files-tree">
+      <div className="files-tree" style={{ flexBasis: panel.treeWidth ?? 236 }}>
         <TreeHeader panelId={panelId} root={panel.root} homedir={homedir} />
         <div className="files-tree-scroll">
+          <UpRow panelId={panelId} root={panel.root} />
           <Dir panelId={panelId} path={panel.root} depth={0} />
         </div>
       </div>
+
+      <TreeResizer panelId={panelId} />
 
       <div className="files-editor">
         {(panel.open.length > 0 || panel.gitOpen) && (
@@ -142,13 +147,37 @@ function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string;
   const sessionIds = useStore(useShallow((state) => Object.keys(state.sessions)));
   const setPanelRoot = useStore((s) => s.setPanelRoot);
   const short = root.startsWith(homedir) ? `~${root.slice(homedir.length)}` : root;
+  // The folder above this one, or null at the top of the disk.
+  const parent = (() => {
+    const cut = root.replace(/\/+$/, '').lastIndexOf('/');
+    if (cut <= 0) return root === '/' ? null : '/';
+    return root.slice(0, cut);
+  })();
 
   return (
     <div className="files-tree-header">
-      <button ref={buttonRef} className="files-root" title={root} onClick={() => setOpen((o) => !o)}>
-        <span className="files-root-name">{root.split('/').filter(Boolean).pop() ?? root}</span>
-        <span className="files-caret">⌄</span>
-      </button>
+      <div className="files-root-row">
+        {/*
+          Changing the root walks you down into a folder, so there has to be a way
+          back out of it. Up to the parent, named — a bare arrow leaves you
+          guessing where it goes.
+        */}
+        <button
+          className="files-up"
+          disabled={!parent}
+          title={parent ? `Up to ${parent.split('/').filter(Boolean).pop() ?? '/'}` : 'Already at the top'}
+          aria-label="Up to the parent folder"
+          onClick={() => parent && setPanelRoot(panelId, parent)}
+        >
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4">
+            <path d="M7 11.2V3.2M3.4 6.6L7 3l3.6 3.6" />
+          </svg>
+        </button>
+        <button ref={buttonRef} className="files-root" title={root} onClick={() => setOpen((o) => !o)}>
+          <span className="files-root-name">{root.split('/').filter(Boolean).pop() ?? root}</span>
+          <span className="files-caret">⌄</span>
+        </button>
+      </div>
       <div className="files-root-line">
         <span className="files-root-path" title={root}>{short}</span>
         <GitButton panelId={panelId} />
@@ -190,6 +219,167 @@ function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string;
         </Popover>
       )}
     </div>
+  );
+}
+
+/**
+ * `..` at the top of the tree.
+ *
+ * The arrow in the header does the same thing, and both are here on purpose:
+ * one is where the folder's identity is, the other is where forty years of file
+ * trees have taught people to look.
+ */
+function UpRow({ panelId, root }: { panelId: string; root: string }) {
+  const setPanelRoot = useStore((s) => s.setPanelRoot);
+  const cut = root.replace(/\/+$/, '').lastIndexOf('/');
+  const parent = cut <= 0 ? (root === '/' ? null : '/') : root.slice(0, cut);
+  if (!parent) return null;
+
+  return (
+    <div
+      className="files-row is-up"
+      style={{ paddingLeft: 6 }}
+      title={parent}
+      onClick={() => setPanelRoot(panelId, parent)}
+    >
+      <span className="files-chevron" />
+      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3">
+        <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
+      </svg>
+      <span className="files-name">..</span>
+      <span className="files-up-name">{parent.split('/').filter(Boolean).pop() ?? '/'}</span>
+    </div>
+  );
+}
+
+/**
+ * What a folder or a file in the tree can be asked to do.
+ *
+ * The two that matter are the two ways of taking a folder somewhere: a section
+ * of its own beside this one, or a window of its own. A subfolder is very often
+ * a project in its own right — a submodule, a sibling checkout — and until now
+ * the only way to open one was to go back to the chooser and find it again.
+ */
+function EntryMenu({
+  panelId,
+  entry,
+  at,
+  onClose,
+}: {
+  panelId: string;
+  entry: DirEntry;
+  at: { x: number; y: number };
+  onClose(): void;
+}) {
+  const openFilePanel = useStore((s) => s.openFilePanel);
+  const openFile = useStore((s) => s.openFile);
+  const setPanelRoot = useStore((s) => s.setPanelRoot);
+  const layout = useStore((s) => s.layout);
+
+  const act = (fn: () => void) => () => {
+    onClose();
+    fn();
+  };
+  const leafId = leafOfTab(layout, panelId)?.id;
+
+  return (
+    <Popover anchorPoint={at} onClose={onClose}>
+      <div className="menu-heading">
+        <span style={{ color: entry.repo ? '#e0af68' : undefined }}>{entry.name}</span>
+        {entry.repo && <span className="menu-heading-pid">its own repository</span>}
+      </div>
+
+      {entry.isDirectory ? (
+        <>
+          <MenuRow
+            label="Open in a new section"
+            hint="beside this one"
+            onClick={act(() => openFilePanel({ leafId, side: 'right', root: entry.path }))}
+          />
+          <MenuRow
+            label="Open in a new window"
+            hint="⌘N"
+            onClick={act(() => {
+              // The window opens empty and the folder is opened into it; there is
+              // no way to hand a new window a job before it has booted.
+              window.api.newWindow();
+              openFilePanel({ leafId, side: 'center', root: entry.path });
+            })}
+          />
+          <MenuRow
+            label="Show this folder here"
+            hint="change the root"
+            onClick={act(() => setPanelRoot(panelId, entry.path))}
+          />
+        </>
+      ) : (
+        <MenuRow label="Open" hint="in the editor" onClick={act(() => openFile(panelId, entry.path))} />
+      )}
+
+      <div className="menu-separator" />
+      <MenuRow label="Copy path" onClick={act(() => navigator.clipboard?.writeText(entry.path))} />
+      <MenuRow label="Show in Finder" onClick={act(() => window.api.files.reveal(entry.path))} />
+    </Popover>
+  );
+}
+
+function MenuRow({ label, hint, onClick }: { label: string; hint?: string; onClick(): void }) {
+  return (
+    <button className="menu-item" onClick={onClick}>
+      <span>{label}</span>
+      {hint && <kbd title={hint}>{hint}</kbd>}
+    </button>
+  );
+}
+
+/**
+ * The divider between the tree and the file.
+ *
+ * A tree of `src/state/components/…` needs room a tree of `migrations/` does
+ * not, so the width belongs to the panel rather than to the app — two folders
+ * open at once keep their own. Pointer capture rather than window listeners, so
+ * a drag that leaves the window still ends where the pointer does.
+ */
+function TreeResizer({ panelId }: { panelId: string }) {
+  const patchPanel = useStore((s) => s.patchPanel);
+
+  return (
+    <div
+      className="tree-resizer"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the tree"
+      onDoubleClick={() => patchPanel(panelId, { treeWidth: 236 })}
+      onPointerDown={(event) => {
+        event.preventDefault();
+        // Capture is a nicety — the listeners below are on the window, so the
+        // drag works without it. It can throw when the pointer is already gone,
+        // and a throw here would take the listeners with it and leave a divider
+        // that silently does nothing.
+        try {
+          (event.target as HTMLElement).setPointerCapture(event.pointerId);
+        } catch {
+          /* no capture; the window listeners still see the whole drag */
+        }
+        const startX = event.clientX;
+        const startWidth = useStore.getState().panels[panelId]?.treeWidth ?? 236;
+
+        const onMove = (move: PointerEvent) => {
+          // Narrower than this and the names are all ellipsis; wider and the file
+          // has nowhere to be.
+          const next = Math.round(Math.min(640, Math.max(140, startWidth + move.clientX - startX)));
+          patchPanel(panelId, { treeWidth: next });
+        };
+        const onUp = () => {
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+          document.body.classList.remove('resizing');
+        };
+        document.body.classList.add('resizing');
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+      }}
+    />
   );
 }
 
@@ -327,7 +517,7 @@ function Row({
   expanded,
 }: {
   panelId: string;
-  entry: { name: string; path: string; isDirectory: boolean; noise: boolean };
+  entry: DirEntry;
   depth: number;
   expanded: boolean;
 }) {
@@ -344,6 +534,7 @@ function Row({
   const iconStyle = useStore((s) => s.settings.fileIcons);
   const folderColour = useStore((s) => s.settings.folderColour);
   const folderStyle = useStore((s) => s.settings.folderStyle);
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
 
   return (
     <>
@@ -354,7 +545,8 @@ function Row({
         onClick={() => (entry.isDirectory ? toggleDir(panelId, entry.path) : openFile(panelId, entry.path))}
         onContextMenu={(event) => {
           event.preventDefault();
-          window.api.files.reveal(entry.path);
+          event.stopPropagation();
+          setMenuAt({ x: event.clientX, y: event.clientY });
         }}
       >
         {entry.isDirectory ? (
@@ -384,8 +576,29 @@ function Row({
         >
           {entry.name}
         </span>
+        {/* Its own checkout, not just a folder: a submodule, a sibling
+            repository, something vendored in. Worth knowing before you open it. */}
+        {entry.repo && (
+          <svg
+            className="files-repo"
+            width="11"
+            height="11"
+            viewBox="0 0 14 14"
+            fill="none"
+            stroke="#e0af68"
+            strokeWidth="1.4"
+          >
+            <circle cx="3.6" cy="3.2" r="1.7" />
+            <circle cx="3.6" cy="10.8" r="1.7" />
+            <circle cx="10.4" cy="6.4" r="1.7" />
+            <path d="M3.6 4.9v4.2M5.2 3.9c2.6.4 3.8 1.3 4 2.3" />
+          </svg>
+        )}
         {dirty && <span className="files-dirty" title="unsaved" />}
       </div>
+      {menuAt && (
+        <EntryMenu panelId={panelId} entry={entry} at={menuAt} onClose={() => setMenuAt(null)} />
+      )}
       {entry.isDirectory && expanded && <Dir panelId={panelId} path={entry.path} depth={depth + 1} />}
     </>
   );

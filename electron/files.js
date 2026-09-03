@@ -26,6 +26,16 @@ const MAX_BYTES = 2 * 1024 * 1024;
 /** Folders nobody opens a tree to look at. Dimmed, not hidden — see the design. */
 const NOISE = new Set(['.git', 'node_modules', '.DS_Store', 'dist', 'release', '.next', '__pycache__']);
 
+/** `.git` is a directory in a checkout and a file in a worktree or submodule. */
+function hasGit(dir) {
+  try {
+    fs.statSync(path.join(dir, '.git'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * A file is binary if its first chunk holds a NUL. Crude, and the same rule
  * `grep` uses — good enough to keep an editor from opening a database.
@@ -50,10 +60,15 @@ async function listDir(dirPath) {
         continue;
       }
     }
+    const full = path.join(dirPath, entry.name);
     out.push({
       name: entry.name,
-      path: path.join(dirPath, entry.name),
+      path: full,
       isDirectory,
+      // A folder holding a `.git` is a checkout of its own — a submodule, a
+      // sibling repository, a vendored dependency. Saying so is the difference
+      // between a tree of folders and a tree that knows what it is looking at.
+      repo: isDirectory && hasGit(full),
       noise: NOISE.has(entry.name) || entry.name.startsWith('.'),
     });
   }
@@ -168,4 +183,4 @@ class FileWatcher {
   }
 }
 
-module.exports = { listDir, readTextFile, writeTextFile, FileWatcher, looksBinary, MAX_BYTES, NOISE };
+module.exports = { listDir, readTextFile, writeTextFile, FileWatcher, looksBinary, hasGit, MAX_BYTES, NOISE };

@@ -178,6 +178,8 @@ export interface FilePanel {
   followsSessionId: string | null;
   /** Folders opened in the tree, so it keeps its shape across a restart. */
   expanded: string[];
+  /** How wide the tree is. Per panel, because two folders are not equally deep. */
+  treeWidth: number;
   /** Files open in the editor, in tab order. */
   open: string[];
   /** The one in front. */

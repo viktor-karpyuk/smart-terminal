@@ -1074,6 +1074,7 @@ export const useStore = create<State>((set, get) => ({
       root,
       followsSessionId: options.sessionId ?? null,
       expanded: root ? [root] : [],
+      treeWidth: 236,
       open: [],
       active: null,
       gitOpen: false,

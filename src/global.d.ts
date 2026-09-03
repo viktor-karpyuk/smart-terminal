@@ -149,6 +149,8 @@ export interface DirEntry {
   name: string;
   path: string;
   isDirectory: boolean;
+  /** A folder that is a git checkout of its own. */
+  repo?: boolean;
   /** Build output, dot-files, node_modules — shown, but dimmed. */
   noise: boolean;
 }

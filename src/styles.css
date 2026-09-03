@@ -1443,7 +1443,7 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .files-panel { flex: 1; display: flex; min-width: 0; min-height: 0; background: var(--bg); }
 
 .files-tree {
-  flex: 0 0 236px;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -1480,6 +1480,18 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .files-dirty { width: 5px; height: 5px; border-radius: 50%; background: var(--text); flex: 0 0 auto; }
 .files-chevron { width: 12px; flex: 0 0 auto; transition: transform 120ms ease-out; }
 .files-chevron.is-open { transform: rotate(90deg); }
+
+/* Wide enough to grab without being a stripe you notice, and it takes the
+   cursor across its whole height so the target is the edge, not a handle. */
+.tree-resizer {
+  flex: 0 0 5px;
+  margin: 0 -2px;
+  cursor: col-resize;
+  background: transparent;
+  z-index: 1;
+}
+
+.tree-resizer:hover { background: var(--accent-soft); }
 
 .files-editor { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
 
@@ -1871,3 +1883,28 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 }
 
 .sidebar-item:hover .tab-close { opacity: 1; }
+
+/* A subfolder that is a checkout of its own says so, quietly, on the right. */
+.files-repo { flex: 0 0 auto; opacity: 0.85; }
+
+/* Going back up: an arrow where the folder is named, and `..` where trees put it. */
+.files-root-row { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.files-root-row .files-root { flex: 1; min-width: 0; }
+
+.files-up {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  color: var(--text-faint);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.files-up:hover:not(:disabled) { background: var(--bg-elevated); color: var(--text); }
+.files-up:disabled { opacity: 0.3; cursor: default; }
+
+.files-row.is-up { color: var(--text-faint); }
+.files-row.is-up:hover { color: var(--text-dim); }
+.files-up-name { font-size: 10.5px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
