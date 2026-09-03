@@ -524,6 +524,40 @@ function registerIpc() {
   /** Tidying, and only what was asked for. Never on a timer, never as a side effect. */
   ipcMain.handle('db:maintain', (_e, options = {}) => db.maintain(options ?? {}));
 
+  /** Every table, with what it holds — the list a browser starts from. */
+  ipcMain.handle('db:tables', () => {
+    try {
+      return db.tables();
+    } catch {
+      return [];
+    }
+  });
+
+  /**
+   * One page of one table.
+   *
+   * The renderer names a table; it never sends SQL. There is no version of
+   * browsing a database that needs arbitrary statements, and an app that will
+   * run a string from its own interface will run one from anywhere.
+   */
+  ipcMain.handle('db:table-rows', (_e, { name, limit, offset, search, orderBy, descending } = {}) => {
+    if (!name) return { ok: false, error: 'No table named.' };
+    try {
+      return db.tableRows(name, { limit, offset, search, orderBy, descending });
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  });
+
+  /** One value in full, when the cut-down version in the grid is not enough. */
+  ipcMain.handle('db:table-value', (_e, { name, column, rowid } = {}) => {
+    try {
+      return db.tableValue(name, column, rowid);
+    } catch {
+      return null;
+    }
+  });
+
   /**
    * Drop what was read for a session.
    *
@@ -1217,6 +1251,10 @@ function liveRoster() {
       name: row.title || path.basename(cwd) || 'session',
       profile: profiles.get(row.profileId)?.name ?? 'account',
       cwd,
+      // The conversation behind the session, so one session can point another at
+      // an exact thread rather than describing it — and so anyone reading a
+      // roster can match a tab to a transcript on disk.
+      conversation: row.claudeSessionId ?? null,
       groupId: row.groupId ?? null,
       groupName: row.groupId ? (groupNames.get(row.groupId) ?? null) : null,
       state: describeSession(sessionId),

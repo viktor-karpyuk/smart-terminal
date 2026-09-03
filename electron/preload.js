@@ -66,6 +66,9 @@ contextBridge.exposeInMainWorld('api', {
     history: (sessionId) => ipcRenderer.invoke('analysis:history', sessionId),
     dbHealth: (deep = false) => ipcRenderer.invoke('db:health', { deep }),
     dbMaintain: (options) => ipcRenderer.invoke('db:maintain', options),
+    dbTables: () => ipcRenderer.invoke('db:tables'),
+    dbTableRows: (query) => ipcRenderer.invoke('db:table-rows', query),
+    dbTableValue: (query) => ipcRenderer.invoke('db:table-value', query),
     handOver: (sessionId, text) => ipcRenderer.invoke('analysis:hand-over', { sessionId, text }),
     onChanged: (fn) => {
       const handler = (_e, payload) => fn(payload);

@@ -38,6 +38,7 @@ function parseFindings(raw) {
 
 class Database {
   constructor(file = path.join(app.getPath('userData'), 'smart-terminal.db')) {
+    this.file = file;
     this.db = new DatabaseSync(file);
     // WAL means an abrupt exit loses at most the last transaction, not the file.
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;');
@@ -1283,13 +1284,121 @@ class Database {
   }
 
   /**
+   * Every table, with how many rows it holds and roughly what it weighs.
+   *
+   * The weight is the summed length of every value cast to text, which is an
+   * estimate and not the page count — SQLite will not say what a table costs
+   * without the `dbstat` module, which is not always compiled in. It is right
+   * about which table is the big one, which is the question being asked.
+   */
+  tables() {
+    const names = this.db
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
+      .all()
+      .map((row) => row.name);
+
+    return names.map((name) => {
+      const columns = this.db.prepare(`PRAGMA table_info("${name}")`).all().map((row) => row.name);
+      let rows = 0;
+      let bytes = null;
+      try {
+        rows = this.db.prepare(`SELECT COUNT(*) AS n FROM "${name}"`).get().n ?? 0;
+        if (columns.length && rows) {
+          const sum = columns.map((column) => `COALESCE(LENGTH(CAST("${column}" AS TEXT)), 0)`).join(' + ');
+          bytes = this.db.prepare(`SELECT COALESCE(SUM(${sum}), 0) AS n FROM "${name}"`).get().n ?? 0;
+        }
+      } catch {
+        // A virtual table can refuse to be counted; it still belongs in the list.
+      }
+      return { name, rows, bytes, columns };
+    });
+  }
+
+  /**
+   * The rows of one table, a page at a time.
+   *
+   * The caller names a table and never writes SQL. That is not ceremony: an app
+   * that will run a string from its own interface is one prompt injection away
+   * from running a string from somewhere else, and there is no version of
+   * "browse the database" that needs arbitrary statements. The name is checked
+   * against the ones that actually exist, values go in as parameters, and the
+   * only thing built by hand is a quoted identifier.
+   */
+  tableRows(name, { limit = 50, offset = 0, search = '', orderBy = null, descending = true } = {}) {
+    const known = this.db
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`)
+      .get(name);
+    if (!known) return { ok: false, error: `No table called ${name}.` };
+
+    const columns = this.db.prepare(`PRAGMA table_info("${name}")`).all();
+    const names = columns.map((row) => row.name);
+    if (!names.length) return { ok: false, error: `${name} has no columns.` };
+
+    // Sorting by whatever was asked for, but only if it is a real column.
+    const order = orderBy && names.includes(orderBy) ? orderBy : null;
+    const sort = order ? ` ORDER BY "${order}" ${descending ? 'DESC' : 'ASC'}` : '';
+
+    const term = String(search ?? '').trim();
+    const where = term
+      ? ` WHERE ${names.map((column) => `COALESCE(CAST("${column}" AS TEXT), '') LIKE ?`).join(' OR ')}`
+      : '';
+    const params = term ? names.map(() => `%${term}%`) : [];
+
+    const total = this.db.prepare(`SELECT COUNT(*) AS n FROM "${name}"${where}`).get(...params).n ?? 0;
+    const page = this.db
+      .prepare(`SELECT * FROM "${name}"${where}${sort} LIMIT ? OFFSET ?`)
+      .all(...params, Math.min(200, Math.max(1, limit)), Math.max(0, offset));
+
+    // Long values are cut here rather than in the interface: a transcript chunk
+    // can be tens of kilobytes and there is no reason to move that across the
+    // boundary to show forty characters of it.
+    const rows = page.map((row) => {
+      const out = {};
+      for (const column of names) {
+        const value = row[column];
+        if (typeof value === 'string' && value.length > 300) {
+          out[column] = { cut: true, text: value.slice(0, 300), length: value.length };
+        } else {
+          out[column] = value ?? null;
+        }
+      }
+      return out;
+    });
+
+    return { ok: true, name, columns: names, rows, total, offset, limit };
+  }
+
+  /** One value in full, for when the cut-down version is not enough. */
+  tableValue(name, column, rowid) {
+    const known = this.db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(name);
+    if (!known) return null;
+    const columns = this.db.prepare(`PRAGMA table_info("${name}")`).all().map((row) => row.name);
+    if (!columns.includes(column)) return null;
+    try {
+      const row = this.db.prepare(`SELECT "${column}" AS value FROM "${name}" WHERE rowid = ?`).get(rowid);
+      return row?.value ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Do the tidying that was asked for, and say what it cost.
    *
    * Every operation is named by the caller. Nothing here runs on a timer or as a
    * side effect of looking: deleting somebody's history because a panel was
    * opened would be indefensible, however old the history.
    */
-  maintain({ orphans = false, olderThanDays = null, transcriptsOlderThanDays = null, historyOlderThanDays = null, reclaim = false } = {}) {
+  maintain({
+    orphans = false,
+    olderThanDays = null,
+    transcriptsOlderThanDays = null,
+    historyOlderThanDays = null,
+    checkpoint = false,
+    optimize = false,
+    rebuildSearch = false,
+    reclaim = false,
+  } = {}) {
     const before = this.health();
     const done = [];
 
@@ -1333,12 +1442,50 @@ class Database {
       done.push({ op: 'sessions', rows: ids.length });
     }
 
+    // Fold the write-ahead log back into the file. It grows while the app is
+    // running and is only checkpointed when SQLite feels like it; a session left
+    // open for days can carry a log larger than the database.
+    if (checkpoint) {
+      const before = this.#walBytes();
+      this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+      done.push({ op: 'checkpoint', rows: 0, bytes: Math.max(0, before - this.#walBytes()) });
+    }
+
+    // Let SQLite re-measure its own indexes. Cheap, and the thing that stops a
+    // query plan chosen when the database was empty from being used on a
+    // database that no longer is.
+    if (optimize) {
+      this.db.exec('ANALYZE');
+      this.db.exec('PRAGMA optimize');
+      done.push({ op: 'optimize', rows: 0 });
+    }
+
+    // The search index is derived, so it can always be thrown away and rebuilt —
+    // which is the answer when searching stops finding things it should.
+    if (rebuildSearch) {
+      try {
+        this.db.exec(`INSERT INTO transcript_fts (transcript_fts) VALUES ('rebuild')`);
+        done.push({ op: 'search', rows: 0 });
+      } catch (error) {
+        done.push({ op: 'search', rows: 0, error: String(error?.message ?? error) });
+      }
+    }
+
     // Last, and only if asked: VACUUM rewrites the whole file, so it is the one
     // operation here whose cost is measured in seconds rather than milliseconds.
     if (reclaim) this.reclaim();
 
     const after = this.health();
     return { done, freed: Math.max(0, before.bytes - after.bytes), before, after };
+  }
+
+  /** The write-ahead log's size, which the database itself will not report. */
+  #walBytes() {
+    try {
+      return require('node:fs').statSync(`${this.file}-wal`).size;
+    } catch {
+      return 0;
+    }
   }
 
   /**

@@ -1690,7 +1690,11 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .file-bar.is-danger { background: rgba(247, 118, 142, 0.12); color: var(--text); }
 .file-bar .ghost-btn { padding: 2px 9px; border: 1px solid var(--border); border-radius: 5px; font-size: 11px; }
 
-.editor-wrap { flex: 1; min-height: 0; }
+/* A flex box even with one child in it: an iframe with no stated height falls
+   back to 150px, and the preview has to be told to fill the room like the
+   editor already does. */
+.editor-wrap { flex: 1; min-height: 0; min-width: 0; display: flex; }
+.editor-wrap > * { flex: 1; min-width: 0; min-height: 0; }
 .editor-host { height: 100%; }
 .editor-host .cm-editor { height: 100%; }
 
@@ -2630,3 +2634,110 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .monitor-losing-title { color: var(--text); }
 .monitor-losing-prompt { font-style: italic; }
 .monitor-losing-tasks { opacity: 0.85; }
+
+/* Code, preview, or both — a question about this minute, not a setting. */
+.file-view { margin-left: auto; display: inline-flex; gap: 1px; flex: none; }
+.file-view button {
+  padding: 1px 8px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+}
+.file-view button:first-child { border-radius: 5px 0 0 5px; }
+.file-view button:last-child { border-radius: 0 5px 5px 0; }
+.file-view button + button { border-left: none; }
+.file-view button:hover { color: var(--text); }
+.file-view button.is-on { color: var(--text); background: var(--bg-active); border-color: var(--border-strong); }
+
+.editor-wrap.is-split { display: flex; min-width: 0; }
+.editor-wrap.is-split > * { flex: 1 1 50%; min-width: 0; }
+.editor-wrap.is-split .file-preview { border-left: 1px solid var(--border); }
+
+.file-preview { display: flex; flex-direction: column; min-height: 0; min-width: 0; flex: 1; background: var(--bg); }
+.file-preview-frame { flex: 1; width: 100%; border: none; background: var(--bg); }
+.file-preview-note {
+  flex: none;
+  margin: 0;
+  padding: 5px 10px;
+  border-top: 1px solid var(--border);
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+/* The tables, and what is in them. */
+.monitor-tool.is-table { text-align: left; border-radius: 5px; padding: 2px 4px; }
+.monitor-tool.is-table:hover { background: var(--bg-hover); }
+.monitor-tool.is-table.is-on { background: var(--bg-active); }
+
+.db-table {
+  margin-top: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--bg-input);
+  overflow: hidden;
+}
+
+.db-table-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+}
+
+.db-table-head strong { font-weight: 550; }
+.db-table-search {
+  flex: 1;
+  min-width: 80px;
+  padding: 2px 7px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+}
+.db-table-count { color: var(--text-dim); font-size: 10.5px; white-space: nowrap; }
+
+.db-table-scroll { max-height: 320px; overflow: auto; }
+.db-table-scroll table { border-collapse: collapse; width: 100%; font-size: 11px; }
+.db-table-scroll th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elevated);
+  text-align: left;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.db-table-scroll td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "JetBrains Mono", "SF Mono", Menlo, ui-monospace, monospace;
+}
+
+.db-null { color: var(--text-faint, var(--text-dim)); opacity: 0.6; font-style: italic; }
+.db-cut { color: var(--accent); text-align: left; font-family: inherit; font-size: inherit; }
+.db-cut:hover { text-decoration: underline; }
+
+.db-value { border-top: 1px solid var(--border); }
+.db-value header { display: flex; align-items: center; justify-content: space-between; padding: 5px 8px; font-size: 11.5px; }
+.db-value pre {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 260px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg);
+}

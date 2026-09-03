@@ -457,6 +457,8 @@ export interface SessionAnalysis {
     preTokens: number;
     postTokens: number;
     droppedTokens: number;
+    /** The running total for the session, which is not this one's share of it. */
+    droppedSoFar: number;
     durationMs: number;
   }>;
   reprimes: { count: number; tokens: number };

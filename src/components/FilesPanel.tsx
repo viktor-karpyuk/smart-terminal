@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { asFilePanel, useStore } from '../state/store';
+import { asFilePanel, isDarkAppearance, useStore } from '../state/store';
 import type { DirEntry } from '../global';
 import { GIT_TAB } from '../state/types';
 import { leafOfTab } from '../state/layout';
 import { Editor } from './Editor';
 import { Popover } from './Popover';
 import { FileIcon, colourFor } from '../lib/fileIcons';
+import { previewDocument, previewKind } from '../lib/preview';
 import { GitPanel } from './GitPanel';
 import { TerminalSlot } from './TerminalSlot';
 
@@ -189,6 +190,39 @@ function TerminalButton({ panelId }: { panelId: string }) {
       </svg>
       <span>Terminal</span>
     </button>
+  );
+}
+
+/**
+ * A document as it is meant to be read.
+ *
+ * In a frame with no origin and no scripts. A working tree is full of files
+ * nobody wrote to be opened here, and a preview that runs them is a preview that
+ * can be made to do things — so it renders and does not execute. The cost is
+ * stated on screen rather than left to be discovered: a page's own scripts do
+ * not run and the images beside it do not load.
+ */
+function Preview({ path, text, kind }: { path: string; text: string; kind: 'markdown' | 'html' }) {
+  const dark = useStore((s) => isDarkAppearance(s.settings.theme));
+  const doc = useMemo(() => previewDocument(path, text, dark), [path, text, dark]);
+
+  return (
+    <div className="file-preview">
+      <iframe
+        className="file-preview-frame"
+        title={`Preview of ${path.split('/').pop()}`}
+        // No allow-scripts and no allow-same-origin: it renders, and can do
+        // nothing else. Everything the preview cannot show follows from this.
+        sandbox=""
+        srcDoc={doc}
+      />
+      {kind === 'html' && (
+        <p className="file-preview-note">
+          Rendered without scripts, and it cannot read files from beside it — images and
+          stylesheets it loads from disk will be missing.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -764,6 +798,10 @@ function OpenFile({
 }) {
   const buffer = useStore((s) => s.buffers[path]);
   const saveBuffer = useStore((s) => s.saveBuffer);
+  const kind = previewKind(path);
+  // Per open file, and not remembered: which way you want to look at a document
+  // is a question about this minute, not a setting.
+  const [showing, setShowing] = useState<'code' | 'preview' | 'both'>(kind ? 'preview' : 'code');
   const revertBuffer = useStore((s) => s.revertBuffer);
   const sendSelectionTo = useStore((s) => s.sendSelectionTo);
   // Sessions working in this folder — the ones a selection can usefully go to.
@@ -798,6 +836,19 @@ function OpenFile({
             {index < all.length - 1 && <i>›</i>}
           </span>
         ))}
+        {kind && (
+          <span className="file-view">
+            <button className={showing === 'code' ? 'is-on' : ''} onClick={() => setShowing('code')}>
+              Code
+            </button>
+            <button className={showing === 'preview' ? 'is-on' : ''} onClick={() => setShowing('preview')}>
+              Preview
+            </button>
+            <button className={showing === 'both' ? 'is-on' : ''} onClick={() => setShowing('both')}>
+              Both
+            </button>
+          </span>
+        )}
       </div>
 
       {/* A session rewrote this while it was open and nothing was unsaved. */}
@@ -828,8 +879,11 @@ function OpenFile({
         </div>
       )}
 
-      <div className="editor-wrap">
-        <Editor path={path} onSave={onSave} onSelection={onSelection} />
+      <div className={`editor-wrap${kind && showing === 'both' ? ' is-split' : ''}`}>
+        {(!kind || showing !== 'preview') && (
+          <Editor path={path} onSave={onSave} onSelection={onSelection} />
+        )}
+        {kind && showing !== 'code' && <Preview path={path} text={buffer.text} kind={kind} />}
       </div>
 
       <footer className="files-status">

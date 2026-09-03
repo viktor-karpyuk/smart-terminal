@@ -177,18 +177,29 @@ class MessageBridge {
     const audience = audienceFor(from, roster, reach);
 
     if (op === 'roster') {
+      const reachable = new Set(audience.map((entry) => entry.id));
       return {
         ok: true,
         reach,
         group: me.groupName ?? null,
+        // Who you are, which a session cannot otherwise tell: it knows its own
+        // id and nothing else about how the app has it listed.
+        you: { id: me.id, name: me.name, conversation: me.conversation ?? null, group: me.groupName ?? null },
         sessions: audience.map((entry) => ({
           id: entry.id,
           name: entry.name,
           profile: entry.profile,
           cwd: entry.cwd,
+          conversation: entry.conversation ?? null,
           group: entry.groupName ?? null,
           state: entry.state,
         })),
+        // The ones that exist but are out of reach. Naming them turns "there is
+        // no session called that" — which is false and unhelpable — into "it is
+        // there, and here is why you cannot reach it".
+        beyond: roster
+          .filter((entry) => entry.id !== from && !reachable.has(entry.id))
+          .map((entry) => ({ name: entry.name, group: entry.groupName ?? null })),
       };
     }
 

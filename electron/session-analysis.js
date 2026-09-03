@@ -143,7 +143,11 @@ function measure(rows) {
         trigger: meta.trigger ?? 'unknown',
         preTokens: num(meta.preTokens),
         postTokens: num(meta.postTokens),
-        droppedTokens: num(meta.cumulativeDroppedTokens),
+        // What *this* compaction let go of. `cumulativeDroppedTokens` is the
+        // running total for the whole session, so reporting it per compaction
+        // gives every one of them the same figure — the sum of all of them.
+        droppedTokens: Math.max(0, num(meta.preTokens) - num(meta.postTokens)),
+        droppedSoFar: num(meta.cumulativeDroppedTokens),
         durationMs: num(meta.durationMs),
       });
     }
@@ -357,6 +361,8 @@ function findingsFor(m) {
 
   const auto = m.compactions.filter((c) => c.trigger === 'auto');
   if (auto.length) {
+    // Each one's own drop, added up — the cumulative figure would count the
+    // earlier compactions again inside every later one.
     const dropped = auto.reduce((sum, c) => sum + c.droppedTokens, 0);
     const lost = auto.reduce((sum, c) => sum + c.durationMs, 0);
     out.push({

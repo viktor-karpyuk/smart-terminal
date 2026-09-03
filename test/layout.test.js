@@ -3,7 +3,7 @@
  * up as panes vanishing or dividers drifting. Run with `npm test`.
  */
 const assert = require('node:assert');
-const L = require('../.test-build/layout');
+const L = require('../.test-build/state/layout');
 
 let passed = 0;
 function test(name, fn) {

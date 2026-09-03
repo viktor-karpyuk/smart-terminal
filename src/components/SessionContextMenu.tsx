@@ -113,6 +113,19 @@ function Menu({
         onClick={run(() => store.openMonitor(sessionId))}
       />
 
+      {/*
+        The conversation behind the tab. Worth being able to reach: it is what
+        `claude --resume` takes, what names the transcript on disk, and what one
+        session gives another when it needs to point at an exact thread.
+      */}
+      {session.claudeSessionId && (
+        <MenuItem
+          label="Copy the conversation id"
+          hint={session.claudeSessionId.slice(0, 8)}
+          onClick={run(() => navigator.clipboard.writeText(session.claudeSessionId as string))}
+        />
+      )}
+
       {exited && (
         <MenuItem label="Start again" hint="⌘R" onClick={run(() => store.restartSession(sessionId))} />
       )}

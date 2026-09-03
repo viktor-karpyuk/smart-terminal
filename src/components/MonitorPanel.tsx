@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../state/store';
 import { STORAGE } from '../state/types';
-import type { CompactionRecord, DbHealth, HistorySample, Norms } from '../global';
+import type { CompactionRecord, DbCell, DbHealth, DbPage, DbTable, HistorySample, Norms } from '../global';
 import type { Finding, SessionAnalysis } from '../state/types';
 
 /**
@@ -606,6 +606,9 @@ function Against({
  * tidies because this was opened: deleting somebody's history as a side effect of
  * looking at a panel would be indefensible however old the history is.
  */
+/** What a tidying operation reports back, which is what the caller describes. */
+type MaintenanceResult = Awaited<ReturnType<typeof window.api.analysis.dbMaintain>>;
+
 function Storage() {
   const [health, setHealth] = useState<DbHealth | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -626,7 +629,7 @@ function Storage() {
     // sort of thing that makes a panel expensive to leave open.
   }, []);
 
-  const run = async (key: string, options: Parameters<typeof window.api.analysis.dbMaintain>[0], describe: (r: { done: Array<{ op: string; rows: number }>; freed: number }) => string) => {
+  const run = async (key: string, options: Parameters<typeof window.api.analysis.dbMaintain>[0], describe: (r: MaintenanceResult) => string) => {
     setBusy(key);
     setConfirming(null);
     try {
@@ -645,7 +648,7 @@ function Storage() {
   const historyRows = health.tables.find((table) => table.name === 'session_history')?.rows ?? 0;
   const wastedShare = health.bytes ? Math.round((health.wasted / health.bytes) * 100) : 0;
 
-  const ask = (key: string, label: string, detail: string, options: Parameters<typeof window.api.analysis.dbMaintain>[0], describe: (r: { done: Array<{ op: string; rows: number }>; freed: number }) => string, danger = false) =>
+  const ask = (key: string, label: string, detail: string, options: Parameters<typeof window.api.analysis.dbMaintain>[0], describe: (r: MaintenanceResult) => string, danger = false) =>
     confirming === key ? (
       <span className="storage-confirm">
         <em>{detail}</em>
@@ -697,28 +700,7 @@ function Storage() {
         </div>
       </div>
 
-      <h3 className="monitor-heading">What is taking the room</h3>
-      <div className="monitor-tools">
-        {health.tables
-          .filter((table) => table.rows > 0)
-          .map((table) => {
-            const widest = health.tables[0]?.bytes || 1;
-            return (
-              <div className="monitor-tool" key={table.name}>
-                <span className="monitor-tool-name">{table.name}</span>
-                <span className="monitor-bar">
-                  <span
-                    className="monitor-bar-fill is-ok"
-                    style={{ width: `${Math.round(((table.bytes ?? 0) / widest) * 100)}%` }}
-                  />
-                </span>
-                <small>
-                  {table.rows.toLocaleString()} rows{table.bytes ? ` · ${bytes(table.bytes)}` : ''}
-                </small>
-              </div>
-            );
-          })}
-      </div>
+      <Tables />
 
       <h3 className="monitor-heading">Tidying</h3>
       {said && <p className="usage-note">{said}</p>}
@@ -756,6 +738,40 @@ function Storage() {
         <button
           className="ghost-btn tiny"
           disabled={Boolean(busy)}
+          title="Folds the write-ahead log back into the file. It grows while the app runs and is only checkpointed when SQLite feels like it."
+          onClick={() =>
+            run('checkpoint', { checkpoint: true }, (r) => {
+              const freed = r.done.find((d) => d.op === 'checkpoint')?.bytes ?? 0;
+              return freed ? `Folded ${bytes(freed)} of log back in.` : 'The log was already folded in.';
+            })
+          }
+        >
+          {busy === 'checkpoint' ? 'Folding…' : `Fold in the ${bytes(health.walBytes)} log`}
+        </button>
+        <button
+          className="ghost-btn tiny"
+          disabled={Boolean(busy)}
+          title="Re-measures the indexes, so a query plan chosen when the database was empty is not still in use now that it is not."
+          onClick={() => run('optimize', { optimize: true }, () => 'Indexes re-measured.')}
+        >
+          {busy === 'optimize' ? 'Measuring…' : 'Re-measure indexes'}
+        </button>
+        <button
+          className="ghost-btn tiny"
+          disabled={Boolean(busy)}
+          title="Throws away the search index and builds it again from the conversations themselves."
+          onClick={() =>
+            run('search', { rebuildSearch: true }, (r) => {
+              const failed = r.done.find((d) => d.op === 'search')?.error;
+              return failed ? `The search index refused: ${failed}` : 'Search index rebuilt.';
+            })
+          }
+        >
+          {busy === 'search' ? 'Rebuilding…' : 'Rebuild the search index'}
+        </button>
+        <button
+          className="ghost-btn tiny"
+          disabled={Boolean(busy)}
           title="Rewrites the file so the empty pages are given back. Takes a few seconds."
           onClick={() => run('reclaim', { reclaim: true }, (r) => `Gave back ${bytes(r.freed)}.`)}
         >
@@ -767,6 +783,162 @@ function Storage() {
       </div>
     </>
   );
+}
+
+/**
+ * The tables, and what is in them.
+ *
+ * Read-only, and it names tables rather than sending statements: there is no
+ * version of looking at your own data that needs arbitrary SQL, and an app that
+ * will run a string typed into it will run one that arrived some other way.
+ *
+ * Long values arrive cut down — a transcript chunk is tens of kilobytes and
+ * there is no reason to move that to show forty characters of it — with the
+ * full thing fetched only for the one cell somebody opens.
+ */
+function Tables() {
+  const [tables, setTables] = useState<DbTable[]>([]);
+  const [chosen, setChosen] = useState<string | null>(null);
+
+  useEffect(() => {
+    window.api.analysis.dbTables().then(setTables);
+  }, []);
+
+  if (!tables.length) return null;
+  const widest = Math.max(...tables.map((table) => table.bytes ?? 0), 1);
+
+  return (
+    <>
+      <h3 className="monitor-heading">What is taking the room</h3>
+      <div className="monitor-tools">
+        {tables.map((table) => (
+          <button
+            className={`monitor-tool is-table${chosen === table.name ? ' is-on' : ''}`}
+            key={table.name}
+            onClick={() => setChosen(chosen === table.name ? null : table.name)}
+            title={`${table.columns.length} columns — click to look inside`}
+          >
+            <span className="monitor-tool-name">{table.name}</span>
+            <span className="monitor-bar">
+              <span className="monitor-bar-fill is-ok" style={{ width: `${Math.round(((table.bytes ?? 0) / widest) * 100)}%` }} />
+            </span>
+            <small>
+              {table.rows.toLocaleString()} rows{table.bytes ? ` · ${bytes(table.bytes)}` : ''}
+            </small>
+          </button>
+        ))}
+      </div>
+
+      {chosen && <TableRows name={chosen} onClose={() => setChosen(null)} />}
+    </>
+  );
+}
+
+/** One table's rows, a page at a time, with somewhere to type a filter. */
+function TableRows({ name, onClose }: { name: string; onClose(): void }) {
+  const [page, setPage] = useState<DbPage | null>(null);
+  const [offset, setOffset] = useState(0);
+  const [search, setSearch] = useState('');
+  const [full, setFull] = useState<{ column: string; text: string } | null>(null);
+  const limit = 25;
+
+  useEffect(() => {
+    setOffset(0);
+  }, [name, search]);
+
+  useEffect(() => {
+    let alive = true;
+    window.api.analysis.dbTableRows({ name, limit, offset, search }).then((answer) => {
+      if (alive) setPage(answer);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [name, offset, search]);
+
+  const total = page?.total ?? 0;
+  const columns = page?.columns ?? [];
+
+  return (
+    <div className="db-table">
+      <header className="db-table-head">
+        <strong>{name}</strong>
+        <input
+          className="db-table-search"
+          placeholder="Filter — matches any column"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+        <span className="db-table-count">
+          {total ? `${offset + 1}–${Math.min(offset + limit, total)} of ${total.toLocaleString()}` : 'nothing here'}
+        </span>
+        <button className="ghost-btn tiny" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - limit))}>
+          ‹
+        </button>
+        <button className="ghost-btn tiny" disabled={offset + limit >= total} onClick={() => setOffset(offset + limit)}>
+          ›
+        </button>
+        <button className="tab-close" onClick={onClose} aria-label="Close">
+          ×
+        </button>
+      </header>
+
+      {page && !page.ok && <p className="usage-note">{page.error}</p>}
+
+      {page?.ok && (
+        <div className="db-table-scroll">
+          <table>
+            <thead>
+              <tr>
+                {columns.map((column) => (
+                  <th key={column}>{column}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {(page.rows ?? []).map((row, index) => (
+                <tr key={index}>
+                  {columns.map((column) => (
+                    <td key={column}>
+                      <Cell
+                        value={row[column]}
+                        onOpen={(text) => setFull({ column, text })}
+                      />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {full && (
+        <div className="db-value">
+          <header>
+            <strong>{full.column}</strong>
+            <button className="tab-close" onClick={() => setFull(null)} aria-label="Close">
+              ×
+            </button>
+          </header>
+          <pre>{full.text}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One value. A cut-down one says so and can be opened in full. */
+function Cell({ value, onOpen }: { value: DbCell; onOpen(text: string): void }) {
+  if (value === null || value === undefined) return <span className="db-null">null</span>;
+  if (typeof value === 'object' && 'cut' in value) {
+    return (
+      <button className="db-cut" title={`${value.length.toLocaleString()} characters — click to read it`} onClick={() => onOpen(value.text)}>
+        {value.text.slice(0, 60)}…
+      </button>
+    );
+  }
+  return <span>{String(value)}</span>;
 }
 
 /**

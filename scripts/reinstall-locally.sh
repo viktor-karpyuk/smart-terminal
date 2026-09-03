@@ -33,10 +33,18 @@ fi
 # `pgrep` cannot see it on macOS: neither `pgrep -f` with the full path nor
 # `pgrep -x "Smart Terminal"` returns it, though both find its Helper processes.
 # Asked that way it reports the app gone the instant it is asked, and the swap
-# then happens underneath a live app. The Helpers live under Contents/Frameworks,
-# so matching the main binary's path does not catch them.
+# then happens underneath a live app.
+#
+# The match has to be the whole command line and not a substring of it. The
+# Helpers live under Contents/Frameworks and never matched, but the MCP servers
+# do: they are spawned as *this same binary* with a script path after it, so
+# `index($0, bin)` finds them, and whichever `ps` happened to list first was
+# quit instead of the app. Once that has happened the swap goes in underneath a
+# live app, `open -a` merely activates the copy already running, and the whole
+# thing reports success while changing nothing.
 app_pid() {
-  ps -axo pid=,command= | awk -v bin="$DEST/Contents/MacOS/Smart Terminal" 'index($0, bin) { print $1; exit }'
+  ps -axo pid=,command= | awk -v bin="$DEST/Contents/MacOS/Smart Terminal" '
+    { pid = $1; sub(/^[ ]*[0-9]+[ ]+/, ""); if ($0 == bin) { print pid; exit } }'
 }
 
 PID="${1:-$(app_pid)}"

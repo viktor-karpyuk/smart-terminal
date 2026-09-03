@@ -373,3 +373,39 @@ test('a tidy session scores well and has nothing to explain', () => {
 test('a session with nothing in it has no score to give', () => {
   assert.equal(analyze([]).quality, null);
 });
+
+test('each compaction reports what it dropped, not the running total', () => {
+  const compaction = (minute, pre, post, soFar) => ({
+    type: 'system',
+    timestamp: at(minute),
+    compactMetadata: { trigger: 'auto', preTokens: pre, postTokens: post, cumulativeDroppedTokens: soFar, durationMs: 1000 },
+  });
+
+  const verdict = analyze([
+    request(0),
+    compaction(1, 900000, 20000, 880000),
+    request(2),
+    compaction(3, 800000, 30000, 1650000),
+  ]);
+
+  assert.deepEqual(verdict.compactions.map((c) => c.droppedTokens), [880000, 770000]);
+  assert.deepEqual(verdict.compactions.map((c) => c.droppedSoFar), [880000, 1650000]);
+
+  // And the finding adds the two drops together — 1.65M, which is not the same
+  // as adding the two cumulative figures, which would come to 2.5M.
+  const finding = verdict.findings.find((f) => f.id === 'auto-compaction');
+  assert.match(finding.detail, /1\.[67]M tokens dropped/);
+  assert.equal(/2\.5M/.test(finding.detail), false);
+});
+
+test('a compaction that grew the context does not report a negative drop', () => {
+  const verdict = analyze([
+    request(0),
+    {
+      type: 'system',
+      timestamp: at(1),
+      compactMetadata: { trigger: 'manual', preTokens: 3337, postTokens: 8309, cumulativeDroppedTokens: 687393, durationMs: 500 },
+    },
+  ]);
+  assert.equal(verdict.compactions[0].droppedTokens, 0);
+});

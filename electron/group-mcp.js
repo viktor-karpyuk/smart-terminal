@@ -36,9 +36,11 @@ const TOOLS = [
     name: 'list_sessions',
     description:
       'List the other Smart Terminal sessions you can talk to right now, with what each is ' +
-      'working on and whether it is busy. Reach is set by the user: normally the other sessions ' +
-      'in your own group, optionally every session in the app. Call this before sending anything, ' +
-      'so you address a session that is actually there.',
+      'working on, whether it is busy, and the id of the conversation behind it. Also tells you ' +
+      'who you are, and names any session that is running but out of your reach. Reach is set by ' +
+      'the user: normally the other sessions in your own group, optionally every session in the ' +
+      'app. Call this before sending anything, so you address a session that is actually there — ' +
+      'and when the user asks you to tell another session something, this is how you find it.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
@@ -184,13 +186,29 @@ async function callTool(name, args = {}) {
     const lines = reply.sessions.map(
       (s) =>
         `- ${s.name} (${s.id.slice(0, 8)}) — ${s.profile}, in ${s.cwd}` +
-        `${s.group ? `, group ${s.group}` : ''} — ${s.state}`,
+        `${s.group ? `, group ${s.group}` : ''} — ${s.state}` +
+        `${s.conversation ? `\n    conversation ${s.conversation}` : ''}`,
     );
-    return text(
+    const parts = [
+      `You are "${reply.you?.name ?? 'this session'}"` +
+        `${reply.you?.conversation ? `, conversation ${reply.you.conversation}` : ''}` +
+        `${reply.you?.group ? `, in group ${reply.you.group}` : ''}.`,
+      '',
       `You can reach ${reply.sessions.length} session${reply.sessions.length === 1 ? '' : 's'} ` +
-        `(${reply.reach === 'all' ? 'every session in the app' : `your group, ${reply.group ?? 'unnamed'}`}):\n` +
-        lines.join('\n'),
-    );
+        `(${reply.reach === 'all' ? 'every session in the app' : `your group, ${reply.group ?? 'unnamed'}`}):`,
+      ...lines,
+    ];
+    // Saying which sessions exist but are out of reach turns "there is no
+    // session called that" — which is false, and leaves nobody anything to do —
+    // into something the person asking can actually act on.
+    if (reply.beyond?.length) {
+      parts.push(
+        '',
+        `Also running, but outside your reach: ${reply.beyond.map((s) => s.name + (s.group ? ` (group ${s.group})` : '')).join(', ')}.`,
+        'If you were asked to talk to one of those, say so: the user can widen the reach to every session in Appearance → Session monitor, or put both sessions in the same group.',
+      );
+    }
+    return text(parts.join('\n'));
   }
 
   if (name === 'send_message') {

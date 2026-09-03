@@ -4,9 +4,9 @@ const assert = require('node:assert');
 const { MessageBridge } = require('../electron/message-bridge.js');
 
 const ROSTER = [
-  { id: 'a', name: 'alpha', profile: 'work', cwd: '/w/a', groupId: 'g1', groupName: 'api', state: 'idle' },
-  { id: 'b', name: 'beta', profile: 'work', cwd: '/w/b', groupId: 'g1', groupName: 'api', state: 'busy' },
-  { id: 'c', name: 'gamma', profile: 'home', cwd: '/w/c', groupId: null, groupName: null, state: 'idle' },
+  { id: 'a', name: 'alpha', profile: 'work', cwd: '/w/a', conversation: 'conv-a', groupId: 'g1', groupName: 'api', state: 'idle' },
+  { id: 'b', name: 'beta', profile: 'work', cwd: '/w/b', conversation: 'conv-b', groupId: 'g1', groupName: 'api', state: 'busy' },
+  { id: 'c', name: 'gamma', profile: 'home', cwd: '/w/c', conversation: 'conv-c', groupId: null, groupName: null, state: 'idle' },
 ];
 
 function bridge({ reach = 'group', health = (id, opts) => (opts?.brief ? `${id}: fine` : `You: reading for ${id}`) } = {}) {
@@ -88,4 +88,38 @@ test('a note from the monitor is queued as coming from the app, not a session', 
 test('an empty note is refused rather than delivered', () => {
   assert.equal(bridge().note('a', '   ').ok, false);
   assert.equal(bridge().note('', 'something').ok, false);
+});
+
+// --- the roster a session reads before it talks to anybody -----------------
+
+test('a session is told who it is, which it has no other way to know', async () => {
+  const answer = await bridge().handle({ op: 'roster', from: 'a' });
+  assert.equal(answer.you.name, 'alpha');
+  assert.equal(answer.you.conversation, 'conv-a');
+  assert.equal(answer.you.group, 'api');
+});
+
+test('every session it can reach comes with its conversation id', async () => {
+  const answer = await bridge({ reach: 'all' }).handle({ op: 'roster', from: 'a' });
+  assert.deepEqual(
+    answer.sessions.map((s) => [s.name, s.conversation]),
+    [['beta', 'conv-b'], ['gamma', 'conv-c']],
+  );
+});
+
+test('sessions out of reach are named rather than hidden', async () => {
+  const answer = await bridge().handle({ op: 'roster', from: 'a' });
+  assert.deepEqual(answer.sessions.map((s) => s.name), ['beta']);
+  assert.deepEqual(answer.beyond.map((s) => s.name), ['gamma'], 'it exists — say so');
+});
+
+test('with everything in reach there is nothing beyond it', async () => {
+  const answer = await bridge({ reach: 'all' }).handle({ op: 'roster', from: 'a' });
+  assert.deepEqual(answer.beyond, []);
+});
+
+test('a session is never listed as beyond its own reach', async () => {
+  const answer = await bridge({ reach: 'off' }).handle({ op: 'roster', from: 'a' });
+  assert.equal(answer.beyond.some((s) => s.name === 'alpha'), false);
+  assert.deepEqual(answer.beyond.map((s) => s.name), ['beta', 'gamma']);
 });

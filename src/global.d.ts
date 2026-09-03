@@ -365,6 +365,29 @@ export interface Norms {
   autoCompactions: number;
 }
 
+/** One table, with what it holds and roughly what it weighs. */
+export interface DbTable {
+  name: string;
+  rows: number;
+  bytes: number | null;
+  columns: string[];
+}
+
+/** A value too long to move whole, cut down with its real length noted. */
+export type DbCell = string | number | null | { cut: true; text: string; length: number };
+
+/** One page of one table. */
+export interface DbPage {
+  ok: boolean;
+  error?: string;
+  name?: string;
+  columns?: string[];
+  rows?: Array<Record<string, DbCell>>;
+  total?: number;
+  offset?: number;
+  limit?: number;
+}
+
 /** How the database is doing: what it weighs, what of that is empty, what is rot. */
 export interface DbHealth {
   pageSize: number;
@@ -512,8 +535,25 @@ declare global {
           olderThanDays?: number | null;
           transcriptsOlderThanDays?: number | null;
           historyOlderThanDays?: number | null;
+          checkpoint?: boolean;
+          optimize?: boolean;
+          rebuildSearch?: boolean;
           reclaim?: boolean;
-        }): Promise<{ done: Array<{ op: string; rows: number }>; freed: number; after: DbHealth }>;
+        }): Promise<{
+          done: Array<{ op: string; rows: number; bytes?: number; error?: string }>;
+          freed: number;
+          after: DbHealth;
+        }>;
+        dbTables(): Promise<DbTable[]>;
+        dbTableRows(query: {
+          name: string;
+          limit?: number;
+          offset?: number;
+          search?: string;
+          orderBy?: string | null;
+          descending?: boolean;
+        }): Promise<DbPage>;
+        dbTableValue(query: { name: string; column: string; rowid: number }): Promise<string | null>;
         onChanged(fn: (payload: { sessionId: string; verdict: SessionAnalysis }) => void): () => void;
       };
       context: {
