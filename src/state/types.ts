@@ -225,6 +225,14 @@ export interface MonitorPanel {
   sessionId: string | null;
 }
 
+/**
+ * The monitor looking at the database rather than at a session.
+ *
+ * A sentinel in the same slot a session id goes in, because it is the same
+ * question — how is this doing — asked of the other thing the app keeps.
+ */
+export const STORAGE = '::storage';
+
 /** What a section can hold besides a terminal. */
 export type Panel = FilePanel | MonitorPanel;
 
@@ -250,6 +258,11 @@ export interface MinimizedSection {
   active: string | null;
   /** A tab in the pane it sat beside; a tab id survives the tree being rebuilt. */
   anchorTabId: string | null;
+  /**
+   * Every tab in the block it sat beside. Optional because sections set aside by
+   * an earlier build were saved without it, and those still have to come back.
+   */
+  anchorTabs?: string[];
   side: 'left' | 'right' | 'top' | 'bottom' | null;
   share: number;
   /** What to call it in the dock: the group it belongs to, or its own tabs. */

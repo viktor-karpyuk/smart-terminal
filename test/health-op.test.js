@@ -79,7 +79,7 @@ test('a note from the monitor is queued as coming from the app, not a session', 
   const result = made.note('a', 'Your context is at 98%.', { subject: 'this session' });
   assert.equal(result.ok, true);
   assert.equal(made.queued.length, 1);
-  assert.equal(made.queued[0].from, null, 'no session sent this');
+  assert.equal(made.queued[0].from, 'smart-terminal', 'the app is the sender; the column is NOT NULL');
   assert.equal(made.queued[0].to, 'a');
   assert.match(made.queued[0].body, /session monitor/);
   assert.match(made.queued[0].body, /Your context is at 98%\./);

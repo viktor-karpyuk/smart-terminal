@@ -15,6 +15,16 @@ const { app } = require('electron');
  * A session can opt in to having its transcript text stored here as well, which is
  * what makes searching *inside* past conversations possible.
  */
+function parseTasks(raw) {
+  if (!raw) return [];
+  try {
+    const value = JSON.parse(raw);
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
 function parseFindings(raw) {
   if (!raw) return [];
   try {
@@ -57,6 +67,18 @@ class Database {
       CREATE INDEX IF NOT EXISTS sessions_started  ON sessions (started_at DESC);
       CREATE INDEX IF NOT EXISTS sessions_profile  ON sessions (profile_id, started_at DESC);
       CREATE INDEX IF NOT EXISTS sessions_open     ON sessions (ended_at);
+
+      CREATE TABLE IF NOT EXISTS session_briefs (
+        session_id  TEXT PRIMARY KEY,
+        at          INTEGER NOT NULL,
+        title       TEXT,
+        last_prompt TEXT,
+        cwd         TEXT,
+        branch      TEXT,
+        turns       INTEGER NOT NULL DEFAULT 0,
+        open_tasks  TEXT,
+        done_tasks  TEXT
+      );
 
       CREATE TABLE IF NOT EXISTS session_stats (
         session_id      TEXT PRIMARY KEY,
@@ -656,6 +678,55 @@ class Database {
   }
 
   /**
+   * Keep what a session would need to be told if it had to start over.
+   *
+   * Written continuously rather than at the moment somebody restarts, because
+   * the cases this exists for are exactly the ones where nothing can be read at
+   * that moment: the app was killed, the transcript was deleted, the account was
+   * signed out. A brief that is only made on demand is not there when it is
+   * needed. One row per session, overwritten — this is the current state of a
+   * session, not a history of it.
+   */
+  saveBrief(sessionId, entry) {
+    this.db
+      .prepare(
+        `INSERT INTO session_briefs (session_id, at, title, last_prompt, cwd, branch, turns, open_tasks, done_tasks)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (session_id) DO UPDATE SET
+           at = excluded.at, title = excluded.title, last_prompt = excluded.last_prompt,
+           cwd = excluded.cwd, branch = excluded.branch, turns = excluded.turns,
+           open_tasks = excluded.open_tasks, done_tasks = excluded.done_tasks`,
+      )
+      .run(
+        sessionId,
+        Date.now(),
+        entry.title ?? null,
+        entry.lastPrompt ?? null,
+        entry.cwd ?? null,
+        entry.branch ?? null,
+        entry.turns ?? 0,
+        JSON.stringify(entry.open ?? []),
+        JSON.stringify(entry.done ?? []),
+      );
+  }
+
+  /** What was last known about a session, in the shape the brief was built in. */
+  getBrief(sessionId) {
+    const row = this.db.prepare('SELECT * FROM session_briefs WHERE session_id = ?').get(sessionId);
+    if (!row) return null;
+    return {
+      at: row.at,
+      title: row.title,
+      lastPrompt: row.last_prompt,
+      cwd: row.cwd,
+      branch: row.branch,
+      turns: row.turns,
+      open: parseTasks(row.open_tasks),
+      done: parseTasks(row.done_tasks),
+    };
+  }
+
+  /**
    * Every session measured so far, newest first — what "compared to the others"
    * is computed from, and what the fleet view lists.
    */
@@ -925,11 +996,7 @@ class Database {
       .all(...(before ? [before] : []))
       .map((row) => row.id);
 
-    for (const id of doomed) {
-      this.forgetTranscript(id);
-      this.db.prepare('DELETE FROM handoffs WHERE from_session_id = ? OR to_session_id = ?').run(id, id);
-      this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
-    }
+    for (const id of doomed) this.#eraseSession(id);
     this.reclaim();
     return doomed;
   }
@@ -946,11 +1013,152 @@ class Database {
       .all(cutoff, keepRows)
       .map((row) => row.id);
 
-    for (const id of doomed) {
-      this.forgetTranscript(id);
-      this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
-    }
+    for (const id of doomed) this.#eraseSession(id);
     return doomed;
+  }
+
+  /**
+   * Everything belonging to one session, gone.
+   *
+   * In one place because it is the thing most easily got wrong: every table
+   * added later — the messages, the monitor's readings, the brief — is another
+   * row that outlives the session unless deleting remembers it, and orphans are
+   * invisible until the database is twice the size it should be.
+   */
+  #eraseSession(id) {
+    this.forgetTranscript(id);
+    this.db.prepare('DELETE FROM handoffs WHERE from_session_id = ? OR to_session_id = ?').run(id, id);
+    this.db.prepare('DELETE FROM session_messages WHERE from_session = ? OR to_session = ?').run(id, id);
+    this.db.prepare('DELETE FROM session_stats WHERE session_id = ?').run(id);
+    this.db.prepare('DELETE FROM session_briefs WHERE session_id = ?').run(id);
+    this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
+  }
+
+  /**
+   * How the database is doing.
+   *
+   * Three separate questions, and they are worth keeping apart. **Size** is what
+   * it weighs and which tables account for it. **Waste** is the part of that
+   * weight holding nothing — deleting rows only marks their pages reusable, so a
+   * database that has had a lot deleted stays exactly as large as it was, and
+   * that gap is the closest thing to "degraded" that SQLite has. **Rot** is rows
+   * that outlived what they belonged to: a session deleted before this file knew
+   * about a table leaves its readings behind, invisible until they are counted.
+   *
+   * `deep` runs SQLite's own integrity check, which reads every page — a second
+   * or two on a large file, so it is asked for rather than assumed.
+   */
+  health({ deep = false } = {}) {
+    const pageSize = this.db.prepare('PRAGMA page_size').get().page_size;
+    const pageCount = this.db.prepare('PRAGMA page_count').get().page_count;
+    const freelist = this.db.prepare('PRAGMA freelist_count').get().freelist_count;
+
+    const count = (sql) => this.db.prepare(sql).get().n ?? 0;
+    const tables = [
+      { name: 'transcript_chunks', rows: count('SELECT COUNT(*) AS n FROM transcript_chunks'),
+        bytes: this.db.prepare('SELECT COALESCE(SUM(LENGTH(text)), 0) AS n FROM transcript_chunks').get().n },
+      { name: 'sessions', rows: count('SELECT COUNT(*) AS n FROM sessions'), bytes: null },
+      { name: 'session_messages', rows: count('SELECT COUNT(*) AS n FROM session_messages'),
+        bytes: this.db.prepare('SELECT COALESCE(SUM(LENGTH(body)), 0) AS n FROM session_messages').get().n },
+      { name: 'session_stats', rows: count('SELECT COUNT(*) AS n FROM session_stats'), bytes: null },
+      { name: 'session_briefs', rows: count('SELECT COUNT(*) AS n FROM session_briefs'), bytes: null },
+      { name: 'handoffs', rows: count('SELECT COUNT(*) AS n FROM handoffs'), bytes: null },
+      { name: 'groups', rows: count('SELECT COUNT(*) AS n FROM groups'), bytes: null },
+      { name: 'windows', rows: count('SELECT COUNT(*) AS n FROM windows'), bytes: null },
+    ].sort((a, b) => (b.bytes ?? 0) - (a.bytes ?? 0) || b.rows - a.rows);
+
+    const orphans = {
+      chunks: count('SELECT COUNT(*) AS n FROM transcript_chunks WHERE session_id NOT IN (SELECT id FROM sessions)'),
+      stats: count('SELECT COUNT(*) AS n FROM session_stats WHERE session_id NOT IN (SELECT id FROM sessions)'),
+      briefs: count('SELECT COUNT(*) AS n FROM session_briefs WHERE session_id NOT IN (SELECT id FROM sessions)'),
+      messages: count(
+        `SELECT COUNT(*) AS n FROM session_messages
+          WHERE to_session NOT IN (SELECT id FROM sessions)`,
+      ),
+    };
+
+    const day = 86400000;
+    const sessions = {
+      total: count('SELECT COUNT(*) AS n FROM sessions'),
+      open: count('SELECT COUNT(*) AS n FROM sessions WHERE ended_at IS NULL'),
+      ended: count('SELECT COUNT(*) AS n FROM sessions WHERE ended_at IS NOT NULL'),
+      olderThan30: this.db
+        .prepare('SELECT COUNT(*) AS n FROM sessions WHERE ended_at IS NOT NULL AND started_at < ?')
+        .get(Date.now() - 30 * day).n,
+      olderThan90: this.db
+        .prepare('SELECT COUNT(*) AS n FROM sessions WHERE ended_at IS NOT NULL AND started_at < ?')
+        .get(Date.now() - 90 * day).n,
+      oldest: this.db.prepare('SELECT MIN(started_at) AS n FROM sessions').get().n ?? null,
+    };
+
+    let integrity = null;
+    if (deep) {
+      const answer = this.db.prepare('PRAGMA integrity_check').get();
+      integrity = Object.values(answer ?? {})[0] ?? 'unknown';
+    }
+
+    return {
+      pageSize,
+      bytes: pageSize * pageCount,
+      wasted: pageSize * freelist,
+      pages: pageCount,
+      freePages: freelist,
+      tables,
+      orphans,
+      sessions,
+      integrity,
+      readAt: Date.now(),
+    };
+  }
+
+  /**
+   * Do the tidying that was asked for, and say what it cost.
+   *
+   * Every operation is named by the caller. Nothing here runs on a timer or as a
+   * side effect of looking: deleting somebody's history because a panel was
+   * opened would be indefensible, however old the history.
+   */
+  maintain({ orphans = false, olderThanDays = null, transcriptsOlderThanDays = null, reclaim = false } = {}) {
+    const before = this.health();
+    const done = [];
+
+    if (orphans) {
+      const gone =
+        this.db.prepare('DELETE FROM transcript_chunks WHERE session_id NOT IN (SELECT id FROM sessions)').run().changes +
+        this.db.prepare('DELETE FROM session_stats WHERE session_id NOT IN (SELECT id FROM sessions)').run().changes +
+        this.db.prepare('DELETE FROM session_briefs WHERE session_id NOT IN (SELECT id FROM sessions)').run().changes +
+        this.db.prepare('DELETE FROM session_messages WHERE to_session NOT IN (SELECT id FROM sessions)').run().changes;
+      done.push({ op: 'orphans', rows: gone });
+    }
+
+    // Only conversations, keeping the sessions themselves: the index of what ran
+    // when is small and worth keeping long after the transcripts are not.
+    if (Number.isFinite(transcriptsOlderThanDays)) {
+      const cutoff = Date.now() - transcriptsOlderThanDays * 86400000;
+      const ids = this.db
+        .prepare('SELECT id FROM sessions WHERE ended_at IS NOT NULL AND started_at < ? AND store_transcript = 1')
+        .all(cutoff)
+        .map((row) => row.id);
+      for (const id of ids) this.forgetTranscript(id);
+      done.push({ op: 'transcripts', rows: ids.length });
+    }
+
+    if (Number.isFinite(olderThanDays)) {
+      const cutoff = Date.now() - olderThanDays * 86400000;
+      const ids = this.db
+        .prepare('SELECT id FROM sessions WHERE ended_at IS NOT NULL AND started_at < ?')
+        .all(cutoff)
+        .map((row) => row.id);
+      for (const id of ids) this.#eraseSession(id);
+      done.push({ op: 'sessions', rows: ids.length });
+    }
+
+    // Last, and only if asked: VACUUM rewrites the whole file, so it is the one
+    // operation here whose cost is measured in seconds rather than milliseconds.
+    if (reclaim) this.reclaim();
+
+    const after = this.health();
+    return { done, freed: Math.max(0, before.bytes - after.bytes), before, after };
   }
 
   /**

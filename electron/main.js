@@ -17,6 +17,7 @@ const { ContextStore, transcriptPath, locateTranscript, readTurnState } = requir
 const { SessionMonitor } = require('./session-monitor');
 const { summarise, oneLine } = require('./session-analysis');
 const { Advisor } = require('./advisor');
+const { render: renderBrief } = require('./session-brief');
 const { Autopilot, looksLikeADecision } = require('./autopilot');
 const { tabsInLayout, minimizedIds, sessionsToRestore, unaccountedTabs } = require('./restore');
 const { MessageBridge } = require('./message-bridge');
@@ -473,6 +474,55 @@ function registerIpc() {
     if (!messages) return { ok: false, error: 'Session messaging is not running.' };
     return messages.note(sessionId, text, { subject: 'this session' });
   });
+
+  /**
+   * What a session would be told if it started over, as the words to say to it.
+   *
+   * Read from the database rather than the transcript on purpose: this has to
+   * answer for a session whose conversation is gone, which is most of the reason
+   * it is kept at all.
+   */
+  ipcMain.handle('analysis:brief', (_e, sessionId) => {
+    if (!sessionId) return null;
+    const entry = db.getBrief(sessionId);
+    if (!entry) return null;
+    const row = db.getSession(sessionId);
+    return {
+      ...entry,
+      text: renderBrief(entry, { command: row?.lastCommand ?? null, name: row?.title ?? null }),
+    };
+  });
+
+  /** Say it to the session — used when one is restarted without its conversation. */
+  ipcMain.handle('analysis:hand-over', (_e, { sessionId, text } = {}) => {
+    if (!messages) return { ok: false, error: 'Session messaging is not running.' };
+    return messages.handOver(sessionId, text);
+  });
+
+  /**
+   * How the database is doing, with the file sizes the database itself cannot
+   * see: the write-ahead log, and the snapshots kept beside it.
+   */
+  ipcMain.handle('db:health', (_e, { deep = false } = {}) => {
+    const health = db.health({ deep });
+    const file = path.join(app.getPath('userData'), 'smart-terminal.db');
+    const sizeOf = (suffix) => {
+      try {
+        return fs.statSync(file + suffix).size;
+      } catch {
+        return 0;
+      }
+    };
+    return {
+      ...health,
+      onDisk: sizeOf('') + sizeOf('-wal') + sizeOf('-shm'),
+      walBytes: sizeOf('-wal'),
+      snapshotBytes: context.diskUsage(),
+    };
+  });
+
+  /** Tidying, and only what was asked for. Never on a timer, never as a side effect. */
+  ipcMain.handle('db:maintain', (_e, options = {}) => db.maintain(options ?? {}));
 
   /** What the monitor is following right now, without re-reading anything. */
   ipcMain.handle('analysis:live', () => {

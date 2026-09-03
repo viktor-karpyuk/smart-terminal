@@ -2302,24 +2302,48 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .monitor-stat small { font-size: 10.5px; color: var(--text-dim); }
 
 /* The shape of the climb says more than any single number on it. */
-.monitor-curve {
-  width: 100%;
-  height: 60px;
-  display: block;
+.monitor-curve-box {
   margin-bottom: 16px;
   border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--bg-input);
+  overflow: hidden;
 }
 
-.monitor-curve-line { fill: none; stroke: var(--accent); stroke-width: 0.7; vector-effect: non-scaling-stroke; }
-.monitor-curve-fill { fill: color-mix(in srgb, var(--accent) 18%, transparent); stroke: none; }
-.monitor-curve-ceiling {
-  stroke: var(--danger);
-  stroke-width: 0.6;
-  stroke-dasharray: 2 2;
-  vector-effect: non-scaling-stroke;
+.monitor-curve { display: block; cursor: crosshair; }
+.monitor-curve-line { fill: none; stroke: var(--accent); stroke-width: 1.5; stroke-linejoin: round; }
+.monitor-fade-top { stop-color: var(--accent); stop-opacity: 0.26; }
+.monitor-fade-bottom { stop-color: var(--accent); stop-opacity: 0.02; }
+
+.monitor-rule { stroke-dasharray: 3 3; stroke-width: 1; }
+.monitor-rule.is-warn { stroke: color-mix(in srgb, #e0af68 55%, transparent); }
+.monitor-rule.is-ceiling { stroke: color-mix(in srgb, var(--danger) 60%, transparent); }
+
+.monitor-tick { font-size: 9.5px; fill: var(--text-dim); }
+.monitor-tick.is-warn { fill: #e0af68; }
+.monitor-tick.is-ceiling { fill: var(--danger); }
+.monitor-axis { font-size: 9.5px; fill: var(--text-faint, var(--text-dim)); }
+
+/* Where it compacted. Without these the drops look like the session recovering. */
+.monitor-compaction { stroke: #bb9af7; stroke-width: 1; stroke-dasharray: 2 3; opacity: 0.75; }
+
+.monitor-now { fill: var(--accent); stroke: var(--bg-input); stroke-width: 1.5; }
+.monitor-cursor { stroke: var(--border-strong); stroke-width: 1; }
+.monitor-dot { fill: var(--text); stroke: var(--bg-input); stroke-width: 1.5; }
+
+/* The reading under the chart: what the pointer is on, or what the scale is. */
+.monitor-curve-read {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 10px 7px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-dim);
 }
+
+.monitor-curve-read strong { font-size: 13px; color: var(--text); font-weight: 550; }
+.monitor-curve-read small { margin-left: auto; font-size: 10.5px; }
 
 .monitor-heading {
   font-size: 11px;
@@ -2496,3 +2520,29 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .git-amending-file .is-del { color: var(--danger); }
 
 .git-amending-note { margin: 6px 0 0; font-size: 11px; line-height: 1.5; color: var(--text-dim); }
+
+/* The monitor's reading, in the session menu: a number that carries its own alarm. */
+.menu-item kbd.is-high { color: var(--danger); }
+.menu-item kbd.is-medium { color: #e0af68; }
+.menu-item kbd.is-low { color: var(--accent); }
+
+/* The database, asked the same question as a session. */
+.monitor-row.is-storage { margin-top: 6px; border-top: 1px solid var(--border); border-radius: 0 0 6px 6px; padding-top: 8px; }
+
+.storage-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.storage-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-input);
+  font-size: 11px;
+}
+.storage-confirm em { font-style: normal; color: var(--text-dim); max-width: 380px; }
+.danger-btn.tiny { padding: 3px 9px; font-size: 11.5px; }
+
+/* A folder in the dock: no account, nothing running, so it wears less. */
+.dock-item.is-panel { opacity: 0.9; }
+.dock-item.is-panel .dock-name { font-style: normal; }

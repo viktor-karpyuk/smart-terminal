@@ -463,8 +463,20 @@ export function keepOnly(node: LayoutNode, validTabs: Set<string>): LayoutNode {
  * remembered as "the side of whichever pane holds this tab".
  */
 export interface PanePlace {
-  /** A tab in the pane this one sat next to. */
+  /** A tab in the pane this one sat next to. Kept for places recorded before
+   *  `anchorTabs` existed, so a section set aside by an older build still lands. */
   anchorTabId: string | null;
+  /**
+   * Every tab that was in the neighbouring *block*, not just the nearest pane.
+   *
+   * One tab is not enough. A pane whose neighbour is a column of three sits
+   * beside the whole column, and naming a single tab inside it brings the pane
+   * back wedged against that one pane instead — the column loses its left-hand
+   * neighbour and gains an intruder in the middle of it. Remembering the block
+   * lets the restore find what those tabs have in common and hang the pane off
+   * that instead.
+   */
+  anchorTabs: string[];
   side: Exclude<DropSide, 'center'> | null;
   /** Its share of the split, so it comes back the width it was. */
   share: number;
@@ -472,7 +484,7 @@ export interface PanePlace {
 
 export function panePlace(root: LayoutNode, leafId: string): PanePlace {
   const parent = parentOf(root, leafId);
-  if (!parent) return { anchorTabId: null, side: null, share: 1 };
+  if (!parent) return { anchorTabId: null, anchorTabs: [], side: null, share: 1 };
 
   const at = parent.children.findIndex((child) => child.id === leafId);
   const share = parent.sizes[at] ?? 1 / parent.children.length;
@@ -481,13 +493,55 @@ export function panePlace(root: LayoutNode, leafId: string): PanePlace {
   const before = at > 0 ? parent.children[at - 1] : null;
   const after = at < parent.children.length - 1 ? parent.children[at + 1] : null;
   const neighbour = before ?? after;
-  if (!neighbour) return { anchorTabId: null, side: null, share };
+  if (!neighbour) return { anchorTabId: null, anchorTabs: [], side: null, share };
 
-  const anchorTabId = allTabs(neighbour)[0] ?? null;
+  const anchorTabs = allTabs(neighbour);
   const side = parent.direction === 'row'
     ? (before ? 'right' : 'left')
     : (before ? 'bottom' : 'top');
-  return { anchorTabId, side, share };
+  return { anchorTabId: anchorTabs[0] ?? null, anchorTabs, side, share };
+}
+
+/** Any node by id, split or leaf — the restore hangs a pane off either. */
+function findNode(node: LayoutNode, id: string): LayoutNode | null {
+  if (node.id === id) return node;
+  if (node.type === 'leaf') return null;
+  for (const child of node.children) {
+    const found = findNode(child, id);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** The chain of nodes from the root down to the leaf holding `tabId`. */
+function chainTo(node: LayoutNode, tabId: string, trail: LayoutNode[] = []): LayoutNode[] | null {
+  const here = [...trail, node];
+  if (node.type === 'leaf') return node.tabs.includes(tabId) ? here : null;
+  for (const child of node.children) {
+    const found = chainTo(child, tabId, here);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * The smallest node containing all of these tabs.
+ *
+ * How a block is found again after the tree around it has changed. Tabs that
+ * have since been closed are simply not there, so a neighbour that has lost some
+ * of its panes still resolves — to whatever is left of it, which is the right
+ * answer.
+ */
+export function commonAncestor(root: LayoutNode, tabIds: string[]): LayoutNode | null {
+  const chains = tabIds.map((tabId) => chainTo(root, tabId)).filter(Boolean) as LayoutNode[][];
+  if (!chains.length) return null;
+  let deepest = chains[0];
+  for (let depth = 0; ; depth += 1) {
+    const node = chains[0][depth];
+    if (!node || !chains.every((chain) => chain[depth]?.id === node.id)) break;
+    deepest = chains[0].slice(0, depth + 1);
+  }
+  return deepest[deepest.length - 1] ?? null;
 }
 
 /**
@@ -506,10 +560,13 @@ export function restorePaneAt(
 ): { root: LayoutNode; leafId: string } {
   const restored: LeafNode = { id: uid(), type: 'leaf', tabs, active: active ?? tabs[0] ?? null };
 
-  const anchorLeaf = place.anchorTabId ? leafOfTab(root, place.anchorTabId) : null;
-  const target = anchorLeaf?.id ?? fallbackLeafId;
+  // The whole block it sat beside, when that was recorded; a single pane when the
+  // place was written by a build that only knew how to remember one.
+  const remembered = place.anchorTabs?.length ? place.anchorTabs : (place.anchorTabId ? [place.anchorTabId] : []);
+  const anchor = remembered.length ? commonAncestor(root, remembered) : null;
+  const target = anchor?.id ?? fallbackLeafId;
   const side = place.side ?? 'right';
-  if (!findLeaf(root, target)) {
+  if (!findNode(root, target)) {
     // Nothing left to hang it on: it becomes the workspace.
     return { root: prune(restored), leafId: restored.id };
   }

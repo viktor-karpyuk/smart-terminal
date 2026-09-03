@@ -28,6 +28,29 @@ function Menu({
   const profiles = useStore((s) => s.profiles);
   const authByProfile = useStore((s) => s.authByProfile);
   const [pickingAccount, setPickingAccount] = useState(false);
+  /**
+   * How this session is going, as one short string.
+   *
+   * A string rather than the verdict itself: selecting the object would hand back
+   * a new reference every time the monitor sweeps, and a menu that rebuilds while
+   * somebody is reading it is worse than one that says nothing.
+   */
+  const healthText = useStore((s) => {
+    const verdict = s.analysisBySession[sessionId];
+    if (!verdict?.ok) return null;
+    const share = verdict.context.window
+      ? Math.round((verdict.context.last / verdict.context.window) * 100)
+      : 0;
+    return verdict.worst ? `${share}% · ${verdict.worst}` : `${share}%`;
+  });
+  const healthWorst = useStore((s) => s.analysisBySession[sessionId]?.worst ?? null);
+  /** Whether this session's own size is the thing worth restarting to escape. */
+  const heavy = useStore((s) => {
+    const verdict = s.analysisBySession[sessionId];
+    if (!verdict?.ok || !verdict.context.window) return false;
+    return verdict.context.last / verdict.context.window >= 0.6;
+  });
+  const health = healthText ? { text: healthText, worst: healthWorst } : null;
   const store = useStore.getState();
   if (!session) return null;
 
@@ -77,8 +100,37 @@ function Menu({
         <span className="menu-heading-pid">{state}</span>
       </div>
 
+      {/*
+        First, and always there, because it is the one item that is about the
+        session rather than about doing something to it — and it carries its own
+        answer: the reading is already in hand, so the menu can say how the
+        session is doing without being opened.
+      */}
+      <MenuItem
+        label="Session monitor"
+        hint={health?.text}
+        hintTone={health?.worst ?? null}
+        onClick={run(() => store.openMonitor(sessionId))}
+      />
+
       {exited && (
         <MenuItem label="Start again" hint="⌘R" onClick={run(() => store.restartSession(sessionId))} />
+      )}
+
+      {/*
+        Two ways to start over, and they are not variations of each other.
+        Resuming brings the conversation back whole, which is almost always what
+        is wanted. Starting clean throws it away and opens the new one with a
+        brief instead — the answer when the conversation's own weight is the
+        problem, which is exactly when the monitor is complaining.
+      */}
+      {session.kind === 'claude' && session.claudeSessionId && !exited && (
+        <MenuItem
+          label="Start again, clean"
+          hint={heavy ? 'drops the context' : 'no conversation'}
+          hintTone={heavy ? 'high' : null}
+          onClick={run(() => store.restartSession(sessionId, { fresh: true }))}
+        />
       )}
 
       {claudeUp && (
@@ -425,11 +477,14 @@ function GroupSection({
 function MenuItem({
   label,
   hint,
+  hintTone,
   danger,
   onClick,
 }: {
   label: string;
   hint?: string;
+  /** Colours the hint by severity, for the one item that reports rather than acts. */
+  hintTone?: 'high' | 'medium' | 'low' | null;
   danger?: boolean;
   onClick(): void;
 }) {
@@ -437,7 +492,11 @@ function MenuItem({
     <button className={`menu-item${danger ? ' is-danger' : ''}`} onClick={onClick}>
       <span>{label}</span>
       {/* The hint is trimmed before the label is, so hovering is how the rest of it is read. */}
-      {hint && <kbd title={hint}>{hint}</kbd>}
+      {hint && (
+        <kbd className={hintTone ? `is-${hintTone}` : undefined} title={hint}>
+          {hint}
+        </kbd>
+      )}
     </button>
   );
 }

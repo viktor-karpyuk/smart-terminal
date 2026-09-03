@@ -24,6 +24,16 @@ const fs = require('node:fs');
 const net = require('node:net');
 const { audienceFor, normalizeReach, resolveRecipient, formatMessage, formatNote } = require('./messaging');
 
+/**
+ * Who a message from the app itself is from.
+ *
+ * Not a session, and not null: the column is `NOT NULL` and should stay that
+ * way, since a sender is the one thing a message cannot be missing. A reserved
+ * id says the same thing without loosening the schema — and no session can
+ * collide with it, because session ids are UUIDs.
+ */
+const APP_SENDER = 'smart-terminal';
+
 /** How often the queue is retried against sessions that were busy. */
 const SWEEP_MS = 4000;
 
@@ -127,7 +137,7 @@ class MessageBridge {
   note(sessionId, body, { subject = null, fromName = 'monitor' } = {}) {
     const text = String(body ?? '').trim();
     if (!sessionId || !text) return { ok: false, error: 'A note needs a session and something to say.' };
-    this.store.queue({ from: null, to: sessionId, fromName, body: formatNote({ text, subject }) });
+    this.store.queue({ from: APP_SENDER, to: sessionId, fromName, body: formatNote({ text, subject }) });
     const delivered = this.flush();
     return {
       ok: true,
@@ -136,6 +146,23 @@ class MessageBridge {
         ? 'It arrived in the session.'
         : 'The session is busy; it is waiting and arrives the moment it is free.',
     };
+  }
+
+  /**
+   * Hand a fresh session its brief.
+   *
+   * Unlike a note, this is not wrapped in anything: it *is* the first thing said
+   * to that session, and a header explaining who it came from would only invite
+   * an answer about the header. It rides the same queue, so it arrives when the
+   * session is at its prompt and not before — which for a session that has just
+   * been started means once Claude has finished coming up.
+   */
+  handOver(sessionId, text) {
+    const body = String(text ?? '').trim();
+    if (!sessionId || !body) return { ok: false, error: 'A handover needs a session and something to say.' };
+    this.store.queue({ from: APP_SENDER, to: sessionId, fromName: 'handover', body });
+    const delivered = this.flush();
+    return { ok: true, delivered: delivered.includes(sessionId) };
   }
 
   /** Every request, resolved against the live roster. Kept separate so it is testable. */
@@ -294,4 +321,4 @@ class MessageBridge {
   }
 }
 
-module.exports = { MessageBridge, SUBMIT_DELAY_MS };
+module.exports = { APP_SENDER, MessageBridge, SUBMIT_DELAY_MS };

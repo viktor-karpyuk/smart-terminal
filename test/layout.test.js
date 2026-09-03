@@ -356,3 +356,66 @@ test('a pane that is not there leaves the layout alone', () => {
 });
 
 console.log(`\n${passed} passing`);
+
+
+// --- a whole section set aside, and put back where it was -------------------
+
+/**
+ * The case that was wrong: a pane whose neighbour is not one pane but several.
+ *
+ * Remembering "the pane holding tab X" is enough while the neighbour is a single
+ * pane. When it is a column of three, X names one of them, and the pane came
+ * back squeezed beside that one instead of alongside the whole column.
+ */
+test('a pane comes back between the two it sat between', () => {
+  const start = L.makeLeaf(['a']);
+  let r = L.splitLeaf(start, start.id, 'row', 'b');
+  r = L.splitLeaf(r.root, L.leafOfTab(r.root, 'b').id, 'row', 'c');
+  const middle = L.leafOfTab(r.root, 'b').id;
+  const remembered = L.panePlace(r.root, middle);
+  const without = L.closePane(r.root, middle);
+  assert.equal(shape(without), 'H[a | c]');
+
+  const back = L.restorePaneAt(without, ['b'], 'b', remembered, L.allLeaves(without)[0].id);
+  assert.equal(shape(back.root), 'H[a | b | c]');
+});
+
+test('a pane beside a column of panes comes back beside the whole column', () => {
+  const start = L.makeLeaf(['a']);
+  let r = L.splitLeaf(start, start.id, 'row', 'b');
+  r = L.splitLeaf(r.root, L.leafOfTab(r.root, 'b').id, 'column', 'c');
+  assert.equal(shape(r.root), 'H[a | V[b | c]]');
+
+  const left = L.leafOfTab(r.root, 'a').id;
+  const remembered = L.panePlace(r.root, left);
+  const without = L.closePane(r.root, left);
+  assert.equal(shape(without), 'V[b | c]');
+
+  const back = L.restorePaneAt(without, ['a'], 'a', remembered, L.allLeaves(without)[0].id);
+  assert.equal(shape(back.root), 'H[a | V[b | c]]', 'a belongs beside the whole column, not beside b');
+});
+
+test('a pane whose neighbours have all closed still comes back', () => {
+  const start = L.makeLeaf(['a']);
+  const r = L.splitLeaf(start, start.id, 'row', 'b');
+  const bLeaf = L.leafOfTab(r.root, 'b').id;
+  const remembered = L.panePlace(r.root, bLeaf);
+  let without = L.closePane(r.root, bLeaf);
+  without = L.removeTab(without, 'a');
+
+  const back = L.restorePaneAt(without, ['b'], 'b', remembered, L.allLeaves(without)[0]?.id ?? '');
+  assert.deepEqual(L.allTabs(back.root), ['b']);
+});
+
+test('a pane keeps roughly the width it had', () => {
+  const start = L.makeLeaf(['a']);
+  const r = L.splitLeaf(start, start.id, 'row', 'b');
+  const root = L.setSizes(r.root, r.root.id, [0.75, 0.25]);
+  const bLeaf = L.leafOfTab(root, 'b').id;
+  const remembered = L.panePlace(root, bLeaf);
+  assert.ok(Math.abs(remembered.share - 0.25) < 0.01, `share was ${remembered.share}`);
+
+  const without = L.closePane(root, bLeaf);
+  const back = L.restorePaneAt(without, ['b'], 'b', remembered, L.allLeaves(without)[0].id);
+  assert.ok(Math.abs(back.root.sizes[1] - 0.25) < 0.02, `expected about a quarter, got ${back.root.sizes[1]}`);
+});

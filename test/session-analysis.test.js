@@ -306,3 +306,14 @@ test('a quiet session says so in one line', () => {
   const verdict = analyze([request(0, { read: 1000 }), request(1, { read: 1200 })]);
   assert.match(oneLine(verdict, 'tidy'), /^tidy: .*nothing to report$/);
 });
+
+test('a request with no input at all is not counted as an empty context', () => {
+  const verdict = analyze([
+    request(0, { read: 400000 }),
+    request(1, { read: 420000 }),
+    // A turn written without its accounting: real in an errored request.
+    { type: 'assistant', timestamp: at(2), message: { usage: { output_tokens: 5 }, content: [] } },
+  ]);
+  assert.equal(verdict.requests, 2);
+  assert.equal(verdict.context.last, 420002, 'the last real reading, not the empty one');
+});

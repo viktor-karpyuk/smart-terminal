@@ -61,6 +61,20 @@ export function PanelTab({
       </svg>
       <span className="tab-title">{name}</span>
       {!monitor && unsaved && <span className="file-tab-dirty" title="unsaved changes" />}
+      {/* A folder can be put down without being closed, the same as a session:
+          the tree it is showing takes real work to get back to. */}
+      <button
+        className="tab-min"
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          useStore.getState().minimizeSession(panelId);
+        }}
+        title="Set this folder aside — it keeps its tree, and you get its space back"
+        aria-label="Minimize folder"
+      >
+        –
+      </button>
       <button
         className="tab-close"
         onMouseDown={(event) => event.stopPropagation()}

@@ -61,6 +61,10 @@ contextBridge.exposeInMainWorld('api', {
     advice: (payload) => ipcRenderer.invoke('analysis:advice', payload),
     adviceHeld: (sessionId) => ipcRenderer.invoke('analysis:advice-held', sessionId),
     tell: (sessionId, text) => ipcRenderer.invoke('analysis:tell', { sessionId, text }),
+    brief: (sessionId) => ipcRenderer.invoke('analysis:brief', sessionId),
+    dbHealth: (deep = false) => ipcRenderer.invoke('db:health', { deep }),
+    dbMaintain: (options) => ipcRenderer.invoke('db:maintain', options),
+    handOver: (sessionId, text) => ipcRenderer.invoke('analysis:hand-over', { sessionId, text }),
     onChanged: (fn) => {
       const handler = (_e, payload) => fn(payload);
       ipcRenderer.on('analysis:changed', handler);

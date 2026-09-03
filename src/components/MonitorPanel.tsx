@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../state/store';
+import { STORAGE } from '../state/types';
+import type { DbHealth } from '../global';
 import type { Finding, SessionAnalysis } from '../state/types';
 
 /**
@@ -38,10 +40,10 @@ export function MonitorPanel({ panelId }: { panelId: string }) {
     ),
   );
 
-  const current = chosen ? analysis[chosen] : null;
+  const current = chosen && chosen !== STORAGE ? analysis[chosen] : null;
 
   useEffect(() => {
-    if (chosen) refresh(chosen);
+    if (chosen && chosen !== STORAGE) refresh(chosen);
   }, [chosen, refresh]);
 
   return (
@@ -58,11 +60,23 @@ export function MonitorPanel({ panelId }: { panelId: string }) {
               onPick={() => pick(panelId, id)}
             />
           ))}
+
+          {/* The other thing the app keeps, asked the same question. */}
+          <button
+            className={`monitor-row is-storage${chosen === STORAGE ? ' is-on' : ''}`}
+            onClick={() => pick(panelId, STORAGE)}
+          >
+            <span className="tab-dot" style={{ background: 'var(--text-dim)' }} />
+            <span className="monitor-row-name">Storage</span>
+          </button>
         </aside>
 
         <section className="monitor-detail">
+          {chosen === STORAGE && <Storage />}
           {!chosen && <p className="usage-note">Pick a session to see how it is going.</p>}
-          {chosen && !current && <p className="usage-note">Reading its transcript…</p>}
+          {chosen && chosen !== STORAGE && !current && (
+            <p className="usage-note">Reading its transcript…</p>
+          )}
           {current && !current.ok && (
             <p className="usage-note">
               {current.reason === 'empty'
@@ -78,7 +92,7 @@ export function MonitorPanel({ panelId }: { panelId: string }) {
         <span className="usage-footnote">
           Read from the conversation Claude Code already writes to disk — no tokens, no requests.
         </span>
-        {chosen && (
+        {chosen && chosen !== STORAGE && (
           <button className="ghost-btn tiny" onClick={() => refresh(chosen, true)}>
             Refresh
           </button>
@@ -224,27 +238,326 @@ function Detail({ verdict, showSuggestions }: { verdict: SessionAnalysis; showSu
  * doing something about.
  */
 function Curve({ verdict }: { verdict: SessionAnalysis }) {
-  const points = verdict.context.curve;
-  if (points.length < 2) return null;
+  const box = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  const [at, setAt] = useState<number | null>(null);
 
-  const width = 100;
-  const height = 34;
-  const top = Math.max(verdict.context.peak, verdict.context.window * 0.25);
-  const path = points
-    .map((point, i) => {
-      const x = (i / (points.length - 1)) * width;
-      const y = height - (point.context / top) * height;
-      return `${i === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`;
-    })
-    .join(' ');
-  const ceiling = height - (verdict.context.window / top) * height;
+  // Measured rather than stretched. A viewBox scaled to fit would squash every
+  // label and stroke with it, and the labels are most of what makes this a chart
+  // rather than a squiggle.
+  useEffect(() => {
+    const element = box.current;
+    if (!element) return;
+    const measure = () => setWidth(element.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const points = verdict.context.curve;
+  const height = 150;
+  const pad = { left: 46, right: 10, top: 12, bottom: 20 };
+  const plot = { w: Math.max(0, width - pad.left - pad.right), h: height - pad.top - pad.bottom };
+
+  const { top, xOf, yOf, path, area, marks, ticks } = useMemo(() => {
+    // The window is the top of the scale whenever the session is anywhere near
+    // it, so "how full" reads off the height directly. Only a session using very
+    // little of it gets a scale of its own, or the line would sit flat on the
+    // floor saying nothing.
+    const ceiling = verdict.context.window;
+    const scaleTop = verdict.context.peak > ceiling * 0.25 ? ceiling : Math.max(verdict.context.peak * 1.35, 1);
+    const x = (i: number) => pad.left + (points.length < 2 ? plot.w : (i / (points.length - 1)) * plot.w);
+    const y = (value: number) => pad.top + plot.h - Math.min(1, value / scaleTop) * plot.h;
+
+    const line = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.context).toFixed(1)}`).join(' ');
+    const filled = points.length
+      ? `${line} L${x(points.length - 1).toFixed(1)},${(pad.top + plot.h).toFixed(1)} L${x(0).toFixed(1)},${(pad.top + plot.h).toFixed(1)} Z`
+      : '';
+
+    // Where the session compacted, placed on the request nearest in time. A
+    // sawtooth is unreadable until you can see which drops were compactions.
+    const compactions = verdict.compactions
+      .map((c) => {
+        if (!c.at || !points.length) return null;
+        let nearest = 0;
+        let best = Infinity;
+        points.forEach((p, i) => {
+          if (!p.at) return;
+          const gap = Math.abs(p.at - c.at!);
+          if (gap < best) {
+            best = gap;
+            nearest = i;
+          }
+        });
+        return { x: x(nearest), trigger: c.trigger, dropped: c.droppedTokens };
+      })
+      .filter(Boolean) as Array<{ x: number; trigger: string; dropped: number }>;
+
+    // Two lines worth drawing: where degradation starts, and the ceiling itself.
+    const lines = [
+      { value: ceiling * 0.6, label: '60%', kind: 'warn' as const },
+      { value: ceiling, label: tokens(ceiling), kind: 'ceiling' as const },
+    ].filter((tick) => tick.value <= scaleTop * 1.001);
+
+    return { top: scaleTop, xOf: x, yOf: y, path: line, area: filled, marks: compactions, ticks: lines };
+  }, [points, verdict.compactions, verdict.context.window, verdict.context.peak, plot.w, plot.h]);
+
+  if (points.length < 2) return <div className="monitor-curve-box" ref={box} />;
+
+  const hovered = at === null ? null : points[at];
 
   return (
-    <svg className="monitor-curve" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden>
-      {ceiling > 0 && <line x1="0" y1={ceiling} x2={width} y2={ceiling} className="monitor-curve-ceiling" />}
-      <path d={`${path} L${width},${height} L0,${height} Z`} className="monitor-curve-fill" />
-      <path d={path} className="monitor-curve-line" />
-    </svg>
+    <div className="monitor-curve-box" ref={box}>
+      {width > 120 && (
+        <svg
+          className="monitor-curve"
+          width={width}
+          height={height}
+          onMouseLeave={() => setAt(null)}
+          onMouseMove={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            const ratio = (event.clientX - rect.left - pad.left) / (plot.w || 1);
+            const index = Math.round(ratio * (points.length - 1));
+            setAt(index >= 0 && index < points.length ? index : null);
+          }}
+        >
+          <defs>
+            <linearGradient id="monitor-fade" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" className="monitor-fade-top" />
+              <stop offset="100%" className="monitor-fade-bottom" />
+            </linearGradient>
+          </defs>
+
+          {ticks.map((tick) => (
+            <g key={tick.label}>
+              <line
+                x1={pad.left}
+                y1={yOf(tick.value)}
+                x2={width - pad.right}
+                y2={yOf(tick.value)}
+                className={`monitor-rule is-${tick.kind}`}
+              />
+              <text x={pad.left - 6} y={yOf(tick.value) + 3} className={`monitor-tick is-${tick.kind}`} textAnchor="end">
+                {tick.label}
+              </text>
+            </g>
+          ))}
+
+          <path d={area} fill="url(#monitor-fade)" />
+          <path d={path} className="monitor-curve-line" />
+
+          {marks.map((mark, i) => (
+            <g key={`${mark.x}-${i}`}>
+              <line x1={mark.x} y1={pad.top} x2={mark.x} y2={pad.top + plot.h} className="monitor-compaction" />
+              <title>
+                {mark.trigger === 'auto' ? 'Compacted itself' : 'Compacted'} — {tokens(mark.dropped)} dropped
+              </title>
+            </g>
+          ))}
+
+          {/* Where it is now: the end of the line, called out. */}
+          <circle cx={xOf(points.length - 1)} cy={yOf(points[points.length - 1].context)} r="3" className="monitor-now" />
+
+          {hovered && (
+            <g>
+              <line x1={xOf(at as number)} y1={pad.top} x2={xOf(at as number)} y2={pad.top + plot.h} className="monitor-cursor" />
+              <circle cx={xOf(at as number)} cy={yOf(hovered.context)} r="3.5" className="monitor-dot" />
+            </g>
+          )}
+
+          {/* A day at each end when the session spans days, clock times when it
+              does not — printing the same date twice tells nobody anything. */}
+          <text x={pad.left} y={height - 5} className="monitor-axis">
+            {when(points[0].at, verdict.spanMs)}
+          </text>
+          <text x={width - pad.right} y={height - 5} className="monitor-axis" textAnchor="end">
+            {when(points[points.length - 1].at, verdict.spanMs) || 'now'}
+          </text>
+        </svg>
+      )}
+
+      <div className="monitor-curve-read">
+        {hovered ? (
+          <>
+            <strong>{tokens(hovered.context)}</strong>
+            <span>{Math.round((hovered.context / verdict.context.window) * 100)}% of the window</span>
+            {hovered.at && <small>{new Date(hovered.at).toLocaleString()}</small>}
+          </>
+        ) : (
+          <>
+            <strong>{tokens(top)}</strong>
+            <span>top of the scale · {points.length} requests{marks.length ? ` · ${marks.length} compaction${marks.length === 1 ? '' : 's'}` : ''}</span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * How the database is doing, and what can be done about it.
+ *
+ * Three readings, kept apart because they mean different things. What it weighs.
+ * How much of that weight is holding nothing — deleting rows only frees pages
+ * for reuse, so a database that has had a lot removed stays exactly as big, and
+ * that gap is the closest thing SQLite has to going bad. And rows that outlived
+ * what they belonged to.
+ *
+ * Every button here is asked for by name. Nothing tidies on a timer, and nothing
+ * tidies because this was opened: deleting somebody's history as a side effect of
+ * looking at a panel would be indefensible however old the history is.
+ */
+function Storage() {
+  const [health, setHealth] = useState<DbHealth | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [said, setSaid] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<string | null>(null);
+
+  const read = (deep = false) => {
+    setBusy(deep ? 'checking' : 'reading');
+    window.api.analysis
+      .dbHealth(deep)
+      .then(setHealth)
+      .finally(() => setBusy(null));
+  };
+
+  useEffect(() => {
+    read(false);
+    // Read once when it opens. Polling a database to watch it not change is the
+    // sort of thing that makes a panel expensive to leave open.
+  }, []);
+
+  const run = async (key: string, options: Parameters<typeof window.api.analysis.dbMaintain>[0], describe: (r: { done: Array<{ op: string; rows: number }>; freed: number }) => string) => {
+    setBusy(key);
+    setConfirming(null);
+    try {
+      const result = await window.api.analysis.dbMaintain(options);
+      setHealth(result.after);
+      setSaid(describe(result));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (!health) return <p className="usage-note">Reading the database…</p>;
+
+  const orphans = health.orphans.chunks + health.orphans.stats + health.orphans.briefs + health.orphans.messages;
+  const wastedShare = health.bytes ? Math.round((health.wasted / health.bytes) * 100) : 0;
+
+  const ask = (key: string, label: string, detail: string, options: Parameters<typeof window.api.analysis.dbMaintain>[0], describe: (r: { done: Array<{ op: string; rows: number }>; freed: number }) => string, danger = false) =>
+    confirming === key ? (
+      <span className="storage-confirm">
+        <em>{detail}</em>
+        <button className={danger ? 'danger-btn tiny' : 'ghost-btn tiny'} onClick={() => run(key, options, describe)}>
+          Yes, do it
+        </button>
+        <button className="ghost-btn tiny" onClick={() => setConfirming(null)}>
+          No
+        </button>
+      </span>
+    ) : (
+      <button className="ghost-btn tiny" disabled={Boolean(busy)} onClick={() => setConfirming(key)}>
+        {label}
+      </button>
+    );
+
+  return (
+    <>
+      <div className="monitor-stats">
+        <div className="monitor-stat">
+          <span className="monitor-stat-label">On disk</span>
+          <strong>{bytes(health.onDisk)}</strong>
+          <small>{bytes(health.walBytes)} of it the write-ahead log</small>
+        </div>
+        <div className="monitor-stat">
+          <span className="monitor-stat-label">Holding nothing</span>
+          <strong>{bytes(health.wasted)}</strong>
+          <small>{wastedShare}% of the file, {health.freePages} free pages</small>
+        </div>
+        <div className="monitor-stat">
+          <span className="monitor-stat-label">Snapshots</span>
+          <strong>{bytes(health.snapshotBytes)}</strong>
+          <small>conversation copies, beside the file</small>
+        </div>
+        <div className="monitor-stat">
+          <span className="monitor-stat-label">Sessions</span>
+          <strong>{health.sessions.total}</strong>
+          <small>{health.sessions.open} still open</small>
+        </div>
+        <div className="monitor-stat">
+          <span className="monitor-stat-label">Orphaned rows</span>
+          <strong>{orphans}</strong>
+          <small>{orphans ? 'outlived their session' : 'nothing left behind'}</small>
+        </div>
+        <div className="monitor-stat">
+          <span className="monitor-stat-label">Integrity</span>
+          <strong>{health.integrity ?? '—'}</strong>
+          <small>{health.integrity ? 'checked just now' : 'not checked yet'}</small>
+        </div>
+      </div>
+
+      <h3 className="monitor-heading">What is taking the room</h3>
+      <div className="monitor-tools">
+        {health.tables
+          .filter((table) => table.rows > 0)
+          .map((table) => {
+            const widest = health.tables[0]?.bytes || 1;
+            return (
+              <div className="monitor-tool" key={table.name}>
+                <span className="monitor-tool-name">{table.name}</span>
+                <span className="monitor-bar">
+                  <span
+                    className="monitor-bar-fill is-ok"
+                    style={{ width: `${Math.round(((table.bytes ?? 0) / widest) * 100)}%` }}
+                  />
+                </span>
+                <small>
+                  {table.rows.toLocaleString()} rows{table.bytes ? ` · ${bytes(table.bytes)}` : ''}
+                </small>
+              </div>
+            );
+          })}
+      </div>
+
+      <h3 className="monitor-heading">Tidying</h3>
+      {said && <p className="usage-note">{said}</p>}
+      <div className="storage-actions">
+        {ask(
+          'orphans',
+          `Clear ${orphans} orphaned row${orphans === 1 ? '' : 's'}`,
+          'Rows whose session no longer exists. Nothing else refers to them.',
+          { orphans: true },
+          (r) => `Removed ${r.done.find((d) => d.op === 'orphans')?.rows ?? 0} rows.`,
+        )}
+        {ask(
+          'transcripts',
+          'Forget conversations older than 90 days',
+          `Deletes the kept conversations of sessions that ended over 90 days ago. The record of what ran stays.`,
+          { transcriptsOlderThanDays: 90 },
+          (r) => `Forgot ${r.done.find((d) => d.op === 'transcripts')?.rows ?? 0} conversations.`,
+        )}
+        {ask(
+          'sessions',
+          `Delete ${health.sessions.olderThan90} session${health.sessions.olderThan90 === 1 ? '' : 's'} older than 90 days`,
+          `Removes those sessions entirely — their record, conversation, messages and readings. This cannot be undone.`,
+          { olderThanDays: 90 },
+          (r) => `Deleted ${r.done.find((d) => d.op === 'sessions')?.rows ?? 0} sessions.`,
+          true,
+        )}
+        <button
+          className="ghost-btn tiny"
+          disabled={Boolean(busy)}
+          title="Rewrites the file so the empty pages are given back. Takes a few seconds."
+          onClick={() => run('reclaim', { reclaim: true }, (r) => `Gave back ${bytes(r.freed)}.`)}
+        >
+          {busy === 'reclaim' ? 'Compacting…' : `Reclaim ${bytes(health.wasted)}`}
+        </button>
+        <button className="ghost-btn tiny" disabled={Boolean(busy)} onClick={() => read(true)}>
+          {busy === 'checking' ? 'Checking…' : 'Check integrity'}
+        </button>
+      </div>
+    </>
   );
 }
 
@@ -318,6 +631,22 @@ function FindingRow({ finding, showSuggestion }: { finding: Finding; showSuggest
       {showSuggestion && <p className="monitor-suggestion">{finding.suggestion}</p>}
     </div>
   );
+}
+
+/** A date only when there is one; a curve can carry rows with no timestamp. */
+function when(at: number | null, spanMs: number) {
+  if (!at) return '';
+  const stamp = new Date(at);
+  return spanMs > 86400000
+    ? stamp.toLocaleDateString()
+    : stamp.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function bytes(value: number) {
+  if (value >= 1024 ** 3) return `${(value / 1024 ** 3).toFixed(1)} GB`;
+  if (value >= 1024 ** 2) return `${Math.round(value / 1024 ** 2)} MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+  return `${value} B`;
 }
 
 function tokens(value: number) {

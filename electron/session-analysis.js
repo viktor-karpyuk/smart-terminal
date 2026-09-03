@@ -168,7 +168,11 @@ function measure(rows) {
           reprimedTokens += write;
         }
 
-        samples.push({ at, context: contextOf(usage), output: num(usage.output_tokens) });
+        // A request with no input at all is not a measurement of anything — an
+        // errored turn, or a row written without its accounting. Counting it
+        // would put a zero in the curve and make the session look emptied.
+        const size = contextOf(usage);
+        if (size > 0) samples.push({ at, context: size, output: num(usage.output_tokens) });
       }
 
       for (const block of blocksOf(row)) {
@@ -523,14 +527,12 @@ function worstSeverity(findings = []) {
  * appended to by another process while we read it, and the last line is often
  * half-written.
  */
-function analyzeFile(file) {
+function readRows(file) {
   let text;
-  let stat;
   try {
-    stat = fs.statSync(file);
     text = fs.readFileSync(file, 'utf8');
   } catch {
-    return null;
+    return [];
   }
   const rows = [];
   for (const line of text.split('\n')) {
@@ -541,6 +543,17 @@ function analyzeFile(file) {
       // half-written tail, or a row from a newer format than this one
     }
   }
+  return rows;
+}
+
+function analyzeFile(file) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return null;
+  }
+  const rows = readRows(file);
   if (!rows.length) return null;
   return { ...analyze(rows), file, size: stat.size, readAt: Date.now() };
 }
@@ -548,6 +561,7 @@ function analyzeFile(file) {
 module.exports = {
   analyze,
   analyzeFile,
+  readRows,
   summarise,
   oneLine,
   measure,

@@ -245,7 +245,7 @@ interface State {
     resumeCommand?: boolean;
   }): Promise<string | null>;
   closeSession(sessionId: string): void;
-  restartSession(sessionId: string): Promise<void>;
+  restartSession(sessionId: string, options?: { fresh?: boolean }): Promise<void>;
   duplicateSession(sessionId: string): Promise<void>;
   renameSession(sessionId: string, title: string | null): void;
   focusSession(sessionId: string, options?: { startClaude?: boolean }): void;
@@ -871,10 +871,24 @@ export const useStore = create<State>((set, get) => ({
     schedulePersist(get);
   },
 
-  async restartSession(sessionId) {
+  /**
+   * Start a session again.
+   *
+   * Two doors, and the difference is the whole point. By default it resumes the
+   * conversation — Claude comes back with the thing itself, which no summary can
+   * match. `fresh` is the other case: a session whose context has grown until
+   * carrying it is the problem, or one whose conversation cannot be resumed at
+   * all. That one starts a new conversation and opens it with the brief the
+   * monitor has been keeping, which arrives once Claude is up and waiting.
+   */
+  async restartSession(sessionId, { fresh = false } = {}) {
     const state = get();
     const session = state.sessions[sessionId];
     if (!session) return;
+
+    // Asked for before anything is killed: once the session is gone its
+    // transcript may be unreadable, and the answer would arrive too late.
+    const brief = fresh && session.kind === 'claude' ? await window.api.analysis.brief(sessionId) : null;
     if (session.ptyId) {
       window.api.pty.kill(session.ptyId);
       ptyIndex.delete(session.ptyId);
@@ -888,13 +902,19 @@ export const useStore = create<State>((set, get) => ({
       cwd: session.cwd || session.startCwd,
       customTitle: session.customTitle,
       startCwd: session.startCwd,
-      // Pick the conversation back up instead of throwing it away.
-      ...(session.claudeSessionId && session.kind === 'claude'
+      // Pick the conversation back up instead of throwing it away — unless the
+      // whole point of this restart was to leave it behind.
+      ...(!fresh && session.claudeSessionId && session.kind === 'claude'
         ? { resumeSessionId: session.claudeSessionId }
         : {}),
       handoffFrom: session.handoffFrom,
     });
     get().focusSession(sessionId);
+
+    // Delivered through the same queue as a message between sessions, so it
+    // lands when Claude is at its prompt rather than into whatever it is
+    // printing while it starts up.
+    if (brief?.text) window.api.analysis.handOver(sessionId, brief.text);
   },
 
   async duplicateSession(sessionId) {
@@ -1075,9 +1095,17 @@ export const useStore = create<State>((set, get) => ({
    * and an emptied pane is pruned, which is how the space goes back to the panes
    * around it.
    */
+  /**
+   * Set one tab aside, whatever kind it is.
+   *
+   * Named for sessions because that is what it was first for, but a folder is a
+   * tab in the same strip and there is no reason it should be the one thing that
+   * can only be closed. Everything below this works on tab ids, so widening the
+   * guard is the whole change.
+   */
   minimizeSession(sessionId) {
     const state = get();
-    if (!state.sessions[sessionId]) return;
+    if (!state.sessions[sessionId] && !state.panels[sessionId]) return;
     if (state.minimized.some((entry) => entry.sessionId === sessionId)) return;
     const from = leafOfTab(state.layout, sessionId);
 
@@ -1188,6 +1216,7 @@ export const useStore = create<State>((set, get) => ({
             tabs: [...leaf.tabs],
             active: leaf.active,
             anchorTabId: place.anchorTabId,
+            anchorTabs: place.anchorTabs,
             side: place.side,
             share: place.share,
             label,
@@ -1222,7 +1251,14 @@ export const useStore = create<State>((set, get) => ({
       state.layout,
       alive,
       alive.includes(section.active ?? '') ? section.active : alive[0],
-      { anchorTabId: section.anchorTabId, side: section.side, share: section.share },
+      {
+        anchorTabId: section.anchorTabId,
+        // Absent on a section set aside before the app knew to remember the
+        // whole block; the restore falls back to the single tab in that case.
+        anchorTabs: section.anchorTabs ?? [],
+        side: section.side,
+        share: section.share,
+      },
       fallback,
     );
 
@@ -2785,7 +2821,9 @@ function restoreTabs(
 ) {
   const state = get();
   const entries = state.minimized.filter(
-    (entry) => sessionIds.includes(entry.sessionId) && state.sessions[entry.sessionId],
+    (entry) =>
+      sessionIds.includes(entry.sessionId) &&
+      (state.sessions[entry.sessionId] || state.panels[entry.sessionId]),
   );
   if (!entries.length) return;
 

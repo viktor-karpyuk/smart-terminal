@@ -1,7 +1,8 @@
 'use strict';
 
 const fs = require('node:fs');
-const { analyzeFile, worstSeverity } = require('./session-analysis');
+const { analyze, readRows, worstSeverity } = require('./session-analysis');
+const { brief, worthCarrying } = require('./session-brief');
 
 /**
  * Watches how every running session is behaving, continuously.
@@ -103,16 +104,19 @@ class SessionMonitor {
     const previous = this.readings.get(sessionId);
     if (!force && previous && size - previous.size < GROWTH_BYTES) return previous.verdict;
 
-    const verdict = analyzeFile(file);
-    if (!verdict) return { sessionId, ok: false, reason: 'empty' };
+    const rows = readRows(file);
+    if (!rows.length) return { sessionId, ok: false, reason: 'empty' };
 
-    // The path names the account's config directory and the working tree. The
-    // renderer has no use for either, and they are not its business.
-    delete verdict.file;
-    const answer = { ...verdict, sessionId, ok: true, worst: worstSeverity(verdict.findings) };
+    const verdict = analyze(rows);
+    const answer = { ...verdict, sessionId, ok: true, worst: worstSeverity(verdict.findings), readAt: Date.now() };
     this.readings.set(sessionId, { size, verdict: answer });
     try {
       this.db?.saveStats(sessionId, verdict);
+      // The same parse, read a second way. What a session would need to be told
+      // if it had to start over has to be on hand *before* it is needed — the
+      // moment somebody wants it is usually the moment the transcript is gone.
+      const carry = brief(rows);
+      if (worthCarrying(carry)) this.db?.saveBrief(sessionId, carry);
     } catch {
       /* a verdict is still worth showing even if it could not be filed */
     }

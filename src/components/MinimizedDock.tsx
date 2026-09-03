@@ -1,4 +1,4 @@
-import { useStore } from '../state/store';
+import { asFilePanel, panelLabel, useStore } from '../state/store';
 import { sessionLabel } from '../lib/labels';
 import type { MinimizedTab } from '../state/types';
 
@@ -90,8 +90,44 @@ function DockedSection({ id }: { id: string }) {
   );
 }
 
+/** A folder put down: its name, and one click to pick it back up. */
+function DockedPanel({ panelId }: { panelId: string }) {
+  const name = useStore((s) => panelLabel(s.panels[panelId]));
+  const root = useStore((s) => asFilePanel(s.panels[panelId])?.root ?? '');
+  const restore = useStore((s) => s.restoreMinimized);
+  const closePanel = useStore((s) => s.closePanel);
+
+  return (
+    <button
+      className="dock-item is-panel"
+      style={{ ['--dock-tint' as string]: '#7aa2f7' }}
+      onClick={() => restore(panelId)}
+      title={[`${name} — set aside`, root, 'Click to bring it back'].join('\n')}
+    >
+      <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="#7aa2f7" strokeWidth="1.3">
+        <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
+      </svg>
+      <span className="dock-name">{name}</span>
+      <span
+        className="dock-close"
+        role="button"
+        aria-label="Close this folder"
+        onClick={(event) => {
+          event.stopPropagation();
+          closePanel(panelId);
+        }}
+      >
+        ×
+      </span>
+    </button>
+  );
+}
+
 function DockedTab({ sessionId }: { sessionId: string }) {
   const session = useStore((s) => s.sessions[sessionId]);
+  // A folder set aside sits in the same dock. It has no account, no state and
+  // nothing running, so it gets its own smaller chip rather than a session's.
+  const panelKind = useStore((s) => s.panels[sessionId]?.kind ?? null);
   const profile = useStore((s) => {
     const owner = s.sessions[sessionId]?.profileId;
     return owner ? s.profiles.find((p) => p.id === owner) : undefined;
@@ -101,6 +137,7 @@ function DockedTab({ sessionId }: { sessionId: string }) {
   const requestClose = useStore((s) => s.requestClose);
   const openContextMenu = useStore((s) => s.openContextMenu);
 
+  if (!session && panelKind) return <DockedPanel panelId={sessionId} />;
   // Restored in the same tick it is spawned, a docked entry can briefly name a
   // session the store has not built yet.
   if (!session) return null;
