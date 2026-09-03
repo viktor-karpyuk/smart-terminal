@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useStore } from '../state/store';
 import type { Session } from '../state/types';
 import { Popover } from './Popover';
+import { leafOfTab } from '../state/layout';
 
 /** Right-click menu for a session, wherever it is listed. */
 export function SessionContextMenu() {
@@ -197,12 +198,40 @@ function Menu({
       )}
 
       <div className="menu-separator" />
+      {/*
+        The folder this session is working in, opened beside it. A session
+        already knows where it is — asking which folder, when the answer is on
+        the tab you right-clicked, is a question with one answer.
+      */}
+      <MenuItem
+        label="Open its folder"
+        hint={folderName(session.cwd)}
+        onClick={run(() => {
+          const leaf = leafOfTab(store.layout, sessionId);
+          store.openFilePanel({ leafId: leaf?.id, side: 'right', root: session.cwd });
+        })}
+      />
+      <MenuItem
+        label="Open its folder here"
+        hint="same section"
+        onClick={run(() => {
+          const leaf = leafOfTab(store.layout, sessionId);
+          store.openFilePanel({ leafId: leaf?.id, side: 'center', root: session.cwd });
+        })}
+      />
+
+      <div className="menu-separator" />
       <MenuItem label="Split right" hint="⌘D" onClick={run(() => store.splitActive('row'))} />
       <MenuItem label="Split down" hint="⇧⌘D" onClick={run(() => store.splitActive('column'))} />
       <div className="menu-separator" />
       <MenuItem label="Close" hint="⌘W" danger onClick={run(() => store.requestClose(sessionId))} />
     </Popover>
   );
+}
+
+/** The last part of a path, which is what a folder is called in conversation. */
+function folderName(path: string): string {
+  return path.split('/').filter(Boolean).pop() ?? path;
 }
 
 /** What autopilot is doing right now, in the fewest words that still say it. */
