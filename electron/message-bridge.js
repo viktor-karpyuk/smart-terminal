@@ -54,7 +54,7 @@ class MessageBridge {
    * @param {(id: string) => boolean} deps.isFree   idle at a Claude prompt, no dialog up
    * @param {object} deps.store               the queue: queue/pending/markDelivered/markRead
    */
-  constructor({ socketPath, reach, roster, write, isFree, store, health = null }) {
+  constructor({ socketPath, reach, roster, write, isFree, store, health = null, lookup = null }) {
     this.socketPath = socketPath;
     this.reach = reach;
     this.roster = roster;
@@ -64,6 +64,9 @@ class MessageBridge {
     /** How a session is behaving, asked of the monitor. Optional: without it the
      *  channel still carries messages, it just cannot answer for anyone. */
     this.health = health;
+    /** Sessions the app knows but is not running, so "gone" can be told from
+     *  "never existed" — two answers that need completely different replies. */
+    this.lookup = lookup;
     this.server = null;
     this.sweep = null;
   }
@@ -165,6 +168,46 @@ class MessageBridge {
     return { ok: true, delivered: delivered.includes(sessionId) };
   }
 
+  /**
+   * Why a message could not be addressed — which is three different answers.
+   *
+   * Collapsing them into "no session called that" is what sends a session round
+   * in circles: it is told something false about a session that plainly exists,
+   * has nothing to act on, and tries again. Each of these leaves somebody
+   * something to do.
+   */
+  #whyNot(target, from, roster, reach) {
+    const wanted = String(target ?? '').trim();
+
+    // Running, but the reach does not include it.
+    const beyond = resolveRecipient(wanted, roster.filter((entry) => entry.id !== from));
+    if (beyond && !beyond.ambiguous) {
+      return (
+        `"${beyond.name}" is running, but it is outside your reach: you can talk to ` +
+        `${reach === 'group' ? 'the other sessions in your own group' : 'every session'}, and it is ` +
+        `${beyond.groupName ? `in group ${beyond.groupName}` : 'in no group'}. ` +
+        'Tell the user: they can put you both in one group, or widen the reach to every session.'
+      );
+    }
+    if (beyond?.ambiguous) {
+      return `More than one session is called that: ${beyond.ambiguous.map((s) => `${s.name} (${s.id.slice(0, 8)})`).join(', ')}. Use an id.`;
+    }
+
+    // Known to the app, but not running — the case that reads as "does not
+    // exist" and is nothing of the sort.
+    const past = this.lookup?.(wanted) ?? null;
+    if (past) {
+      return (
+        `"${past.title ?? wanted}" is a session the app knows, but it is not running` +
+        `${past.endedAt ? ` — it ended ${new Date(past.endedAt).toLocaleString()}` : ''}. ` +
+        'Nothing can be delivered to it. Its conversation is still on disk, so the user can open it again, ' +
+        'and then it can be reached like any other.'
+      );
+    }
+
+    return `Nothing running or on record matches "${wanted}". Call list_sessions to see who is there.`;
+  }
+
   /** Every request, resolved against the live roster. Kept separate so it is testable. */
   async handle(request) {
     const { op, from } = request ?? {};
@@ -259,12 +302,7 @@ class MessageBridge {
           };
         }
         if (!found) {
-          return {
-            ok: false,
-            error:
-              `No session you can reach is called "${request.to}". ` +
-              'Call list_sessions to see who is there.',
-          };
+          return { ok: false, error: this.#whyNot(request.to, from, roster, reach) };
         }
         targets = [found];
       }

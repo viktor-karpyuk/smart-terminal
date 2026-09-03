@@ -123,3 +123,57 @@ test('a session is never listed as beyond its own reach', async () => {
   assert.equal(answer.beyond.some((s) => s.name === 'alpha'), false);
   assert.deepEqual(answer.beyond.map((s) => s.name), ['beta', 'gamma']);
 });
+
+// --- why a message could not be delivered ---------------------------------
+
+/** A bridge that can also be asked about sessions the app is not running. */
+function bridgeWith(options) {
+  return bridge(options);
+}
+
+test('a session in reach receives the message', async () => {
+  const made = bridge({ reach: 'all' });
+  const answer = await made.handle({ op: 'send', from: 'a', to: 'gamma', message: 'hello' });
+  assert.equal(answer.ok, true);
+  assert.match(answer.detail, /Sent to gamma/);
+});
+
+test('a running session out of reach is named, with what to do about it', async () => {
+  const answer = await bridge({ reach: 'group' }).handle({ op: 'send', from: 'a', to: 'gamma', message: 'hi' });
+  assert.equal(answer.ok, false);
+  assert.match(answer.error, /"gamma" is running/);
+  assert.match(answer.error, /outside your reach/);
+  assert.match(answer.error, /one group|widen the reach/);
+  assert.equal(/no session/i.test(answer.error), false, 'it exists — never say it does not');
+});
+
+test('a session that has ended is told apart from one that never existed', async () => {
+  const made = new MessageBridge({
+    socketPath: '/tmp/never-bound',
+    reach: () => 'all',
+    roster: () => ROSTER,
+    write: () => false,
+    isFree: () => false,
+    store: { queue: () => {}, pending: () => [], markDelivered: () => {}, markRead: () => {} },
+    lookup: (query) =>
+      query === 'c6884512-cdeb-4cec-8973-be4a57071ca8'
+        ? { id: '0e43ee2e', title: 'TT-dev', endedAt: Date.parse('2026-09-02T18:00:00Z') }
+        : null,
+  });
+
+  const gone = await made.handle({ op: 'send', from: 'a', to: 'c6884512-cdeb-4cec-8973-be4a57071ca8', message: 'x' });
+  assert.equal(gone.ok, false);
+  assert.match(gone.error, /"TT-dev" is a session the app knows/);
+  assert.match(gone.error, /not running/);
+  assert.match(gone.error, /open it again/);
+
+  const never = await made.handle({ op: 'send', from: 'a', to: 'made-up', message: 'x' });
+  assert.match(never.error, /Nothing running or on record matches "made-up"/);
+});
+
+test('a session addressed by its conversation id is found', async () => {
+  const made = bridge({ reach: 'all' });
+  const answer = await made.handle({ op: 'send', from: 'a', to: 'conv-c', message: 'hello' });
+  assert.equal(answer.ok, true, answer.error);
+  assert.match(answer.detail, /Sent to gamma/);
+});

@@ -127,3 +127,19 @@ test('a note from the monitor is marked as not being from a session', () => {
 test('a note can name what it is about', () => {
   assert.match(formatNote({ text: 'x', subject: 'this session' }), /note about this session/);
 });
+
+test('a session answers to the conversation id, which is an address the app hands out', () => {
+  const audience = [
+    { id: 'aaaa1111-0000-0000-0000-000000000000', name: 'docs', conversation: 'c6884512-cdeb-4cec-8973-be4a57071ca8' },
+    { id: 'bbbb2222-0000-0000-0000-000000000000', name: 'build', conversation: 'ffff0000-0000-0000-0000-000000000000' },
+  ];
+  assert.equal(resolveRecipient('c6884512-cdeb-4cec-8973-be4a57071ca8', audience).name, 'docs');
+  assert.equal(resolveRecipient('C6884512-CDEB-4CEC-8973-BE4A57071CA8', audience).name, 'docs');
+});
+
+test('the session id still wins, and a name still resolves', () => {
+  const audience = [{ id: 'aaaa1111-2222', name: 'docs', conversation: 'cccc' }];
+  assert.equal(resolveRecipient('aaaa1111-2222', audience).name, 'docs');
+  assert.equal(resolveRecipient('docs', audience).name, 'docs');
+  assert.equal(resolveRecipient('nobody', audience), null);
+});

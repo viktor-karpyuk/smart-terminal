@@ -70,6 +70,14 @@ function resolveRecipient(target, audience = []) {
   const byShortId = audience.find((entry) => entry.id.startsWith(lower) && lower.length >= 6);
   if (byShortId) return byShortId;
 
+  // The conversation id counts too. The app hands that one out — it is on the
+  // session's own menu and in every roster — so refusing it would be refusing an
+  // address the app itself gave out.
+  const byConversation = audience.find(
+    (entry) => entry.conversation && String(entry.conversation).toLowerCase() === lower,
+  );
+  if (byConversation) return byConversation;
+
   const named = audience.filter((entry) => String(entry.name ?? '').toLowerCase() === lower);
   // An ambiguous name is refused rather than guessed at: delivering to the wrong
   // session of two with the same name is worse than saying which two they are.

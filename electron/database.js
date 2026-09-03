@@ -472,6 +472,26 @@ class Database {
       .map(decorate);
   }
 
+  /**
+   * A session by any of the addresses the app hands out: its own id, the
+   * conversation behind it, or its name — whether or not it is still running.
+   *
+   * The last part is the point. A session that has ended is not a session that
+   * never existed, and telling those two apart is the difference between "that
+   * is gone, open it again" and "there is no such thing", which sends whoever
+   * asked round in circles.
+   */
+  findSession(query) {
+    const wanted = String(query ?? '').trim();
+    if (!wanted) return null;
+    const row =
+      this.db.prepare('SELECT * FROM sessions WHERE id = ? OR claude_session_id = ?').get(wanted, wanted) ??
+      this.db
+        .prepare('SELECT * FROM sessions WHERE LOWER(title) = LOWER(?) ORDER BY started_at DESC LIMIT 1')
+        .get(wanted);
+    return row ? decorate(row) : null;
+  }
+
   listSessions({ query = '', profileId = null, includeOpen = true, limit = 200 } = {}) {
     const where = [];
     const values = [];

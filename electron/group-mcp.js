@@ -53,7 +53,14 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        to: { type: 'string', description: 'Name or id of the session, from list_sessions.' },
+        to: {
+          type: 'string',
+          description:
+            'Which session: its name, its id, or the id of its conversation — all three work, and ' +
+            'list_sessions gives you all three. If it cannot be reached you are told why, and ' +
+            '"not running" is a different answer from "no such session": pass that on rather than ' +
+            'retrying.',
+        },
         message: { type: 'string', description: 'What to say. Plain text.' },
       },
       required: ['to', 'message'],

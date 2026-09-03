@@ -1176,6 +1176,13 @@ function startMessaging() {
       return false;
     },
     isFree: sessionIsFree,
+    // Sessions the app knows but is not running. Without this, a message to a
+    // session that has ended comes back as "no such session", which is false and
+    // leaves the sender nothing to do but try again.
+    lookup: (query) => {
+      const row = db.findSession(query);
+      return row ? { id: row.id, title: row.title, endedAt: row.endedAt ?? null } : null;
+    },
     // A session asking how it is going gets the monitor's own reading, in prose.
     // Free to answer: the reading already exists, and nothing here is a request.
     health: (sessionId, { brief = false } = {}) => {
