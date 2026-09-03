@@ -15,6 +15,16 @@ const { app } = require('electron');
  * A session can opt in to having its transcript text stored here as well, which is
  * what makes searching *inside* past conversations possible.
  */
+function parseFindings(raw) {
+  if (!raw) return [];
+  try {
+    const value = JSON.parse(raw);
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
 class Database {
   constructor(file = path.join(app.getPath('userData'), 'smart-terminal.db')) {
     this.db = new DatabaseSync(file);
@@ -47,6 +57,33 @@ class Database {
       CREATE INDEX IF NOT EXISTS sessions_started  ON sessions (started_at DESC);
       CREATE INDEX IF NOT EXISTS sessions_profile  ON sessions (profile_id, started_at DESC);
       CREATE INDEX IF NOT EXISTS sessions_open     ON sessions (ended_at);
+
+      CREATE TABLE IF NOT EXISTS session_stats (
+        session_id      TEXT PRIMARY KEY,
+        measured_at     INTEGER NOT NULL,
+        requests        INTEGER NOT NULL DEFAULT 0,
+        span_ms         INTEGER NOT NULL DEFAULT 0,
+        context_window  INTEGER NOT NULL DEFAULT 0,
+        context_peak    INTEGER NOT NULL DEFAULT 0,
+        context_last    INTEGER NOT NULL DEFAULT 0,
+        context_mean    INTEGER NOT NULL DEFAULT 0,
+        turns_above     INTEGER NOT NULL DEFAULT 0,
+        input_tokens    INTEGER NOT NULL DEFAULT 0,
+        output_tokens   INTEGER NOT NULL DEFAULT 0,
+        cache_write     INTEGER NOT NULL DEFAULT 0,
+        cache_read      INTEGER NOT NULL DEFAULT 0,
+        effective_input INTEGER NOT NULL DEFAULT 0,
+        compactions     INTEGER NOT NULL DEFAULT 0,
+        auto_compactions INTEGER NOT NULL DEFAULT 0,
+        dropped_tokens  INTEGER NOT NULL DEFAULT 0,
+        reprimed_tokens INTEGER NOT NULL DEFAULT 0,
+        latency_p50     INTEGER NOT NULL DEFAULT 0,
+        latency_p95     INTEGER NOT NULL DEFAULT 0,
+        errors          INTEGER NOT NULL DEFAULT 0,
+        worst           TEXT,
+        findings        TEXT
+      );
+      CREATE INDEX IF NOT EXISTS session_stats_measured ON session_stats (measured_at DESC);
 
       CREATE TABLE IF NOT EXISTS groups (
         id          TEXT PRIMARY KEY,
@@ -121,6 +158,15 @@ class Database {
     );
     if (!present.has('window_id')) this.db.exec('ALTER TABLE sessions ADD COLUMN window_id TEXT');
     if (!present.has('group_id')) this.db.exec('ALTER TABLE sessions ADD COLUMN group_id TEXT');
+    /*
+     * What this session was running, and whether it should be started again.
+     * Two columns because they answer different questions: the command is a
+     * fact about the session, and bringing it back is a decision about it.
+     */
+    if (!present.has('last_command')) this.db.exec('ALTER TABLE sessions ADD COLUMN last_command TEXT');
+    if (!present.has('resume_command')) {
+      this.db.exec('ALTER TABLE sessions ADD COLUMN resume_command INTEGER DEFAULT 0');
+    }
     this.db.exec('CREATE INDEX IF NOT EXISTS sessions_group ON sessions (group_id)');
 
     const windowColumns = new Set(
@@ -294,6 +340,8 @@ class Database {
       transcriptBytes: 'transcript_bytes',
       windowId: 'window_id',
       groupId: 'group_id',
+      lastCommand: 'last_command',
+      resumeCommand: 'resume_command',
     };
     const sets = [];
     const values = [];
@@ -545,6 +593,81 @@ class Database {
 
   listHandoffs(limit = 100) {
     return this.db.prepare('SELECT * FROM handoffs ORDER BY at DESC LIMIT ?').all(limit);
+  }
+
+  // --- how a session is behaving ---------------------------------------------
+
+  /**
+   * Keep the headline figures of one analysis.
+   *
+   * The transcript it was read from is the truth and stays on disk, so this is a
+   * cache, not a record — one row per session, overwritten each time. What it
+   * buys is comparison: a number is only alarming next to the others, and the
+   * transcripts of finished sessions get archived or deleted while this does not.
+   */
+  saveStats(sessionId, verdict) {
+    const auto = verdict.compactions.filter((c) => c.trigger === 'auto');
+    this.db
+      .prepare(
+        `INSERT INTO session_stats
+           (session_id, measured_at, requests, span_ms, context_window, context_peak,
+            context_last, context_mean, turns_above, input_tokens, output_tokens,
+            cache_write, cache_read, effective_input, compactions, auto_compactions,
+            dropped_tokens, reprimed_tokens, latency_p50, latency_p95, errors, worst, findings)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (session_id) DO UPDATE SET
+           measured_at = excluded.measured_at, requests = excluded.requests,
+           span_ms = excluded.span_ms, context_window = excluded.context_window,
+           context_peak = excluded.context_peak, context_last = excluded.context_last,
+           context_mean = excluded.context_mean, turns_above = excluded.turns_above,
+           input_tokens = excluded.input_tokens, output_tokens = excluded.output_tokens,
+           cache_write = excluded.cache_write, cache_read = excluded.cache_read,
+           effective_input = excluded.effective_input, compactions = excluded.compactions,
+           auto_compactions = excluded.auto_compactions, dropped_tokens = excluded.dropped_tokens,
+           reprimed_tokens = excluded.reprimed_tokens, latency_p50 = excluded.latency_p50,
+           latency_p95 = excluded.latency_p95, errors = excluded.errors,
+           worst = excluded.worst, findings = excluded.findings`,
+      )
+      .run(
+        sessionId,
+        Date.now(),
+        verdict.requests,
+        verdict.spanMs,
+        verdict.context.window,
+        verdict.context.peak,
+        verdict.context.last,
+        verdict.context.mean,
+        verdict.context.turnsAbove,
+        verdict.totals.input,
+        verdict.totals.output,
+        verdict.totals.cacheWrite,
+        verdict.totals.cacheRead,
+        verdict.effectiveInput,
+        verdict.compactions.length,
+        auto.length,
+        auto.reduce((sum, c) => sum + c.droppedTokens, 0),
+        verdict.reprimes.tokens,
+        verdict.latency.p50,
+        verdict.latency.p95,
+        verdict.errors.length,
+        verdict.findings[0]?.severity ?? null,
+        JSON.stringify(verdict.findings.map((f) => ({ id: f.id, severity: f.severity, title: f.title }))),
+      );
+  }
+
+  /**
+   * Every session measured so far, newest first — what "compared to the others"
+   * is computed from, and what the fleet view lists.
+   */
+  listStats(limit = 200) {
+    return this.db
+      .prepare(
+        `SELECT s.*, x.title, x.profile_name, x.start_cwd, x.started_at, x.ended_at
+           FROM session_stats s LEFT JOIN sessions x ON x.id = s.session_id
+          ORDER BY s.measured_at DESC LIMIT ?`,
+      )
+      .all(limit)
+      .map((row) => ({ ...row, findings: parseFindings(row.findings) }));
   }
 
   // --- messages between sessions -------------------------------------------
@@ -882,6 +1005,8 @@ function decorate(row) {
     resumedFrom: row.resumed_from,
     windowId: row.window_id,
     groupId: row.group_id,
+    lastCommand: row.last_command ?? null,
+    resumeCommand: Boolean(row.resume_command),
     storeTranscript: Boolean(row.store_transcript),
     transcriptBytes: row.transcript_bytes,
     open: endedAt === null,

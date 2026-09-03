@@ -155,6 +155,24 @@ function Menu({
         </button>
       )}
 
+      {/*
+        Only worth offering once there is something to bring back. The app cannot
+        tell a dev server from a migration, so this is per session and off until
+        someone says otherwise.
+      */}
+      {session.lastCommand && (
+        <button
+          className={`menu-item menu-check${session.resumeCommand ? ' is-on' : ''}`}
+          title={`Start ${session.lastCommand} again whenever this session comes back`}
+          onClick={run(() => store.setResumeCommand(sessionId, !session.resumeCommand))}
+        >
+          <span>
+            <i className="check">{session.resumeCommand ? '☑' : '☐'}</i> Bring its command back
+          </span>
+          <kbd title={session.lastCommand}>{session.lastCommand}</kbd>
+        </button>
+      )}
+
       {hostsClaude && (
         <MenuItem
           label={session.recording ? 'Recording conversation ✓' : 'Record conversation'}

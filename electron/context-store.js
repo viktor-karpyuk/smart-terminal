@@ -172,6 +172,11 @@ class ContextStore {
     for (const coords of this.tracked.values()) coords.withCommands = withCommands;
   }
 
+  /** Every session whose conversation is being followed right now. */
+  trackedIds() {
+    return [...this.tracked.keys()];
+  }
+
   untrack(sessionId) {
     this.tracked.delete(sessionId);
   }
@@ -278,6 +283,33 @@ class ContextStore {
   }
 
   /** What we know about a session's saved context. */
+  /**
+   * The best transcript on disk for a session: the live one while it is running,
+   * the snapshot once it is not.
+   *
+   * Analysis has to work on a session that has ended — that is when someone most
+   * wants to know how it went — and by then the CLI's own file may be gone or
+   * belong to an account that has since been signed out. The snapshot is a
+   * byte-for-byte copy, so it answers exactly the same questions.
+   */
+  transcriptFor(sessionId) {
+    const coords = this.tracked.get(sessionId);
+    if (coords) {
+      const live = transcriptPath(coords);
+      if (statTime(live)) return live;
+      const found = locateTranscript(coords.configDir ?? null, coords.claudeSessionId, [coords.cwd]);
+      if (found) return found;
+    }
+    try {
+      const meta = JSON.parse(fs.readFileSync(path.join(snapshotPath(sessionId), 'meta.json'), 'utf8'));
+      const copy = path.join(snapshotPath(sessionId), `${meta.claudeSessionId}.jsonl`);
+      if (statTime(copy)) return copy;
+    } catch {
+      /* nothing saved for this session */
+    }
+    return null;
+  }
+
   info(sessionId) {
     const coords = this.tracked.get(sessionId);
     const metaFile = path.join(snapshotPath(sessionId), 'meta.json');

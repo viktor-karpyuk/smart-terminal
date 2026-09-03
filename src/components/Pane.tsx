@@ -12,6 +12,7 @@ import { PathLabel } from './PathLabel';
 import { SessionTab } from './SessionTab';
 import { GroupChip, GroupTheseTabs } from './GroupChip';
 import { FilesPanel } from './FilesPanel';
+import { MonitorPanel } from './MonitorPanel';
 import { PanelTab } from './PanelTab';
 
 export function Pane({ leaf }: { leaf: LeafNode }) {
@@ -41,6 +42,8 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
   const panelIds = useStore(
     useShallow((s) => leaf.tabs.filter((id) => Boolean(s.panels[id]))),
   );
+  /** Which sort of panel is in front, when one is. A string, so it is stable. */
+  const activePanelKind = useStore((s) => (leaf.active ? (s.panels[leaf.active]?.kind ?? null) : null));
   const tabGroups = useStore(
     useShallow((s) => leaf.tabs.map((id) => s.sessions[id]?.groupId ?? null)),
   );
@@ -355,10 +358,15 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
 
       <div className="pane-body" ref={bodyRef}>
         {leaf.active && panelIds.includes(leaf.active) ? (
-          <FilesPanel key={leaf.active} panelId={leaf.active} />
+          activePanelKind === 'monitor' ? (
+            <MonitorPanel key={leaf.active} panelId={leaf.active} />
+          ) : (
+            <FilesPanel key={leaf.active} panelId={leaf.active} />
+          )
         ) : leaf.active && activeSession ? (
           <>
             <TerminalSlot key={leaf.active} sessionId={leaf.active} />
+            {activeSession.offerCommand && <CommandOffer sessionId={leaf.active} />}
             {activeSession.limitHit && <HandoffBanner sessionId={leaf.active} />}
             {findOpenFor === leaf.active && <FindBar sessionId={leaf.active} />}
           </>
@@ -408,6 +416,46 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
         </footer>
       )}
     </section>
+  );
+}
+
+/**
+ * What this session was running before the app restarted, offered back.
+ *
+ * Offered, not run. The app remembers `npm run local` and a migration in exactly
+ * the same way and cannot tell them apart — so it asks once, and the checkbox is
+ * how you say "this one is safe, do it by itself next time".
+ */
+function CommandOffer({ sessionId }: { sessionId: string }) {
+  const command = useStore((s) => s.sessions[sessionId]?.offerCommand ?? null);
+  const runCommandIn = useStore((s) => s.runCommandIn);
+  const setResumeCommand = useStore((s) => s.setResumeCommand);
+  const dismiss = useStore((s) => s.dismissCommandOffer);
+  if (!command) return null;
+
+  return (
+    <div className="command-offer">
+      <span className="file-bar-dot is-ok" />
+      <span className="command-offer-text">
+        This was running <code>{command}</code>
+      </span>
+      <button className="primary-btn" onClick={() => runCommandIn(sessionId, command)}>
+        Run it again
+      </button>
+      <button
+        className="ghost-btn"
+        title="Start it by itself whenever this session comes back"
+        onClick={() => {
+          setResumeCommand(sessionId, true);
+          runCommandIn(sessionId, command);
+        }}
+      >
+        Always
+      </button>
+      <button className="tab-close" onClick={() => dismiss(sessionId)} aria-label="Dismiss">
+        ×
+      </button>
+    </div>
   );
 }
 

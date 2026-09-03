@@ -23,6 +23,13 @@ export function SessionTab({ sessionId, selected, tight, grouped }: Props) {
     return owner ? s.profiles.find((p) => p.id === owner) : undefined;
   });
   const homedir = useStore((s) => s.homedir);
+  // A primitive, deliberately: selecting the verdict object would hand back a new
+  // reference on every sweep and redraw every tab in the window for nothing.
+  const alert = useStore((s) =>
+    s.settings.sessionAlerts && s.analysisBySession[sessionId]?.worst !== 'low'
+      ? (s.analysisBySession[sessionId]?.worst ?? null)
+      : null,
+  );
   const kept = useStore((s) => s.sessionSizes[sessionId]);
   const groupColor = useStore((s) => {
     const owner = s.sessions[sessionId]?.groupId;
@@ -87,6 +94,16 @@ export function SessionTab({ sessionId, selected, tight, grouped }: Props) {
       }}
     >
       <span className="tab-dot" style={{ background: color }} />
+      {alert && (
+        <span
+          className={`tab-alert is-${alert}`}
+          title="This session needs a look — open the monitor"
+          onClick={(event) => {
+            event.stopPropagation();
+            useStore.getState().openMonitor(sessionId);
+          }}
+        />
+      )}
       <span className="tab-account" style={{ color }}>
         {profile?.name ?? 'account'}
       </span>

@@ -6,6 +6,7 @@ const {
   audienceFor,
   resolveRecipient,
   formatMessage,
+  formatNote,
 } = require('../electron/messaging');
 
 const S = (id, groupId, name) => ({ id, groupId, name });
@@ -112,4 +113,17 @@ test('every message says who sent it and how widely', () => {
 test('a message with nothing but whitespace still carries its label', () => {
   const out = formatMessage({ fromName: 'a', text: '   ' });
   assert.match(out, /message from a to you/);
+});
+
+test('a note from the monitor is marked as not being from a session', () => {
+  const note = formatNote({ text: 'Your context is at 82%.' });
+  assert.match(note, /session monitor/);
+  assert.match(note, /no reply expected/);
+  assert.match(note, /Your context is at 82%\./);
+  // The thing that must never happen: reading as a message from a peer.
+  assert.equal(/message from/.test(note), false);
+});
+
+test('a note can name what it is about', () => {
+  assert.match(formatNote({ text: 'x', subject: 'this session' }), /note about this session/);
 });

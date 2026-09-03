@@ -1,12 +1,12 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { useStore } from '../state/store';
+import { asFilePanel, useStore } from '../state/store';
 import { allTabs, leafOfTab } from '../state/layout';
 import { SESSION_MIME } from '../lib/drag';
 import { sessionLabel } from '../lib/labels';
 import { compactPath } from '../lib/labels';
 import { PathLabel } from './PathLabel';
-import { AccountsIcon, AppearanceIcon, HistoryIcon, UsageIcon } from './icons';
+import { AccountsIcon, AppearanceIcon, HistoryIcon, MonitorIcon, UsageIcon } from './icons';
 
 /**
  * The narrowest the sidebar will sit at. With the switches down to icons what
@@ -199,7 +199,7 @@ function SectionHeader({
  */
 function Folders() {
   const homedir = useStore((s) => s.homedir);
-  const panelIds = useStore(useShallow((s) => Object.keys(s.panels).filter((id) => s.panels[id].root)));
+  const panelIds = useStore(useShallow((s) => Object.keys(s.panels).filter((id) => asFilePanel(s.panels[id])?.root)));
   const openFilePanel = useStore((s) => s.openFilePanel);
   const activeLeafId = useStore((s) => s.activeLeafId);
   const collapsed = useStore((s) => s.settings.sidebarFoldersCollapsed);
@@ -211,7 +211,7 @@ function Folders() {
     for (const id of panelIds) {
       // Not in a repository is its own heading rather than a silent lump at the
       // end: it is a real answer about the folder, not a leftover.
-      const key = panels[id].gitRoot ?? '';
+      const key = asFilePanel(panels[id])?.gitRoot ?? '';
       byRepo.set(key, [...(byRepo.get(key) ?? []), id]);
     }
     return [...byRepo.entries()].sort(([a], [b]) => a.localeCompare(b));
@@ -275,11 +275,11 @@ function Folders() {
 }
 
 function FolderItem({ panelId, homedir }: { panelId: string; homedir: string }) {
-  const root = useStore((s) => s.panels[panelId]?.root ?? '');
-  const gitRoot = useStore((s) => s.panels[panelId]?.gitRoot ?? null);
+  const root = useStore((s) => asFilePanel(s.panels[panelId])?.root ?? '');
+  const gitRoot = useStore((s) => asFilePanel(s.panels[panelId])?.gitRoot ?? null);
   const changed = useStore((s) => (gitRoot ? (s.repos[gitRoot]?.files.length ?? 0) : 0));
   const unsaved = useStore((s) => {
-    const panel = s.panels[panelId];
+    const panel = asFilePanel(s.panels[panelId]);
     if (!panel) return false;
     return panel.open.some((path) => {
       const buffer = s.buffers[path];
@@ -441,9 +441,10 @@ function ActivityBar() {
   const runningCount = useStore(
     (s) => allTabs(s.layout).filter((id) => s.sessions[id]?.status === 'running').length,
   );
-  const folderCount = useStore((s) => Object.values(s.panels).filter((p) => p.root).length);
+  const folderCount = useStore((s) => Object.values(s.panels).filter((p) => asFilePanel(p)?.root).length);
   const setProfileEditorOpen = useStore((s) => s.setProfileEditorOpen);
   const setUsagePanelOpen = useStore((s) => s.setUsagePanelOpen);
+  const openMonitor = useStore((s) => s.openMonitor);
   const setHistoryOpen = useStore((s) => s.setHistoryOpen);
   const setAppearanceOpen = useStore((s) => s.setAppearanceOpen);
 
@@ -480,6 +481,9 @@ function ActivityBar() {
 
       <button className="activity" onClick={() => setProfileEditorOpen(true)} data-tip="Accounts (⌘,)" aria-label="Accounts">
         <AccountsIcon />
+      </button>
+      <button className="activity" onClick={() => openMonitor()} data-tip="Session monitor" aria-label="Session monitor">
+        <MonitorIcon />
       </button>
       <button className="activity" onClick={() => setUsagePanelOpen(true)} data-tip="Usage limits (⌘U)" aria-label="Usage">
         <UsageIcon />

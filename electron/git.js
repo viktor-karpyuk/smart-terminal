@@ -296,6 +296,37 @@ async function commitFiles(root, sha) {
   return { ok: true, files };
 }
 
+/**
+ * The commit an amend would rewrite.
+ *
+ * Its *whole* message, not the subject: `git log --format=%s` throws away every
+ * line after the first, and an amend that silently drops the body of a commit
+ * message is a worse outcome than not offering amend at all. `%B` keeps it.
+ *
+ * The files come along because they are half the question. "Amend" means adding
+ * to a commit that already exists, and nobody can decide whether that is the
+ * right thing to do without seeing what is already in it.
+ */
+async function head(root) {
+  const result = await run(root, ['log', '-1', `--format=%H${FS}%an${FS}%aI${FS}%B`]);
+  if (!result.ok) return { ok: false, error: result.error };
+  const [sha, author, date, ...rest] = result.stdout.split(FS);
+  if (!sha) return { ok: false, error: 'This repository has no commits yet.' };
+
+  // `%B` keeps git's own trailing newline; a message box should not start life
+  // with blank lines at the end of it.
+  const message = rest.join(FS).replace(/\s+$/, '');
+  const listed = await commitFiles(root, sha.trim());
+  return {
+    ok: true,
+    sha: sha.trim(),
+    author,
+    date,
+    message,
+    files: listed.ok ? listed.files : [],
+  };
+}
+
 /** The diff of one file — of a commit, of the index, or of the working tree. */
 async function diff(root, { sha = null, file = null, staged = false, untracked = false } = {}) {
   // An untracked file is in no diff at all — git has never seen it. Showing it
@@ -390,6 +421,7 @@ module.exports = {
   refs,
   compare,
   commitFiles,
+  head,
   diff,
   stage,
   unstage,

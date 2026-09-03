@@ -91,4 +91,16 @@ function formatMessage({ fromName, fromProfile, groupName, text, broadcast }) {
   return `[Smart Terminal · message from ${who} to ${scope}]\n${String(text ?? '').trim()}`;
 }
 
-module.exports = { REACH, normalizeReach, audienceFor, resolveRecipient, formatMessage };
+/**
+ * A note from the app itself, rather than from another session.
+ *
+ * Marked differently on purpose. A session that cannot tell "another session
+ * asked you something" from "the tool you are running noticed something about
+ * you" will answer the second as though it were the first.
+ */
+function formatNote({ text, subject = null }) {
+  const about = subject ? ` about ${subject}` : '';
+  return `[Smart Terminal · note${about}, from the session monitor — no reply expected]\n${String(text ?? '').trim()}`;
+}
+
+module.exports = { REACH, normalizeReach, audienceFor, resolveRecipient, formatMessage, formatNote };

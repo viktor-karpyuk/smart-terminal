@@ -69,6 +69,16 @@ export interface Session {
   recording: boolean;
   /** The command the shell is currently running, or null at a prompt. */
   foreground: string | null;
+  /**
+   * The whole command line of whatever was last running here, kept so it can be
+   * offered again after a restart. `foreground` is the short name for showing;
+   * this is the line, which is the only thing that can actually be re-run.
+   */
+  lastCommand: string | null;
+  /** Start that command again by itself when this session comes back. */
+  resumeCommand: boolean;
+  /** Set on a restored session that has a command waiting to be offered. */
+  offerCommand: string | null;
   /** The group this session belongs to, if any. */
   groupId: string | null;
   /**
@@ -184,7 +194,39 @@ export interface FilePanel {
   open: string[];
   /** The one in front. */
   active: string | null;
+  /**
+   * A terminal under the editor, the way an editor has always had one.
+   *
+   * It is a real session with a real shell, rooted at this folder — but it is not
+   * a tab: it belongs to the panel, is not in the layout, and is not saved. That
+   * last part is deliberate rather than lazy. A shell's worth is the process
+   * running in it, and no restart brings that back; reopening a folder to a fresh
+   * prompt is honest, where reopening it to a dead one is not.
+   */
+  terminalId: string | null;
+  /** Whether it is showing. Kept across a restart even though the shell is not. */
+  terminalOpen: boolean;
+  /** How tall, in pixels. Per panel: two folders are not worked on the same way. */
+  terminalHeight: number;
 }
+
+/**
+ * The session monitor, as a tab.
+ *
+ * A modal was the wrong shape for it. Watching a session is something you do
+ * *while* working, not instead of working — and the app already has the right
+ * container: a section, which can sit beside the terminal it is reporting on,
+ * be moved, split, set aside and come back after a restart like anything else.
+ */
+export interface MonitorPanel {
+  id: string;
+  kind: 'monitor';
+  /** The session it is showing, or null while none has been picked. */
+  sessionId: string | null;
+}
+
+/** What a section can hold besides a terminal. */
+export type Panel = FilePanel | MonitorPanel;
 
 /**
  * Git's place in the content row. A file path is always absolute, so this can
@@ -313,4 +355,94 @@ export interface Settings {
    * balance someone chose instead of giving every spare pixel to the last list.
    */
   sidebarSectionSizes: Record<string, number>;
+  /**
+   * Whether a session that is behaving badly says so on its own tab.
+   *
+   * The reading is always there to be opened; this is only about whether it
+   * comes to you. Off is a defensible choice — an alert nobody asked for on
+   * work that is going fine is just noise — so it is a setting rather than a
+   * decision made here.
+   */
+  sessionAlerts: boolean;
+  /**
+   * Whether the panel offers what to do about each finding, or only reports it.
+   * Someone who already knows the answer does not need the paragraph.
+   */
+  sessionSuggestions: boolean;
+  /**
+   * The account the advisor spends on. `null` follows whichever account the app
+   * would use anyway; naming one keeps a second opinion from eating the
+   * allowance of the work it is reporting on.
+   */
+  advisorProfileId: string | null;
+  /**
+   * Whether the monitor may write into a session that has gone badly wrong.
+   *
+   * Off by default, and deliberately: this is the only part of the monitor that
+   * acts rather than reports. When on, it says one thing — the worst finding and
+   * its fix — at most twice an hour, and only through the channel that waits for
+   * the session to be at its prompt.
+   */
+  tellSessions: boolean;
+}
+
+/** What a one-shot advisor said about a session. */
+export interface Advice {
+  ok: boolean;
+  error?: string;
+  sessionId?: string;
+  text?: string;
+  at?: number;
+  account?: string | null;
+}
+
+/** One thing the analyser noticed about a session, and what to do about it. */
+export interface Finding {
+  id: string;
+  severity: 'high' | 'medium' | 'low';
+  title: string;
+  detail: string;
+  suggestion: string;
+}
+
+/** Everything read out of one session's transcript. */
+export interface SessionAnalysis {
+  sessionId: string;
+  ok: boolean;
+  reason?: 'no-transcript' | 'empty';
+  model: string | null;
+  requests: number;
+  firstAt: number | null;
+  lastAt: number | null;
+  spanMs: number;
+  totals: { input: number; output: number; cacheWrite: number; cacheRead: number };
+  effectiveInput: number;
+  context: {
+    window: number;
+    peak: number;
+    last: number;
+    mean: number;
+    turnsAbove: number;
+    share: number;
+    curve: Array<{ at: number | null; context: number; output: number }>;
+  };
+  latency: { turns: number; p50: number; p95: number; totalMs: number };
+  /** Where it is heading at the rate it has been going, or null if it is flat. */
+  projection: { requests: number; ms: number; perRequest: number } | null;
+  compactions: Array<{
+    at: number | null;
+    trigger: string;
+    preTokens: number;
+    postTokens: number;
+    droppedTokens: number;
+    durationMs: number;
+  }>;
+  reprimes: { count: number; tokens: number };
+  tools: Array<{ name: string; calls: number; bytes: number; fails: number; tokens: number }>;
+  repeated: Array<{ tool: string; times: number }>;
+  errors: Array<{ at: number | null; kind: string | number }>;
+  findings: Finding[];
+  worst: 'high' | 'medium' | 'low' | null;
+  readAt: number;
+  size: number;
 }

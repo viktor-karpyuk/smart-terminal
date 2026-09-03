@@ -5,6 +5,10 @@ import { arrangeGroup, moveGroupTo } from './groups';
 import { closePane, movePane, panePlace, restorePaneAt, splitEmpty, splitOffTabs, swapPanes } from './layout';
 import { GIT_TAB } from './types';
 import type {
+  Advice,
+  MonitorPanel,
+  Panel,
+  SessionAnalysis,
   Buffer,
   FilePanel,
   GitView,
@@ -68,7 +72,29 @@ const DEFAULT_SETTINGS: Settings = {
   sidebarFoldersCollapsed: false,
   sidebarOrder: ['sessions', 'folders'],
   sidebarSectionSizes: { sessions: 1, folders: 1 },
+  sessionAlerts: true,
+  sessionSuggestions: true,
+  advisorProfileId: null,
+  tellSessions: false,
 };
+
+/**
+ * The file panel with this id, or null.
+ *
+ * A section can hold a folder or the monitor, and almost every caller wants the
+ * first. Narrowing here rather than at each of twenty call sites keeps the check
+ * in one place, and keeps a monitor tab from ever being read as a folder.
+ */
+export function asFilePanel(panel: Panel | undefined | null): FilePanel | null {
+  return panel?.kind === 'files' ? panel : null;
+}
+
+/** What to call a section holding a panel — the dock and the tab strip both ask. */
+export function panelLabel(panel: Panel | undefined | null): string {
+  if (panel?.kind === 'monitor') return 'Monitor';
+  const root = panel?.kind === 'files' ? panel.root : '';
+  return root.split('/').filter(Boolean).pop() ?? 'section';
+}
 
 /** Whether the interface is currently dark, resolving `system` against the OS. */
 export function isDarkAppearance(theme: Settings['theme']) {
@@ -173,6 +199,11 @@ interface State {
   usageByProfile: Record<string, UsageReport>;
   usageLoading: Record<string, boolean>;
   usagePanelOpen: boolean;
+  /** The latest reading for each session, kept current by the monitor. */
+  analysisBySession: Record<string, SessionAnalysis>;
+  /** What the advisor last said about a session, and whether it is being asked. */
+  adviceBySession: Record<string, Advice>;
+  adviceAsking: Record<string, boolean>;
   /** Characters kept per open session, refreshed as they are recorded. */
   sessionSizes: Record<string, number>;
   /** Named sets of sessions that belong to the same piece of work, shared by every window. */
@@ -186,7 +217,7 @@ interface State {
   /** Whole sections set aside, each remembering where it was. */
   minimizedSections: MinimizedSection[];
   /** Panels that are not sessions: a folder, its editor, and its repository. */
-  panels: Record<string, FilePanel>;
+  panels: Record<string, Panel>;
   /**
    * What git last told us, per repository. Held apart from the panels so two
    * panels on the same repository never disagree about what is changed.
@@ -210,6 +241,8 @@ interface State {
     resumedFrom?: string;
     groupId?: string | null;
     handoffFrom?: { profileId: string; at: number } | null;
+    lastCommand?: string | null;
+    resumeCommand?: boolean;
   }): Promise<string | null>;
   closeSession(sessionId: string): void;
   restartSession(sessionId: string): Promise<void>;
@@ -234,6 +267,8 @@ interface State {
   /** Open a folder as a tab: tree on the left, whatever you open on the right. */
   openFilePanel(options?: { leafId?: string; side?: DropSide; root?: string; sessionId?: string }): string | null;
   closePanel(panelId: string): void;
+  togglePanelTerminal(panelId: string): Promise<void>;
+  setPanelTerminalHeight(panelId: string, height: number): void;
   setPanelRoot(panelId: string, root: string): void;
   /** Open Git in the content row, beside the files. */
   openGit(panelId: string): Promise<void>;
@@ -281,12 +316,22 @@ interface State {
   refreshUsage(profileId: string, force?: boolean): Promise<void>;
   refreshAllUsage(force?: boolean): Promise<void>;
   setUsagePanelOpen(open: boolean): void;
+  openMonitor(sessionId?: string | null): void;
+  setMonitorSession(panelId: string, sessionId: string | null): void;
+  refreshAnalysis(sessionId: string, force?: boolean): Promise<void>;
+  askAdvisor(sessionId: string, options?: { question?: string; force?: boolean }): Promise<void>;
+  tellSession(sessionId: string, text: string): Promise<void>;
   setRecording(sessionId: string, recording: boolean): Promise<void>;
   refreshSessionSizes(): Promise<void>;
   createGroup(name: string, sessionIds: string[]): string;
   updateGroup(groupId: string, patch: Partial<Omit<SessionGroup, 'id'>>): void;
   updateSessionLook(sessionId: string, patch: Partial<Pick<Session, 'color' | 'fontSize'>>): void;
   setAutopilot(sessionId: string, on: boolean): Promise<void>;
+  /** Type a command into a session and send it. */
+  runCommandIn(sessionId: string, command: string): void;
+  /** Whether this session starts its last command again when it comes back. */
+  setResumeCommand(sessionId: string, on: boolean): void;
+  dismissCommandOffer(sessionId: string): void;
   removeGroupOnly(groupId: string): void;
   assignToGroup(sessionId: string, groupId: string | null): void;
   arrangeGroupAs(groupId: string, arrangement: GroupArrangement): void;
@@ -399,6 +444,9 @@ export const useStore = create<State>((set, get) => ({
   usageByProfile: {},
   usageLoading: {},
   usagePanelOpen: false,
+  analysisBySession: {},
+  adviceBySession: {},
+  adviceAsking: {},
   sessionSizes: {},
   groups: [],
   historyOpen: false,
@@ -431,7 +479,12 @@ export const useStore = create<State>((set, get) => ({
     // anything prunes the layout — otherwise its tab looks like a dead session.
     const baseSections = (saved.sections ?? []).filter((entry) => entry?.id && entry.tabs?.length);
     const basePanels = Object.fromEntries(
-      (saved.panels ?? []).filter((panel) => panel?.id).map((panel) => [panel.id, panel]),
+      (saved.panels ?? [])
+        .filter((panel) => panel?.id)
+        // A panel's terminal did not survive the restart, whatever the saved id
+        // says. Clearing it here is what lets the panel come back open and start
+        // a fresh shell, instead of showing a slot with nothing behind it.
+        .map((panel) => [panel.id, panel.kind === 'files' ? { ...panel, terminalId: null } : panel]),
     );
     set({
       profiles,
@@ -508,6 +561,17 @@ export const useStore = create<State>((set, get) => ({
       }
     });
 
+    // What the monitor has already worked out, then every change it notices. A
+    // window that opens late is as informed as one that was there all along.
+    window.api.analysis.live().then((live) => {
+      if (live && Object.keys(live).length) {
+        set((state) => ({ analysisBySession: { ...live, ...state.analysisBySession } }));
+      }
+    });
+    window.api.analysis.onChanged(({ sessionId, verdict }) => {
+      set((state) => ({ analysisBySession: { ...state.analysisBySession, [sessionId]: verdict } }));
+    });
+
     // Groups and the session roster belong to the workspace, not to this window.
     window.api.groups.list().then((groups) => set({ groups }));
     window.api.groups.onChanged((groups) => set({ groups }));
@@ -520,16 +584,25 @@ export const useStore = create<State>((set, get) => ({
     window.api.pty.onCwd((changes) => {
       set((state) => {
         let sessions = state.sessions;
-        for (const { id, cwd, foreground } of changes) {
+        for (const { id, cwd, foreground, command } of changes) {
           const sessionId = ptyIndex.get(id);
           const session = sessions[sessionId ?? ''];
           if (!sessionId || !session) continue;
 
           const movedTo = cwd && cwd !== session.cwd ? cwd : null;
-          if (!movedTo && session.foreground === foreground) continue;
+          if (!movedTo && session.foreground === foreground && session.lastCommand === (command ?? session.lastCommand)) {
+            continue;
+          }
 
           if (sessions === state.sessions) sessions = { ...sessions };
-          sessions[sessionId] = { ...session, foreground, ...(movedTo ? { cwd: movedTo } : {}) };
+          sessions[sessionId] = {
+            ...session,
+            foreground,
+            // Remembered here as well as in the database, so the offer after a
+            // restart and the menu entry both have something to name.
+            ...(command ? { lastCommand: command } : {}),
+            ...(movedTo ? { cwd: movedTo } : {}),
+          };
           // The database is what the next launch restores from, so where the
           // session moved to has to reach it, not just the screen.
           if (movedTo) window.api.history.updateCwd(sessionId, movedTo);
@@ -625,7 +698,34 @@ export const useStore = create<State>((set, get) => ({
             ? { resumeSessionId: descriptor.claudeSessionId }
             : {}),
           handoffFrom: descriptor.handoffFrom ?? null,
+          lastCommand: descriptor.lastCommand ?? null,
+          resumeCommand: descriptor.resumeCommand ?? false,
         });
+
+        /*
+         * What it was running. Started again only if this session was told to;
+         * otherwise it is offered, because the app cannot tell `npm run local`
+         * from a migration and should not guess which one it is looking at.
+         */
+        const line = descriptor.lastCommand?.trim();
+        if (line) {
+          if (descriptor.resumeCommand) {
+            // After the shell has drawn its prompt; a line typed before that is
+            // typed into nothing.
+            window.setTimeout(() => get().runCommandIn(descriptor.id, line), 2500);
+          } else {
+            set((state) =>
+              state.sessions[descriptor.id]
+                ? {
+                    sessions: {
+                      ...state.sessions,
+                      [descriptor.id]: { ...state.sessions[descriptor.id], offerCommand: line },
+                    },
+                  }
+                : state,
+            );
+          }
+        }
       }
       const alive = new Set([...Object.keys(get().sessions), ...Object.keys(get().panels)]);
       set((state) => ({
@@ -643,7 +743,9 @@ export const useStore = create<State>((set, get) => ({
     // it an unasked-for session would be a surprise on top of a restart.
     // Re-open the folders the panels had, the files they were showing, and ask
     // git again for anything a Git tab was looking at.
-    for (const panel of Object.values(get().panels)) {
+    for (const any of Object.values(get().panels)) {
+      const panel = asFilePanel(any);
+      if (!panel) continue;
       if (panel.gitRoot) get().refreshRepo(panel.gitRoot, 'all');
       for (const dir of panel.expanded) get().loadDir(dir);
       if (panel.active) get().openFile(panel.id, panel.active);
@@ -1012,6 +1114,50 @@ export const useStore = create<State>((set, get) => ({
    * beside something, on a side, at a width — and keeping that is what makes
    * bringing it back an undo rather than a guess.
    */
+  /**
+   * Type a command into a session and send it.
+   *
+   * The Return goes separately, for the reason autopilot learned the hard way: a
+   * shell takes the text and the newline in one write as a paste, and anything
+   * TUI-shaped in the way swallows it. The pause is what makes it a line.
+   */
+  runCommandIn(sessionId, command) {
+    const line = command.trim();
+    if (!line) return;
+    get().focusSession(sessionId);
+    get().sendInput(sessionId, line);
+    window.setTimeout(() => get().sendInput(sessionId, '\r'), 700);
+    set((state) =>
+      state.sessions[sessionId]
+        ? { sessions: { ...state.sessions, [sessionId]: { ...state.sessions[sessionId], offerCommand: null } } }
+        : state,
+    );
+  },
+
+  /**
+   * Whether this session starts its command again by itself.
+   *
+   * Per session, and off unless asked: `npm run local` coming back is a
+   * convenience, and a migration coming back is a disaster. The app cannot tell
+   * them apart, so the person says which is which — once, per session.
+   */
+  setResumeCommand(sessionId, on) {
+    set((state) =>
+      state.sessions[sessionId]
+        ? { sessions: { ...state.sessions, [sessionId]: { ...state.sessions[sessionId], resumeCommand: on } } }
+        : state,
+    );
+    window.api.history.setResumeCommand(sessionId, on);
+  },
+
+  dismissCommandOffer(sessionId) {
+    set((state) =>
+      state.sessions[sessionId]
+        ? { sessions: { ...state.sessions, [sessionId]: { ...state.sessions[sessionId], offerCommand: null } } }
+        : state,
+    );
+  },
+
   minimizeSection(leafId) {
     const state = get();
     const leaf = findLeaf(state.layout, leafId);
@@ -1028,7 +1174,7 @@ export const useStore = create<State>((set, get) => ({
       group?.name ??
       state.sessions[front]?.customTitle ??
       state.sessions[front]?.title ??
-      (state.panels[front]?.root.split('/').filter(Boolean).pop() ?? 'section');
+      panelLabel(state.panels[front]);
 
     set((prev) => {
       const layout = closePane(prev.layout, leafId);
@@ -1131,6 +1277,9 @@ export const useStore = create<State>((set, get) => ({
       selectedSha: null,
       selectedPath: null,
       selectedBranch: null,
+      terminalId: null,
+      terminalOpen: false,
+      terminalHeight: 220,
     };
 
     const targetLeafId = options.leafId || state.activeLeafId || allLeaves(state.layout)[0]?.id;
@@ -1157,9 +1306,75 @@ export const useStore = create<State>((set, get) => ({
     return panelId;
   },
 
+  /**
+   * Open or shut the terminal under a panel's editor.
+   *
+   * Opening starts a shell in the folder the tree is rooted at — which is the
+   * whole point of having it here rather than in a tab of its own: the terminal
+   * you want when looking at a folder is the one already standing in it.
+   */
+  async togglePanelTerminal(panelId) {
+    const panel = asFilePanel(get().panels[panelId]);
+    if (!panel) return;
+
+    if (panel.terminalId) {
+      get().closeSession(panel.terminalId);
+      set((prev) => {
+        const current = asFilePanel(prev.panels[panelId]);
+        if (!current) return prev;
+        return {
+          panels: { ...prev.panels, [panelId]: { ...current, terminalId: null, terminalOpen: false } },
+        };
+      });
+      schedulePersist(get);
+      return;
+    }
+
+    const state = get();
+    const profile =
+      state.profiles.find((p) => p.id === state.settings.defaultProfileId) ?? state.profiles[0];
+    if (!profile) return;
+
+    const sessionId = crypto.randomUUID();
+    // Straight to `spawnInto`, never `newSession`: this session must not go into
+    // the layout. It is part of the panel, and a tab appearing for it would be a
+    // second copy of the same terminal in a place nobody put it.
+    await spawnInto(set, get, {
+      sessionId,
+      profile,
+      kind: 'shell',
+      cwd: panel.root || profile.cwd || state.homedir,
+      customTitle: 'Terminal',
+    });
+
+    set((prev) => {
+      const current = asFilePanel(prev.panels[panelId]);
+      if (!current) return prev;
+      return {
+        panels: { ...prev.panels, [panelId]: { ...current, terminalId: sessionId, terminalOpen: true } },
+      };
+    });
+    schedulePersist(get);
+  },
+
+  setPanelTerminalHeight(panelId, height) {
+    set((prev) => {
+      const panel = asFilePanel(prev.panels[panelId]);
+      if (!panel) return prev;
+      return {
+        panels: { ...prev.panels, [panelId]: { ...panel, terminalHeight: Math.round(height) } },
+      };
+    });
+    schedulePersist(get);
+  },
+
   closePanel(panelId) {
     const panel = get().panels[panelId];
     if (!panel) return;
+    // Its terminal goes with it: nothing else can reach that session, so leaving
+    // it running would be a shell nobody can see and nobody can stop.
+    const shell = asFilePanel(panel)?.terminalId;
+    if (shell) get().closeSession(shell);
     // Its buffers are not closed with it: another panel may be showing the same
     // file, and an unsaved edit must never be discarded by closing a view of it.
     set((prev) => {
@@ -1916,6 +2131,106 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
+  /**
+   * Open the monitor, on a session if one is meant.
+   *
+   * A section rather than a modal, and the difference is the whole point: what
+   * the monitor says is only useful next to the session it is saying it about.
+   * A dialog covers that session and has to be dismissed before anything can be
+   * done with what it told you.
+   *
+   * One at a time. A second monitor would be a second view of the same readings,
+   * so asking for it again points the one that exists at the session you meant
+   * and brings its section forward.
+   */
+  openMonitor(sessionId = null) {
+    const state = get();
+    const wanted = sessionId ?? state.activeSessionId ?? null;
+    const existing = Object.values(state.panels).find((panel) => panel.kind === 'monitor');
+
+    if (existing) {
+      const leaf = allLeaves(state.layout).find((candidate) => candidate.tabs.includes(existing.id));
+      if (leaf) {
+        if (wanted) get().setMonitorSession(existing.id, wanted);
+        get().focusPanel(leaf.id, existing.id);
+        if (wanted) get().refreshAnalysis(wanted);
+        return;
+      }
+      // It exists but is not in the layout — set aside. Restoring it is the
+      // honest answer to "open the monitor".
+      get().restoreMinimized(existing.id);
+      if (wanted) get().setMonitorSession(existing.id, wanted);
+      if (wanted) get().refreshAnalysis(wanted);
+      return;
+    }
+
+    const panelId = crypto.randomUUID();
+    const panel: MonitorPanel = { id: panelId, kind: 'monitor', sessionId: wanted };
+    const targetLeafId = state.activeLeafId || allLeaves(state.layout)[0]?.id;
+
+    set((prev) => {
+      const panels = { ...prev.panels, [panelId]: panel };
+      if (!targetLeafId || !findLeaf(prev.layout, targetLeafId)) {
+        const leaf = makeLeaf([panelId]);
+        return { panels, layout: leaf, activeLeafId: leaf.id };
+      }
+      return { panels, layout: insertTab(prev.layout, targetLeafId, panelId), activeLeafId: targetLeafId };
+    });
+
+    if (wanted) get().refreshAnalysis(wanted);
+    schedulePersist(get);
+  },
+
+  /**
+   * Read one session again.
+   *
+   * The monitor in the main process is already following every session, so this
+   * usually returns a reading it has had for a while; `force` is the panel's
+   * Refresh, for when someone is watching the number and wants it re-read now.
+   */
+  async refreshAnalysis(sessionId, force = false) {
+    const verdict = await window.api.analysis.session(sessionId, force);
+    if (!verdict) return;
+    set((state) => ({ analysisBySession: { ...state.analysisBySession, [sessionId]: verdict } }));
+  },
+
+  /**
+   * Ask a model what to make of the measurements.
+   *
+   * The other sessions go along as one line each — a session duplicating another
+   * one's work cannot be seen from inside either of them, and that is exactly the
+   * sort of thing arithmetic will never notice.
+   */
+  async askAdvisor(sessionId, { question, force } = {}) {
+    if (get().adviceAsking[sessionId]) return;
+    set((state) => ({ adviceAsking: { ...state.adviceAsking, [sessionId]: true } }));
+    try {
+      const alongside = Object.values(get().sessions)
+        .filter((session) => session.kind === 'claude' && session.id !== sessionId)
+        .map((session) => session.id);
+      const advice = await window.api.analysis.advice({ sessionId, question, alongside, force });
+      set((state) => ({ adviceBySession: { ...state.adviceBySession, [sessionId]: advice } }));
+    } finally {
+      set((state) => ({ adviceAsking: { ...state.adviceAsking, [sessionId]: false } }));
+    }
+  },
+
+  /** Put a reading into the session it is about. Always asked for by name. */
+  async tellSession(sessionId, text) {
+    await window.api.analysis.tell(sessionId, text);
+  },
+
+  /** Point the monitor at a different session. */
+  setMonitorSession(panelId, sessionId) {
+    set((prev) => {
+      const panel = prev.panels[panelId];
+      if (panel?.kind !== 'monitor') return prev;
+      return { panels: { ...prev.panels, [panelId]: { ...panel, sessionId } } };
+    });
+    if (sessionId) get().refreshAnalysis(sessionId);
+    schedulePersist(get);
+  },
+
   setUsagePanelOpen(open) {
     set({ usagePanelOpen: open });
     if (open) get().refreshAllUsage();
@@ -2526,6 +2841,9 @@ async function spawnInto(
     color?: string | null;
     fontSize?: number | null;
     autopilot?: boolean;
+    /** What it was running before, and whether it should start that again. */
+    lastCommand?: string | null;
+    resumeCommand?: boolean;
     /** Where the session first opened, as a second place to look for its conversation. */
     startCwd?: string;
   },
@@ -2559,6 +2877,9 @@ async function spawnInto(
         handoffFrom: args.handoffFrom ?? null,
         recording: Boolean(args.record),
         foreground: null,
+        lastCommand: args.lastCommand ?? null,
+        resumeCommand: args.resumeCommand ?? false,
+        offerCommand: null,
         groupId: args.groupId ?? null,
         color: args.color ?? null,
         fontSize: args.fontSize ?? null,

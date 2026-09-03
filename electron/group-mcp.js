@@ -72,6 +72,27 @@ const TOOLS = [
     },
   },
   {
+    name: 'session_health',
+    description:
+      'Find out how your own session is going: how much of the context window you are using, ' +
+      'what you have spent, whether you have been compacted automatically, and anything that is ' +
+      'going wrong — each with what usually helps. Costs nothing: it is read from the ' +
+      'conversation already written to disk, with no request and no tokens. Ask about yourself ' +
+      'when a task ends, before starting something long, or when answers start feeling slow. ' +
+      'Set scope to "reach" to also get a line about each session you can reach.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scope: {
+          type: 'string',
+          enum: ['me', 'reach'],
+          description: 'Yourself, or yourself plus the sessions you can reach. Defaults to "me".',
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: 'read_messages',
     description:
       'Read the messages other sessions have sent you that you have not seen yet. Messages are ' +
@@ -182,6 +203,24 @@ async function callTool(name, args = {}) {
     const reply = await ask('broadcast', { message: args.message });
     if (!reply.ok) return text(reply.error, true);
     return text(reply.detail);
+  }
+
+  if (name === 'session_health') {
+    const scope = args.scope === 'reach' ? 'reach' : 'me';
+    const reply = await ask('health', { scope });
+    if (!reply.ok) return text(reply.error, true);
+    const parts = [reply.me || 'Nothing measured for you yet.'];
+    if (scope === 'reach') {
+      const others = reply.others ?? [];
+      parts.push(
+        '',
+        others.length
+          ? `The ${others.length} session${others.length === 1 ? '' : 's'} you can reach:`
+          : 'There is nobody else within your reach.',
+        ...others.map((entry) => `- ${entry.verdict}`),
+      );
+    }
+    return text(parts.join('\n'));
   }
 
   if (name === 'read_messages') {

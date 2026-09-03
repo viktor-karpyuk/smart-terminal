@@ -56,7 +56,7 @@ class CwdWatcher {
 
     Promise.all([
       run(LSOF, ['-a', '-p', pids, '-d', 'cwd', '-Fpn']),
-      run('/bin/ps', ['-axo', 'ppid=,comm=']),
+      run('/bin/ps', ['-axo', 'ppid=,args=']),
     ])
       .then(([lsofOut, psOut]) => {
         const byPid = parseLsof(lsofOut);
@@ -65,11 +65,15 @@ class CwdWatcher {
         const changes = [];
         for (const session of sessions) {
           const cwd = byPid.get(session.pid);
-          const foreground = children.get(session.pid) ?? null;
+          const child = children.get(session.pid) ?? null;
+          const foreground = child?.name ?? null;
+          const command = child?.command ?? null;
           const previous = this.known.get(session.id);
-          if (previous && previous.cwd === cwd && previous.foreground === foreground) continue;
-          this.known.set(session.id, { cwd: cwd ?? previous?.cwd, foreground });
-          changes.push({ id: session.id, cwd: cwd ?? previous?.cwd, foreground });
+          if (previous && previous.cwd === cwd && previous.foreground === foreground && previous.command === command) {
+            continue;
+          }
+          this.known.set(session.id, { cwd: cwd ?? previous?.cwd, foreground, command });
+          changes.push({ id: session.id, cwd: cwd ?? previous?.cwd, foreground, command });
         }
         if (changes.length) this.onChange(changes);
       })
@@ -94,14 +98,22 @@ function run(command, args) {
 /**
  * The command a shell is currently running, if any. Only the last child is kept:
  * a shell running one program at a time is the case that matters.
+ *
+ * Both halves are reported. `name` is the short one everything already shows —
+ * `node`, `claude`, `vim`. `command` is the whole line, which is the only thing
+ * that can be run again: "node" is not a thing anyone can restart, and
+ * `npm run local` is.
  */
 function parseChildren(output) {
   const byParent = new Map();
   for (const line of output.split('\n')) {
     const match = /^\s*(\d+)\s+(.*)$/.exec(line);
     if (!match) continue;
-    const name = match[2].trim().split('/').pop();
-    if (name) byParent.set(Number(match[1]), name);
+    const command = match[2].trim();
+    if (!command) continue;
+    // The first token is the program; the rest are its arguments.
+    const name = command.split(/\s+/)[0].split('/').pop();
+    if (name) byParent.set(Number(match[1]), { name, command });
   }
   return byParent;
 }

@@ -33,6 +33,15 @@ export function UsageIcon() {
   );
 }
 
+/** A pulse: the line a session's context traces as it fills up. */
+export function MonitorIcon() {
+  return (
+    <svg {...base} aria-hidden>
+      <path d="M1.6 9.2h2.6l1.6-4.4 2.4 6.6 1.7-3.6 1.1 1.4h3" />
+    </svg>
+  );
+}
+
 export function HistoryIcon() {
   return (
     <svg {...base} aria-hidden>

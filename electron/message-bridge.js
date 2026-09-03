@@ -22,7 +22,7 @@
 
 const fs = require('node:fs');
 const net = require('node:net');
-const { audienceFor, normalizeReach, resolveRecipient, formatMessage } = require('./messaging');
+const { audienceFor, normalizeReach, resolveRecipient, formatMessage, formatNote } = require('./messaging');
 
 /** How often the queue is retried against sessions that were busy. */
 const SWEEP_MS = 4000;
@@ -44,13 +44,16 @@ class MessageBridge {
    * @param {(id: string) => boolean} deps.isFree   idle at a Claude prompt, no dialog up
    * @param {object} deps.store               the queue: queue/pending/markDelivered/markRead
    */
-  constructor({ socketPath, reach, roster, write, isFree, store }) {
+  constructor({ socketPath, reach, roster, write, isFree, store, health = null }) {
     this.socketPath = socketPath;
     this.reach = reach;
     this.roster = roster;
     this.write = write;
     this.isFree = isFree;
     this.store = store;
+    /** How a session is behaving, asked of the monitor. Optional: without it the
+     *  channel still carries messages, it just cannot answer for anyone. */
+    this.health = health;
     this.server = null;
     this.sweep = null;
   }
@@ -113,6 +116,28 @@ class MessageBridge {
     });
   }
 
+  /**
+   * Put a note from the app itself into a session's conversation.
+   *
+   * Not a message from anybody: it queues through the same store so it obeys the
+   * same rule that makes any of this bearable — it is delivered when the session
+   * is next waiting at its prompt, never onto work in progress and never onto a
+   * question it is asking the user.
+   */
+  note(sessionId, body, { subject = null, fromName = 'monitor' } = {}) {
+    const text = String(body ?? '').trim();
+    if (!sessionId || !text) return { ok: false, error: 'A note needs a session and something to say.' };
+    this.store.queue({ from: null, to: sessionId, fromName, body: formatNote({ text, subject }) });
+    const delivered = this.flush();
+    return {
+      ok: true,
+      delivered: delivered.includes(sessionId),
+      detail: delivered.includes(sessionId)
+        ? 'It arrived in the session.'
+        : 'The session is busy; it is waiting and arrives the moment it is free.',
+    };
+  }
+
   /** Every request, resolved against the live roster. Kept separate so it is testable. */
   async handle(request) {
     const { op, from } = request ?? {};
@@ -137,6 +162,29 @@ class MessageBridge {
           group: entry.groupName ?? null,
           state: entry.state,
         })),
+      };
+    }
+
+    // Asking how you are going is not messaging, so reach does not gate it for
+    // yourself — only for asking about anybody else.
+    if (op === 'health') {
+      if (!this.health) return { ok: false, error: 'Smart Terminal is not measuring sessions.' };
+      const scope = request.scope === 'reach' ? 'reach' : 'me';
+      if (scope === 'me') {
+        return { ok: true, scope, me: this.health(from), name: me.name };
+      }
+      if (reach === 'off') {
+        return { ok: false, error: 'Session messaging is turned off, so you cannot ask about others.' };
+      }
+      return {
+        ok: true,
+        scope,
+        reach,
+        me: this.health(from),
+        name: me.name,
+        others: audience
+          .map((entry) => ({ name: entry.name, verdict: this.health(entry.id, { brief: true }) }))
+          .filter((entry) => entry.verdict),
       };
     }
 

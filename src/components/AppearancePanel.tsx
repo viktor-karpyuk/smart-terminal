@@ -322,6 +322,7 @@ export function AppearancePanel() {
  * about growth is abstract; a number you can watch is not.
  */
 function ConversationStorage() {
+  const profiles = useStore((s) => s.profiles);
   const settings = useStore((s) => s.settings);
   const updateSettings = useStore((s) => s.updateSettings);
   const [stats, setStats] = useState<{
@@ -377,6 +378,71 @@ function ConversationStorage() {
         <strong>Its group</strong> keeps that to sessions in the same group, which is the safe
         default; a session in no group reaches nobody. <strong>Every session</strong> opens it to
         everything running. Changing this takes effect at once, on sessions already open.
+      </p>
+
+      <h3>Session monitor</h3>
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={settings.sessionAlerts}
+          onChange={(event) => updateSettings({ sessionAlerts: event.target.checked })}
+        />
+        <span>Mark a session on its tab when it needs a look</span>
+      </label>
+      <p className="form-hint">
+        Every session is read continuously from the conversation Claude Code already writes to disk —
+        no requests, no tokens, whether or not this is on. What this decides is whether a session
+        that has filled its window, compacted itself, or started paying twice for the same context
+        comes and tells you, or waits until you open the monitor.
+      </p>
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={settings.sessionSuggestions}
+          onChange={(event) => updateSettings({ sessionSuggestions: event.target.checked })}
+        />
+        <span>Say what to do about it</span>
+      </label>
+      <p className="form-hint">
+        Each finding comes with the thing that usually fixes it. Turn this off to be told what was
+        measured and left to it.
+      </p>
+
+      <label className="field">
+        <span>Second opinion runs on</span>
+        <select
+          value={settings.advisorProfileId ?? ''}
+          onChange={(event) => updateSettings({ advisorProfileId: event.target.value || null })}
+        >
+          <option value="">Whichever account the app would use</option>
+          {profiles.map((profile) => (
+            <option key={profile.id} value={profile.id}>
+              {profile.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="form-hint">
+        Everything above is read from disk and costs nothing. The second opinion in the monitor is
+        the one part that spends: a single short request, given the measurements only — never a
+        transcript, a file or a command. Putting it on an account of its own keeps it from eating
+        the allowance of the work it is reporting on.
+      </p>
+
+      <label className="checkbox">
+        <input
+          type="checkbox"
+          checked={settings.tellSessions}
+          onChange={(event) => updateSettings({ tellSessions: event.target.checked })}
+        />
+        <span>Let the monitor warn a session in its own conversation</span>
+      </label>
+      <p className="form-hint">
+        Off by default, because this is the only part of the monitor that acts rather than reports.
+        With it on, a session that reaches the worst grade of finding gets one note — what went
+        wrong and what helps — at most twice an hour, delivered the way session messages are:
+        when it is next waiting at its prompt, never onto work in progress. A session can also ask
+        after itself at any time with the <code>session_health</code> tool, which costs nothing.
       </p>
 
       <h3>Conversations</h3>

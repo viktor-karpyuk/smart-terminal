@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { useStore } from '../state/store';
+import { asFilePanel, useStore } from '../state/store';
 import type { DirEntry } from '../global';
 import { GIT_TAB } from '../state/types';
 import { leafOfTab } from '../state/layout';
@@ -8,6 +8,7 @@ import { Editor } from './Editor';
 import { Popover } from './Popover';
 import { FileIcon, colourFor } from '../lib/fileIcons';
 import { GitPanel } from './GitPanel';
+import { TerminalSlot } from './TerminalSlot';
 
 /**
  * A folder on the left, the file you are looking at on the right.
@@ -19,7 +20,7 @@ import { GitPanel } from './GitPanel';
 export function FilesPanel({ panelId }: { panelId: string }) {
   // Narrowed here once: everything below this belongs to a files panel.
   const panel = useStore((s) => {
-    const found = s.panels[panelId];
+    const found = asFilePanel(s.panels[panelId]);
     return found?.kind === 'files' ? found : null;
   });
   const homedir = useStore((s) => s.homedir);
@@ -82,8 +83,112 @@ export function FilesPanel({ panelId }: { panelId: string }) {
             <p className="form-hint">⌘S and Ctrl+S both save.</p>
           </div>
         )}
+
+        {panel.terminalId && (
+          <>
+            <TerminalResizer panelId={panelId} />
+            <div className="files-terminal" style={{ height: panel.terminalHeight ?? 220 }}>
+              {/*
+                A strip of its own, so the terminal can be shut from where it is
+                rather than from the button that opened it — the same reason every
+                panel that can be closed carries its own cross.
+              */}
+              <header className="files-terminal-head">
+                <TerminalName sessionId={panel.terminalId} />
+                <button
+                  className="tab-close"
+                  title="Close the terminal"
+                  aria-label="Close the terminal"
+                  onClick={() => useStore.getState().togglePanelTerminal(panelId)}
+                >
+                  ×
+                </button>
+              </header>
+              <TerminalSlot key={panel.terminalId} sessionId={panel.terminalId} />
+            </div>
+          </>
+        )}
       </div>
     </div>
+  );
+}
+
+/**
+ * What the terminal is called: where it actually is.
+ *
+ * Named after the shell's own directory rather than the tree's root, and the two
+ * come apart in both directions — re-rooting the tree does not move a running
+ * shell, and typing `cd` in the shell does not move the tree. Whichever way they
+ * drift, the strip has to say where the prompt you are looking at is standing.
+ */
+function TerminalName({ sessionId }: { sessionId: string }) {
+  const cwd = useStore((s) => s.sessions[sessionId]?.cwd ?? '');
+  const homedir = useStore((s) => s.homedir);
+  const here = cwd.split('/').filter(Boolean).pop() ?? cwd;
+  const full = cwd.startsWith(homedir) ? `~${cwd.slice(homedir.length)}` : cwd;
+
+  return (
+    <span className="files-terminal-name" title={full}>
+      Terminal — {cwd === homedir ? '~' : here}
+    </span>
+  );
+}
+
+/**
+ * The divider between the editor and the terminal below it.
+ *
+ * Dragged upward makes the terminal taller, which is the direction that reads as
+ * "give me more terminal" — and the numbers are clamped so neither half can be
+ * dragged out of existence, since a zero-height editor looks exactly like a bug.
+ */
+function TerminalResizer({ panelId }: { panelId: string }) {
+  const setHeight = useStore((s) => s.setPanelTerminalHeight);
+
+  return (
+    <div
+      className="files-terminal-resizer"
+      role="separator"
+      aria-orientation="horizontal"
+      onPointerDown={(event) => {
+        event.preventDefault();
+        const panel = asFilePanel(useStore.getState().panels[panelId]);
+        const startY = event.clientY;
+        const startHeight = panel?.terminalHeight ?? 220;
+        const editor = event.currentTarget.parentElement;
+        const room = editor ? editor.getBoundingClientRect().height : 600;
+
+        const move = (moveEvent: PointerEvent) => {
+          const wanted = startHeight + (startY - moveEvent.clientY);
+          setHeight(panelId, Math.max(80, Math.min(room - 120, wanted)));
+        };
+        const done = () => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', done);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', done);
+      }}
+    />
+  );
+}
+
+/** Opens and shuts the terminal, and says which it will do. */
+function TerminalButton({ panelId }: { panelId: string }) {
+  const open = useStore((s) => Boolean(asFilePanel(s.panels[panelId])?.terminalId));
+  const toggle = useStore((s) => s.togglePanelTerminal);
+
+  return (
+    <button
+      className={`files-git${open ? ' has-changes' : ''}`}
+      title={open ? 'Close the terminal' : 'Open a terminal in this folder'}
+      aria-label="Terminal"
+      onClick={() => toggle(panelId)}
+    >
+      <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2.6 4.4 5.4 7l-2.8 2.6M7.4 9.8h4" />
+      </svg>
+      <span>Terminal</span>
+    </button>
   );
 }
 
@@ -181,6 +286,7 @@ function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string;
       <div className="files-root-line">
         <span className="files-root-path" title={root}>{short}</span>
         <GitButton panelId={panelId} />
+        <TerminalButton panelId={panelId} />
       </div>
       {open && (
         <Popover anchorEl={buttonRef.current} onClose={() => setOpen(false)}>
@@ -362,7 +468,7 @@ function TreeResizer({ panelId }: { panelId: string }) {
           /* no capture; the window listeners still see the whole drag */
         }
         const startX = event.clientX;
-        const startWidth = useStore.getState().panels[panelId]?.treeWidth ?? 236;
+        const startWidth = asFilePanel(useStore.getState().panels[panelId])?.treeWidth ?? 236;
 
         const onMove = (move: PointerEvent) => {
           // Narrower than this and the names are all ellipsis; wider and the file
@@ -392,8 +498,8 @@ function TreeResizer({ panelId }: { panelId: string }) {
  * corner is not read.
  */
 function GitButton({ panelId }: { panelId: string }) {
-  const root = useStore((s) => s.panels[panelId]?.root ?? '');
-  const gitRoot = useStore((s) => s.panels[panelId]?.gitRoot ?? null);
+  const root = useStore((s) => asFilePanel(s.panels[panelId])?.root ?? '');
+  const gitRoot = useStore((s) => asFilePanel(s.panels[panelId])?.gitRoot ?? null);
   const changed = useStore((s) => (gitRoot ? (s.repos[gitRoot]?.files.length ?? 0) : 0));
   const branch = useStore((s) => (gitRoot ? (s.repos[gitRoot]?.branch ?? null) : null));
   const openGit = useStore((s) => s.openGit);
@@ -438,7 +544,7 @@ function GitButton({ panelId }: { panelId: string }) {
 
 /** Git's own tab in the content row, first, with a close of its own. */
 function GitTab({ panelId, selected }: { panelId: string; selected: boolean }) {
-  const gitRoot = useStore((s) => s.panels[panelId]?.gitRoot ?? null);
+  const gitRoot = useStore((s) => asFilePanel(s.panels[panelId])?.gitRoot ?? null);
   const changed = useStore((s) => (gitRoot ? (s.repos[gitRoot]?.files.length ?? 0) : 0));
   const setActiveFile = useStore((s) => s.setActiveFile);
   const closeGit = useStore((s) => s.closeGit);
@@ -477,7 +583,7 @@ function Dir({ panelId, path, depth }: { panelId: string; path: string; depth: n
   const listing = useStore((s) => s.dirs[path]);
   const expanded = useStore(
     useShallow((s) => {
-      const panel = s.panels[panelId];
+      const panel = asFilePanel(s.panels[panelId]);
       return panel?.kind === 'files' ? panel.expanded : [];
     }),
   );
@@ -524,7 +630,7 @@ function Row({
   const toggleDir = useStore((s) => s.toggleDir);
   const openFile = useStore((s) => s.openFile);
   const isOpen = useStore((s) => {
-    const panel = s.panels[panelId];
+    const panel = asFilePanel(s.panels[panelId]);
     return panel?.kind === 'files' && panel.active === entry.path;
   });
   const dirty = useStore((s) => {

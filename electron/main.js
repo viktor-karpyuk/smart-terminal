@@ -14,6 +14,9 @@ const { Database } = require('./database');
 const { buildMenu } = require('./menu');
 const { CwdWatcher } = require('./cwd-watcher');
 const { ContextStore, transcriptPath, locateTranscript, readTurnState } = require('./context-store');
+const { SessionMonitor } = require('./session-monitor');
+const { summarise, oneLine } = require('./session-analysis');
+const { Advisor } = require('./advisor');
 const { Autopilot, looksLikeADecision } = require('./autopilot');
 const { tabsInLayout, minimizedIds, sessionsToRestore, unaccountedTabs } = require('./restore');
 const { MessageBridge } = require('./message-bridge');
@@ -100,6 +103,14 @@ const lastOutputBySession = new Map();
 /** What the renderer last said about how far a session may reach. Narrow until told. */
 let messagingReach = 'group';
 let messages = null;
+let advisor = null;
+/** The account the advisor spends on. Null means whichever a session is using. */
+let advisorProfileId = null;
+/** Whether the monitor may put a note into a session that has gone badly wrong. */
+let tellSessions = false;
+/** sessionId -> when it was last told, so a bad session is not nagged. */
+const told = new Map();
+const TELL_COOLDOWN_MS = 30 * 60 * 1000;
 let fileWatcher = null;
 let mcpConfigPath = null;
 
@@ -111,6 +122,7 @@ const sessionByPty = new Map();
 let recordByDefault = true;
 let context = null;
 let db = null;
+let monitor = null;
 /** App session ids whose processes this launch started, so quitting can close their rows. */
 const liveSessions = new Set();
 const usageCache = new Map();
@@ -413,6 +425,65 @@ function registerIpc() {
     return pending;
   });
 
+  /**
+   * How a session is behaving: the token accounting, the context curve, and the
+   * handful of findings that come out of them.
+   *
+   * The monitor is already reading these on its own, so the panel usually gets an
+   * answer it has had for a while. `force` is Refresh — the one case where
+   * someone is looking at the number and wants it re-read now.
+   */
+  ipcMain.handle('analysis:session', (_e, { sessionId, force = false } = {}) => {
+    if (!sessionId) return null;
+    return monitor.read(sessionId, { force });
+  });
+
+  /** Every session that has ever been measured — the monitor's fleet view. */
+  ipcMain.handle('analysis:all', () => {
+    try {
+      return db.listStats();
+    } catch {
+      return [];
+    }
+  });
+
+  /**
+   * A read of one session from a model, rather than from arithmetic.
+   *
+   * Costs tokens — one short request — so it is never called on its own: only
+   * when someone asks for it, on the account they chose, with a cooldown so a
+   * panel left open cannot turn into a subscription.
+   */
+  ipcMain.handle('analysis:advice', async (_e, { sessionId, question = null, alongside = [], force = false } = {}) => {
+    if (!sessionId || !advisor) return { ok: false, error: 'The advisor is not available.' };
+    return advisor.ask(sessionId, { question, alongside, profileId: advisorProfileId, force });
+  });
+
+  /** Whatever the advisor last said, without asking it anything. */
+  ipcMain.handle('analysis:advice-held', (_e, sessionId) => advisor?.peek(sessionId) ?? null);
+
+  /**
+   * Put a reading into the session it is about.
+   *
+   * The one thing here that acts rather than reports, so it happens only when
+   * asked for by name. It goes through the message bridge, which delivers when
+   * the session is next waiting at its prompt — never onto work in progress.
+   */
+  ipcMain.handle('analysis:tell', (_e, { sessionId, text } = {}) => {
+    if (!messages) return { ok: false, error: 'Session messaging is not running.' };
+    return messages.note(sessionId, text, { subject: 'this session' });
+  });
+
+  /** What the monitor is following right now, without re-reading anything. */
+  ipcMain.handle('analysis:live', () => {
+    const out = {};
+    for (const sessionId of monitor.sessions()) {
+      const verdict = monitor.peek(sessionId);
+      if (verdict) out[sessionId] = verdict;
+    }
+    return out;
+  });
+
   ipcMain.handle('context:info', (_e, sessionId) => context.info(sessionId));
   ipcMain.handle('context:save', (_e, sessionId) => context.snapshot(sessionId, { force: true }));
   ipcMain.handle('context:handoff', (_e, { sessionId, targetProfileId, cwd }) => {
@@ -484,6 +555,9 @@ function registerIpc() {
           customTitle: row.title,
           claudeSessionId: row.claudeSessionId,
           groupId: row.groupId ?? null,
+          // What it was running, and whether it was told to start that again.
+          lastCommand: row.lastCommand ?? null,
+          resumeCommand: row.resumeCommand ?? false,
           handoffFrom: null,
         })),
     };
@@ -495,6 +569,9 @@ function registerIpc() {
     // Reach is read at the moment a session asks, not when it started, so changing
     // it takes effect on every running session without restarting any of them.
     if (state.settings?.sessionMessaging) messagingReach = state.settings.sessionMessaging;
+    // Same reason: the account the advisor spends on is read when it is asked.
+    if ('advisorProfileId' in (state.settings ?? {})) advisorProfileId = state.settings.advisorProfileId;
+    if ('tellSessions' in (state.settings ?? {})) tellSessions = Boolean(state.settings.tellSessions);
     // Written on every change: a crash then costs at most the last few hundred ms.
     db.saveWorkspace(windowId, {
       layout: state.layout,
@@ -582,6 +659,7 @@ function registerIpc() {
     refs: (root) => git.refs(root),
     compare: (root, { a, b }) => git.compare(root, a, b),
     commitFiles: (root, { sha }) => git.commitFiles(root, sha),
+    head: (root) => git.head(root),
     diff: (root, options) => git.diff(root, options ?? {}),
     stage: (root, { paths }) => git.stage(root, paths),
     unstage: (root, { paths }) => git.unstage(root, paths),
@@ -700,13 +778,19 @@ function registerIpc() {
   ipcMain.handle('db:delete-session', (_e, sessionId) => {
     const removed = db.deleteSession(sessionId);
     // Its saved conversation goes with it; nothing is left pointing at nothing.
-    if (removed) context.forget(sessionId);
+    if (removed) {
+      context.forget(sessionId);
+      monitor?.forget(sessionId);
+    }
     return removed;
   });
   ipcMain.handle('db:clear-history', (_e, options) => {
     const removed = db.clearHistory(options || {});
     // Their saved conversations go with them; nothing is left pointing at nothing.
-    for (const id of removed) context.forget(id);
+    for (const id of removed) {
+      context.forget(id);
+      monitor?.forget(id);
+    }
     return removed.length;
   });
   ipcMain.handle('db:excerpts', (_e, { sessionId, query }) => db.searchInSession(sessionId, query));
@@ -745,6 +829,10 @@ function registerIpc() {
   });
   ipcMain.handle('db:transcript', (_e, { sessionId, limit }) => db.readTranscript(sessionId, limit || 2000));
   ipcMain.on('db:cwd', (_e, { sessionId, cwd }) => db.updateSession(sessionId, { lastCwd: cwd }));
+  ipcMain.on('db:resume-command', (_e, { sessionId, on }) => {
+    db.updateSession(sessionId, { resumeCommand: on ? 1 : 0 });
+  });
+
   ipcMain.on('db:rename', (_e, { sessionId, title }) => {
     db.updateSession(sessionId, { title });
     announceRoster();
@@ -856,6 +944,16 @@ if (isPrimaryInstance) app.whenReady().then(() => {
       for (const change of changes) {
         if (change.foreground) foregroundByPty.set(change.id, change);
         else foregroundByPty.delete(change.id);
+
+        /*
+         * Remember what a session is running, so it can be offered back after a
+         * restart. Only something worth restarting: the shell itself is not a
+         * command, and Claude is already brought back by its own machinery.
+         */
+        const owner = sessionByPty.get(change.id);
+        if (owner && change.command && worthRemembering(change.foreground, change.command)) {
+          db.updateSession(owner, { lastCommand: change.command });
+        }
       }
       send('pty:cwd', changes);
     },
@@ -870,6 +968,27 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   startMessaging();
   fileWatcher = new FileWatcher((changes) => send('files:changed', changes));
   context = new ContextStore(db);
+  // Watching how sessions behave is a separate job from keeping copies of them,
+  // but it needs the same two things — where a transcript is, and which sessions
+  // have one — so it is handed the store rather than working them out again.
+  monitor = new SessionMonitor({
+    context,
+    db,
+    emit: (sessionId, verdict) => {
+      send('analysis:changed', { sessionId, verdict });
+      tellIfSerious(sessionId, verdict);
+    },
+  });
+  monitor.start();
+
+  // Judgement, kept apart from measurement on purpose. One shot of `claude -p`
+  // per reading: no conversation, so it cannot become the kind of session it is
+  // there to warn about.
+  advisor = new Advisor({
+    profileFor: (profileId) => profiles.get(profileId ?? advisorProfileId ?? undefined) ?? null,
+    verdictFor: (sessionId) => monitor.read(sessionId),
+    nameFor: (sessionId) => db.getSession(sessionId)?.title ?? 'the session',
+  });
   context.start();
   // Saved conversations whose session row is gone are dead weight from a crash.
   const orphans = context.sweepOrphans(db.allSessionIds());
@@ -952,6 +1071,16 @@ function startMessaging() {
       return false;
     },
     isFree: sessionIsFree,
+    // A session asking how it is going gets the monitor's own reading, in prose.
+    // Free to answer: the reading already exists, and nothing here is a request.
+    health: (sessionId, { brief = false } = {}) => {
+      const verdict = monitor?.read(sessionId);
+      if (!verdict) return null;
+      const name = db.getSession(sessionId)?.title ?? 'session';
+      // Asking about yourself is worth the whole reading; asking about the others
+      // is a roster, and six paragraphs of someone else's numbers is not one.
+      return brief ? oneLine(verdict, name) : summarise(verdict, { name: 'You' });
+    },
     store: {
       queue: (message) => db.queueMessage(message),
       pending: (to, options) => db.messagesFor(to, options),
@@ -984,6 +1113,27 @@ function socketPathFor(dir) {
 }
 
 /** Every live session, as the thing on the other end of the channel sees it. */
+/**
+ * Tell a session, in its own conversation, that it has gone badly wrong.
+ *
+ * Off unless asked for, because it writes into a running session — and even then
+ * only for the worst grade of finding, at most twice an hour, and only through
+ * the bridge, which waits until the session is at its prompt. The note names the
+ * one finding and its fix; a session does not need the whole report to act.
+ */
+function tellIfSerious(sessionId, verdict) {
+  if (!tellSessions || !messages) return;
+  if (!verdict?.ok || verdict.worst !== 'high') return;
+  const last = told.get(sessionId) ?? 0;
+  if (Date.now() - last < TELL_COOLDOWN_MS) return;
+  const finding = verdict.findings.find((entry) => entry.severity === 'high');
+  if (!finding) return;
+  told.set(sessionId, Date.now());
+  messages.note(sessionId, `${finding.title}. ${finding.detail}\n\n${finding.suggestion}`, {
+    subject: 'this session',
+  });
+}
+
 function liveRoster() {
   const groupNames = new Map(db.listGroups({ limit: 500 }).map((group) => [group.id, group.name]));
   const roster = [];

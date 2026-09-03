@@ -5,6 +5,8 @@ import type {
   MinimizedTab,
   Profile,
   Session,
+  Panel,
+  SessionAnalysis,
   SessionGroup,
   Settings,
 } from './state/types';
@@ -59,7 +61,7 @@ export interface PersistedWorkspace {
       | 'color'
       | 'fontSize'
       | 'autopilot'
-    > & { startCwd?: string }
+    > & { startCwd?: string; lastCommand?: string | null; resumeCommand?: boolean }
   >;
   settings: Partial<Settings>;
   /** Which pane had focus, so a crash restores it too. */
@@ -68,7 +70,7 @@ export interface PersistedWorkspace {
   /** Tabs set aside in the dock. Saved apart from the layout because they are not in it. */
   minimized?: MinimizedTab[];
   /** Panels that occupy tabs in the layout but are not sessions. */
-  panels?: FilePanel[];
+  panels?: Panel[];
   /** Whole sections set aside, each remembering where it was. */
   sections?: MinimizedSection[];
 }
@@ -88,6 +90,11 @@ export interface GitResult {
   commits?: GitCommit[];
   width?: number;
   current?: string | null;
+  /** The commit an amend would rewrite: its whole message, and what was in it. */
+  sha?: string;
+  message?: string;
+  author?: string;
+  date?: string;
   local?: GitBranch[];
   remote?: Array<{ name: string; sha: string; date: string }>;
   tags?: Array<{ name: string; sha: string; date: string }>;
@@ -298,6 +305,38 @@ export interface ConfigDirSuggestion {
   hasLogin: boolean;
 }
 
+/** One session's row in the monitor's saved history. */
+export interface SessionStats {
+  session_id: string;
+  measured_at: number;
+  requests: number;
+  span_ms: number;
+  context_window: number;
+  context_peak: number;
+  context_last: number;
+  context_mean: number;
+  turns_above: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_write: number;
+  cache_read: number;
+  effective_input: number;
+  compactions: number;
+  auto_compactions: number;
+  dropped_tokens: number;
+  reprimed_tokens: number;
+  latency_p50: number;
+  latency_p95: number;
+  errors: number;
+  worst: 'high' | 'medium' | 'low' | null;
+  findings: Array<{ id: string; severity: 'high' | 'medium' | 'low'; title: string }>;
+  title: string | null;
+  profile_name: string | null;
+  start_cwd: string | null;
+  started_at: number | null;
+  ended_at: number | null;
+}
+
 declare global {
   interface Window {
     api: {
@@ -335,7 +374,15 @@ declare global {
           handler: (payload: { id: string; exitCode: number; signal?: number }) => void,
         ): () => void;
         onCwd(
-          handler: (changes: Array<{ id: string; cwd?: string; foreground: string | null }>) => void,
+          handler: (
+            changes: Array<{
+              id: string;
+              cwd?: string;
+              foreground: string | null;
+              /** The whole line, for offering it again after a restart. */
+              command?: string | null;
+            }>,
+          ) => void,
         ): () => void;
         onAdopted(
           handler: (payload: { sessionId: string; claudeSessionId: string }) => void,
@@ -354,6 +401,20 @@ declare global {
       };
       usage: {
         read(profileId: string, force?: boolean): Promise<UsageReport>;
+      };
+      analysis: {
+        session(sessionId: string, force?: boolean): Promise<SessionAnalysis | null>;
+        all(): Promise<SessionStats[]>;
+        live(): Promise<Record<string, SessionAnalysis>>;
+        advice(payload: {
+          sessionId: string;
+          question?: string;
+          alongside?: string[];
+          force?: boolean;
+        }): Promise<Advice>;
+        adviceHeld(sessionId: string): Promise<Advice | null>;
+        tell(sessionId: string, text: string): Promise<{ ok: boolean; detail?: string; error?: string }>;
+        onChanged(fn: (payload: { sessionId: string; verdict: SessionAnalysis }) => void): () => void;
       };
       context: {
         info(sessionId: string): Promise<ContextInfo>;
@@ -414,6 +475,7 @@ declare global {
         setRecordDefault(enabled: boolean): void;
         forgetAllTranscripts(): Promise<{ entries: number; snapshots: number }>;
         rename(sessionId: string, title: string | null): void;
+        setResumeCommand(sessionId: string, on: boolean): void;
         updateCwd(sessionId: string, cwd: string): void;
         endSession(sessionId: string, exitCode?: number | null): void;
         recordHandoff(entry: Record<string, unknown>): void;

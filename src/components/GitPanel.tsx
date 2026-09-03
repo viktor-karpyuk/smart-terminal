@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useStore } from '../state/store';
+import { asFilePanel, useStore } from '../state/store';
 import type { GitBranch, GitCommit, GitFile } from '../global';
 import { Popover } from './Popover';
 
@@ -13,7 +13,7 @@ import { Popover } from './Popover';
  * again rather than trusting the picture it already has.
  */
 export function GitPanel({ panelId }: { panelId: string }) {
-  const panel = useStore((s) => s.panels[panelId] ?? null);
+  const panel = useStore((s) => asFilePanel(s.panels[panelId]) ?? null);
   const root = panel?.gitRoot ?? null;
   const repo = useStore((s) => (root ? s.repos[root] : undefined));
   const setGitView = useStore((s) => s.setGitView);
@@ -368,11 +368,47 @@ const LETTER_COLOUR: Record<string, string> = {
 };
 
 export function Changes({ panelId, compact = false }: { panelId: string; compact?: boolean }) {
-  const panel = useStore((s) => s.panels[panelId] ?? null);
+  const panel = useStore((s) => asFilePanel(s.panels[panelId]) ?? null);
   const root = panel?.gitRoot ?? '';
   const repo = useStore((s) => (root ? s.repos[root] : undefined));
   const patch = useStore((s) => s.patchPanel);
   const gitDo = useStore((s) => s.gitDo);
+  /**
+   * What was in the box before Amend was ticked, and what ticking put there.
+   *
+   * Both are needed to undo the tick honestly. Ticking replaces an empty box with
+   * the message being rewritten — that is the point of it — but unticking must
+   * only take back the message *it* put there. If the person has since edited it,
+   * those words are theirs and clearing them would be destroying work to tidy up
+   * a checkbox.
+   */
+  const draft = useRef<string | null>(null);
+  const loaded = useRef<string | null>(null);
+
+  /** Ticking Amend is a question asked of git, not a flag flipped in the panel. */
+  const toggleAmend = async (id: string, on: boolean) => {
+    const before = asFilePanel(useStore.getState().panels[id]);
+
+    if (!on) {
+      const untouched = before?.message === loaded.current;
+      patch(id, { amend: false, message: untouched ? (draft.current ?? '') : (before?.message ?? '') });
+      draft.current = null;
+      loaded.current = null;
+      return;
+    }
+
+    draft.current = before?.message ?? '';
+    patch(id, { amend: true });
+
+    const result = await window.api.git.call('head', root, {});
+    if (!result?.ok) return;
+    const now = asFilePanel(useStore.getState().panels[id]);
+    // An answer that arrives late must not land on a box somebody has moved on
+    // from — unticked in the meantime, or typed into while it was being fetched.
+    if (!now?.amend || now.message.trim()) return;
+    loaded.current = result.message ?? '';
+    patch(id, { message: loaded.current });
+  };
 
   const files = repo?.files ?? [];
   const tree = useMemo(() => group(files, panel?.gitGrouping ?? 'directory'), [files, panel?.gitGrouping]);
@@ -515,6 +551,7 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
       </div>
 
       <div className="git-commit">
+        {panel.amend && <Amending root={root} panelId={panelId} />}
         <textarea
           className="git-message"
           placeholder="What changed, and why"
@@ -526,7 +563,7 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
             <input
               type="checkbox"
               checked={panel.amend}
-              onChange={(event) => patch(panelId, { amend: event.target.checked })}
+              onChange={(event) => toggleAmend(panelId, event.target.checked)}
             />
             <span>Amend</span>
           </label>
@@ -556,6 +593,77 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * What is about to be rewritten.
+ *
+ * Amend is the one git verb in this panel that changes history rather than adding
+ * to it, and until now the box gave no sign of which commit it meant. Naming it —
+ * its subject, when it was made, and every file already in it — is the difference
+ * between amending the commit you think you are amending and amending whatever
+ * happens to be at the top.
+ */
+function Amending({ root, panelId }: { root: string; panelId: string }) {
+  const [head, setHead] = useState<{
+    sha: string;
+    message: string;
+    author: string;
+    date: string;
+    files: Array<{ path: string; name: string; added: number | null; removed: number | null }>;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const openFile = useStore((s) => s.openFile);
+
+  useEffect(() => {
+    let alive = true;
+    setHead(null);
+    setError(null);
+    window.api.git.call('head', root, {}).then((result) => {
+      if (!alive) return;
+      if (result?.ok) setHead(result as never);
+      else setError(result?.error ?? 'Could not read the last commit.');
+    });
+    return () => {
+      alive = false;
+    };
+  }, [root]);
+
+  if (error) return <p className="git-amending is-empty">{error}</p>;
+  if (!head) return <p className="git-amending is-empty">Reading the last commit…</p>;
+
+  const subject = head.message.split('\n')[0];
+
+  return (
+    <div className="git-amending">
+      <header>
+        <span className="git-amending-label">Rewriting</span>
+        <code>{head.sha.slice(0, 8)}</code>
+        <span className="git-amending-subject" title={head.message}>{subject}</span>
+        <small>{new Date(head.date).toLocaleString()}</small>
+      </header>
+      <div className="git-amending-files">
+        {!head.files.length && <span className="git-amending-none">No files in it — an empty commit.</span>}
+        {head.files.map((file) => (
+          <button
+            key={file.path}
+            className="git-amending-file"
+            title={file.path}
+            onClick={() => openFile(panelId, `${root}/${file.path}`)}
+          >
+            <span className="git-amending-name">{file.name}</span>
+            <span className="git-amending-dir">{file.path.split('/').slice(0, -1).join('/')}</span>
+            {file.added ? <i className="is-add">+{file.added}</i> : null}
+            {file.removed ? <i className="is-del">−{file.removed}</i> : null}
+          </button>
+        ))}
+      </div>
+      <p className="git-amending-note">
+        Committing replaces this commit. Anything staged joins it; the message above becomes its
+        message. If it has already been pushed, the push after it has to be forced.
+      </p>
+    </div>
   );
 }
 
@@ -619,9 +727,9 @@ function FileRow({
  * about with anyone. Colour marks the change; the numbers say where it is.
  */
 function Diff({ root, panelId }: { root: string; panelId: string }) {
-  const selected = useStore((s) => s.panels[panelId]?.selectedPath ?? null);
+  const selected = useStore((s) => asFilePanel(s.panels[panelId])?.selectedPath ?? null);
   const file = useStore((s) => {
-    const gitRoot = s.panels[panelId]?.gitRoot;
+    const gitRoot = asFilePanel(s.panels[panelId])?.gitRoot;
     return gitRoot ? s.repos[gitRoot]?.files.find((entry) => entry.path === selected) : undefined;
   });
   const openFile = useStore((s) => s.openFile);
@@ -773,7 +881,7 @@ const ROW = 26;
 const LANE_W = 16;
 
 function History({ panelId }: { panelId: string }) {
-  const panel = useStore((s) => s.panels[panelId] ?? null);
+  const panel = useStore((s) => asFilePanel(s.panels[panelId]) ?? null);
   const root = panel?.gitRoot ?? '';
   const repo = useStore((s) => (root ? s.repos[root] : undefined));
   const patch = useStore((s) => s.patchPanel);
@@ -928,7 +1036,7 @@ function CommitDetail({ root, sha }: { root: string; sha: string }) {
 // --- Branches --------------------------------------------------------------
 
 function Branches({ panelId }: { panelId: string }) {
-  const panel = useStore((s) => s.panels[panelId] ?? null);
+  const panel = useStore((s) => asFilePanel(s.panels[panelId]) ?? null);
   const root = panel?.gitRoot ?? '';
   const repo = useStore((s) => (root ? s.repos[root] : undefined));
   const patch = useStore((s) => s.patchPanel);

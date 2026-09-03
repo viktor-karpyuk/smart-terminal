@@ -17,7 +17,9 @@ export function PanelTab({
   selected: boolean;
   leafId: string;
 }) {
-  const panel = useStore((s) => s.panels[panelId]);
+  // Both kinds, on purpose: the strip is where a section says what it holds, and
+  // it holds either a folder or the monitor.
+  const panel = useStore((s) => s.panels[panelId] ?? null);
   const closePanel = useStore((s) => s.closePanel);
   const setDraggingId = useStore((s) => s.setDraggingSessionId);
   const setActiveLeaf = useStore((s) => s.setActiveLeaf);
@@ -27,13 +29,15 @@ export function PanelTab({
   );
 
   if (!panel) return null;
-  const name = panel.root ? (panel.root.split('/').filter(Boolean).pop() ?? 'Files') : 'Files';
+  const monitor = panel.kind === 'monitor';
+  const root = panel.kind === 'files' ? panel.root : '';
+  const name = monitor ? 'Monitor' : (root.split('/').filter(Boolean).pop() ?? 'Files');
 
   return (
     <div
       className={`tab${selected ? ' tab-selected' : ''}`}
       style={{ boxShadow: selected ? 'inset 0 -2px 0 #7aa2f7' : undefined }}
-      title={panel.root || 'No folder chosen yet'}
+      title={monitor ? 'How every session is behaving' : root || 'No folder chosen yet'}
       // A folder tab moves like a session tab: the panes already know how to
       // take a tab, and a folder is one.
       draggable
@@ -48,11 +52,15 @@ export function PanelTab({
         focusPanel(leafId, panelId);
       }}
     >
-      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#7aa2f7" strokeWidth="1.3">
-        <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
+      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#7aa2f7" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+        {monitor ? (
+          <path d="M1.4 8h2.3l1.4-3.9L7.2 10l1.5-3.2 1 1.2h2.9" />
+        ) : (
+          <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
+        )}
       </svg>
       <span className="tab-title">{name}</span>
-      {unsaved && <span className="file-tab-dirty" title="unsaved changes" />}
+      {!monitor && unsaved && <span className="file-tab-dirty" title="unsaved changes" />}
       <button
         className="tab-close"
         onMouseDown={(event) => event.stopPropagation()}

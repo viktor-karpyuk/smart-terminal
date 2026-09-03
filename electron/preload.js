@@ -54,6 +54,19 @@ contextBridge.exposeInMainWorld('api', {
     read: (profileId, force = false) => ipcRenderer.invoke('usage:read', { profileId, force }),
   },
 
+  analysis: {
+    session: (sessionId, force = false) => ipcRenderer.invoke('analysis:session', { sessionId, force }),
+    all: () => ipcRenderer.invoke('analysis:all'),
+    live: () => ipcRenderer.invoke('analysis:live'),
+    advice: (payload) => ipcRenderer.invoke('analysis:advice', payload),
+    adviceHeld: (sessionId) => ipcRenderer.invoke('analysis:advice-held', sessionId),
+    tell: (sessionId, text) => ipcRenderer.invoke('analysis:tell', { sessionId, text }),
+    onChanged: (fn) => {
+      const handler = (_e, payload) => fn(payload);
+      ipcRenderer.on('analysis:changed', handler);
+      return () => ipcRenderer.removeListener('analysis:changed', handler);
+    },
+  },
   context: {
     info: (sessionId) => ipcRenderer.invoke('context:info', sessionId),
     save: (sessionId) => ipcRenderer.invoke('context:save', sessionId),
@@ -98,6 +111,7 @@ contextBridge.exposeInMainWorld('api', {
     setRecordDefault: (enabled) => ipcRenderer.send('db:record-default', enabled),
     forgetAllTranscripts: () => ipcRenderer.invoke('db:forget-all-transcripts'),
     rename: (sessionId, title) => ipcRenderer.send('db:rename', { sessionId, title }),
+    setResumeCommand: (sessionId, on) => ipcRenderer.send('db:resume-command', { sessionId, on }),
     updateCwd: (sessionId, cwd) => ipcRenderer.send('db:cwd', { sessionId, cwd }),
     endSession: (sessionId, exitCode) => ipcRenderer.send('db:end-session', { sessionId, exitCode }),
     recordHandoff: (entry) => ipcRenderer.send('db:handoff', entry),
