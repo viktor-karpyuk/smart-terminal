@@ -17,7 +17,6 @@ export function GitPanel({ panelId }: { panelId: string }) {
   const repo = useStore((s) => (root ? s.repos[root] : undefined));
   const setGitView = useStore((s) => s.setGitView);
   const refreshRepo = useStore((s) => s.refreshRepo);
-  const setPanelMode = useStore((s) => s.setPanelMode);
 
   useEffect(() => {
     if (root && !repo) refreshRepo(root, 'all');
@@ -29,9 +28,6 @@ export function GitPanel({ panelId }: { panelId: string }) {
       <div className="git-panel">
         <div className="files-empty">
           <p>This folder is not in a git repository.</p>
-          <button className="ghost-btn" onClick={() => setPanelMode(panelId, 'files')}>
-            Back to the files
-          </button>
         </div>
       </div>
     );
@@ -42,17 +38,6 @@ export function GitPanel({ panelId }: { panelId: string }) {
       <BranchBar panelId={panelId} root={root} />
 
       <div className="git-views">
-        <button
-          className="files-git is-back"
-          onClick={() => setPanelMode(panelId, 'files')}
-          title="Back to the files"
-        >
-          <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3">
-            <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
-          </svg>
-          <span>Files</span>
-        </button>
-        <span className="git-views-sep" />
         {(['changes', 'history', 'branches'] as const).map((view) => (
           <button
             key={view}
@@ -185,7 +170,7 @@ const LETTER_COLOUR: Record<string, string> = {
   A: '#9ece6a', M: '#7aa2f7', D: '#f7768e', R: '#bb9af7', C: '#bb9af7', '?': '#e0af68', '!': '#f7768e',
 };
 
-function Changes({ panelId }: { panelId: string }) {
+export function Changes({ panelId, compact = false }: { panelId: string; compact?: boolean }) {
   const panel = useStore((s) => s.panels[panelId] ?? null);
   const root = panel?.gitRoot ?? '';
   const repo = useStore((s) => (root ? s.repos[root] : undefined));
@@ -195,24 +180,41 @@ function Changes({ panelId }: { panelId: string }) {
   const files = repo?.files ?? [];
   const tree = useMemo(() => group(files, panel?.gitGrouping ?? 'directory'), [files, panel?.gitGrouping]);
   const staged = files.filter((file) => file.staged || file.partial);
+  const allStaged = files.length > 0 && staged.length === files.length;
+  const someStaged = staged.length > 0 && !allStaged;
 
   if (!panel || !root) return null;
 
   const toggle = (file: GitFile) =>
     gitDo(root, file.staged || file.partial ? 'unstage' : 'stage', { paths: [file.path] }, 'Staging');
 
+  // Everything in one call rather than one call per file: forty files is forty
+  // git processes and forty refreshes, and the list flickering its way through
+  // them looks like something going wrong.
+  const selectAll = () =>
+    gitDo(root, 'stage', { paths: files.map((file) => file.path) }, 'Staging everything');
+  const deselectAll = () =>
+    gitDo(
+      root,
+      'unstage',
+      { paths: files.filter((file) => file.staged || file.partial).map((file) => file.path) },
+      'Taking everything back out',
+    );
+
   return (
     <>
-      <div className="git-toolbar">
-        <span className="git-toolbar-label">Group by</span>
-        <div className="segmented git-grouping">
+      <div className={`git-toolbar${compact ? ' is-compact' : ''}`}>
+        {!compact && <span className="git-toolbar-label">Group by</span>}
+        <div className="segmented git-grouping" title="Group the changes by">
           {(['directory', 'module', 'both', 'files'] as const).map((mode) => (
             <button
               key={mode}
               className={panel.gitGrouping === mode ? 'is-on' : ''}
               onClick={() => patch(panelId, { gitGrouping: mode })}
             >
-              {mode === 'directory' ? 'Directory' : mode === 'module' ? 'Module' : mode === 'both' ? 'Both' : 'Files'}
+              {compact
+                ? mode === 'directory' ? 'Dir' : mode === 'module' ? 'Mod' : mode === 'both' ? 'Both' : 'Flat'
+                : mode === 'directory' ? 'Directory' : mode === 'module' ? 'Module' : mode === 'both' ? 'Both' : 'Files'}
             </button>
           ))}
         </div>
@@ -235,11 +237,45 @@ function Changes({ panelId }: { panelId: string }) {
         </button>
       </div>
 
+      {files.length > 0 && (
+        <div className="git-selectall">
+          {/*
+            One box for the lot. Tri-state on purpose: with some files staged it
+            shows a dash rather than a tick, because a box that reads "checked"
+            while three of seven are staged is a box that gets a half-commit made.
+          */}
+          <button
+            className={`git-box${allStaged ? ' is-on' : someStaged ? ' is-partial' : ''}`}
+            title={allStaged ? 'Take everything back out' : 'Stage everything'}
+            aria-label={allStaged ? 'Deselect all' : 'Select all'}
+            onClick={() => (allStaged ? deselectAll() : selectAll())}
+          />
+          <span className="git-selectall-count">
+            {staged.length} of {files.length} staged
+          </span>
+          <span style={{ flex: 1 }} />
+          <button className="link-btn" disabled={allStaged} onClick={selectAll}>
+            {compact ? 'All' : 'Select all'}
+          </button>
+          <button className="link-btn" disabled={!staged.length} onClick={deselectAll}>
+            {compact ? 'None' : 'Deselect all'}
+          </button>
+        </div>
+      )}
+
+      <div className="git-changes-body">
       <div className="git-list">
         {files.length === 0 && <p className="files-note">Nothing changed.</p>}
         {tree.map((node) =>
           node.kind === 'file' ? (
-            <FileRow key={node.key} file={node.file} depth={0} onToggle={toggle} panelId={panelId} />
+            <FileRow
+              key={node.key}
+              file={node.file}
+              depth={0}
+              onToggle={toggle}
+              panelId={panelId}
+              selected={panel.selectedPath === node.file.path}
+            />
           ) : (
             <div key={node.key}>
               <div
@@ -264,12 +300,21 @@ function Changes({ panelId }: { panelId: string }) {
               {!panel.gitCollapsed.includes(node.key) &&
                 node.children.map((child) =>
                   child.kind === 'file' ? (
-                    <FileRow key={child.key} file={child.file} depth={1} onToggle={toggle} panelId={panelId} />
+                    <FileRow
+                      key={child.key}
+                      file={child.file}
+                      depth={1}
+                      onToggle={toggle}
+                      panelId={panelId}
+                      selected={panel.selectedPath === child.file.path}
+                    />
                   ) : null,
                 )}
             </div>
           ),
         )}
+      </div>
+      {!compact && <Diff root={root} panelId={panelId} />}
       </div>
 
       <div className="git-commit">
@@ -288,9 +333,6 @@ function Changes({ panelId }: { panelId: string }) {
             />
             <span>Amend</span>
           </label>
-          <span className="form-hint">
-            {staged.length} of {files.length} staged
-          </span>
           <span style={{ flex: 1 }} />
           <button
             className="ghost-btn"
@@ -325,17 +367,26 @@ function FileRow({
   depth,
   onToggle,
   panelId,
+  selected,
 }: {
   file: GitFile;
   depth: number;
   onToggle(file: GitFile): void;
   panelId: string;
+  selected?: boolean;
 }) {
   const openFile = useStore((s) => s.openFile);
-  const setPanelMode = useStore((s) => s.setPanelMode);
+  const patch = useStore((s) => s.patchPanel);
 
   return (
-    <div className="git-row" style={{ paddingLeft: 8 + depth * 16 }}>
+    <div
+      className={`git-row${selected ? ' is-selected' : ''}`}
+      style={{ paddingLeft: 8 + depth * 16 }}
+      // One click shows what changed; opening it to edit is the deliberate
+      // second act, because most looks at a changed file are only looks.
+      onClick={() => patch(panelId, { selectedPath: file.path })}
+      onDoubleClick={() => openFile(panelId, file.absolute)}
+    >
       <button
         className={`git-box${file.staged ? ' is-on' : file.partial ? ' is-partial' : ''}`}
         onClick={() => onToggle(file)}
@@ -349,10 +400,6 @@ function FileRow({
         className={`git-file-name${file.letter === 'D' ? ' is-gone' : ''}`}
         title={file.from ? `${file.from} → ${file.path}` : file.path}
         // Back to the files, with this one open — the same tab, so nothing moves.
-        onClick={() => {
-          openFile(panelId, file.absolute);
-          setPanelMode(panelId, 'files');
-        }}
       >
         {depth === 0 && file.dir ? `${file.dir}/` : ''}
         {file.name}
@@ -363,6 +410,119 @@ function FileRow({
           {file.removed ? <i className="is-del">−{file.removed}</i> : null}
         </span>
       )}
+    </div>
+  );
+}
+
+/**
+ * What changed inside one file.
+ *
+ * The patch is parsed rather than shown raw: a unified diff carries its own line
+ * numbers in the hunk headers, and a diff without them is a diff you cannot talk
+ * about with anyone. Colour marks the change; the numbers say where it is.
+ */
+function Diff({ root, panelId }: { root: string; panelId: string }) {
+  const selected = useStore((s) => s.panels[panelId]?.selectedPath ?? null);
+  const file = useStore((s) => {
+    const gitRoot = s.panels[panelId]?.gitRoot;
+    return gitRoot ? s.repos[gitRoot]?.files.find((entry) => entry.path === selected) : undefined;
+  });
+  const openFile = useStore((s) => s.openFile);
+  const [patch, setPatch] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!selected) {
+      setPatch(null);
+      return;
+    }
+    let alive = true;
+    setPatch(null);
+    setError(null);
+    window.api.git
+      .call('diff', root, { file: selected, untracked: file?.untracked === true })
+      .then((result) => {
+        if (!alive) return;
+        if (result.ok) setPatch(result.patch ?? '');
+        else setError(result.error ?? 'Could not read the diff.');
+      });
+    return () => {
+      alive = false;
+    };
+  }, [root, selected, file?.untracked, file?.index, file?.worktree]);
+
+  if (!selected) {
+    return (
+      <div className="git-diff is-empty">
+        <p className="files-note">Pick a file to see what changed.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="git-diff">
+      <div className="git-diff-head">
+        <span className="git-diff-name" title={selected}>{selected}</span>
+        <button className="link-btn" onClick={() => file && openFile(panelId, file.absolute)}>
+          Open
+        </button>
+      </div>
+      <div className="git-diff-body">
+        {error && <p className="files-note">{error}</p>}
+        {patch === null && !error && <p className="files-note">Reading…</p>}
+        {patch !== null && patch.trim() === '' && <p className="files-note">No text changes.</p>}
+        {patch ? <Patch text={patch} /> : null}
+      </div>
+    </div>
+  );
+}
+
+/** A unified diff, with the line numbers its hunk headers already carry. */
+function Patch({ text }: { text: string }) {
+  const rows = useMemo(() => {
+    const out: Array<{ kind: string; text: string; before: number | null; after: number | null }> = [];
+    let before = 0;
+    let after = 0;
+    for (const line of text.split('\n')) {
+      // `@@ -12,7 +12,9 @@` — where the next run of lines sits in each side.
+      const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      if (hunk) {
+        before = Number(hunk[1]);
+        after = Number(hunk[2]);
+        out.push({ kind: 'hunk', text: line, before: null, after: null });
+        continue;
+      }
+      // The file headers say nothing the panel is not already showing.
+      if (/^(diff --git|index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode)/.test(line)) {
+        continue;
+      }
+      if (line.startsWith('+')) {
+        out.push({ kind: 'add', text: line.slice(1), before: null, after });
+        after += 1;
+      } else if (line.startsWith('-')) {
+        out.push({ kind: 'del', text: line.slice(1), before, after: null });
+        before += 1;
+      } else if (line.startsWith('\\')) {
+        out.push({ kind: 'note', text: line.slice(1).trim(), before: null, after: null });
+      } else {
+        out.push({ kind: 'same', text: line.slice(1), before, after });
+        before += 1;
+        after += 1;
+      }
+    }
+    return out;
+  }, [text]);
+
+  return (
+    <div className="patch mono">
+      {rows.map((row, index) => (
+        <div key={index} className={`patch-line is-${row.kind}`}>
+          <span className="patch-num">{row.before ?? ''}</span>
+          <span className="patch-num">{row.after ?? ''}</span>
+          <span className="patch-sign">{row.kind === 'add' ? '+' : row.kind === 'del' ? '−' : ''}</span>
+          <span className="patch-text">{row.text || ' '}</span>
+        </div>
+      ))}
     </div>
   );
 }

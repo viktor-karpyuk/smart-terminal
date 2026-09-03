@@ -156,7 +156,12 @@ export interface FilePanel {
    * tab would have meant choosing between them in the strip, when what is
    * wanted is the repository *of the folder you are already in*.
    */
-  mode: PanelMode;
+  /**
+   * Git is open as a tab in the content row, beside the files. Not a mode: the
+   * tree never goes away, and closing Git leaves you on whatever file you had —
+   * so there is nothing to be in and nothing to remember.
+   */
+  gitOpen: boolean;
   /** The repository `root` is inside, once git has been asked. */
   gitRoot: string | null;
   gitView: GitView;
@@ -166,6 +171,8 @@ export interface FilePanel {
   message: string;
   amend: boolean;
   selectedSha: string | null;
+  /** The changed file whose diff is showing, as a repository-relative path. */
+  selectedPath: string | null;
   selectedBranch: string | null;
   /** Which session's folder this followed, if it was opened from one. */
   followsSessionId: string | null;
@@ -177,8 +184,12 @@ export interface FilePanel {
   active: string | null;
 }
 
-/** The two things a files tab can be showing. */
-export type PanelMode = 'files' | 'git';
+/**
+ * Git's place in the content row. A file path is always absolute, so this can
+ * never be mistaken for one.
+ */
+export const GIT_TAB = '::git';
+
 export type GitView = 'changes' | 'history' | 'branches';
 export type GitGrouping = 'directory' | 'module' | 'both' | 'files';
 
@@ -248,4 +259,12 @@ export interface Settings {
    * finding it by reading forty names.
    */
   fileIcons: 'outline' | 'solid' | 'colour' | 'none';
+  /**
+   * Folders are set apart from files on purpose. They are the thing you navigate
+   * by, so their colour is worth choosing rather than inheriting whatever the
+   * files happen to be — and `match` is for anyone who would rather they did.
+   */
+  folderColour: string;
+  /** Whether an open folder is drawn differently from a shut one. */
+  folderStyle: 'plain' | 'open-shut';
 }

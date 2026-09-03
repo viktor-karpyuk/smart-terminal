@@ -77,9 +77,86 @@ export function AppearancePanel() {
               what it is, so a folder reads as groups rather than as forty separate names;{' '}
               <strong>Outline</strong> is the plainer, quieter version of the same shapes.
             </p>
+            <div className="folder-settings">
+              <div>
+                <span className="cap-label">Folder colour</span>
+                <div className="group-swatches">
+                  {[
+                    ['#7aa2f7', 'blue'],
+                    ['#e0af68', 'amber'],
+                    ['#9ece6a', 'green'],
+                    ['#bb9af7', 'violet'],
+                    ['#7dcfff', 'cyan'],
+                    ['#7b849c', 'grey'],
+                  ].map(([colour, label]) => (
+                    <button
+                      key={colour}
+                      className={`swatch${settings.folderColour === colour ? ' is-selected' : ''}`}
+                      style={{ background: colour }}
+                      aria-label={label}
+                      title={label}
+                      onClick={() => updateSettings({ folderColour: colour })}
+                    />
+                  ))}
+                  <button
+                    className={`swatch is-none${settings.folderColour === 'match' ? ' is-selected' : ''}`}
+                    title="Match the files — no colour of their own"
+                    aria-label="match the files"
+                    onClick={() => updateSettings({ folderColour: 'match' })}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <span className="cap-label">Open folders</span>
+                <div className="segmented">
+                  {(
+                    [
+                      ['open-shut', 'Show as open'],
+                      ['plain', 'Always the same'],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <button
+                      key={value}
+                      className={settings.folderStyle === value ? 'is-on' : ''}
+                      onClick={() => updateSettings({ folderStyle: value })}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <p className="form-hint">
+              Folders keep their colour in every icon style — they are the one thing in the tree
+              that is a different <em>kind</em> of thing, and telling them apart at a glance is
+              worth more than an evenly grey list. <strong>Match the files</strong> gives that up
+              for anyone who would rather it were quieter.
+            </p>
+
             <div className="icon-preview">
+              <span className="icon-preview-item">
+                <FileIcon
+                  name="src"
+                  isDirectory
+                  open
+                  style={settings.fileIcons}
+                  folderColour={settings.folderColour}
+                  folderStyle={settings.folderStyle}
+                />
+                <span>src</span>
+              </span>
+              <span className="icon-preview-item">
+                <FileIcon
+                  name="electron"
+                  isDirectory
+                  style={settings.fileIcons}
+                  folderColour={settings.folderColour}
+                  folderStyle={settings.folderStyle}
+                />
+                <span>electron</span>
+              </span>
               {[
-                ['src', true],
                 ['store.ts', false],
                 ['styles.css', false],
                 ['main.js', false],
@@ -89,7 +166,13 @@ export function AppearancePanel() {
                 ['icon.png', false],
               ].map(([name, isDir]) => (
                 <span key={name as string} className="icon-preview-item">
-                  <FileIcon name={name as string} isDirectory={isDir as boolean} style={settings.fileIcons} />
+                  <FileIcon
+                    name={name as string}
+                    isDirectory={isDir as boolean}
+                    style={settings.fileIcons}
+                    folderColour={settings.folderColour}
+                    folderStyle={settings.folderStyle}
+                  />
                   <span
                     style={
                       settings.fileIcons === 'colour' && !isDir

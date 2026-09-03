@@ -58,9 +58,17 @@ const BY_NAME: Record<string, string> = {
   makefile: '#ff9e64',
 };
 
-export function colourFor(name: string, isDirectory: boolean, style: IconStyle): string {
+export function colourFor(
+  name: string,
+  isDirectory: boolean,
+  style: IconStyle,
+  folderColour = '#7aa2f7',
+): string {
+  // A folder keeps its colour even in the plain styles: it is the one thing in
+  // the tree that is a different kind of thing, and telling it apart at a glance
+  // is worth more than the restraint of an all-grey list.
+  if (isDirectory) return folderColour === 'match' ? 'currentColor' : folderColour;
   if (style !== 'colour') return 'currentColor';
-  if (isDirectory) return '#7aa2f7';
   const lower = name.toLowerCase();
   if (BY_NAME[lower]) return BY_NAME[lower];
   const dot = lower.lastIndexOf('.');
@@ -75,17 +83,29 @@ interface Props {
   open?: boolean;
   style: IconStyle;
   size?: number;
+  folderColour?: string;
+  /** Whether an open folder is drawn differently from a shut one. */
+  folderStyle?: 'plain' | 'open-shut';
 }
 
 /**
  * One icon. The shapes never change between styles — a tree that reflows when you
  * change how it is painted is a tree you have to find your place in again.
  */
-export function FileIcon({ name, isDirectory, open = false, style, size = 13 }: Props) {
+export function FileIcon({
+  name,
+  isDirectory,
+  open = false,
+  style,
+  size = 13,
+  folderColour = '#7aa2f7',
+  folderStyle = 'open-shut',
+}: Props) {
   if (style === 'none') return <span style={{ width: 0, flex: '0 0 auto' }} />;
 
-  const colour = colourFor(name, isDirectory, style);
+  const colour = colourFor(name, isDirectory, style, folderColour);
   const filled = style === 'solid' || style === 'colour';
+  const ajar = isDirectory && open && folderStyle === 'open-shut';
   const common = {
     width: size,
     height: size,
@@ -96,15 +116,15 @@ export function FileIcon({ name, isDirectory, open = false, style, size = 13 }: 
   if (isDirectory) {
     return filled ? (
       <svg {...common} fill={colour} stroke="none" opacity={style === 'solid' ? 0.75 : 1}>
-        {open ? (
+        {ajar ? (
           <path d="M1.6 3.4h3.4l1.1 1.4h6.3v1.1H3.5L1.6 11.4z" />
         ) : (
           <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
         )}
       </svg>
     ) : (
-      <svg {...common} fill="none" stroke="currentColor" strokeWidth="1.3">
-        <path d={open ? 'M1.6 3.4h3.4l1.1 1.4h6.3v1.4M1.6 3.4v7.6h10.8l1.6-5.6H3.4z' : 'M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z'} />
+      <svg {...common} fill="none" stroke={colour} strokeWidth="1.3">
+        <path d={ajar ? 'M1.6 3.4h3.4l1.1 1.4h6.3v1.4M1.6 3.4v7.6h10.8l1.6-5.6H3.4z' : 'M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z'} />
       </svg>
     );
   }

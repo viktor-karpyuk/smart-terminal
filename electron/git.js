@@ -297,13 +297,24 @@ async function commitFiles(root, sha) {
 }
 
 /** The diff of one file — of a commit, of the index, or of the working tree. */
-async function diff(root, { sha = null, file = null, staged = false } = {}) {
+async function diff(root, { sha = null, file = null, staged = false, untracked = false } = {}) {
+  // An untracked file is in no diff at all — git has never seen it. Showing it
+  // whole, as one long addition, is what someone means by "what changed here".
+  if (untracked && file) {
+    const read = await run(root, ['diff', '--no-color', '--no-index', '--', '/dev/null', file]);
+    // `--no-index` exits 1 when the files differ, which is the normal case here.
+    return { ok: true, patch: read.stdout || read.error || '' };
+  }
   const args = ['diff', '--no-color'];
   if (sha) {
     args.length = 0;
     args.push('show', '--no-color', '--format=', sha);
   } else if (staged) {
     args.push('--cached');
+  } else {
+    // Against HEAD, so a file that is half staged still shows everything that
+    // changed rather than only the half git happens to be asked about.
+    args.push('HEAD');
   }
   if (file) args.push('--', file);
   const result = await run(root, args);

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../state/store';
+import { GIT_TAB } from '../state/types';
 import { Editor } from './Editor';
 import { Popover } from './Popover';
 import { FileIcon, colourFor } from '../lib/fileIcons';
@@ -31,10 +32,10 @@ export function FilesPanel({ panelId }: { panelId: string }) {
   // Opened without a folder. Asking is better than guessing: the folders worth
   // offering are the ones sessions are actually working in.
   if (!panel.root) return <ChooseFolder panelId={panelId} />;
-  if (panel.mode === 'git') return <GitPanel panelId={panelId} />;
 
   return (
     <div className="files-panel">
+      {/* The tree never moves, whatever is open on the right. */}
       <div className="files-tree">
         <TreeHeader panelId={panelId} root={panel.root} homedir={homedir} />
         <div className="files-tree-scroll">
@@ -43,8 +44,9 @@ export function FilesPanel({ panelId }: { panelId: string }) {
       </div>
 
       <div className="files-editor">
-        {panel.open.length > 0 && (
+        {(panel.open.length > 0 || panel.gitOpen) && (
           <div className="file-tabs">
+            {panel.gitOpen && <GitTab panelId={panelId} selected={active === GIT_TAB} />}
             {panel.open.map((path) => (
               <FileTab
                 key={path}
@@ -57,7 +59,9 @@ export function FilesPanel({ panelId }: { panelId: string }) {
           </div>
         )}
 
-        {active ? (
+        {active === GIT_TAB ? (
+          <GitPanel panelId={panelId} />
+        ) : active ? (
           <OpenFile
             key={active}
             panelId={panelId}
@@ -192,45 +196,45 @@ function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string;
 /**
  * The way into Git, in the tree's own corner.
  *
- * Not a tab of its own: Git here is the repository *of the folder you are looking
- * at*, so it belongs to this tab rather than beside it. It carries the number of
- * changed files, which is also what makes it findable — an icon with a count on
- * it is read; a bare glyph in a corner is not.
+ * It opens Git as a tab on the right rather than replacing anything: the tree is
+ * what you navigate by and it should not vanish because you glanced at what
+ * changed. The count is what makes the button findable — a bare glyph in a
+ * corner is not read.
  */
 function GitButton({ panelId }: { panelId: string }) {
   const root = useStore((s) => s.panels[panelId]?.root ?? '');
   const gitRoot = useStore((s) => s.panels[panelId]?.gitRoot ?? null);
   const changed = useStore((s) => (gitRoot ? (s.repos[gitRoot]?.files.length ?? 0) : 0));
   const branch = useStore((s) => (gitRoot ? (s.repos[gitRoot]?.branch ?? null) : null));
-  const setPanelMode = useStore((s) => s.setPanelMode);
-  const [known, setKnown] = useState<boolean | null>(null);
+  const openGit = useStore((s) => s.openGit);
+  const [isRepo, setIsRepo] = useState<boolean | null>(null);
 
-  // Ask once whether this folder is even in a repository; offering Git where
-  // there is none is a button that can only ever disappoint.
+  // Asked once. Offering Git where there is no repository is a button that can
+  // only ever disappoint.
   useEffect(() => {
     if (!root) return;
     if (gitRoot) {
-      setKnown(true);
+      setIsRepo(true);
       return;
     }
     let alive = true;
     window.api.git.call('root', root).then((result) => {
-      if (alive) setKnown(typeof result.value === 'string' && Boolean(result.value));
+      if (alive) setIsRepo(typeof result.value === 'string' && Boolean(result.value));
     });
     return () => {
       alive = false;
     };
   }, [root, gitRoot]);
 
-  if (known === false) return null;
+  if (isRepo === false) return null;
 
   return (
     <button
       className={`files-git${changed ? ' has-changes' : ''}`}
-      onClick={() => setPanelMode(panelId, 'git')}
+      onClick={() => openGit(panelId)}
       title={branch ? `Git — on ${branch}${changed ? `, ${changed} changed` : ''}` : 'Git'}
     >
-      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3">
+      <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3">
         <circle cx="3.6" cy="3.2" r="1.7" />
         <circle cx="3.6" cy="10.8" r="1.7" />
         <circle cx="10.4" cy="6.4" r="1.7" />
@@ -239,6 +243,42 @@ function GitButton({ panelId }: { panelId: string }) {
       <span>Git</span>
       {changed > 0 && <span className="files-git-count">{changed}</span>}
     </button>
+  );
+}
+
+/** Git's own tab in the content row, first, with a close of its own. */
+function GitTab({ panelId, selected }: { panelId: string; selected: boolean }) {
+  const gitRoot = useStore((s) => s.panels[panelId]?.gitRoot ?? null);
+  const changed = useStore((s) => (gitRoot ? (s.repos[gitRoot]?.files.length ?? 0) : 0));
+  const setActiveFile = useStore((s) => s.setActiveFile);
+  const closeGit = useStore((s) => s.closeGit);
+
+  return (
+    <div
+      className={`file-tab is-git${selected ? ' is-selected' : ''}`}
+      onMouseDown={() => setActiveFile(panelId, GIT_TAB)}
+      title="Git"
+    >
+      <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="#e0af68" strokeWidth="1.3">
+        <circle cx="3.6" cy="3.2" r="1.7" />
+        <circle cx="3.6" cy="10.8" r="1.7" />
+        <circle cx="10.4" cy="6.4" r="1.7" />
+        <path d="M3.6 4.9v4.2M5.2 3.9c2.6.4 3.8 1.3 4 2.3" />
+      </svg>
+      <span className="file-tab-name">Git</span>
+      {changed > 0 && <span className="files-git-count">{changed}</span>}
+      <button
+        className="tab-close"
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          closeGit(panelId);
+        }}
+        aria-label="Close Git"
+      >
+        ×
+      </button>
+    </div>
   );
 }
 
@@ -302,6 +342,8 @@ function Row({
     return buffer ? buffer.text !== buffer.savedText : false;
   });
   const iconStyle = useStore((s) => s.settings.fileIcons);
+  const folderColour = useStore((s) => s.settings.folderColour);
+  const folderStyle = useStore((s) => s.settings.folderStyle);
 
   return (
     <>
@@ -322,12 +364,23 @@ function Row({
         ) : (
           <span className="files-chevron" />
         )}
-        <FileIcon name={entry.name} isDirectory={entry.isDirectory} open={expanded} style={iconStyle} />
+        <FileIcon
+          name={entry.name}
+          isDirectory={entry.isDirectory}
+          open={expanded}
+          style={iconStyle}
+          folderColour={folderColour}
+          folderStyle={folderStyle}
+        />
         <span
           className="files-name"
           // In colour mode the name takes the icon's tint too, faintly — an icon
           // on its own is a small target for the eye at this size.
-          style={iconStyle === 'colour' && !entry.isDirectory ? { color: colourFor(entry.name, false, 'colour') } : undefined}
+          style={
+            iconStyle === 'colour' && !entry.isDirectory
+              ? { color: colourFor(entry.name, false, 'colour') }
+              : undefined
+          }
         >
           {entry.name}
         </span>

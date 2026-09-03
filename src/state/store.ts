@@ -3,6 +3,7 @@ import { FOLLOW_APP, resolveTerminalTheme } from '../terminals/themes';
 import { generateSessionName } from '../lib/names';
 import { arrangeGroup, moveGroupTo } from './groups';
 import { closePane, movePane, splitEmpty, splitOffTabs } from './layout';
+import { GIT_TAB } from './types';
 import type {
   Buffer,
   FilePanel,
@@ -58,6 +59,8 @@ const DEFAULT_SETTINGS: Settings = {
   terminalOverrides: {},
   sessionMessaging: 'group',
   fileIcons: 'colour',
+  folderColour: '#7aa2f7',
+  folderStyle: 'open-shut',
 };
 
 /** Whether the interface is currently dark, resolving `system` against the OS. */
@@ -213,8 +216,9 @@ interface State {
   openFilePanel(options?: { leafId?: string; side?: DropSide; root?: string; sessionId?: string }): string | null;
   closePanel(panelId: string): void;
   setPanelRoot(panelId: string, root: string): void;
-  /** Show the folder, or the repository it is in. Both live in the same tab. */
-  setPanelMode(panelId: string, mode: 'files' | 'git'): Promise<void>;
+  /** Open Git in the content row, beside the files. */
+  openGit(panelId: string): Promise<void>;
+  closeGit(panelId: string): void;
   setGitView(panelId: string, view: GitView): void;
   patchPanel(panelId: string, patch: Partial<FilePanel>): void;
   refreshRepo(root: string, what?: 'status' | 'graph' | 'refs' | 'all'): Promise<void>;
@@ -961,7 +965,7 @@ export const useStore = create<State>((set, get) => ({
       expanded: root ? [root] : [],
       open: [],
       active: null,
-      mode: 'files',
+      gitOpen: false,
       gitRoot: null,
       gitView: 'changes',
       gitGrouping: 'directory',
@@ -969,6 +973,7 @@ export const useStore = create<State>((set, get) => ({
       message: '',
       amend: false,
       selectedSha: null,
+      selectedPath: null,
       selectedBranch: null,
     };
 
@@ -1026,27 +1031,32 @@ export const useStore = create<State>((set, get) => ({
   },
 
   /**
-   * Switch a panel between its folder and its repository.
+   * Open Git as a tab in the content row.
    *
-   * The first time it is asked for git, it finds the repository the folder is
-   * *in* — a session working in `src/state` still wants the whole repository's
-   * changes, and a view rooted halfway down one hides things.
+   * It is pointed at the repository the folder is *in*: a session working in
+   * `src/state` still wants the whole repository's changes, and a view rooted
+   * halfway down one hides things.
    */
-  async setPanelMode(panelId, mode) {
+  async openGit(panelId) {
     const panel = filesPanel(get(), panelId);
     if (!panel) return;
-    if (mode === 'files') {
-      get().patchPanel(panelId, { mode });
-      return;
-    }
-
     let gitRoot = panel.gitRoot;
     if (!gitRoot && panel.root) {
       const found = await window.api.git.call('root', panel.root);
       gitRoot = typeof found.value === 'string' ? found.value : null;
     }
-    get().patchPanel(panelId, { mode, gitRoot });
+    get().patchPanel(panelId, { gitOpen: true, gitRoot, active: GIT_TAB });
     if (gitRoot) get().refreshRepo(gitRoot, 'all');
+  },
+
+  /** Close it, and land back on whatever file was open behind it. */
+  closeGit(panelId) {
+    const panel = filesPanel(get(), panelId);
+    if (!panel) return;
+    get().patchPanel(panelId, {
+      gitOpen: false,
+      active: panel.active === GIT_TAB ? (panel.open[panel.open.length - 1] ?? null) : panel.active,
+    });
   },
 
   setGitView(panelId, view) {

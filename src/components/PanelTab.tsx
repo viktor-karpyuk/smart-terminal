@@ -25,31 +25,21 @@ export function PanelTab({
   );
 
   if (!panel) return null;
-  const isGit = panel.mode === 'git';
   const name = panel.root ? (panel.root.split('/').filter(Boolean).pop() ?? 'Files') : 'Files';
 
   return (
     <div
       className={`tab${selected ? ' tab-selected' : ''}`}
-      style={{ boxShadow: selected ? `inset 0 -2px 0 ${isGit ? '#e0af68' : '#7aa2f7'}` : undefined }}
+      style={{ boxShadow: selected ? 'inset 0 -2px 0 #7aa2f7' : undefined }}
       title={panel.root || 'No folder chosen yet'}
       onMouseDown={() => {
         setActiveLeaf(leafId);
         focusPanel(leafId, panelId);
       }}
     >
-      {isGit ? (
-        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#e0af68" strokeWidth="1.3">
-          <circle cx="3.6" cy="3.2" r="1.7" />
-          <circle cx="3.6" cy="10.8" r="1.7" />
-          <circle cx="10.4" cy="6.4" r="1.7" />
-          <path d="M3.6 4.9v4.2M5.2 3.9c2.6.4 3.8 1.3 4 2.3" />
-        </svg>
-      ) : (
-        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#7aa2f7" strokeWidth="1.3">
-          <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
-        </svg>
-      )}
+      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#7aa2f7" strokeWidth="1.3">
+        <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
+      </svg>
       <span className="tab-title">{name}</span>
       {unsaved && <span className="file-tab-dirty" title="unsaved changes" />}
       <button
