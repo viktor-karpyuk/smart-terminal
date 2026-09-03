@@ -524,6 +524,26 @@ function registerIpc() {
   /** Tidying, and only what was asked for. Never on a timer, never as a side effect. */
   ipcMain.handle('db:maintain', (_e, options = {}) => db.maintain(options ?? {}));
 
+  /**
+   * Drop what was read for a session.
+   *
+   * Sent when a session is deliberately started over on a new conversation: what
+   * was measured belongs to the one it replaced, and holding it even until the
+   * next sweep means the panel reports the old session's trouble as the new
+   * one's.
+   */
+  ipcMain.on('analysis:forget', (_e, sessionId) => monitor?.forget(sessionId));
+
+  /** How one session has been doing over time, and what typical looks like. */
+  ipcMain.handle('analysis:history', (_e, sessionId) => {
+    if (!sessionId) return { samples: [], norms: null, compactions: [] };
+    try {
+      return { samples: db.history(sessionId), norms: db.norms(), compactions: db.compactions(sessionId) };
+    } catch {
+      return { samples: [], norms: null, compactions: [] };
+    }
+  });
+
   /** What the monitor is following right now, without re-reading anything. */
   ipcMain.handle('analysis:live', () => {
     const out = {};
@@ -1024,6 +1044,7 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   monitor = new SessionMonitor({
     context,
     db,
+    conversationOf: (sessionId) => db.getSession(sessionId)?.claudeSessionId ?? null,
     emit: (sessionId, verdict) => {
       send('analysis:changed', { sessionId, verdict });
       tellIfSerious(sessionId, verdict);

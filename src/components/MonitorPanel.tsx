@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../state/store';
 import { STORAGE } from '../state/types';
-import type { DbHealth } from '../global';
+import type { CompactionRecord, DbHealth, HistorySample, Norms } from '../global';
 import type { Finding, SessionAnalysis } from '../state/types';
 
 /**
@@ -179,6 +179,8 @@ function Detail({ verdict, showSuggestions }: { verdict: SessionAnalysis; showSu
 
   return (
     <>
+      {verdict.quality && <Quality quality={verdict.quality} />}
+
       <div className="monitor-stats">
         {stats.map((stat) => (
           <div className="monitor-stat" key={stat.label}>
@@ -190,6 +192,10 @@ function Detail({ verdict, showSuggestions }: { verdict: SessionAnalysis; showSu
       </div>
 
       <Curve verdict={verdict} />
+
+      <Compactions verdict={verdict} />
+
+      <Compared sessionId={verdict.sessionId} verdict={verdict} />
 
       <h3 className="monitor-heading">
         {verdict.findings.length ? 'What stands out' : 'Nothing stands out'}
@@ -396,6 +402,198 @@ function Curve({ verdict }: { verdict: SessionAnalysis }) {
 }
 
 /**
+ * How well the session is being used, as one judgement.
+ *
+ * The findings below say what is wrong; this says how much it matters, which is
+ * the question actually being asked. Every point off is listed beside it —
+ * a score that will not account for itself is a horoscope, and nobody should act
+ * on one.
+ */
+function Quality({ quality }: { quality: NonNullable<SessionAnalysis['quality']> }) {
+  return (
+    <div className={`monitor-quality is-${quality.grade}`}>
+      <div className="monitor-quality-mark">
+        <strong>{quality.score}</strong>
+        <span>{quality.grade}</span>
+      </div>
+      <div className="monitor-quality-why">
+        {!quality.reasons.length && <p>Nothing is being wasted here.</p>}
+        {quality.reasons.map((reason) => (
+          <p key={reason.label}>
+            <em>−{reason.cost}</em> {reason.label}
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What each compaction actually did.
+ *
+ * A compaction is the one event in a session's life that changes it rather than
+ * adding to it, and a single "context now" figure hides it completely: the
+ * number goes down and nothing says why, or it stays high and nothing says the
+ * session already threw away half its memory to get there. Before, after, and
+ * where it stands now — so the drop can be read as the event it was.
+ */
+function Compactions({ verdict }: { verdict: SessionAnalysis }) {
+  const [kept, setKept] = useState<CompactionRecord[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    window.api.analysis.history(verdict.sessionId).then((answer) => {
+      if (alive) setKept(answer.compactions ?? []);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [verdict.sessionId, verdict.compactions.length]);
+
+  if (!verdict.compactions.length) return null;
+  const recordFor = (at: number | null) => (at ? kept.find((row) => row.at === at) ?? null : null);
+
+  return (
+    <>
+      <h3 className="monitor-heading">What each compaction changed</h3>
+      <div className="monitor-compactions">
+        {verdict.compactions.map((entry, index) => (
+          <div className={`monitor-compaction-row${entry.trigger === 'auto' ? ' is-auto' : ''}`} key={`${entry.at}-${index}`}>
+            <span className="monitor-compaction-when">
+              {entry.at ? new Date(entry.at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}
+            </span>
+            <span className="monitor-compaction-move">
+              <strong>{tokens(entry.preTokens)}</strong>
+              <i>→</i>
+              <strong>{tokens(entry.postTokens)}</strong>
+            </span>
+            <span className="monitor-compaction-note">
+              {entry.trigger === 'auto' ? 'chose for itself' : 'you asked'}
+              {entry.droppedTokens ? ` · ${tokens(entry.droppedTokens)} dropped` : ''}
+              {entry.durationMs ? ` · ${duration(entry.durationMs)}` : ''}
+            </span>
+            <Losing record={recordFor(entry.at)} />
+          </div>
+        ))}
+        <div className="monitor-compaction-row is-now">
+          <span className="monitor-compaction-when">now</span>
+          <span className="monitor-compaction-move">
+            <strong>{tokens(verdict.context.last)}</strong>
+          </span>
+          <span className="monitor-compaction-note">
+            {Math.round((verdict.context.last / verdict.context.window) * 100)}% of the window · peak was{' '}
+            {tokens(verdict.context.peak)}
+          </span>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/**
+ * What the session was in the middle of when it compacted.
+ *
+ * The token counts say how much was thrown away; this says what. Kept in the
+ * database at the moment the compaction was first noticed, because the
+ * transcript afterwards no longer remembers — which is the whole point of a
+ * compaction, and the reason it has to be written down as it happens.
+ */
+function Losing({ record }: { record: CompactionRecord | null }) {
+  if (!record || (!record.title && !record.last_prompt && !record.open_tasks.length)) return null;
+
+  return (
+    <div className="monitor-losing">
+      {record.title && <span className="monitor-losing-title">It was on: {record.title}</span>}
+      {record.last_prompt && <span className="monitor-losing-prompt">“{record.last_prompt}”</span>}
+      {record.open_tasks.length > 0 && (
+        <span className="monitor-losing-tasks">
+          {record.open_tasks.length} open at the time: {record.open_tasks.slice(0, 3).map((t) => t.subject).join(' · ')}
+          {record.open_tasks.length > 3 ? ` · +${record.open_tasks.length - 3}` : ''}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * This session against the others, and against its own past.
+ *
+ * A number about one session says almost nothing on its own: 400k of context is
+ * either ordinary or alarming depending on what the rest of the fleet does. The
+ * comparison is to the median rather than the average, because one session that
+ * ran for a week at nine hundred thousand tokens would pull an average up behind
+ * it and make everything else look healthy.
+ */
+function Compared({ sessionId, verdict }: { sessionId: string; verdict: SessionAnalysis }) {
+  const [samples, setSamples] = useState<HistorySample[]>([]);
+  const [norms, setNorms] = useState<Norms | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    window.api.analysis.history(sessionId).then((answer) => {
+      if (!alive) return;
+      setSamples(answer.samples ?? []);
+      setNorms(answer.norms ?? null);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [sessionId, verdict.readAt]);
+
+  if (!norms || norms.sessions < 2) return null;
+
+  const share = verdict.context.window ? verdict.context.last / verdict.context.window : 0;
+  const runs = new Set(samples.map((sample) => sample.conversation_id ?? '')).size;
+  const first = samples[0];
+
+  return (
+    <>
+      <h3 className="monitor-heading">Compared</h3>
+      <div className="monitor-compare">
+        <Against label="Context" mine={share} typical={norms.contextShare} render={(v) => `${Math.round(v * 100)}%`} />
+        <Against label="Input, weighted" mine={verdict.effectiveInput} typical={norms.effectiveInput} render={tokens} />
+        <Against label="Output" mine={verdict.totals.output} typical={norms.output} render={tokens} />
+        <Against label="Requests" mine={verdict.requests} typical={norms.requests} render={(v) => String(Math.round(v))} />
+      </div>
+      <p className="usage-footnote">
+        Against the middle of {norms.sessions} measured session{norms.sessions === 1 ? '' : 's'}.
+        {samples.length > 1 && first
+          ? ` Followed since ${new Date(first.at).toLocaleDateString()}, ${samples.length} readings kept${runs > 1 ? ` across ${runs} conversations` : ''}.`
+          : ''}
+      </p>
+    </>
+  );
+}
+
+/** One figure beside the typical one, with the gap said out loud. */
+function Against({
+  label,
+  mine,
+  typical,
+  render,
+}: {
+  label: string;
+  mine: number;
+  typical: number;
+  render: (value: number) => string;
+}) {
+  const ratio = typical > 0 ? mine / typical : 0;
+  // Only a difference worth mentioning gets a word; everything within half again
+  // of typical is just noise dressed up as a finding.
+  const word = !typical || (ratio > 0.66 && ratio < 1.5) ? 'about typical' : ratio >= 1.5 ? `${ratio.toFixed(1)}× typical` : `${(1 / ratio).toFixed(1)}× below`;
+  const tone = ratio >= 2 ? 'is-high' : ratio >= 1.5 ? 'is-warm' : 'is-ok';
+
+  return (
+    <div className="monitor-compare-row">
+      <span className="monitor-compare-label">{label}</span>
+      <strong>{render(mine)}</strong>
+      <span className="monitor-compare-typical">vs {render(typical)}</span>
+      <span className={`monitor-compare-word ${tone}`}>{word}</span>
+    </div>
+  );
+}
+
+/**
  * How the database is doing, and what can be done about it.
  *
  * Three readings, kept apart because they mean different things. What it weighs.
@@ -442,7 +640,9 @@ function Storage() {
 
   if (!health) return <p className="usage-note">Reading the database…</p>;
 
-  const orphans = health.orphans.chunks + health.orphans.stats + health.orphans.briefs + health.orphans.messages;
+  const orphans =
+    health.orphans.chunks + health.orphans.stats + health.orphans.briefs + health.orphans.messages + health.orphans.history;
+  const historyRows = health.tables.find((table) => table.name === 'session_history')?.rows ?? 0;
   const wastedShare = health.bytes ? Math.round((health.wasted / health.bytes) * 100) : 0;
 
   const ask = (key: string, label: string, detail: string, options: Parameters<typeof window.api.analysis.dbMaintain>[0], describe: (r: { done: Array<{ op: string; rows: number }>; freed: number }) => string, danger = false) =>
@@ -537,6 +737,14 @@ function Storage() {
           { transcriptsOlderThanDays: 90 },
           (r) => `Forgot ${r.done.find((d) => d.op === 'transcripts')?.rows ?? 0} conversations.`,
         )}
+        {historyRows > 0 &&
+          ask(
+            'history',
+            'Trim readings older than a year',
+            'Removes monitor readings older than a year. The sessions and their conversations stay.',
+            { historyOlderThanDays: 365 },
+            (r) => `Trimmed ${r.done.find((d) => d.op === 'history')?.rows ?? 0} readings.`,
+          )}
         {ask(
           'sessions',
           `Delete ${health.sessions.olderThan90} session${health.sessions.olderThan90 === 1 ? '' : 's'} older than 90 days`,

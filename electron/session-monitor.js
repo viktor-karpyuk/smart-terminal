@@ -35,13 +35,17 @@ class SessionMonitor {
    * @param {{ saveStats(sessionId: string, verdict: object): void } | null} deps.db
    * @param {(sessionId: string, verdict: object) => void} deps.emit called when a verdict changes
    */
-  constructor({ context, db = null, emit = () => {}, intervalMs = INTERVAL_MS }) {
+  constructor({ context, db = null, emit = () => {}, conversationOf = null, intervalMs = INTERVAL_MS }) {
     this.context = context;
     this.db = db;
     this.emit = emit;
+    /** Which conversation a session is on, so a restarted one starts its own record. */
+    this.conversationOf = conversationOf;
     this.intervalMs = intervalMs;
-    /** sessionId -> { size, verdict } — the last reading, and what it was read from. */
+    /** sessionId -> { file, size, verdict } — the last reading, and what it came from. */
     this.readings = new Map();
+    /** sessionId -> the compaction times already written down. */
+    this.filed = new Map();
     this.timer = null;
     /** Where the last sweep stopped, so a busy fleet is covered evenly. */
     this.cursor = 0;
@@ -72,6 +76,7 @@ class SessionMonitor {
   /** Drop what was read for a session that has gone. */
   forget(sessionId) {
     this.readings.delete(sessionId);
+    this.filed.delete(sessionId);
   }
 
   stop() {
@@ -101,26 +106,65 @@ class SessionMonitor {
       return { sessionId, ok: false, reason: 'no-transcript' };
     }
 
+    // A transcript only ever grows, so a little more of it is the only reason to
+    // skip a re-read. Anything else means it is not the same transcript: a
+    // session restarted without its conversation gets a new file — smaller, and
+    // under a different name — and "it has not grown enough" would answer for the
+    // old one forever.
     const previous = this.readings.get(sessionId);
-    if (!force && previous && size - previous.size < GROWTH_BYTES) return previous.verdict;
+    const sameFile = previous?.file === file;
+    const grewLittle = previous && size >= previous.size && size - previous.size < GROWTH_BYTES;
+    if (!force && previous && sameFile && grewLittle) return previous.verdict;
 
     const rows = readRows(file);
     if (!rows.length) return { sessionId, ok: false, reason: 'empty' };
 
     const verdict = analyze(rows);
     const answer = { ...verdict, sessionId, ok: true, worst: worstSeverity(verdict.findings), readAt: Date.now() };
-    this.readings.set(sessionId, { size, verdict: answer });
+    this.readings.set(sessionId, { file, size, verdict: answer });
     try {
       this.db?.saveStats(sessionId, verdict);
+      // And a sample kept beside it, if this one is worth keeping. `saveStats`
+      // answers "how is it now" and is overwritten; the history is what makes
+      // "compared to what" a question anyone can answer.
+      this.db?.noteHistory(sessionId, verdict, this.conversationOf?.(sessionId) ?? null);
       // The same parse, read a second way. What a session would need to be told
       // if it had to start over has to be on hand *before* it is needed — the
       // moment somebody wants it is usually the moment the transcript is gone.
       const carry = brief(rows);
       if (worthCarrying(carry)) this.db?.saveBrief(sessionId, carry);
+      this.#recordCompactions(sessionId, verdict, rows);
     } catch {
       /* a verdict is still worth showing even if it could not be filed */
     }
     return answer;
+  }
+
+  /**
+   * File any compaction not filed yet, with the state as it stood just before it.
+   *
+   * Reconstructed from the rows before the compaction rather than captured live,
+   * which is both easier and better: the transcript is the record, so the answer
+   * is exact rather than whatever happened to be sampled at the time.
+   *
+   * The times already filed are held in memory, so the usual case — every sweep
+   * seeing the same compactions again — costs a set lookup and nothing else.
+   */
+  #recordCompactions(sessionId, verdict, rows) {
+    if (!this.db || !verdict.compactions.length) return;
+    let known = this.filed.get(sessionId);
+    if (!known) {
+      known = new Set(this.db.compactionTimes?.(sessionId) ?? []);
+      this.filed.set(sessionId, known);
+    }
+
+    for (const entry of verdict.compactions) {
+      const when = entry.at ?? 0;
+      if (known.has(when)) continue;
+      const before = entry.index > 0 ? brief(rows.slice(0, entry.index)) : null;
+      this.db.noteCompaction(sessionId, entry, before, this.conversationOf?.(sessionId) ?? null);
+      known.add(when);
+    }
   }
 
   /**

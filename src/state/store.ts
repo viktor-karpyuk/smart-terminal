@@ -68,10 +68,12 @@ const DEFAULT_SETTINGS: Settings = {
   folderStyle: 'open-shut',
   sidebarShowSessions: true,
   sidebarShowFolders: true,
+  sidebarShowMonitor: true,
   sidebarSessionsCollapsed: false,
   sidebarFoldersCollapsed: false,
-  sidebarOrder: ['sessions', 'folders'],
-  sidebarSectionSizes: { sessions: 1, folders: 1 },
+  sidebarMonitorCollapsed: false,
+  sidebarOrder: ['sessions', 'folders', 'monitor'],
+  sidebarSectionSizes: { sessions: 1, folders: 1, monitor: 1 },
   sessionAlerts: true,
   sessionSuggestions: true,
   advisorProfileId: null,
@@ -889,6 +891,20 @@ export const useStore = create<State>((set, get) => ({
     // Asked for before anything is killed: once the session is gone its
     // transcript may be unreadable, and the answer would arrive too late.
     const brief = fresh && session.kind === 'claude' ? await window.api.analysis.brief(sessionId) : null;
+
+    // Everything measured about this session belongs to the conversation being
+    // left behind. Kept even for the few seconds until the next sweep, it would
+    // report the old session's trouble as the new one's.
+    if (fresh) {
+      window.api.analysis.forget(sessionId);
+      set((prev) => {
+        const analysisBySession = { ...prev.analysisBySession };
+        const adviceBySession = { ...prev.adviceBySession };
+        delete analysisBySession[sessionId];
+        delete adviceBySession[sessionId];
+        return { analysisBySession, adviceBySession };
+      });
+    }
     if (session.ptyId) {
       window.api.pty.kill(session.ptyId);
       ptyIndex.delete(session.ptyId);

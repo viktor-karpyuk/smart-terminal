@@ -14,6 +14,10 @@ import { AccountsIcon, AppearanceIcon, HistoryIcon, MonitorIcon, UsageIcon } fro
  */
 export const SIDEBAR_MIN = 150;
 
+/** The lists the sidebar can show, in the order they arrive with. */
+type SidebarList = 'sessions' | 'folders' | 'monitor';
+const DEFAULT_ORDER: SidebarList[] = ['sessions', 'folders', 'monitor'];
+
 /**
  * One list: a heading that stays, and a body that scrolls on its own.
  *
@@ -123,7 +127,7 @@ function SectionHeader({
   onClose,
   extra,
 }: {
-  id: 'sessions' | 'folders';
+  id: SidebarList;
   label: string;
   count: number;
   collapsed: boolean;
@@ -132,14 +136,20 @@ function SectionHeader({
   extra?: React.ReactNode;
 }) {
   const updateSettings = useStore((s) => s.updateSettings);
-  const order = useStore((s) => s.settings.sidebarOrder ?? ['sessions', 'folders']);
+  const order = useStore((s) => s.settings.sidebarOrder ?? DEFAULT_ORDER);
   const [over, setOver] = useState(false);
 
-  /** Dropping one heading on another swaps them; with two lists that is the whole of it. */
+  /**
+ * Dropping one heading on another puts the dragged list where that one is.
+ *
+ * With two lists this was a swap and nothing more; with three it has to be an
+ * insertion, or dragging the last onto the first would leave the middle one
+ * where it was and look like nothing happened.
+ */
   const moveHere = (dragged: string) => {
     if (dragged === id) return;
     const next = order.filter((entry) => entry !== dragged);
-    next.splice(next.indexOf(id), 0, dragged as 'sessions' | 'folders');
+    next.splice(next.indexOf(id), 0, dragged as SidebarList);
     updateSettings({ sidebarOrder: next });
   };
 
@@ -343,10 +353,20 @@ export function Sidebar() {
 
   // With both switched off there is no panel at all — just the rail, which is
   // the whole point of the rail.
-  const showsSomething = settings.sidebarShowSessions || settings.sidebarShowFolders;
-  const open = (settings.sidebarOrder ?? ['sessions', 'folders']).filter((which) =>
-    which === 'sessions' ? settings.sidebarShowSessions : settings.sidebarShowFolders,
-  );
+  const showsSomething =
+    settings.sidebarShowSessions || settings.sidebarShowFolders || settings.sidebarShowMonitor;
+  // Any list the order does not mention yet — the monitor, for a workspace saved
+  // before it existed — goes on the end rather than disappearing.
+  const ordered = [
+    ...(settings.sidebarOrder ?? DEFAULT_ORDER),
+    ...DEFAULT_ORDER.filter((which) => !(settings.sidebarOrder ?? DEFAULT_ORDER).includes(which)),
+  ];
+  const shown: Record<SidebarList, boolean> = {
+    sessions: settings.sidebarShowSessions,
+    folders: settings.sidebarShowFolders,
+    monitor: settings.sidebarShowMonitor,
+  };
+  const open = ordered.filter((which) => shown[which]);
 
   const grouped = useMemo(() => {
     const pairs = membership.map((entry) => entry.split(' ') as [string, string]);
@@ -411,8 +431,10 @@ export function Sidebar() {
                   );
                 })}
               </List>
-            ) : (
+            ) : which === 'folders' ? (
               <Folders />
+            ) : (
+              <MonitorList />
             )}
           </Fragment>
         ))}
@@ -424,6 +446,100 @@ export function Sidebar() {
       </div>
       )}
     </aside>
+  );
+}
+
+/**
+ * The fleet's health, as a list.
+ *
+ * The same readings the monitor section shows, in the place you already look to
+ * find a session. Clicking one opens the monitor on it — the list answers "which
+ * one should I look at", the section answers "why".
+ */
+function MonitorList() {
+  const collapsed = useStore((s) => s.settings.sidebarMonitorCollapsed);
+  const updateSettings = useStore((s) => s.updateSettings);
+  const ids = useStore(
+    useShallow((s) =>
+      Object.values(s.sessions)
+        .filter((session) => session.kind === 'claude')
+        .map((session) => session.id),
+    ),
+  );
+  const troubled = useStore(
+    (s) => Object.values(s.analysisBySession).filter((v) => v.worst === 'high' || v.worst === 'medium').length,
+  );
+
+  return (
+    <List
+      id="monitor"
+      collapsed={collapsed}
+      header={
+        <SectionHeader
+          id="monitor"
+          label="Monitor"
+          count={troubled}
+          collapsed={collapsed}
+          onToggle={() => updateSettings({ sidebarMonitorCollapsed: !collapsed })}
+          onClose={() => updateSettings({ sidebarShowMonitor: false })}
+          extra={
+            <button
+              className="section-open"
+              title="Open the monitor in a section"
+              aria-label="Open the monitor"
+              onClick={(event) => {
+                event.stopPropagation();
+                useStore.getState().openMonitor();
+              }}
+            >
+              ⇱
+            </button>
+          }
+        />
+      }
+    >
+      {!ids.length && <p className="sidebar-empty">No Claude sessions running.</p>}
+      {ids.map((id) => (
+        <MonitorRow key={id} sessionId={id} />
+      ))}
+    </List>
+  );
+}
+
+/** One session's health: how full it is, and whether anything is wrong. */
+function MonitorRow({ sessionId }: { sessionId: string }) {
+  const openMonitor = useStore((s) => s.openMonitor);
+  const title = useStore((s) => s.sessions[sessionId]?.customTitle || s.sessions[sessionId]?.title || 'session');
+  // Primitives only. The verdict object is replaced on every sweep, and selecting
+  // it would redraw every row in the list each time any session was read.
+  const share = useStore((s) => {
+    const verdict = s.analysisBySession[sessionId];
+    if (!verdict?.ok || !verdict.context.window) return -1;
+    return verdict.context.last / verdict.context.window;
+  });
+  const worst = useStore((s) => s.analysisBySession[sessionId]?.worst ?? null);
+  const pct = share < 0 ? null : Math.min(100, Math.round(share * 100));
+  const tone = pct === null ? '' : pct >= 80 ? 'is-high' : pct >= 60 ? 'is-warm' : 'is-ok';
+
+  return (
+    <button
+      className="sidebar-item monitor-item"
+      onClick={() => openMonitor(sessionId)}
+      title={pct === null ? `${title} — nothing measured yet` : `${title} — ${pct}% of its context window`}
+    >
+      <span className={`monitor-pip is-${worst ?? 'clear'}`} />
+      <span className="sidebar-item-name">{title}</span>
+      {pct === null ? (
+        <span className="monitor-row-quiet">—</span>
+      ) : (
+        <>
+          <span className="monitor-bar">
+            <span className={`monitor-bar-fill ${tone}`} style={{ width: `${pct}%` }} />
+          </span>
+          <span className="monitor-item-pct">{pct}%</span>
+        </>
+      )}
+    </button>
   );
 }
 
@@ -442,9 +558,12 @@ function ActivityBar() {
     (s) => allTabs(s.layout).filter((id) => s.sessions[id]?.status === 'running').length,
   );
   const folderCount = useStore((s) => Object.values(s.panels).filter((p) => asFilePanel(p)?.root).length);
+  /** Sessions with something worth looking at — a count, so the selector is stable. */
+  const alerts = useStore(
+    (s) => Object.values(s.analysisBySession).filter((v) => v.worst === 'high' || v.worst === 'medium').length,
+  );
   const setProfileEditorOpen = useStore((s) => s.setProfileEditorOpen);
   const setUsagePanelOpen = useStore((s) => s.setUsagePanelOpen);
-  const openMonitor = useStore((s) => s.openMonitor);
   const setHistoryOpen = useStore((s) => s.setHistoryOpen);
   const setAppearanceOpen = useStore((s) => s.setAppearanceOpen);
 
@@ -477,13 +596,21 @@ function ActivityBar() {
         {folderCount > 0 && <span className="activity-count">{folderCount}</span>}
       </button>
 
+      <button
+        className={`activity${settings.sidebarShowMonitor ? ' is-on' : ''}`}
+        data-tip={alerts ? `Monitor — ${alerts} need a look` : 'Monitor'}
+        aria-label="Monitor"
+        aria-pressed={settings.sidebarShowMonitor}
+        onClick={() => updateSettings({ sidebarShowMonitor: !settings.sidebarShowMonitor })}
+      >
+        <MonitorIcon />
+        {alerts > 0 && <span className="activity-count">{alerts}</span>}
+      </button>
+
       <span className="activity-spacer" />
 
       <button className="activity" onClick={() => setProfileEditorOpen(true)} data-tip="Accounts (⌘,)" aria-label="Accounts">
         <AccountsIcon />
-      </button>
-      <button className="activity" onClick={() => openMonitor()} data-tip="Session monitor" aria-label="Session monitor">
-        <MonitorIcon />
       </button>
       <button className="activity" onClick={() => setUsagePanelOpen(true)} data-tip="Usage limits (⌘U)" aria-label="Usage">
         <UsageIcon />

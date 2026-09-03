@@ -171,3 +171,34 @@ test('the timer starts once and stops cleanly', () => {
 });
 
 test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+test('a session that starts over on a new conversation is not answered from the old one', () => {
+  // A long conversation, then the same session pointed at a fresh, much shorter
+  // one — which is exactly what restarting without resuming does.
+  const heavy = transcript('r-old', 60, { read: 900000 });
+  const map = { r: heavy };
+  const monitor = new SessionMonitor({ context: fakeContext(map) });
+  const before = monitor.read('r');
+  assert.equal(before.requests, 60);
+
+  map.r = transcript('r-new', 2);
+  const after = monitor.read('r');
+  assert.equal(after.requests, 2, 'the new conversation, not the one it replaced');
+});
+
+test('a transcript that shrinks is read again rather than trusted', () => {
+  const file = transcript('s', 40);
+  const monitor = new SessionMonitor({ context: fakeContext({ s: file }) });
+  assert.equal(monitor.read('s').requests, 40);
+
+  // The same path, rewritten shorter: a truncation, or a file replaced in place.
+  fs.writeFileSync(file, fs.readFileSync(transcript('s-short', 3), 'utf8'));
+  assert.equal(monitor.read('s').requests, 3);
+});
+
+test('growth is still enough to skip a re-read', () => {
+  const file = transcript('t', 20);
+  const monitor = new SessionMonitor({ context: fakeContext({ t: file }) });
+  const first = monitor.read('t');
+  assert.equal(monitor.read('t'), first, 'a file that has barely grown gives the same object back');
+});

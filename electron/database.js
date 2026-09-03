@@ -2,6 +2,7 @@
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 const { app } = require('electron');
+const { worthSampling, normsFrom } = require('./history');
 
 /**
  * Durable record of every session this app has ever run.
@@ -67,6 +68,45 @@ class Database {
       CREATE INDEX IF NOT EXISTS sessions_started  ON sessions (started_at DESC);
       CREATE INDEX IF NOT EXISTS sessions_profile  ON sessions (profile_id, started_at DESC);
       CREATE INDEX IF NOT EXISTS sessions_open     ON sessions (ended_at);
+
+      CREATE TABLE IF NOT EXISTS session_compactions (
+        session_id      TEXT NOT NULL,
+        at              INTEGER NOT NULL,
+        conversation_id TEXT,
+        trigger         TEXT,
+        pre_tokens      INTEGER NOT NULL DEFAULT 0,
+        post_tokens     INTEGER NOT NULL DEFAULT 0,
+        dropped_tokens  INTEGER NOT NULL DEFAULT 0,
+        duration_ms     INTEGER NOT NULL DEFAULT 0,
+        context_before  INTEGER NOT NULL DEFAULT 0,
+        requests_before INTEGER NOT NULL DEFAULT 0,
+        title           TEXT,
+        last_prompt     TEXT,
+        open_tasks      TEXT,
+        PRIMARY KEY (session_id, at)
+      );
+      CREATE INDEX IF NOT EXISTS session_compactions_session ON session_compactions (session_id, at DESC);
+
+      CREATE TABLE IF NOT EXISTS session_history (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id      TEXT NOT NULL,
+        conversation_id TEXT,
+        at              INTEGER NOT NULL,
+        requests        INTEGER NOT NULL DEFAULT 0,
+        context_last    INTEGER NOT NULL DEFAULT 0,
+        context_window  INTEGER NOT NULL DEFAULT 0,
+        context_peak    INTEGER NOT NULL DEFAULT 0,
+        output_tokens   INTEGER NOT NULL DEFAULT 0,
+        effective_input INTEGER NOT NULL DEFAULT 0,
+        compactions     INTEGER NOT NULL DEFAULT 0,
+        auto_compactions INTEGER NOT NULL DEFAULT 0,
+        latency_p50     INTEGER NOT NULL DEFAULT 0,
+        latency_p95     INTEGER NOT NULL DEFAULT 0,
+        errors          INTEGER NOT NULL DEFAULT 0,
+        worst           TEXT
+      );
+      CREATE INDEX IF NOT EXISTS session_history_session ON session_history (session_id, at DESC);
+      CREATE INDEX IF NOT EXISTS session_history_at ON session_history (at DESC);
 
       CREATE TABLE IF NOT EXISTS session_briefs (
         session_id  TEXT PRIMARY KEY,
@@ -710,6 +750,132 @@ class Database {
       );
   }
 
+  /**
+   * Keep a sample of how a session was doing, if this one is worth keeping.
+   *
+   * `session_stats` answers "how is it now" and is overwritten; this answers "how
+   * has it been", which is the only way to compare anything. The two are separate
+   * because they are asked at completely different rates and the first would be
+   * useless as a log.
+   *
+   * Not every sweep: a session read three times a minute for a week is a quarter
+   * of a million rows that all say the same thing. A sample is kept when the
+   * conversation changed, when the verdict changed, or when enough time has
+   * passed — which is `worthSampling` below, kept pure so the rule can be
+   * argued with in a test rather than in production.
+   */
+  noteHistory(sessionId, verdict, conversationId = null) {
+    const last = this.db
+      .prepare('SELECT at, worst, conversation_id FROM session_history WHERE session_id = ? ORDER BY at DESC LIMIT 1')
+      .get(sessionId);
+    if (!worthSampling(last, { worst: verdict.findings[0]?.severity ?? null, conversationId }, Date.now())) return false;
+
+    const auto = verdict.compactions.filter((c) => c.trigger === 'auto');
+    this.db
+      .prepare(
+        `INSERT INTO session_history
+           (session_id, conversation_id, at, requests, context_last, context_window, context_peak,
+            output_tokens, effective_input, compactions, auto_compactions, latency_p50, latency_p95, errors, worst)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        sessionId,
+        conversationId ?? null,
+        Date.now(),
+        verdict.requests,
+        verdict.context.last,
+        verdict.context.window,
+        verdict.context.peak,
+        verdict.totals.output,
+        verdict.effectiveInput,
+        verdict.compactions.length,
+        auto.length,
+        verdict.latency.p50,
+        verdict.latency.p95,
+        verdict.errors.length,
+        verdict.findings[0]?.severity ?? null,
+      );
+    return true;
+  }
+
+  /**
+   * Keep what a compaction threw away, as it stood just before it happened.
+   *
+   * A compaction is the one thing in a session's life that removes rather than
+   * adds, and the transcript afterwards has no memory of what was there — that
+   * is the point of it. The pre/post token counts survive in the metadata, but
+   * *what it was doing* does not, and that is the part somebody actually wants
+   * when they ask what was lost.
+   *
+   * Written once. `OR IGNORE` on (session, when) because the transcript is read
+   * again on every sweep and every read sees the same compactions.
+   */
+  noteCompaction(sessionId, entry, before = null, conversationId = null) {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO session_compactions
+           (session_id, at, conversation_id, trigger, pre_tokens, post_tokens, dropped_tokens,
+            duration_ms, context_before, requests_before, title, last_prompt, open_tasks)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        sessionId,
+        entry.at ?? 0,
+        conversationId ?? null,
+        entry.trigger ?? null,
+        entry.preTokens ?? 0,
+        entry.postTokens ?? 0,
+        entry.droppedTokens ?? 0,
+        entry.durationMs ?? 0,
+        entry.contextBefore ?? 0,
+        entry.requestsBefore ?? 0,
+        before?.title ?? null,
+        before?.lastPrompt ?? null,
+        JSON.stringify(before?.open ?? []),
+      );
+  }
+
+  /** When this session has compacted, so the same one is not written twice. */
+  compactionTimes(sessionId) {
+    return this.db
+      .prepare('SELECT at FROM session_compactions WHERE session_id = ?')
+      .all(sessionId)
+      .map((row) => row.at);
+  }
+
+  /** Every compaction of a session, oldest first, with what it was doing at the time. */
+  compactions(sessionId) {
+    return this.db
+      .prepare('SELECT * FROM session_compactions WHERE session_id = ? ORDER BY at ASC')
+      .all(sessionId)
+      .map((row) => ({ ...row, open_tasks: parseTasks(row.open_tasks) }));
+  }
+
+  /** How one session has been doing over time, oldest first — the shape of a chart. */
+  history(sessionId, limit = 400) {
+    return this.db
+      .prepare('SELECT * FROM session_history WHERE session_id = ? ORDER BY at DESC LIMIT ?')
+      .all(sessionId, limit)
+      .reverse();
+  }
+
+  /**
+   * What normal looks like across everything measured.
+   *
+   * Medians rather than averages: one session that ran for a week at nine
+   * hundred thousand tokens would drag every average with it and make the rest
+   * look fine by comparison, which is the opposite of useful.
+   */
+  norms() {
+    const rows = this.db
+      .prepare(
+        `SELECT context_last, context_window, effective_input, output_tokens, requests, auto_compactions
+           FROM session_stats WHERE requests > 0`,
+      )
+      .all();
+    return normsFrom(rows);
+  }
+
   /** What was last known about a session, in the shape the brief was built in. */
   getBrief(sessionId) {
     const row = this.db.prepare('SELECT * FROM session_briefs WHERE session_id = ?').get(sessionId);
@@ -1031,6 +1197,8 @@ class Database {
     this.db.prepare('DELETE FROM session_messages WHERE from_session = ? OR to_session = ?').run(id, id);
     this.db.prepare('DELETE FROM session_stats WHERE session_id = ?').run(id);
     this.db.prepare('DELETE FROM session_briefs WHERE session_id = ?').run(id);
+    this.db.prepare('DELETE FROM session_history WHERE session_id = ?').run(id);
+    this.db.prepare('DELETE FROM session_compactions WHERE session_id = ?').run(id);
     this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
   }
 
@@ -1060,6 +1228,8 @@ class Database {
       { name: 'sessions', rows: count('SELECT COUNT(*) AS n FROM sessions'), bytes: null },
       { name: 'session_messages', rows: count('SELECT COUNT(*) AS n FROM session_messages'),
         bytes: this.db.prepare('SELECT COALESCE(SUM(LENGTH(body)), 0) AS n FROM session_messages').get().n },
+      { name: 'session_history', rows: count('SELECT COUNT(*) AS n FROM session_history'), bytes: null },
+      { name: 'session_compactions', rows: count('SELECT COUNT(*) AS n FROM session_compactions'), bytes: null },
       { name: 'session_stats', rows: count('SELECT COUNT(*) AS n FROM session_stats'), bytes: null },
       { name: 'session_briefs', rows: count('SELECT COUNT(*) AS n FROM session_briefs'), bytes: null },
       { name: 'handoffs', rows: count('SELECT COUNT(*) AS n FROM handoffs'), bytes: null },
@@ -1071,6 +1241,7 @@ class Database {
       chunks: count('SELECT COUNT(*) AS n FROM transcript_chunks WHERE session_id NOT IN (SELECT id FROM sessions)'),
       stats: count('SELECT COUNT(*) AS n FROM session_stats WHERE session_id NOT IN (SELECT id FROM sessions)'),
       briefs: count('SELECT COUNT(*) AS n FROM session_briefs WHERE session_id NOT IN (SELECT id FROM sessions)'),
+      history: count('SELECT COUNT(*) AS n FROM session_history WHERE session_id NOT IN (SELECT id FROM sessions)'),
       messages: count(
         `SELECT COUNT(*) AS n FROM session_messages
           WHERE to_session NOT IN (SELECT id FROM sessions)`,
@@ -1118,7 +1289,7 @@ class Database {
    * side effect of looking: deleting somebody's history because a panel was
    * opened would be indefensible, however old the history.
    */
-  maintain({ orphans = false, olderThanDays = null, transcriptsOlderThanDays = null, reclaim = false } = {}) {
+  maintain({ orphans = false, olderThanDays = null, transcriptsOlderThanDays = null, historyOlderThanDays = null, reclaim = false } = {}) {
     const before = this.health();
     const done = [];
 
@@ -1127,7 +1298,8 @@ class Database {
         this.db.prepare('DELETE FROM transcript_chunks WHERE session_id NOT IN (SELECT id FROM sessions)').run().changes +
         this.db.prepare('DELETE FROM session_stats WHERE session_id NOT IN (SELECT id FROM sessions)').run().changes +
         this.db.prepare('DELETE FROM session_briefs WHERE session_id NOT IN (SELECT id FROM sessions)').run().changes +
-        this.db.prepare('DELETE FROM session_messages WHERE to_session NOT IN (SELECT id FROM sessions)').run().changes;
+        this.db.prepare('DELETE FROM session_messages WHERE to_session NOT IN (SELECT id FROM sessions)').run().changes +
+        this.db.prepare('DELETE FROM session_history WHERE session_id NOT IN (SELECT id FROM sessions)').run().changes;
       done.push({ op: 'orphans', rows: gone });
     }
 
@@ -1141,6 +1313,14 @@ class Database {
         .map((row) => row.id);
       for (const id of ids) this.forgetTranscript(id);
       done.push({ op: 'transcripts', rows: ids.length });
+    }
+
+    // Old readings, keeping the sessions themselves. A year of history is worth
+    // having; three is a chart nobody scrolls to the start of.
+    if (Number.isFinite(historyOlderThanDays)) {
+      const cutoff = Date.now() - historyOlderThanDays * 86400000;
+      const gone = this.db.prepare('DELETE FROM session_history WHERE at < ?').run(cutoff).changes;
+      done.push({ op: 'history', rows: gone });
     }
 
     if (Number.isFinite(olderThanDays)) {

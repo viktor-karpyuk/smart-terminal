@@ -121,7 +121,9 @@ function measure(rows) {
   let model = null;
   let turnsAbove = 0;
 
+  let index = -1;
   for (const row of rows) {
+    index += 1;
     if (!row || typeof row !== 'object') continue;
     const at = Date.parse(row.timestamp) || null;
     if (at) {
@@ -133,6 +135,11 @@ function measure(rows) {
       const meta = row.compactMetadata;
       compactions.push({
         at,
+        // Where it happened in the file, so the state just before it can be
+        // reconstructed exactly rather than guessed at afterwards.
+        index,
+        contextBefore: samples.length ? samples[samples.length - 1].context : 0,
+        requestsBefore: samples.length,
         trigger: meta.trigger ?? 'unknown',
         preTokens: num(meta.preTokens),
         postTokens: num(meta.postTokens),
@@ -328,15 +335,23 @@ function findingsFor(m) {
   const out = [];
   const { context } = m;
 
+  // Two different things, and saying them in the same tense was wrong: a session
+  // that spent all morning against the ceiling and has since compacted is not
+  // "running near the top" any more, however much of its history was.
+  const nowShare = context.window ? context.last / context.window : 0;
   if (context.turnsAbove >= 3) {
-    const share = Math.round(context.share * 100);
+    const spent = Math.round(context.share * 100);
+    const heavyNow = nowShare >= HIGH_CONTEXT_SHARE;
     out.push({
       id: 'high-context',
-      severity: context.share > 0.5 ? 'high' : 'medium',
-      title: 'Running near the top of the window',
-      detail: `${context.turnsAbove} of ${m.requests} requests were above ${Math.round(HIGH_CONTEXT_SHARE * 100)}% of the ${thousands(context.window)} window — ${share}% of the session. Peak ${thousands(context.peak)}.`,
-      suggestion:
-        'Compact at a point you choose — the end of a task, before starting the next — rather than waiting for it to happen mid-step. A finished piece of work is also a good place to hand over to a fresh session.',
+      severity: heavyNow ? (context.share > 0.5 ? 'high' : 'medium') : 'low',
+      title: heavyNow ? 'Running near the top of the window' : 'Spent much of its life near the top',
+      detail: heavyNow
+        ? `At ${Math.round(nowShare * 100)}% of the ${thousands(context.window)} window now, and above ${Math.round(HIGH_CONTEXT_SHARE * 100)}% for ${context.turnsAbove} of ${m.requests} requests — ${spent}% of the session. Peak ${thousands(context.peak)}.`
+        : `Down to ${Math.round(nowShare * 100)}% now, but ${context.turnsAbove} of ${m.requests} requests ran above ${Math.round(HIGH_CONTEXT_SHARE * 100)}% of the window. Peak ${thousands(context.peak)}.`,
+      suggestion: heavyNow
+        ? 'Compact at a point you choose — the end of a task, before starting the next — rather than waiting for it to happen mid-step. A finished piece of work is also a good place to hand over to a fresh session.'
+        : 'Nothing to do right now. Worth knowing because it will climb back, and the descent was probably a compaction choosing what to forget.',
     });
   }
 
@@ -443,7 +458,8 @@ function findingsFor(m) {
 /** The whole verdict for one session's transcript rows. */
 function analyze(rows) {
   const metrics = measure(Array.isArray(rows) ? rows : []);
-  return { ...metrics, findings: findingsFor(metrics) };
+  const verdict = { ...metrics, findings: findingsFor(metrics) };
+  return { ...verdict, quality: quality(verdict) };
 }
 
 /**
@@ -509,6 +525,77 @@ function oneLine(verdict, name) {
   );
 }
 
+/**
+ * How well this session is being used, as one number.
+ *
+ * The findings say what is wrong. This says how much it matters, which is a
+ * different question and the one usually being asked — nobody reads seven
+ * findings to decide whether to keep going.
+ *
+ * Built out of named penalties rather than a formula, so the number can always
+ * be justified: every point off has a sentence attached, and the sentences are
+ * what is shown. A score with no account of itself is a horoscope.
+ *
+ * It measures *use*, not the work: a session can be doing excellent work badly,
+ * carrying nine hundred thousand tokens to write a line of CSS, and that is
+ * exactly what this is meant to notice.
+ */
+function quality(verdict) {
+  if (!verdict || !verdict.requests) return null;
+  const reasons = [];
+  const context = verdict.context;
+
+  const share = context.window ? context.last / context.window : 0;
+  if (share >= 0.85) reasons.push({ cost: 30, label: `Running at ${Math.round(share * 100)}% of the window` });
+  else if (share >= 0.6) reasons.push({ cost: 15, label: `Past ${Math.round(share * 100)}% of the window` });
+
+  const auto = verdict.compactions.filter((c) => c.trigger === 'auto').length;
+  if (auto) reasons.push({ cost: Math.min(30, 15 * auto), label: `Compacted itself ${auto} time${auto === 1 ? '' : 's'}` });
+
+  if (verdict.reprimes.count >= 2) {
+    reasons.push({
+      cost: Math.min(12, 3 * verdict.reprimes.count),
+      label: `Paid for ${thousands(verdict.reprimes.tokens)} of context twice`,
+    });
+  }
+
+  const flood = verdict.tools.find((t) => t.calls && t.bytes / t.calls > FLOOD_BYTES);
+  if (flood) reasons.push({ cost: 10, label: `${flood.name} is filling the context` });
+
+  const repeats = verdict.repeated[0];
+  if (repeats && repeats.times >= 4) {
+    reasons.push({ cost: 6, label: `The same ${repeats.tool} call ${repeats.times} times` });
+  }
+
+  // What it produces for what it reads. Only meaningful once a session has run
+  // long enough to have a shape; before that it is noise about a warm-up.
+  if (verdict.requests >= 20 && verdict.totals.output > 0) {
+    const perOutput = verdict.effectiveInput / verdict.totals.output;
+    if (perOutput > 300) reasons.push({ cost: 15, label: `${Math.round(perOutput)} tokens read for every one written` });
+    else if (perOutput > 150) reasons.push({ cost: 8, label: `${Math.round(perOutput)} tokens read for every one written` });
+  }
+
+  if (verdict.errors.length >= 3) reasons.push({ cost: 5, label: `${verdict.errors.length} failed requests` });
+
+  const score = Math.max(0, 100 - reasons.reduce((sum, reason) => sum + reason.cost, 0));
+  reasons.sort((a, b) => b.cost - a.cost);
+  return { score, grade: gradeFor(score), reasons };
+}
+
+/**
+ * Four words, not a hundred numbers.
+ *
+ * The boundaries are where the advice changes, not where the arithmetic is
+ * tidy: below 50 the thing to do is start something fresh, and above 85 there is
+ * nothing to do at all.
+ */
+function gradeFor(score) {
+  if (score >= 85) return 'healthy';
+  if (score >= 65) return 'fine';
+  if (score >= 50) return 'strained';
+  return 'struggling';
+}
+
 /** Highest severity present, or null — what a badge on a tab needs to know. */
 function worstSeverity(findings = []) {
   for (const level of ['high', 'medium', 'low']) {
@@ -564,6 +651,8 @@ module.exports = {
   readRows,
   summarise,
   oneLine,
+  quality,
+  gradeFor,
   measure,
   findingsFor,
   worstSeverity,

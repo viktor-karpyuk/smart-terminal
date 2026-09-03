@@ -317,3 +317,59 @@ test('a request with no input at all is not counted as an empty context', () => 
   assert.equal(verdict.requests, 2);
   assert.equal(verdict.context.last, 420002, 'the last real reading, not the empty one');
 });
+
+test('a session that has come down from the ceiling is not still called high', () => {
+  const rows = [];
+  for (let i = 0; i < 10; i += 1) rows.push(request(i, { read: 900000 }));
+  // A compaction, then life at a tenth of the window.
+  rows.push({
+    type: 'system',
+    timestamp: at(11),
+    compactMetadata: { trigger: 'auto', preTokens: 900000, postTokens: 60000, cumulativeDroppedTokens: 840000, durationMs: 90000 },
+  });
+  for (let i = 12; i < 18; i += 1) rows.push(request(i, { read: 60000 }));
+
+  const verdict = analyze(rows);
+  const finding = verdict.findings.find((f) => f.id === 'high-context');
+  assert.ok(finding);
+  assert.equal(finding.severity, 'low', 'it is history now, not a problem now');
+  assert.match(finding.title, /Spent much of its life/);
+  assert.match(finding.detail, /Down to 6% now/);
+});
+
+test('a session still at the ceiling is called high, in the present tense', () => {
+  const rows = [];
+  for (let i = 0; i < 10; i += 1) rows.push(request(i, { read: 900000 }));
+  const finding = analyze(rows).findings.find((f) => f.id === 'high-context');
+  assert.match(finding.title, /Running near the top/);
+  assert.match(finding.detail, /at 90% of the 1.0M window now/i);
+});
+
+test('quality is a score with its reasons attached', () => {
+  const rows = [];
+  for (let i = 0; i < 10; i += 1) rows.push(request(i, { read: 950000 }));
+  rows.push({
+    type: 'system',
+    timestamp: at(11),
+    compactMetadata: { trigger: 'auto', preTokens: 950000, postTokens: 20000, cumulativeDroppedTokens: 930000, durationMs: 60000 },
+  });
+  const { quality } = analyze(rows);
+  assert.ok(quality.score < 70, `expected a low score, got ${quality.score}`);
+  assert.ok(quality.reasons.length >= 2);
+  assert.ok(quality.reasons.every((r) => r.cost > 0 && r.label), 'every point off is accounted for');
+  // Sorted worst first, so the first line is the thing to fix.
+  assert.ok(quality.reasons[0].cost >= quality.reasons[quality.reasons.length - 1].cost);
+});
+
+test('a tidy session scores well and has nothing to explain', () => {
+  const rows = [];
+  for (let i = 0; i < 25; i += 1) rows.push(request(i, { read: 30000, output: 900 }));
+  const { quality } = analyze(rows);
+  assert.equal(quality.score, 100);
+  assert.equal(quality.grade, 'healthy');
+  assert.deepEqual(quality.reasons, []);
+});
+
+test('a session with nothing in it has no score to give', () => {
+  assert.equal(analyze([]).quality, null);
+});

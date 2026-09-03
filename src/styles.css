@@ -2546,3 +2546,87 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 /* A folder in the dock: no account, nothing running, so it wears less. */
 .dock-item.is-panel { opacity: 0.9; }
 .dock-item.is-panel .dock-name { font-style: normal; }
+
+/* One session against the middle of the others. */
+.monitor-compare { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+.monitor-compare-row {
+  display: grid;
+  grid-template-columns: 110px auto 1fr auto;
+  align-items: baseline;
+  gap: 9px;
+  font-size: 11.5px;
+}
+.monitor-compare-label { color: var(--text-dim); }
+.monitor-compare-row strong { font-size: 12.5px; font-weight: 550; }
+.monitor-compare-typical { color: var(--text-dim); font-size: 11px; }
+.monitor-compare-word { font-size: 10.5px; white-space: nowrap; }
+.monitor-compare-word.is-ok { color: var(--text-dim); }
+.monitor-compare-word.is-warm { color: #e0af68; }
+.monitor-compare-word.is-high { color: var(--danger); }
+
+/* A session's health in the sidebar: the same reading, where you already look. */
+.monitor-item { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 7px; }
+.monitor-item .monitor-bar { width: 34px; }
+.monitor-item-pct { font-size: 10.5px; color: var(--text-dim); min-width: 26px; text-align: right; }
+
+/* The session's own grade, with every point off accounted for beside it. */
+.monitor-quality {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--ok);
+  border-radius: 7px;
+  background: var(--bg-input);
+}
+
+.monitor-quality.is-fine { border-left-color: var(--accent); }
+.monitor-quality.is-strained { border-left-color: #e0af68; }
+.monitor-quality.is-struggling { border-left-color: var(--danger); }
+
+.monitor-quality-mark { display: flex; flex-direction: column; align-items: center; min-width: 62px; }
+.monitor-quality-mark strong { font-size: 26px; font-weight: 550; line-height: 1.1; }
+.monitor-quality-mark span { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim); }
+.monitor-quality-why { display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; }
+.monitor-quality-why p { margin: 0; color: var(--text-dim); }
+.monitor-quality-why em { font-style: normal; color: var(--danger); font-size: 11px; margin-right: 3px; }
+
+/* Before, after, and where it stands now. */
+.monitor-compactions { display: flex; flex-direction: column; gap: 5px; }
+.monitor-compaction-row {
+  display: grid;
+  grid-template-columns: 118px 132px 1fr;
+  gap: 9px;
+  align-items: baseline;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  font-size: 11.5px;
+}
+
+.monitor-compaction-row.is-auto { border-left: 2px solid #bb9af7; }
+.monitor-compaction-row.is-now { border-left: 2px solid var(--accent); }
+.monitor-compaction-when { color: var(--text-dim); font-size: 11px; }
+.monitor-compaction-move { display: inline-flex; align-items: baseline; gap: 6px; }
+.monitor-compaction-move strong { font-weight: 550; }
+.monitor-compaction-move i { font-style: normal; color: var(--text-dim); }
+.monitor-compaction-note { color: var(--text-dim); }
+
+.monitor-losing {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px dashed var(--border);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.monitor-losing-title { color: var(--text); }
+.monitor-losing-prompt { font-style: italic; }
+.monitor-losing-tasks { opacity: 0.85; }

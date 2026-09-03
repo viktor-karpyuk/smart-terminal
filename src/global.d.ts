@@ -318,6 +318,53 @@ export interface SessionBrief {
   text: string | null;
 }
 
+/** One reading kept from the past, so the present has something to be compared to. */
+export interface HistorySample {
+  id: number;
+  session_id: string;
+  conversation_id: string | null;
+  at: number;
+  requests: number;
+  context_last: number;
+  context_window: number;
+  context_peak: number;
+  output_tokens: number;
+  effective_input: number;
+  compactions: number;
+  auto_compactions: number;
+  latency_p50: number;
+  latency_p95: number;
+  errors: number;
+  worst: 'high' | 'medium' | 'low' | null;
+}
+
+/** A compaction, kept with what the session was doing just before it. */
+export interface CompactionRecord {
+  session_id: string;
+  at: number;
+  conversation_id: string | null;
+  trigger: string | null;
+  pre_tokens: number;
+  post_tokens: number;
+  dropped_tokens: number;
+  duration_ms: number;
+  context_before: number;
+  requests_before: number;
+  title: string | null;
+  last_prompt: string | null;
+  open_tasks: Array<{ id: string; subject: string; status: string }>;
+}
+
+/** What a typical session looks like, as medians across everything measured. */
+export interface Norms {
+  sessions: number;
+  contextShare: number;
+  effectiveInput: number;
+  output: number;
+  requests: number;
+  autoCompactions: number;
+}
+
 /** How the database is doing: what it weighs, what of that is empty, what is rot. */
 export interface DbHealth {
   pageSize: number;
@@ -326,7 +373,7 @@ export interface DbHealth {
   pages: number;
   freePages: number;
   tables: Array<{ name: string; rows: number; bytes: number | null }>;
-  orphans: { chunks: number; stats: number; briefs: number; messages: number };
+  orphans: { chunks: number; stats: number; briefs: number; messages: number; history: number };
   sessions: {
     total: number;
     open: number;
@@ -452,12 +499,19 @@ declare global {
         adviceHeld(sessionId: string): Promise<Advice | null>;
         tell(sessionId: string, text: string): Promise<{ ok: boolean; detail?: string; error?: string }>;
         brief(sessionId: string): Promise<SessionBrief | null>;
+        forget(sessionId: string): void;
+        history(sessionId: string): Promise<{
+          samples: HistorySample[];
+          norms: Norms | null;
+          compactions: CompactionRecord[];
+        }>;
         handOver(sessionId: string, text: string): Promise<{ ok: boolean; delivered?: boolean; error?: string }>;
         dbHealth(deep?: boolean): Promise<DbHealth>;
         dbMaintain(options: {
           orphans?: boolean;
           olderThanDays?: number | null;
           transcriptsOlderThanDays?: number | null;
+          historyOlderThanDays?: number | null;
           reclaim?: boolean;
         }): Promise<{ done: Array<{ op: string; rows: number }>; freed: number; after: DbHealth }>;
         onChanged(fn: (payload: { sessionId: string; verdict: SessionAnalysis }) => void): () => void;

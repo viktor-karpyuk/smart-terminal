@@ -353,6 +353,8 @@ export interface Settings {
    */
   sidebarShowSessions: boolean;
   sidebarShowFolders: boolean;
+  /** The fleet's health, as a list beside the other two. */
+  sidebarShowMonitor: boolean;
   /**
    * Folded away rather than closed. Two different acts: collapsing keeps the
    * heading, so you can see the count and open it again without remembering it
@@ -360,8 +362,9 @@ export interface Settings {
    */
   sidebarSessionsCollapsed: boolean;
   sidebarFoldersCollapsed: boolean;
+  sidebarMonitorCollapsed: boolean;
   /** Which of the sidebar's lists comes first. Dragging a heading changes it. */
-  sidebarOrder: Array<'sessions' | 'folders'>;
+  sidebarOrder: Array<'sessions' | 'folders' | 'monitor'>;
   /**
    * How the vertical room is split between the open lists, as shares of the
    * whole. Proportional rather than in pixels, so resizing the window keeps the
@@ -442,6 +445,12 @@ export interface SessionAnalysis {
   latency: { turns: number; p50: number; p95: number; totalMs: number };
   /** Where it is heading at the rate it has been going, or null if it is flat. */
   projection: { requests: number; ms: number; perRequest: number } | null;
+  /** How well the session is being used, with every point off accounted for. */
+  quality: {
+    score: number;
+    grade: 'healthy' | 'fine' | 'strained' | 'struggling';
+    reasons: Array<{ cost: number; label: string }>;
+  } | null;
   compactions: Array<{
     at: number | null;
     trigger: string;
