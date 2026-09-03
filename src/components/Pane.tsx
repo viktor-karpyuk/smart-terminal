@@ -361,18 +361,26 @@ function EmptyPane({ leafId }: { leafId: string }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const newSession = useStore((s) => s.newSession);
+  const openFilePanel = useStore((s) => s.openFilePanel);
   const closeThisPane = useStore((s) => s.closePane);
   const onlyPane = useStore((s) => allLeaves(s.layout).length === 1);
 
   return (
     <div className="empty-pane">
       <p>Nothing here yet.</p>
+      <p className="form-hint">A section can hold a terminal, or a folder and its files.</p>
       <div className="empty-pane-actions">
         <button className="primary-btn" onClick={() => newSession({ leafId, kind: 'claude' })}>
           Start a session
         </button>
         <button ref={buttonRef} className="ghost-btn" onClick={() => setOpen((o) => !o)}>
           as…
+        </button>
+        {/* The other thing a section can hold. It is offered here rather than
+            only in the ⌄ menu, because an empty pane is exactly the moment
+            someone is deciding what this section is for. */}
+        <button className="ghost-btn" onClick={() => openFilePanel({ leafId })}>
+          Open a folder
         </button>
         {!onlyPane && (
           <button className="ghost-btn" onClick={() => closeThisPane(leafId)}>
