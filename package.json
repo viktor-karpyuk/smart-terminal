@@ -1,7 +1,7 @@
 {
   "name": "smart-terminal",
   "productName": "Smart Terminal",
-  "version": "0.2.0-rc.1",
+  "version": "0.2.0-rc.2",
   "description": "A VS Code-style workbench for running many Claude Code sessions at once, each on a different Claude account.",
   "main": "electron/main.js",
   "author": "Viktor Karpyuk",
