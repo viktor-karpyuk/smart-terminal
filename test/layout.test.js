@@ -191,4 +191,105 @@ test('putting a tab in an empty pane makes it an ordinary pane', () => {
   assert.equal(shape(L.removeTab(filled, 'b')), 'a');
 });
 
+// --- minimizing a whole section, and putting it back -----------------------
+
+/*
+ * The place is remembered by a TAB in the neighbouring pane, never by a split id
+ * or an index: removing a pane rebuilds the tree above it, and a split with two
+ * children collapses into its survivor, so both of those are gone by the time
+ * anyone wants to undo it.
+ */
+test('a pane remembers which side of its neighbour it was on', () => {
+  let root = L.makeLeaf(['a']);
+  const r = L.splitLeaf(root, root.id, 'row', 'b');
+  const place = L.panePlace(r.root, r.leafId);
+  assert.equal(place.anchorTabId, 'a');
+  assert.equal(place.side, 'right');
+});
+
+test('the first pane of a split remembers it was on the left', () => {
+  let root = L.makeLeaf(['a']);
+  const r = L.splitLeaf(root, root.id, 'row', 'b');
+  const leafA = L.leafOfTab(r.root, 'a');
+  const place = L.panePlace(r.root, leafA.id);
+  assert.equal(place.anchorTabId, 'b');
+  assert.equal(place.side, 'left');
+});
+
+test('a stacked pane remembers top and bottom, not left and right', () => {
+  let root = L.makeLeaf(['a']);
+  const r = L.splitLeaf(root, root.id, 'column', 'b');
+  assert.equal(L.panePlace(r.root, r.leafId).side, 'bottom');
+});
+
+test('a section comes back exactly where it was', () => {
+  let root = L.makeLeaf(['a']);
+  let r = L.splitLeaf(root, root.id, 'row', 'b');
+  r = L.splitLeaf(r.root, r.leafId, 'row', 'c');
+  assert.equal(shape(r.root), 'H[a | b | c]');
+
+  const leafB = L.leafOfTab(r.root, 'b');
+  const place = L.panePlace(r.root, leafB.id);
+  const without = L.closePane(r.root, leafB.id);
+  assert.equal(shape(without), 'H[a | c]');
+
+  const back = L.restorePaneAt(without, ['b'], 'b', place, L.allLeaves(without)[0].id);
+  assert.equal(shape(back.root), 'H[a | b | c]', 'it goes back between a and c');
+});
+
+test('a section whose split collapsed still comes back beside its neighbour', () => {
+  let root = L.makeLeaf(['a']);
+  const r = L.splitLeaf(root, root.id, 'row', 'b');
+  const leafB = L.leafOfTab(r.root, 'b');
+  const place = L.panePlace(r.root, leafB.id);
+  // Removing it collapses the split entirely — there is no tree left to index into.
+  const without = L.closePane(r.root, leafB.id);
+  assert.equal(shape(without), 'a');
+
+  const back = L.restorePaneAt(without, ['b'], 'b', place, L.allLeaves(without)[0].id);
+  assert.equal(shape(back.root), 'H[a | b]');
+});
+
+test('a stacked section comes back stacked', () => {
+  let root = L.makeLeaf(['a']);
+  const r = L.splitLeaf(root, root.id, 'column', 'b');
+  const leafB = L.leafOfTab(r.root, 'b');
+  const place = L.panePlace(r.root, leafB.id);
+  const back = L.restorePaneAt(L.closePane(r.root, leafB.id), ['b'], 'b', place, L.allLeaves(L.closePane(r.root, leafB.id))[0].id);
+  assert.equal(shape(back.root), 'V[a | b]');
+});
+
+/*
+ * Its neighbour can be closed while it is away. Refusing to bring a section back
+ * because the pane it used to sit beside has gone would be the worst of both.
+ */
+test('a section whose anchor is gone still comes back, beside the fallback', () => {
+  const place = { anchorTabId: 'gone', side: 'right', share: 0.5 };
+  const root = L.makeLeaf(['a']);
+  const back = L.restorePaneAt(root, ['b'], 'b', place, root.id);
+  assert.equal(shape(back.root), 'H[a | b]');
+});
+
+test('a section carries all its tabs back, and which one was in front', () => {
+  const root = L.makeLeaf(['a']);
+  const place = L.panePlace(root, root.id);
+  const back = L.restorePaneAt(root, ['x', 'y', 'z'], 'y', place, root.id);
+  const leaf = L.leafOfTab(back.root, 'y');
+  assert.deepEqual(leaf.tabs, ['x', 'y', 'z']);
+  assert.equal(leaf.active, 'y');
+});
+
+test('a section comes back about the width it was', () => {
+  let root = L.makeLeaf(['a']);
+  const r = L.splitLeaf(root, root.id, 'row', 'b');
+  const leafB = L.leafOfTab(r.root, 'b');
+  const wide = L.setSizes(r.root, r.root.id, [0.25, 0.75]);
+  const place = L.panePlace(wide, leafB.id);
+  assert.ok(Math.abs(place.share - 0.75) < 0.01, 'its share is remembered');
+
+  const back = L.restorePaneAt(L.closePane(wide, leafB.id), ['b'], 'b', place, L.allLeaves(L.closePane(wide, leafB.id))[0].id);
+  const sizes = back.root.sizes;
+  assert.ok(Math.abs(sizes[1] - 0.75) < 0.05, `came back at ${sizes[1]}, wanted about 0.75`);
+});
+
 console.log(`\n${passed} passing`);

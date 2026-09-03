@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../state/store';
 import type { GitBranch, GitCommit, GitFile } from '../global';
+import { Popover } from './Popover';
 
 /**
  * Git, as a tab beside the files.
@@ -89,11 +90,15 @@ export function GitPanel({ panelId }: { panelId: string }) {
 function BranchBar({ panelId, root }: { panelId: string; root: string }) {
   const repo = useStore((s) => s.repos[root]);
   const gitDo = useStore((s) => s.gitDo);
-  const setGitView = useStore((s) => s.setGitView);
+  const chipRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
 
   return (
     <div className="git-branchbar">
-      <button className="git-branch" onClick={() => setGitView(panelId, 'branches')} title="Branches">
+      {open && (
+        <BranchMenu panelId={panelId} root={root} anchorEl={chipRef.current} onClose={() => setOpen(false)} />
+      )}
+      <button ref={chipRef} className="git-branch" onClick={() => setOpen((was) => !was)} title="Branches">
         <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="#e0af68" strokeWidth="1.3">
           <circle cx="3.6" cy="3.2" r="1.7" />
           <circle cx="3.6" cy="10.8" r="1.7" />
@@ -101,6 +106,7 @@ function BranchBar({ panelId, root }: { panelId: string; root: string }) {
           <path d="M3.6 4.9v4.2M5.2 3.9c2.6.4 3.8 1.3 4 2.3" />
         </svg>
         <span>{repo?.detached ? 'detached HEAD' : (repo?.branch ?? '…')}</span>
+        <span className="git-branch-caret">⌄</span>
       </button>
       {(repo?.ahead ?? 0) > 0 && <span className="git-ahead">↑{repo?.ahead}</span>}
       {(repo?.behind ?? 0) > 0 && <span className="git-behind">↓{repo?.behind}</span>}
@@ -127,6 +133,197 @@ function BranchBar({ panelId, root }: { panelId: string; root: string }) {
         Push
       </button>
     </div>
+  );
+}
+
+/**
+ * Every branch, and everything that can be done to one, off the branch chip.
+ *
+ * A branch is picked first and its actions appear under it, rather than a flat
+ * list of verbs that each then ask which branch. And every verb names both
+ * sides — *Merge into main*, never a bare *Merge*: the direction is the whole
+ * decision, and getting it backwards is the mistake everyone makes once.
+ */
+function BranchMenu({
+  panelId,
+  root,
+  anchorEl,
+  onClose,
+}: {
+  panelId: string;
+  root: string;
+  anchorEl: HTMLElement | null;
+  onClose(): void;
+}) {
+  const repo = useStore((s) => s.repos[root]);
+  const gitDo = useStore((s) => s.gitDo);
+  const setGitView = useStore((s) => s.setGitView);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [naming, setNaming] = useState(false);
+
+  const current = repo?.current ?? null;
+  const run = (name: string, args: unknown, label: string) => {
+    onClose();
+    gitDo(root, name, args, label);
+  };
+
+  return (
+    <Popover anchorEl={anchorEl} onClose={onClose}>
+      <div className="popover-header">
+        <span>On {current ?? 'HEAD'}</span>
+        {((repo?.ahead ?? 0) > 0 || (repo?.behind ?? 0) > 0) && (
+          <span>
+            {(repo?.ahead ?? 0) > 0 && <em className="git-ahead">↑{repo?.ahead}</em>}{' '}
+            {(repo?.behind ?? 0) > 0 && <em className="git-behind">↓{repo?.behind}</em>}
+          </span>
+        )}
+      </div>
+
+      <button className="menu-item" onClick={() => run('pull', {}, 'Updating')}>
+        <span>Update from origin</span>
+        <kbd>{(repo?.behind ?? 0) > 0 ? `pull ↓${repo?.behind}` : 'pull'}</kbd>
+      </button>
+      <button
+        className="menu-item"
+        onClick={() => run('push', repo?.upstream ? {} : { setUpstream: repo?.branch }, 'Pushing')}
+      >
+        <span>Push</span>
+        <kbd>{repo?.upstream ? `↑${repo?.ahead ?? 0} commits` : 'and set the upstream'}</kbd>
+      </button>
+      <button className="menu-item" onClick={() => run('fetch', {}, 'Fetching')}>
+        <span>Fetch</span>
+        <kbd>every remote</kbd>
+      </button>
+
+      <div className="menu-separator" />
+      {naming ? (
+        <label className="field">
+          <span>New branch from {current ?? 'HEAD'}</span>
+          <input
+            autoFocus
+            placeholder="fix/something"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') setNaming(false);
+              if (event.key !== 'Enter') return;
+              const name = (event.target as HTMLInputElement).value.trim();
+              if (name) run('createBranch', { name }, `Creating ${name}`);
+              else setNaming(false);
+            }}
+          />
+        </label>
+      ) : (
+        <button className="menu-item" onClick={() => setNaming(true)}>
+          <span>New branch…</span>
+          <kbd>from here</kbd>
+        </button>
+      )}
+
+      <div className="menu-label">Local</div>
+      {repo?.local.map((branch) => (
+        <div key={branch.name}>
+          <button
+            className={`menu-item${branch.name === current ? ' menu-check is-on' : ''}`}
+            onClick={() => setExpanded(expanded === branch.name ? null : branch.name)}
+          >
+            <span>
+              {branch.name === current && <i className="check">✓</i>} {branch.name}
+            </span>
+            <kbd>
+              {branch.gone
+                ? 'gone'
+                : !branch.upstream
+                  ? 'no remote'
+                  : branch.ahead || branch.behind
+                    ? `${branch.ahead ? `↑${branch.ahead}` : ''}${branch.behind ? ` ↓${branch.behind}` : ''}`.trim()
+                    : 'up to date'}
+            </kbd>
+          </button>
+          {expanded === branch.name && (
+            <div className="branch-actions">
+              {branch.name !== current && (
+                <button className="menu-item" onClick={() => run('checkout', { ref: branch.name }, `Checking out ${branch.name}`)}>
+                  <span>Check it out</span>
+                </button>
+              )}
+              {branch.name !== current && (
+                <button
+                  className="menu-item"
+                  onClick={() => run('merge', { ref: branch.name }, `Merging ${branch.name} into ${current}`)}
+                >
+                  <span>Merge into <em>{current}</em></span>
+                </button>
+              )}
+              {branch.name !== current && (
+                <button
+                  className="menu-item"
+                  onClick={() => run('rebase', { ref: branch.name }, `Rebasing ${current} onto ${branch.name}`)}
+                >
+                  <span>Rebase <em>{current}</em> onto it</span>
+                </button>
+              )}
+              <button
+                className="menu-item"
+                onClick={() => {
+                  const next = window.prompt(`Rename ${branch.name} to`, branch.name);
+                  if (next && next !== branch.name) run('renameBranch', { from: branch.name, to: next }, `Renaming ${branch.name}`);
+                }}
+              >
+                <span>Rename…</span>
+              </button>
+              <button
+                className="menu-item"
+                onClick={() => {
+                  onClose();
+                  useStore.getState().patchPanel(panelId, { selectedBranch: branch.name });
+                  setGitView(panelId, 'branches');
+                }}
+              >
+                <span>Compare with this one</span>
+              </button>
+              {branch.name !== current && (
+                <button
+                  className="menu-item is-danger"
+                  onClick={() => run('deleteBranch', { name: branch.name }, `Deleting ${branch.name}`)}
+                >
+                  <span>Delete</span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+
+      {(repo?.remote.length ?? 0) > 0 && <div className="menu-label">Remote</div>}
+      {repo?.remote.slice(0, 12).map((branch) => {
+        const local = branch.name.replace(/^[^/]+\//, '');
+        const haveIt = repo?.local.some((entry) => entry.name === local);
+        return (
+          <button
+            key={branch.name}
+            className="menu-item"
+            disabled={haveIt}
+            onClick={() =>
+              !haveIt && run('trackRemote', { remote: branch.name, local }, `Checking out ${local}`)
+            }
+          >
+            <span>{branch.name}</span>
+            <kbd>{haveIt ? 'already local' : `check out as ${local}`}</kbd>
+          </button>
+        );
+      })}
+
+      {(repo?.stashes.length ?? 0) > 0 && <div className="menu-label">Stashes</div>}
+      {repo?.stashes.map((stash) => (
+        <button
+          key={stash.ref}
+          className="menu-item"
+          onClick={() => run('stashPop', { ref: stash.ref }, 'Restoring the stash')}
+        >
+          <span>{stash.subject}</span>
+          <kbd>put it back</kbd>
+        </button>
+      ))}
+    </Popover>
   );
 }
 
@@ -527,6 +724,48 @@ function Patch({ text }: { text: string }) {
   );
 }
 
+/**
+ * Making a branch, from wherever you are.
+ *
+ * It branches from the current one and checks it out, which is what `git
+ * checkout -b` does and what anyone typing "new branch" means. The name is not
+ * validated here — git's own refusal says exactly what is wrong with it, and
+ * would say it better than a regex.
+ */
+function NewBranch({ root, from }: { root: string; from: string | null }) {
+  const [naming, setNaming] = useState(false);
+  const gitDo = useStore((s) => s.gitDo);
+
+  if (!naming) {
+    return (
+      <div className="git-newbranch">
+        <button className="ghost-btn" onClick={() => setNaming(true)}>
+          + New branch
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="git-newbranch">
+      <input
+        autoFocus
+        placeholder="fix/something"
+        onBlur={() => setNaming(false)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') setNaming(false);
+          if (event.key !== 'Enter') return;
+          const name = (event.target as HTMLInputElement).value.trim();
+          if (!name) return setNaming(false);
+          setNaming(false);
+          gitDo(root, 'createBranch', { name }, `Creating ${name}`);
+        }}
+      />
+      <span className="form-hint">from {from ?? 'HEAD'} · ↵ to make it</span>
+    </div>
+  );
+}
+
 // --- History ---------------------------------------------------------------
 
 /** One row of the graph is one commit, so both use the same height. */
@@ -708,6 +947,7 @@ function Branches({ panelId }: { panelId: string }) {
   return (
     <div className="git-branches">
       <div className="git-reflist">
+        <NewBranch root={root} from={current} />
         <div className="git-caption">Local · {repo?.local.length ?? 0}</div>
         {repo?.local.map((branch) => (
           <div
@@ -725,12 +965,29 @@ function Branches({ panelId }: { panelId: string }) {
         ))}
 
         <div className="git-caption">Remote · {repo?.remote.length ?? 0}</div>
-        {repo?.remote.map((branch) => (
-          <div key={branch.name} className="git-row is-quiet">
-            <span className="git-tick" />
-            <span className="git-file-name">{branch.name}</span>
-          </div>
-        ))}
+        {repo?.remote.map((branch) => {
+          // `origin/fix/x` becomes the local `fix/x`; a local branch of that name
+          // already existing means there is nothing to bring across.
+          const local = branch.name.replace(/^[^/]+\//, '');
+          const haveIt = repo?.local.some((entry) => entry.name === local);
+          return (
+            <div key={branch.name} className="git-row is-quiet">
+              <span className="git-tick" />
+              <span className="git-file-name">{branch.name}</span>
+              {!haveIt && (
+                <button
+                  className="link-btn"
+                  title={`Check it out as ${local}, tracking ${branch.name}`}
+                  onClick={() =>
+                    gitDo(root, 'trackRemote', { remote: branch.name, local }, `Checking out ${local}`)
+                  }
+                >
+                  Check out
+                </button>
+              )}
+            </div>
+          );
+        })}
 
         {(repo?.tags.length ?? 0) > 0 && <div className="git-caption">Tags · {repo?.tags.length}</div>}
         {repo?.tags.slice(0, 20).map((tag) => (
@@ -793,6 +1050,17 @@ function Branches({ panelId }: { panelId: string }) {
                 onClick={() => gitDo(root, 'rebase', { ref: picked.name }, `Rebasing ${current} onto ${picked.name}`)}
               >
                 Rebase {current} onto it
+              </button>
+              <button
+                className="ghost-btn"
+                onClick={() => {
+                  const next = window.prompt(`Rename ${picked.name} to`, picked.name);
+                  if (next && next !== picked.name) {
+                    gitDo(root, 'renameBranch', { from: picked.name, to: next }, `Renaming ${picked.name}`);
+                  }
+                }}
+              >
+                Rename
               </button>
               <button
                 className="ghost-btn is-danger"

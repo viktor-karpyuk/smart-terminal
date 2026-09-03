@@ -365,6 +365,14 @@ const fetch = (root) => run(root, ['fetch', '--prune']);
 const checkout = (root, ref) => run(root, ['checkout', ref]);
 const createBranch = (root, name, from) => run(root, ['checkout', '-b', name, ...(from ? [from] : [])]);
 const deleteBranch = (root, name, { force = false } = {}) => run(root, ['branch', force ? '-D' : '-d', name]);
+const renameBranch = (root, from, to) => run(root, ['branch', '-m', from, to]);
+/**
+ * Check out a remote branch as a local one that tracks it. `git checkout <name>`
+ * already does this when exactly one remote has that name, but saying it plainly
+ * means it also works when the local name is not the remote's last segment.
+ */
+const trackRemote = (root, remote, local) =>
+  run(root, ['checkout', '-b', local, '--track', remote]);
 const merge = (root, ref) => run(root, ['merge', '--no-edit', ref]);
 const rebase = (root, ref) => run(root, ['rebase', ref]);
 const abortMerge = (root) => run(root, ['merge', '--abort']);
@@ -391,6 +399,8 @@ module.exports = {
   fetch,
   checkout,
   createBranch,
+  renameBranch,
+  trackRemote,
   deleteBranch,
   merge,
   rebase,

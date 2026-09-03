@@ -451,3 +451,97 @@ export function keepOnly(node: LayoutNode, validTabs: Set<string>): LayoutNode {
   };
   return prune(filter(node));
 }
+
+
+/**
+ * Where a pane sits, described so it can be put back there later.
+ *
+ * Not by split id and index: removing a pane rebuilds the tree above it, and a
+ * split with two children collapses into its surviving child, so both of those
+ * are gone by the time anyone wants to undo it. What survives is a *tab* — a
+ * session or a panel keeps its id wherever the tree moves it — so the place is
+ * remembered as "the side of whichever pane holds this tab".
+ */
+export interface PanePlace {
+  /** A tab in the pane this one sat next to. */
+  anchorTabId: string | null;
+  side: Exclude<DropSide, 'center'> | null;
+  /** Its share of the split, so it comes back the width it was. */
+  share: number;
+}
+
+export function panePlace(root: LayoutNode, leafId: string): PanePlace {
+  const parent = parentOf(root, leafId);
+  if (!parent) return { anchorTabId: null, side: null, share: 1 };
+
+  const at = parent.children.findIndex((child) => child.id === leafId);
+  const share = parent.sizes[at] ?? 1 / parent.children.length;
+  // The neighbour on either side; the one before it is preferred, so a pane that
+  // was second comes back second rather than drifting to the front.
+  const before = at > 0 ? parent.children[at - 1] : null;
+  const after = at < parent.children.length - 1 ? parent.children[at + 1] : null;
+  const neighbour = before ?? after;
+  if (!neighbour) return { anchorTabId: null, side: null, share };
+
+  const anchorTabId = allTabs(neighbour)[0] ?? null;
+  const side = parent.direction === 'row'
+    ? (before ? 'right' : 'left')
+    : (before ? 'bottom' : 'top');
+  return { anchorTabId, side, share };
+}
+
+/**
+ * Put a pane back where `panePlace` said it was.
+ *
+ * When the anchor is gone — its tab closed while the pane was away — the pane
+ * still comes back, beside `fallbackLeafId`. Refusing to restore something
+ * because its neighbour left would be the worst of both.
+ */
+export function restorePaneAt(
+  root: LayoutNode,
+  tabs: string[],
+  active: string | null,
+  place: PanePlace,
+  fallbackLeafId: string,
+): { root: LayoutNode; leafId: string } {
+  const restored: LeafNode = { id: uid(), type: 'leaf', tabs, active: active ?? tabs[0] ?? null };
+
+  const anchorLeaf = place.anchorTabId ? leafOfTab(root, place.anchorTabId) : null;
+  const target = anchorLeaf?.id ?? fallbackLeafId;
+  const side = place.side ?? 'right';
+  if (!findLeaf(root, target)) {
+    // Nothing left to hang it on: it becomes the workspace.
+    return { root: prune(restored), leafId: restored.id };
+  }
+
+  const direction = AXIS[side];
+  const before = side === 'left' || side === 'top';
+  const parent = parentOf(root, target);
+
+  if (parent && isSplit(parent) && parent.direction === direction) {
+    const at = parent.children.findIndex((child) => child.id === target);
+    const neighbourShare = parent.sizes[at] ?? 1 / parent.children.length;
+    const children = parent.children.slice();
+    const sizes = parent.sizes.slice();
+    children.splice(before ? at : at + 1, 0, restored);
+    // The neighbour gives back what this pane had; if that is not on record,
+    // they halve it, which is what a fresh split does.
+    const mine = Math.min(Math.max(place.share, 0.05), 0.95);
+    const total = neighbourShare;
+    sizes[at] = Math.max(0.05, total * (1 - mine));
+    sizes.splice(before ? at : at + 1, 0, Math.max(0.05, total * mine));
+    const updated: SplitNode = { ...parent, children, sizes: normalize(sizes) };
+    return { root: prune(replaceNode(root, parent.id, () => updated) ?? root), leafId: restored.id };
+  }
+
+  const wrapped = replaceNode(root, target, (found) => ({
+    id: uid(),
+    type: 'split',
+    direction,
+    children: before ? [restored, found] : [found, restored],
+    sizes: before
+      ? [place.share, 1 - place.share]
+      : [1 - place.share, place.share],
+  }));
+  return { root: prune(wrapped ?? root), leafId: restored.id };
+}

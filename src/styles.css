@@ -1812,3 +1812,62 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 
 .patch-line.is-hunk .patch-text { padding-left: 0; }
 .patch-line.is-note { color: var(--text-faint); font-style: italic; }
+
+/* A section in the dock reads as a place, not a tab: it comes back where it was. */
+.dock-item.is-section { border-style: solid; border-color: var(--border-strong); }
+.dock-item.is-section .dock-name { font-weight: 600; }
+
+.git-newbranch { padding: 7px 9px; border-bottom: 1px solid var(--border); display: grid; gap: 4px; }
+.git-newbranch .ghost-btn { padding: 3px 9px; border: 1px solid var(--border); border-radius: 5px; font-size: 11.5px; width: 100%; }
+.git-newbranch input { font-size: 11.5px; padding: 3px 7px; }
+.git-newbranch .form-hint { font-size: 10px; }
+.git-reflist .git-row .link-btn { flex: 0 0 auto; font-size: 10.5px; }
+
+.git-branch-caret { font-size: 9px; color: var(--text-faint); }
+/* A branch's own actions, indented under it so they read as belonging to it. */
+.branch-actions { padding-left: 12px; border-left: 1px solid var(--border); margin: 2px 0 4px 8px; }
+.branch-actions .menu-item { font-size: 12px; padding: 4px 8px; }
+.branch-actions em { font-style: normal; color: var(--text); }
+.menu-item:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Two lists in one sidebar: each says what it is, and each can be switched off. */
+.sidebar-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.sidebar-toggle:hover { color: var(--text-dim); }
+.sidebar-toggle.is-on { color: var(--text-dim); border-color: var(--border); background: var(--bg-input); }
+.sidebar-toggle-count { font-size: 9.5px; padding: 0 4px; border-radius: 999px; background: var(--bg); color: var(--text-faint); }
+.sidebar-toggle.is-on .sidebar-toggle-count { background: var(--bg-panel); }
+
+.sidebar-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.sidebar-section .link-btn { margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 11px; }
+.sidebar-item-path { font-size: 10.5px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-changed {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  font-weight: 600;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(224, 175, 104, 0.2);
+  color: #e0af68;
+}
+
+.sidebar-item:hover .tab-close { opacity: 1; }

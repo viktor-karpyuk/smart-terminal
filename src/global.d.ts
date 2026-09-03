@@ -1,6 +1,6 @@
 import type {
   FilePanel,
-  GitPanelState,
+  MinimizedSection,
   LayoutNode,
   MinimizedTab,
   Profile,
@@ -68,7 +68,9 @@ export interface PersistedWorkspace {
   /** Tabs set aside in the dock. Saved apart from the layout because they are not in it. */
   minimized?: MinimizedTab[];
   /** Panels that occupy tabs in the layout but are not sessions. */
-  panels?: Array<FilePanel | GitPanelState>;
+  panels?: FilePanel[];
+  /** Whole sections set aside, each remembering where it was. */
+  sections?: MinimizedSection[];
 }
 
 /** Everything `git:call` can hand back, in one shape. */

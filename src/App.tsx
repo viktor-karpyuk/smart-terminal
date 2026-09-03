@@ -172,13 +172,19 @@ function handleMenuAction(id: string) {
       store.toggleZoom();
       break;
     case 'minimize-pane':
-      store.minimizePane(store.activeLeafId);
+      store.minimizeSection(store.activeLeafId);
       break;
     case 'restore-last': {
-      // Last in, first out: undoing a minimize you just made is what this is for.
-      const last = store.minimized[store.minimized.length - 1];
-      if (last?.groupId) store.restoreMinimizedGroup(last.groupId);
-      else if (last) store.restoreMinimized(last.sessionId);
+      // Last in, first out: undoing a minimize you just made is what this is for,
+      // and a whole section set aside is the more likely thing to want back.
+      const section = store.minimizedSections[store.minimizedSections.length - 1];
+      const tab = store.minimized[store.minimized.length - 1];
+      if (section && (!tab || section.at >= 0)) {
+        store.restoreSection(section.id);
+        break;
+      }
+      if (tab?.groupId) store.restoreMinimizedGroup(tab.groupId);
+      else if (tab) store.restoreMinimized(tab.sessionId);
       break;
     }
     case 'toggle-sidebar':

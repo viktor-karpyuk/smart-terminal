@@ -2,13 +2,14 @@ import { create } from 'zustand';
 import { FOLLOW_APP, resolveTerminalTheme } from '../terminals/themes';
 import { generateSessionName } from '../lib/names';
 import { arrangeGroup, moveGroupTo } from './groups';
-import { closePane, movePane, splitEmpty, splitOffTabs } from './layout';
+import { closePane, movePane, panePlace, restorePaneAt, splitEmpty, splitOffTabs } from './layout';
 import { GIT_TAB } from './types';
 import type {
   Buffer,
   FilePanel,
   GitView,
   GroupArrangement,
+  MinimizedSection,
   MinimizedTab,
   PendingClose,
   SessionGroup,
@@ -61,6 +62,8 @@ const DEFAULT_SETTINGS: Settings = {
   fileIcons: 'colour',
   folderColour: '#7aa2f7',
   folderStyle: 'open-shut',
+  sidebarShowSessions: true,
+  sidebarShowFolders: true,
 };
 
 /** Whether the interface is currently dark, resolving `system` against the OS. */
@@ -170,6 +173,8 @@ interface State {
   pendingClose: PendingClose | null;
   /** Tabs set aside into the dock, in the order they were put there. */
   minimized: MinimizedTab[];
+  /** Whole sections set aside, each remembering where it was. */
+  minimizedSections: MinimizedSection[];
   /** Panels that are not sessions: a folder, its editor, and its repository. */
   panels: Record<string, FilePanel>;
   /**
@@ -233,7 +238,8 @@ interface State {
   saveBuffer(path: string, options?: { force?: boolean }): Promise<boolean>;
   revertBuffer(path: string): void;
   sendSelectionTo(sessionId: string, path: string, text: string, from: number, to: number): void;
-  minimizePane(leafId: string): void;
+  minimizeSection(leafId: string): void;
+  restoreSection(id: string): void;
   minimizeGroup(groupId: string): void;
   restoreMinimized(sessionId: string): void;
   restoreMinimizedGroup(groupId: string): void;
@@ -299,19 +305,27 @@ let persistTimer: number | undefined;
 function schedulePersist(get: () => State) {
   window.clearTimeout(persistTimer);
   persistTimer = window.setTimeout(() => {
-    const { layout, sessions, settings, minimized, panels } = get();
+    const { layout, sessions, settings, minimized, minimizedSections, panels } = get();
     // A minimized tab is not in the layout, so its descriptor has to be gathered
     // from the dock too — otherwise it comes back as an id with nothing behind it
     // and is dropped as a pane that cannot be revived.
-    const saving = [...allTabs(layout), ...minimized.map((entry) => entry.sessionId)];
+    // A section set aside holds tabs that are in neither the layout nor the dock,
+    // so its descriptors have to be gathered too or they come back as ids with
+    // nothing behind them.
+    const saving = [
+      ...allTabs(layout),
+      ...minimized.map((entry) => entry.sessionId),
+      ...minimizedSections.flatMap((entry) => entry.tabs),
+    ];
     window.api.workspace.save({
       layout,
       settings,
       activeLeaf: get().activeLeafId,
       groups: get().groups,
       minimized,
+      sections: minimizedSections,
       // Only the panels the layout still names; one closed a moment ago is gone.
-      panels: allTabs(layout)
+      panels: [...allTabs(layout), ...minimizedSections.flatMap((entry) => entry.tabs)]
         .map((id) => panels[id])
         .filter(Boolean),
       sessions: saving
@@ -375,6 +389,7 @@ export const useStore = create<State>((set, get) => ({
   appearanceOpen: false,
   pendingClose: null,
   minimized: [],
+  minimizedSections: [],
   panels: {},
   repos: {},
   buffers: {},
@@ -398,6 +413,7 @@ export const useStore = create<State>((set, get) => ({
     const baseMinimized = (saved.minimized ?? []).filter((entry) => entry?.sessionId);
     // A panel is a tab with no session behind it, so it has to be put back before
     // anything prunes the layout — otherwise its tab looks like a dead session.
+    const baseSections = (saved.sections ?? []).filter((entry) => entry?.id && entry.tabs?.length);
     const basePanels = Object.fromEntries(
       (saved.panels ?? []).filter((panel) => panel?.id).map((panel) => [panel.id, panel]),
     );
@@ -407,6 +423,7 @@ export const useStore = create<State>((set, get) => ({
       homedir,
       layout: baseLayout,
       minimized: baseMinimized,
+      minimizedSections: baseSections,
       panels: basePanels,
       activeLeafId: allLeaves(baseLayout)[0]?.id ?? '',
       ready: true,
@@ -565,7 +582,11 @@ export const useStore = create<State>((set, get) => ({
     // Bring the saved workspace back to life: same panes, same profiles, fresh processes.
     // Docked sessions are restored exactly like the ones in panes: they are still
     // running work, and the only difference is that no pane is showing them.
-    const wanted = new Set([...allTabs(baseLayout), ...baseMinimized.map((entry) => entry.sessionId)]);
+    const wanted = new Set([
+      ...allTabs(baseLayout),
+      ...baseMinimized.map((entry) => entry.sessionId),
+      ...baseSections.flatMap((entry) => entry.tabs),
+    ]);
     const restorable = (saved.sessions || []).filter((s) => wanted.has(s.id));
     if (restorable.length) {
       for (const descriptor of restorable) {
@@ -596,6 +617,9 @@ export const useStore = create<State>((set, get) => ({
         // The dock is pruned by the same rule as the panes: an entry whose session
         // never came back is a button with nothing behind it.
         minimized: state.minimized.filter((entry) => alive.has(entry.sessionId)),
+        minimizedSections: state.minimizedSections
+          .map((entry) => ({ ...entry, tabs: entry.tabs.filter((tab) => alive.has(tab)) }))
+          .filter((entry) => entry.tabs.length > 0),
       }));
     }
 
@@ -610,7 +634,12 @@ export const useStore = create<State>((set, get) => ({
       for (const file of panel.open) if (file !== panel.active) get().openFile(panel.id, file);
     }
 
-    if (!allTabs(get().layout).length && !get().minimized.length && profiles.length) {
+    if (
+      !allTabs(get().layout).length &&
+      !get().minimized.length &&
+      !get().minimizedSections.length &&
+      profiles.length
+    ) {
       await get().newSession({ kind: 'claude' });
     }
 
@@ -716,6 +745,9 @@ export const useStore = create<State>((set, get) => ({
         // A closed tab leaves the dock as well, or it stays there as a button
         // pointing at a session that is gone.
         minimized: state.minimized.filter((entry) => entry.sessionId !== sessionId),
+        minimizedSections: state.minimizedSections
+          .map((entry) => ({ ...entry, tabs: entry.tabs.filter((tab) => tab !== sessionId) }))
+          .filter((entry) => entry.tabs.length > 0),
       };
     });
     schedulePersist(get);
@@ -929,11 +961,90 @@ export const useStore = create<State>((set, get) => ({
     schedulePersist(get);
   },
 
-  /** Set aside a whole section at once, so the pane it held is handed back entire. */
-  minimizePane(leafId) {
-    const leaf = findLeaf(get().layout, leafId);
-    if (!leaf) return;
-    for (const sessionId of [...leaf.tabs]) get().minimizeSession(sessionId);
+  /**
+   * Set a whole section aside, and remember where it was.
+   *
+   * Not the same as setting its tabs aside one at a time: a section has a place —
+   * beside something, on a side, at a width — and keeping that is what makes
+   * bringing it back an undo rather than a guess.
+   */
+  minimizeSection(leafId) {
+    const state = get();
+    const leaf = findLeaf(state.layout, leafId);
+    if (!leaf || !leaf.tabs.length) return;
+
+    const place = panePlace(state.layout, leafId);
+    // What to call it down there: the group if one owns the whole pane, else
+    // whatever is in front of it.
+    const owner = state.sessions[leaf.tabs[0]]?.groupId ?? null;
+    const whole = owner && leaf.tabs.every((id) => state.sessions[id]?.groupId === owner);
+    const group = whole ? state.groups.find((entry) => entry.id === owner) : null;
+    const front = leaf.active ?? leaf.tabs[0];
+    const label =
+      group?.name ??
+      state.sessions[front]?.customTitle ??
+      state.sessions[front]?.title ??
+      (state.panels[front]?.root.split('/').filter(Boolean).pop() ?? 'section');
+
+    set((prev) => {
+      const layout = closePane(prev.layout, leafId);
+      const leaves = allLeaves(layout);
+      return {
+        layout,
+        minimizedSections: [
+          ...prev.minimizedSections,
+          {
+            id: crypto.randomUUID(),
+            tabs: [...leaf.tabs],
+            active: leaf.active,
+            anchorTabId: place.anchorTabId,
+            side: place.side,
+            share: place.share,
+            label,
+            colour: group?.color ?? prev.sessions[front]?.color ?? null,
+            at: Date.now(),
+          },
+        ],
+        activeLeafId: leaves.some((entry) => entry.id === prev.activeLeafId)
+          ? prev.activeLeafId
+          : (leaves[0]?.id ?? ''),
+        zoomedLeafId: leaves.some((entry) => entry.id === prev.zoomedLeafId) ? prev.zoomedLeafId : null,
+      };
+    });
+    schedulePersist(get);
+  },
+
+  /** Put a section back where it was, with everything it was holding. */
+  restoreSection(id) {
+    const state = get();
+    const section = state.minimizedSections.find((entry) => entry.id === id);
+    if (!section) return;
+
+    // Anything closed while it was away simply is not in it any more.
+    const alive = section.tabs.filter((tab) => state.sessions[tab] || state.panels[tab]);
+    if (!alive.length) {
+      set((prev) => ({ minimizedSections: prev.minimizedSections.filter((entry) => entry.id !== id) }));
+      return;
+    }
+
+    const fallback = state.activeLeafId || allLeaves(state.layout)[0]?.id || '';
+    const result = restorePaneAt(
+      state.layout,
+      alive,
+      alive.includes(section.active ?? '') ? section.active : alive[0],
+      { anchorTabId: section.anchorTabId, side: section.side, share: section.share },
+      fallback,
+    );
+
+    set((prev) => ({
+      layout: result.root,
+      activeLeafId: result.leafId,
+      minimizedSections: prev.minimizedSections.filter((entry) => entry.id !== id),
+      zoomedLeafId: prev.zoomedLeafId ? result.leafId : null,
+    }));
+    const front = alive.includes(section.active ?? '') ? section.active : alive[0];
+    if (front && get().sessions[front]) get().focusSession(front);
+    schedulePersist(get);
   },
 
   /** Set aside a group wherever its sessions happen to be sitting. */

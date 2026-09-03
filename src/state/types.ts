@@ -194,6 +194,27 @@ export type GitView = 'changes' | 'history' | 'branches';
 export type GitGrouping = 'directory' | 'module' | 'both' | 'files';
 
 /**
+ * A whole section set aside, and where it was.
+ *
+ * Unlike a single tab, a section has a *place* — it was beside something, on a
+ * side, at a width. All three are kept so bringing it back is genuinely undoing
+ * the minimize rather than dropping its tabs somewhere plausible.
+ */
+export interface MinimizedSection {
+  id: string;
+  tabs: string[];
+  active: string | null;
+  /** A tab in the pane it sat beside; a tab id survives the tree being rebuilt. */
+  anchorTabId: string | null;
+  side: 'left' | 'right' | 'top' | 'bottom' | null;
+  share: number;
+  /** What to call it in the dock: the group it belongs to, or its own tabs. */
+  label: string;
+  colour: string | null;
+  at: number;
+}
+
+/**
  * A file being edited. Held apart from the panels because two panels showing the
  * same file must show the same unsaved text — the buffer belongs to the file, not
  * to the pane looking at it.
@@ -267,4 +288,12 @@ export interface Settings {
   folderColour: string;
   /** Whether an open folder is drawn differently from a shut one. */
   folderStyle: 'plain' | 'open-shut';
+  /**
+   * Which lists the sidebar shows. Both by default: they are different things —
+   * a session is work in progress, a folder is a place — and someone running
+   * twenty sessions and one folder wants a different sidebar from someone
+   * reading four repositories.
+   */
+  sidebarShowSessions: boolean;
+  sidebarShowFolders: boolean;
 }

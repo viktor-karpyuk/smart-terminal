@@ -15,11 +15,15 @@ import type { MinimizedTab } from '../state/types';
  */
 export function MinimizedDock() {
   const minimized = useStore((s) => s.minimized);
-  if (!minimized.length) return null;
+  const sections = useStore((s) => s.minimizedSections);
+  if (!minimized.length && !sections.length) return null;
 
   return (
     <div className="dock" role="toolbar" aria-label="Minimized tabs">
       <span className="dock-label">Set aside</span>
+      {sections.map((section) => (
+        <DockedSection key={section.id} id={section.id} />
+      ))}
       {entriesInOrder(minimized).map((entry) =>
         entry.groupId ? (
           <DockedGroup key={entry.groupId} groupId={entry.groupId} />
@@ -44,6 +48,46 @@ function entriesInOrder(minimized: MinimizedTab[]): MinimizedTab[] {
     seen.add(entry.groupId);
     return true;
   });
+}
+
+/**
+ * A whole section, waiting to go back where it was.
+ *
+ * It says how many tabs it holds, because a section is a *place* rather than one
+ * thing — and its arrow says the same as its tooltip: this one knows where it
+ * came from, and a single set-aside tab does not.
+ */
+function DockedSection({ id }: { id: string }) {
+  const section = useStore((s) => s.minimizedSections.find((entry) => entry.id === id));
+  const live = useStore((s) =>
+    section ? section.tabs.filter((tab) => s.sessions[tab] || s.panels[tab]).length : 0,
+  );
+  const busy = useStore((s) => Boolean(section?.tabs.some((tab) => s.sessions[tab]?.busy)));
+  const waiting = useStore((s) =>
+    Boolean(section?.tabs.some((tab) => s.sessions[tab]?.autopilotState === 'waiting-for-you')),
+  );
+  const restoreSection = useStore((s) => s.restoreSection);
+
+  if (!section || !live) return null;
+  const colour = section.colour ?? '#7aa2f7';
+
+  return (
+    <button
+      className={`dock-item is-section${waiting ? ' needs-you' : ''}`}
+      style={{ ['--dock-tint' as string]: colour }}
+      onClick={() => restoreSection(id)}
+      title={`${section.label} — a whole section, ${live} tab${live === 1 ? '' : 's'}\nClick to put it back where it was`}
+    >
+      <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke={colour} strokeWidth="1.3">
+        <rect x="1.4" y="2.4" width="11.2" height="9.2" rx="1.4" />
+        <path d="M5.6 2.4v9.2" />
+      </svg>
+      <span className="dock-name">{section.label}</span>
+      <span className="dock-count">{live}</span>
+      {busy && <span className="dock-busy" style={{ borderColor: colour, borderTopColor: 'transparent' }} />}
+      {waiting && <span className="dock-flag" title="One of them is stopped for you">✋</span>}
+    </button>
+  );
 }
 
 function DockedTab({ sessionId }: { sessionId: string }) {

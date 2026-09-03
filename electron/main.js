@@ -591,6 +591,8 @@ function registerIpc() {
     fetch: (root) => git.fetch(root),
     checkout: (root, { ref }) => git.checkout(root, ref),
     createBranch: (root, { name, from }) => git.createBranch(root, name, from),
+    renameBranch: (root, { from, to }) => git.renameBranch(root, from, to),
+    trackRemote: (root, { remote, local }) => git.trackRemote(root, remote, local),
     deleteBranch: (root, { name, force }) => git.deleteBranch(root, name, { force }),
     merge: (root, { ref }) => git.merge(root, ref),
     rebase: (root, { ref }) => git.rebase(root, ref),

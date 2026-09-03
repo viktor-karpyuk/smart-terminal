@@ -70,7 +70,7 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
   const newSession = useStore((s) => s.newSession);
   const closeThisPane = useStore((s) => s.closePane);
   const toggleZoomOf = useStore((s) => s.toggleZoomOf);
-  const minimizePane = useStore((s) => s.minimizePane);
+  const minimizeSection = useStore((s) => s.minimizeSection);
   const zoomed = useStore((s) => s.zoomedLeafId === leaf.id);
   /**
    * The group this whole pane belongs to, if one owns it outright. The frame's
@@ -269,7 +269,7 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
             <>
               <button
                 className="icon-btn"
-                onClick={() => minimizePane(leaf.id)}
+                onClick={() => minimizeSection(leaf.id)}
                 title={
                   sectionGroup
                     ? `Set ${sectionGroup.name} aside — it keeps running, and this space goes back`

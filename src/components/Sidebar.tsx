@@ -1,13 +1,131 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../state/store';
-import { allTabs } from '../state/layout';
+import { allTabs, leafOfTab } from '../state/layout';
 import { NewSessionMenu } from './NewSessionMenu';
 import { SESSION_MIME } from '../lib/drag';
 import { sessionLabel } from '../lib/labels';
 import { compactPath } from '../lib/labels';
 import { PathLabel } from './PathLabel';
 import { AccountsIcon, AppearanceIcon, HistoryIcon, UsageIcon } from './icons';
+
+/**
+ * The folders that are open, grouped by the repository they belong to.
+ *
+ * Sessions group by account because that is what makes two of them different
+ * kinds of thing. For folders it is the repository: two folders in one checkout
+ * are the same piece of work, and two in different ones are not.
+ */
+function Folders() {
+  const homedir = useStore((s) => s.homedir);
+  const panelIds = useStore(useShallow((s) => Object.keys(s.panels).filter((id) => s.panels[id].root)));
+  const openFilePanel = useStore((s) => s.openFilePanel);
+  const activeLeafId = useStore((s) => s.activeLeafId);
+
+  const groups = useMemo(() => {
+    const panels = useStore.getState().panels;
+    const byRepo = new Map<string, string[]>();
+    for (const id of panelIds) {
+      // Not in a repository is its own heading rather than a silent lump at the
+      // end: it is a real answer about the folder, not a leftover.
+      const key = panels[id].gitRoot ?? '';
+      byRepo.set(key, [...(byRepo.get(key) ?? []), id]);
+    }
+    return [...byRepo.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [panelIds]);
+
+  return (
+    <>
+      <div className="sidebar-section">
+        Folders
+        <button
+          className="link-btn"
+          title="Open another folder"
+          onClick={() => openFilePanel({ leafId: activeLeafId })}
+        >
+          + Open
+        </button>
+      </div>
+      {panelIds.length === 0 && <p className="sidebar-empty">No folders open.</p>}
+      {groups.map(([repo, ids]) => (
+        <div className="sidebar-group" key={repo || 'loose'}>
+          <div className="sidebar-group-header" title={repo || 'Not in a git repository'}>
+            <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke={repo ? '#e0af68' : '#565f79'} strokeWidth="1.3">
+              {repo ? (
+                <>
+                  <circle cx="3.6" cy="3.2" r="1.7" />
+                  <circle cx="3.6" cy="10.8" r="1.7" />
+                  <circle cx="10.4" cy="6.4" r="1.7" />
+                  <path d="M3.6 4.9v4.2M5.2 3.9c2.6.4 3.8 1.3 4 2.3" />
+                </>
+              ) : (
+                <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
+              )}
+            </svg>
+            <span style={{ color: repo ? '#e0af68' : undefined }}>
+              {repo ? (repo.split('/').filter(Boolean).pop() ?? repo) : 'Not in a repository'}
+            </span>
+            <span className="sidebar-group-count">{ids.length}</span>
+          </div>
+          {ids.map((id) => (
+            <FolderItem key={id} panelId={id} homedir={homedir} />
+          ))}
+        </div>
+      ))}
+    </>
+  );
+}
+
+function FolderItem({ panelId, homedir }: { panelId: string; homedir: string }) {
+  const root = useStore((s) => s.panels[panelId]?.root ?? '');
+  const gitRoot = useStore((s) => s.panels[panelId]?.gitRoot ?? null);
+  const changed = useStore((s) => (gitRoot ? (s.repos[gitRoot]?.files.length ?? 0) : 0));
+  const unsaved = useStore((s) => {
+    const panel = s.panels[panelId];
+    if (!panel) return false;
+    return panel.open.some((path) => {
+      const buffer = s.buffers[path];
+      return buffer ? buffer.text !== buffer.savedText : false;
+    });
+  });
+  const layout = useStore((s) => s.layout);
+  const focusPanel = useStore((s) => s.focusPanel);
+  const closePanel = useStore((s) => s.closePanel);
+
+  const short = root.startsWith(homedir) ? `~${root.slice(homedir.length)}` : root;
+
+  return (
+    <div
+      className="sidebar-item"
+      title={root}
+      onMouseDown={() => {
+        const leaf = leafOfTab(layout, panelId);
+        if (leaf) focusPanel(leaf.id, panelId);
+      }}
+    >
+      <svg width="12" height="12" viewBox="0 0 14 14" fill="#7aa2f7" stroke="none" style={{ flex: '0 0 auto' }}>
+        <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
+      </svg>
+      <div className="sidebar-item-text">
+        <span className="sidebar-item-title">{root.split('/').filter(Boolean).pop() ?? root}</span>
+        <PathLabel path={short} home={homedir} className="sidebar-item-path" />
+      </div>
+      {changed > 0 && <span className="sidebar-changed" title={`${changed} changed`}>{changed}</span>}
+      {unsaved && <span className="files-dirty" title="unsaved changes" />}
+      <button
+        className="tab-close"
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          closePanel(panelId);
+        }}
+        aria-label="Close folder"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
 
 /** Every live session, grouped by the account it belongs to. */
 export function Sidebar() {
@@ -36,6 +154,7 @@ export function Sidebar() {
   const membership = useStore(
     useShallow((s) => allTabs(s.layout).map((id) => id + ' ' + (s.sessions[id]?.profileId ?? ''))),
   );
+  const folderCount = useStore((s) => Object.values(s.panels).filter((p) => p.root).length);
   const runningCount = useStore(
     (s) => allTabs(s.layout).filter((id) => s.sessions[id]?.status === 'running').length,
   );
@@ -60,13 +179,42 @@ export function Sidebar() {
         >
           &#9636;
         </button>
-        <span className="sidebar-title">Sessions</span>
-        <span className="sidebar-count">{runningCount} running</span>
+        {/*
+          Two switches rather than one control that picks a list. They are
+          different things — a session is work going on, a folder is a place — and
+          someone with twenty sessions and one folder wants a different sidebar
+          from someone reading four repositories. Both on is the default.
+        */}
+        <button
+          className={`sidebar-toggle${settings.sidebarShowSessions ? ' is-on' : ''}`}
+          title="Show sessions"
+          onClick={() => updateSettings({ sidebarShowSessions: !settings.sidebarShowSessions })}
+        >
+          Sessions
+          <span className="sidebar-toggle-count">{runningCount}</span>
+        </button>
+        <button
+          className={`sidebar-toggle${settings.sidebarShowFolders ? ' is-on' : ''}`}
+          title="Show folders"
+          onClick={() => updateSettings({ sidebarShowFolders: !settings.sidebarShowFolders })}
+        >
+          Folders
+          <span className="sidebar-toggle-count">{folderCount}</span>
+        </button>
       </div>
 
       <div className="sidebar-scroll">
-        {grouped.length === 0 && <p className="sidebar-empty">No sessions yet.</p>}
-        {grouped.map(({ profile, ids }) => {
+        {!settings.sidebarShowSessions && !settings.sidebarShowFolders && (
+          <p className="sidebar-empty">Both lists are switched off.</p>
+        )}
+
+        {settings.sidebarShowSessions && (
+          <>
+            <div className="sidebar-section">Sessions</div>
+            {grouped.length === 0 && <p className="sidebar-empty">No sessions yet.</p>}
+          </>
+        )}
+        {settings.sidebarShowSessions && grouped.map(({ profile, ids }) => {
           const auth = authByProfile[profile.id];
           return (
             <div className="sidebar-group" key={profile.id}>
@@ -85,6 +233,8 @@ export function Sidebar() {
             </div>
           );
         })}
+
+        {settings.sidebarShowFolders && <Folders />}
       </div>
 
       <div className="sidebar-footer">
