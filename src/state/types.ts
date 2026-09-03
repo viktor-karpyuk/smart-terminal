@@ -307,4 +307,10 @@ export interface Settings {
   sidebarFoldersCollapsed: boolean;
   /** Which of the sidebar's lists comes first. Dragging a heading changes it. */
   sidebarOrder: Array<'sessions' | 'folders'>;
+  /**
+   * How the vertical room is split between the open lists, as shares of the
+   * whole. Proportional rather than in pixels, so resizing the window keeps the
+   * balance someone chose instead of giving every spare pixel to the last list.
+   */
+  sidebarSectionSizes: Record<string, number>;
 }

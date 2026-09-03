@@ -1,5 +1,9 @@
 export const SESSION_MIME = 'application/x-smart-terminal-session';
 export const GROUP_MIME = 'application/x-smart-terminal-group';
+/** A folder tab. Its own kind, so a group's label refuses it and a pane does not. */
+export const PANEL_MIME = 'application/x-smart-terminal-panel';
+/** A whole pane, dragged onto another to trade places with it. */
+export const PANE_MIME = 'application/x-smart-terminal-pane';
 
 export type Side = 'left' | 'right' | 'top' | 'bottom' | 'center';
 

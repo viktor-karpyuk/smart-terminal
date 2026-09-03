@@ -292,4 +292,67 @@ test('a section comes back about the width it was', () => {
   assert.ok(Math.abs(sizes[1] - 0.75) < 0.05, `came back at ${sizes[1]}, wanted about 0.75`);
 });
 
+// --- trading two panes -----------------------------------------------------
+
+test('two panes trade what they hold, not where they sit', () => {
+  let root = L.makeLeaf(['a']);
+  let r = L.splitLeaf(root, root.id, 'row', 'b');
+  r = L.splitLeaf(r.root, r.leafId, 'row', 'c');
+  assert.equal(shape(r.root), 'H[a | b | c]');
+
+  const leafA = L.leafOfTab(r.root, 'a');
+  const leafC = L.leafOfTab(r.root, 'c');
+  const swapped = L.swapPanes(r.root, leafA.id, leafC.id);
+  assert.equal(shape(swapped), 'H[c | b | a]');
+});
+
+test('a pane holding several tabs takes all of them, and which was in front', () => {
+  let root = L.makeLeaf(['a', 'b']);
+  root = L.setActiveTab(root, root.id, 'b');
+  const r = L.splitLeaf(root, root.id, 'row', 'c');
+  const left = L.leafOfTab(r.root, 'a');
+  const swapped = L.swapPanes(r.root, left.id, r.leafId);
+  assert.equal(shape(swapped), 'H[c | a,b]');
+  assert.equal(L.leafOfTab(swapped, 'a').active, 'b', 'the tab that was in front still is');
+});
+
+test('panes in different splits still trade', () => {
+  let root = L.makeLeaf(['a']);
+  let r = L.splitLeaf(root, root.id, 'row', 'b');
+  r = L.splitLeaf(r.root, r.leafId, 'column', 'c');
+  assert.equal(shape(r.root), 'H[a | V[b | c]]');
+  const leafA = L.leafOfTab(r.root, 'a');
+  const leafC = L.leafOfTab(r.root, 'c');
+  assert.equal(shape(L.swapPanes(r.root, leafA.id, leafC.id)), 'H[c | V[b | a]]');
+});
+
+test('sizes stay with the places, not with what was moved into them', () => {
+  let root = L.makeLeaf(['a']);
+  const r = L.splitLeaf(root, root.id, 'row', 'b');
+  const wide = L.setSizes(r.root, r.root.id, [0.3, 0.7]);
+  const leafA = L.leafOfTab(wide, 'a');
+  const swapped = L.swapPanes(wide, leafA.id, r.leafId);
+  assert.equal(shape(swapped), 'H[b | a]');
+  assert.deepEqual(swapped.sizes, [0.3, 0.7], 'the left slot is still the narrow one');
+});
+
+test('swapping a pane with itself changes nothing', () => {
+  const root = L.makeLeaf(['a']);
+  assert.equal(shape(L.swapPanes(root, root.id, root.id)), 'a');
+});
+
+test('an empty pane can be traded into, and is not pruned away', () => {
+  const root = L.makeLeaf(['a']);
+  const { root: split, leafId } = L.splitEmpty(root, root.id, 'row');
+  assert.equal(shape(split), 'H[a | ∅]');
+  const leafA = L.leafOfTab(split, 'a');
+  assert.equal(shape(L.swapPanes(split, leafA.id, leafId)), 'H[∅ | a]');
+});
+
+test('a pane that is not there leaves the layout alone', () => {
+  let root = L.makeLeaf(['a']);
+  const r = L.splitLeaf(root, root.id, 'row', 'b');
+  assert.equal(shape(L.swapPanes(r.root, 'nope', r.leafId)), 'H[a | b]');
+});
+
 console.log(`\n${passed} passing`);

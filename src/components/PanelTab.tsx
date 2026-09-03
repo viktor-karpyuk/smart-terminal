@@ -1,4 +1,5 @@
 import { useStore } from '../state/store';
+import { PANEL_MIME } from '../lib/drag';
 
 /**
  * The tab a file panel wears.
@@ -18,6 +19,7 @@ export function PanelTab({
 }) {
   const panel = useStore((s) => s.panels[panelId]);
   const closePanel = useStore((s) => s.closePanel);
+  const setDraggingId = useStore((s) => s.setDraggingSessionId);
   const setActiveLeaf = useStore((s) => s.setActiveLeaf);
   const focusPanel = useStore((s) => s.focusPanel);
   const unsaved = useStore((s) =>
@@ -32,6 +34,15 @@ export function PanelTab({
       className={`tab${selected ? ' tab-selected' : ''}`}
       style={{ boxShadow: selected ? 'inset 0 -2px 0 #7aa2f7' : undefined }}
       title={panel.root || 'No folder chosen yet'}
+      // A folder tab moves like a session tab: the panes already know how to
+      // take a tab, and a folder is one.
+      draggable
+      onDragStart={(event) => {
+        setDraggingId(panelId);
+        event.dataTransfer.setData(PANEL_MIME, panelId);
+        event.dataTransfer.effectAllowed = 'move';
+      }}
+      onDragEnd={() => setDraggingId(null)}
       onMouseDown={() => {
         setActiveLeaf(leafId);
         focusPanel(leafId, panelId);

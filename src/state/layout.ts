@@ -545,3 +545,33 @@ export function restorePaneAt(
   }));
   return { root: prune(wrapped ?? root), leafId: restored.id };
 }
+
+
+/**
+ * Trade two panes' contents.
+ *
+ * Swapping what they hold rather than where they sit, which looks identical and
+ * is the only version that always makes sense: two panes can be anywhere in the
+ * tree, in splits of different axes and different depths, and there is no
+ * general "exchange these two positions" that leaves the rest of the layout
+ * alone. Their sizes stay with the places, not with the contents — which is
+ * what someone means by putting this one over there.
+ */
+export function swapPanes(root: LayoutNode, a: string, b: string): LayoutNode {
+  if (a === b) return root;
+  const first = findLeaf(root, a);
+  const second = findLeaf(root, b);
+  if (!first || !second) return root;
+
+  const swap = (node: LayoutNode): LayoutNode => {
+    if (isLeaf(node)) {
+      if (node.id === a) return { ...node, tabs: second.tabs, active: second.active };
+      if (node.id === b) return { ...node, tabs: first.tabs, active: first.active };
+      return node;
+    }
+    return { ...node, children: node.children.map(swap) };
+  };
+  // No prune: an empty pane on either side was deliberate, and pruning here
+  // would delete the very thing that was just moved into place.
+  return swap(root);
+}

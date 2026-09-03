@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../state/store';
 import { allTabs, leafOfTab } from '../state/layout';
-import { NewSessionMenu } from './NewSessionMenu';
 import { SESSION_MIME } from '../lib/drag';
 import { sessionLabel } from '../lib/labels';
 import { compactPath } from '../lib/labels';
@@ -14,6 +13,94 @@ import { AccountsIcon, AppearanceIcon, HistoryIcon, UsageIcon } from './icons';
  * sets the floor is the headings below them; narrower than this it hides.
  */
 export const SIDEBAR_MIN = 150;
+
+/**
+ * One list: a heading that stays, and a body that scrolls on its own.
+ *
+ * Each open list takes a share of the room rather than a number of pixels, so
+ * resizing the window keeps the balance someone chose instead of handing every
+ * spare pixel to whichever list happens to be last. A folded one is only its
+ * heading and takes no share at all.
+ */
+function List({
+  id,
+  collapsed,
+  header,
+  children,
+}: {
+  id: string;
+  collapsed: boolean;
+  header: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const share = useStore((s) => s.settings.sidebarSectionSizes?.[id] ?? 1);
+  return (
+    <div
+      className={`sidebar-list${collapsed ? ' is-collapsed' : ''}`}
+      style={collapsed ? undefined : { flexGrow: Math.max(0.08, share), flexBasis: 0 }}
+      data-list={id}
+    >
+      {header}
+      {!collapsed && <div className="sidebar-list-body">{children}</div>}
+    </div>
+  );
+}
+
+/** The divider between two open lists. Drag it and they trade room. */
+function ListResizer({ above, below }: { above: string; below: string }) {
+  const updateSettings = useStore((s) => s.updateSettings);
+
+  return (
+    <div
+      className="list-resizer"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Resize the lists"
+      onDoubleClick={() =>
+        updateSettings({
+          sidebarSectionSizes: {
+            ...useStore.getState().settings.sidebarSectionSizes,
+            [above]: 1,
+            [below]: 1,
+          },
+        })
+      }
+      onPointerDown={(event) => {
+        event.preventDefault();
+        const container = (event.currentTarget as HTMLElement).parentElement;
+        if (!container) return;
+        const height = container.getBoundingClientRect().height || 1;
+        const startY = event.clientY;
+        const sizes = useStore.getState().settings.sidebarSectionSizes ?? {};
+        const startAbove = sizes[above] ?? 1;
+        const startBelow = sizes[below] ?? 1;
+        const pair = startAbove + startBelow;
+
+        const onMove = (move: PointerEvent) => {
+          // The pair keeps its combined share; only the split between them moves,
+          // so a third list further down is not shoved about by this drag.
+          const delta = ((move.clientY - startY) / height) * pair;
+          const next = Math.min(Math.max(startAbove + delta, pair * 0.12), pair * 0.88);
+          updateSettings({
+            sidebarSectionSizes: {
+              ...useStore.getState().settings.sidebarSectionSizes,
+              [above]: next,
+              [below]: pair - next,
+            },
+          });
+        };
+        const onUp = () => {
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+          document.body.classList.remove('resizing');
+        };
+        document.body.classList.add('resizing');
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+      }}
+    />
+  );
+}
 
 /** Its own kind, so dragging a session onto a heading is not mistaken for this. */
 const SECTION_MIME = 'application/x-smart-terminal-section';
@@ -131,31 +218,34 @@ function Folders() {
   }, [panelIds]);
 
   return (
-    <>
-      <SectionHeader
-        id="folders"
+    <List
+      id="folders"
+      collapsed={collapsed}
+      header={
+        <SectionHeader
+          id="folders"
         label="Folders"
         count={panelIds.length}
         collapsed={collapsed}
         onToggle={() => updateSettings({ sidebarFoldersCollapsed: !collapsed })}
         onClose={() => updateSettings({ sidebarShowFolders: false })}
-        extra={
-          <button
-            className="link-btn"
-            title="Open another folder"
-            onClick={(event) => {
-              event.stopPropagation();
-              openFilePanel({ leafId: activeLeafId });
-            }}
-          >
-            + Open
-          </button>
-        }
-      />
-      {collapsed ? null : panelIds.length === 0 ? (
-        <p className="sidebar-empty">No folders open.</p>
-      ) : null}
-      {!collapsed && groups.map(([repo, ids]) => (
+          extra={
+            <button
+              className="link-btn"
+              title="Open another folder"
+              onClick={(event) => {
+                event.stopPropagation();
+                openFilePanel({ leafId: activeLeafId });
+              }}
+            >
+              + Open
+            </button>
+          }
+        />
+      }
+    >
+      {panelIds.length === 0 && <p className="sidebar-empty">No folders open.</p>}
+      {groups.map(([repo, ids]) => (
         <div className="sidebar-group" key={repo || 'loose'}>
           <div className="sidebar-group-header" title={repo || 'Not in a git repository'}>
             <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke={repo ? '#e0af68' : '#565f79'} strokeWidth="1.3">
@@ -180,7 +270,7 @@ function Folders() {
           ))}
         </div>
       ))}
-    </>
+    </List>
   );
 }
 
@@ -240,21 +330,10 @@ export function Sidebar() {
   const profiles = useStore((s) => s.profiles);
   const settings = useStore((s) => s.settings);
   const authByProfile = useStore((s) => s.authByProfile);
-  const activeLeafId = useStore((s) => s.activeLeafId);
-  const newSession = useStore((s) => s.newSession);
   const updateSettings = useStore((s) => s.updateSettings);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuButtonRef = useRef<HTMLButtonElement>(null);
 
   // Only membership matters here; each row subscribes to its own session, so a
   // session streaming output no longer re-renders the whole list.
-  // Where you are working, so a new session opens there rather than in whatever
-  // folder the account happens to default to.
-  const activeCwd = useStore((s) => {
-    const leaf = allTabs(s.layout).length ? s.sessions[s.activeSessionId ?? ''] : null;
-    return leaf?.cwd;
-  });
-
   const membership = useStore(
     useShallow((s) => allTabs(s.layout).map((id) => id + ' ' + (s.sessions[id]?.profileId ?? ''))),
   );
@@ -265,6 +344,9 @@ export function Sidebar() {
   // With both switched off there is no panel at all — just the rail, which is
   // the whole point of the rail.
   const showsSomething = settings.sidebarShowSessions || settings.sidebarShowFolders;
+  const open = (settings.sidebarOrder ?? ['sessions', 'folders']).filter((which) =>
+    which === 'sessions' ? settings.sidebarShowSessions : settings.sidebarShowFolders,
+  );
 
   const grouped = useMemo(() => {
     const pairs = membership.map((entry) => entry.split(' ') as [string, string]);
@@ -287,77 +369,56 @@ export function Sidebar() {
       */}
       {showsSomething && (
       <div className="sidebar" style={{ width: Math.min(520, Math.max(SIDEBAR_MIN, settings.sidebarWidth)) }}>
-      <div className="sidebar-scroll">
-        {(settings.sidebarOrder ?? ['sessions', 'folders']).map((which) =>
-          which === 'sessions' ? (
-            settings.sidebarShowSessions && (
-              <div key="sessions">
-                <SectionHeader
-                  id="sessions"
-                  label="Sessions"
-                  count={runningCount}
-                  collapsed={settings.sidebarSessionsCollapsed}
-                  onToggle={() =>
-                    updateSettings({ sidebarSessionsCollapsed: !settings.sidebarSessionsCollapsed })
-                  }
-                  onClose={() => updateSettings({ sidebarShowSessions: false })}
-                />
-                {!settings.sidebarSessionsCollapsed && grouped.length === 0 && (
-                  <p className="sidebar-empty">No sessions yet.</p>
-                )}
-                {!settings.sidebarSessionsCollapsed &&
-                  grouped.map(({ profile, ids }) => {
-                    const auth = authByProfile[profile.id];
-                    return (
-                      <div className="sidebar-group" key={profile.id}>
-                        <div
-                          className="sidebar-group-header"
-                          title={auth?.loggedIn ? `Signed in as ${auth.email}` : 'Not signed in'}
-                        >
-                          <span className="tab-dot" style={{ background: profile.color }} />
-                          <span style={{ color: profile.color }}>{profile.name}</span>
-                          <span className="sidebar-group-account">{auth?.loggedIn ? auth.email : ''}</span>
-                          <span className="sidebar-group-count">{ids.length}</span>
-                        </div>
-                        {ids.map((id) => (
-                          <SidebarItem key={id} sessionId={id} />
-                        ))}
+      <div className="sidebar-lists">
+        {open.map((which, index) => (
+          <Fragment key={which}>
+            {index > 0 && <ListResizer above={open[index - 1]} below={which} />}
+            {which === 'sessions' ? (
+              <List
+                id="sessions"
+                collapsed={settings.sidebarSessionsCollapsed}
+                header={
+                  <SectionHeader
+                    id="sessions"
+                    label="Sessions"
+                    count={runningCount}
+                    collapsed={settings.sidebarSessionsCollapsed}
+                    onToggle={() =>
+                      updateSettings({ sidebarSessionsCollapsed: !settings.sidebarSessionsCollapsed })
+                    }
+                    onClose={() => updateSettings({ sidebarShowSessions: false })}
+                  />
+                }
+              >
+                {grouped.length === 0 && <p className="sidebar-empty">No sessions yet.</p>}
+                {grouped.map(({ profile, ids }) => {
+                  const auth = authByProfile[profile.id];
+                  return (
+                    <div className="sidebar-group" key={profile.id}>
+                      <div
+                        className="sidebar-group-header"
+                        title={auth?.loggedIn ? `Signed in as ${auth.email}` : 'Not signed in'}
+                      >
+                        <span className="tab-dot" style={{ background: profile.color }} />
+                        <span style={{ color: profile.color }}>{profile.name}</span>
+                        <span className="sidebar-group-account">{auth?.loggedIn ? auth.email : ''}</span>
+                        <span className="sidebar-group-count">{ids.length}</span>
                       </div>
-                    );
-                  })}
-              </div>
-            )
-          ) : (
-            settings.sidebarShowFolders && <Folders key="folders" />
-          ),
-        )}
+                      {ids.map((id) => (
+                        <SidebarItem key={id} sessionId={id} />
+                      ))}
+                    </div>
+                  );
+                })}
+              </List>
+            ) : (
+              <Folders />
+            )}
+          </Fragment>
+        ))}
       </div>
 
       <div className="sidebar-footer">
-        <div className="sidebar-footer-row">
-          <button
-            className="primary-btn grow"
-            onClick={() => newSession({ leafId: activeLeafId, cwd: activeCwd })}
-          >
-            + New session
-          </button>
-          <button
-            ref={menuButtonRef}
-            className="ghost-btn"
-            title="New session as another account"
-            onClick={() => setMenuOpen((open) => !open)}
-          >
-            &#8964;
-          </button>
-        </div>
-        {menuOpen && (
-          <NewSessionMenu
-            leafId={activeLeafId}
-            cwdHint={activeCwd}
-            anchorEl={menuButtonRef.current}
-            onClose={() => setMenuOpen(false)}
-          />
-        )}
         <BuildLine />
       </div>
       </div>

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../state/store';
 import { allTabs } from '../state/layout';
@@ -51,7 +52,7 @@ export function TitleBar() {
             </svg>
           </button>
         )}
-        <span className="app-name">Smart Terminal</span>
+        <AppMark />
         {activeProfile && (
           <span
             className="titlebar-chip"
@@ -99,6 +100,45 @@ export function TitleBar() {
         </button>
       </div>
     </header>
+  );
+}
+
+/**
+ * What this app is and which build of it you are running, where the window's
+ * name goes anyway.
+ *
+ * The build number is the useful half: "is the fix even installed?" comes up
+ * constantly while iterating, and it should be answerable without opening a
+ * panel. The description is there for anyone meeting the app for the first
+ * time, and gets out of the way as the window narrows.
+ */
+function AppMark() {
+  const [info, setInfo] = useState<Awaited<ReturnType<typeof window.api.version>> | null>(null);
+
+  useEffect(() => {
+    window.api.version().then(setInfo);
+  }, []);
+
+  const built = info?.builtAt ? new Date(info.builtAt) : null;
+  return (
+    <span
+      className="app-mark"
+      title={
+        info
+          ? `Smart Terminal ${info.version} · build ${info.build}\nBuilt ${built?.toLocaleString() ?? '—'}` +
+            '\n\nA workbench for running many Claude Code sessions at once,\neach on its own account, beside the files they are working on.'
+          : 'Smart Terminal'
+      }
+    >
+      <span className="app-name">Smart Terminal</span>
+      <span className="app-blurb">many Claude sessions, and their files</span>
+      {info && (
+        <span className="app-version">
+          {info.version}
+          <em>·{info.build}</em>
+        </span>
+      )}
+    </span>
   );
 }
 

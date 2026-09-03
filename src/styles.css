@@ -117,23 +117,61 @@ input:focus, textarea:focus { border-color: var(--accent); }
   display: flex;
   align-items: center;
   justify-content: center;
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
 }
 
 .titlebar-actions { justify-content: flex-end; }
 
+/*
+ * The bar is how the window is moved, so its three columns stay draggable and
+ * only the controls opt out. Marking the columns `no-drag` — which is what the
+ * grid rewrite did — covers the whole bar and leaves nothing to grab.
+ */
 .titlebar-drag, .titlebar-actions {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
 }
+
+/* Only the things you press. Anything else is somewhere to grab the window. */
+.titlebar button,
+.titlebar .gauge,
+.titlebar .titlebar-chip { -webkit-app-region: no-drag; }
 
 .titlebar-drag { padding-left: 78px; }
 .titlebar-actions { padding-right: 8px; }
 
-.app-name { font-size: 12px; color: var(--text-dim); letter-spacing: 0.02em; }
+/* The app's name, what it is, and which build — in the order you need them. */
+.app-mark { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.app-name { font-size: 12px; color: var(--text-dim); letter-spacing: 0.02em; flex: 0 0 auto; }
+
+.app-blurb {
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.app-version {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--text-faint);
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+
+.app-version em { font-style: normal; opacity: 0.7; margin-left: 2px; }
+
+/* The description is the first thing to go: the name and the build are not. */
+@media (max-width: 1180px) {
+  .app-blurb { display: none; }
+}
 
 .titlebar-chip {
   font-size: 11px;
@@ -347,6 +385,24 @@ input:focus, textarea:focus { border-color: var(--accent); }
 
 .sidebar-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); }
 .sidebar-count { font-size: 11px; color: var(--text-faint); }
+/* The lists stack and share the room; each scrolls inside its own share. */
+.sidebar-lists { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+
+.sidebar-list { display: flex; flex-direction: column; min-height: 0; }
+.sidebar-list.is-collapsed { flex: 0 0 auto; }
+.sidebar-list-body { flex: 1; overflow-y: auto; min-height: 0; padding: 2px 6px 6px; }
+
+/* Wide enough to grab, quiet enough to forget until you want it. */
+.list-resizer {
+  flex: 0 0 5px;
+  margin: -2px 0;
+  cursor: row-resize;
+  background: transparent;
+  z-index: 2;
+}
+
+.list-resizer:hover { background: var(--accent-soft); }
+
 .sidebar-scroll { flex: 1; overflow-y: auto; padding: 4px 6px; }
 .sidebar-empty { color: var(--text-faint); padding: 8px 6px; font-size: 12px; }
 .sidebar-group { margin-bottom: 10px; }
@@ -2076,4 +2132,42 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
   top: auto;
   bottom: calc(100% + 8px);
   transform: translateX(-50%);
+}
+
+/* The empty run of a tab strip doubles as the section's handle. */
+.tab-tail[draggable='true'] { cursor: grab; }
+.tab-tail.is-lifting { background: var(--accent-soft); }
+
+/* Where a dragged section will land. It covers the pane, because a section
+   trades places whole — there is no half of one to put on an edge. */
+.swap-hint {
+  position: absolute;
+  inset: 8px;
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  display: grid;
+  place-content: center;
+  pointer-events: none;
+  z-index: 6;
+}
+
+/* An edge drop for a whole section: the same quadrant the tabs use, saying the
+   other thing it can mean. */
+.swap-side {
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 11px;
+  font-weight: 600;
+  pointer-events: none;
+  z-index: 7;
 }

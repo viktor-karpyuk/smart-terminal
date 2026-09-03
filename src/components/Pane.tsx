@@ -7,7 +7,7 @@ import { TerminalSlot } from './TerminalSlot';
 import { NewSessionMenu } from './NewSessionMenu';
 import { FindBar } from './FindBar';
 import { HandoffBanner } from './HandoffBanner';
-import { GROUP_MIME, SESSION_MIME, sideFromPoint, type Side } from '../lib/drag';
+import { GROUP_MIME, PANEL_MIME, PANE_MIME, SESSION_MIME, sideFromPoint, type Side } from '../lib/drag';
 import { PathLabel } from './PathLabel';
 import { SessionTab } from './SessionTab';
 import { GroupChip, GroupTheseTabs } from './GroupChip';
@@ -18,6 +18,8 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const caretRef = useRef<HTMLButtonElement>(null);
   const [dropSide, setDropSide] = useState<Side | null>(null);
+  /** Another section is hovering over this one, about to trade places with it. */
+  const [swapTarget, setSwapTarget] = useState(false);
   /** Where a dragged tab would land in this strip, as a gap index. */
   const [dropIndex, setDropIndex] = useState<number | null>(null);
   /** True once tabs are squeezed enough that the account label stops fitting. */
@@ -69,6 +71,11 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
   const reorderTab = useStore((s) => s.reorderTab);
   const newSession = useStore((s) => s.newSession);
   const closeThisPane = useStore((s) => s.closePane);
+  const swapSections = useStore((s) => s.swapSections);
+  const moveSection = useStore((s) => s.moveSection);
+  const draggingPane = useStore((s) => s.draggingPaneId);
+  const setDraggingPane = useStore((s) => s.setDraggingPaneId);
+  const lifting = draggingPane === leaf.id;
   const toggleZoomOf = useStore((s) => s.toggleZoomOf);
   const minimizeSection = useStore((s) => s.minimizeSection);
   const zoomed = useStore((s) => s.zoomedLeafId === leaf.id);
@@ -112,6 +119,22 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
   }
 
   function onBodyDragOver(event: React.DragEvent) {
+    /*
+     * A section reads the same quadrants a tab does, and means something
+     * different by them: an edge puts it on that side, the middle trades places
+     * with what is already here. Both move the whole section.
+     */
+    if (draggingPane || event.dataTransfer.types.includes(PANE_MIME)) {
+      // The pane it started from is not a place to drop it.
+      if (draggingPane === leaf.id) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      const rect = bodyRef.current?.getBoundingClientRect();
+      const where = rect ? sideFromPoint(rect, event.clientX, event.clientY) : 'center';
+      setSwapTarget(where === 'center');
+      setDropSide(where === 'center' ? null : where);
+      return;
+    }
     if (!draggingId && !draggingGroup) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
@@ -121,17 +144,25 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
 
   function onBodyDrop(event: React.DragEvent) {
     const side = dropSide;
+    const wasSwap = swapTarget;
     const groupId = event.dataTransfer.getData(GROUP_MIME) || draggingGroup;
-    const sessionId = event.dataTransfer.getData(SESSION_MIME) || draggingId;
+    const paneId = event.dataTransfer.getData(PANE_MIME) || draggingPane || '';
+    const sessionId =
+      event.dataTransfer.getData(SESSION_MIME) || event.dataTransfer.getData(PANEL_MIME) || draggingId;
     setDropSide(null);
     setDraggingId(null);
     setDraggingGroup(null);
-    if (!side) return;
+    if (!side && !wasSwap && !paneId) return;
     event.preventDefault();
 
+    if (paneId) {
+      return side && side !== 'center'
+        ? moveSection(paneId, leaf.id, side)
+        : swapSections(paneId, leaf.id);
+    }
     // A group lands as a unit: all of its sessions together in one place.
-    if (groupId) moveGroup(groupId, leaf.id, side);
-    else if (sessionId) moveTab(sessionId, leaf.id, side);
+    if (groupId) moveGroup(groupId, leaf.id, side!);
+    else if (sessionId) moveTab(sessionId, leaf.id, side!);
   }
 
   /**
@@ -232,7 +263,22 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
             );
           })}
           {dropIndex === leaf.tabs.length && <span className="drop-caret" aria-hidden="true" />}
-          <div className="tab-tail" onDoubleClick={quickNewTab} />
+          {/*
+            The empty run of the strip is the section's handle — where you would
+            grab a window. Dropping it on another section trades their places.
+          */}
+          <div
+            className={`tab-tail${lifting ? ' is-lifting' : ''}`}
+            onDoubleClick={quickNewTab}
+            draggable={leaf.tabs.length > 0}
+            data-tip="Drag to trade places with another section"
+            onDragStart={(event) => {
+              event.dataTransfer.setData(PANE_MIME, leaf.id);
+              event.dataTransfer.effectAllowed = 'move';
+              setDraggingPane(leaf.id);
+            }}
+            onDragEnd={() => setDraggingPane(null)}
+          />
         </div>
 
         <div className="tabstrip-actions">
@@ -320,16 +366,24 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
           <EmptyPane leafId={leaf.id} />
         )}
 
-        {(draggingId || draggingGroup) && (
+        {(draggingId || draggingGroup || draggingPane) && (
           <div
             className="drop-capture"
             onDragOver={onBodyDragOver}
             onDragLeave={(event) => {
-              if (!event.currentTarget.contains(event.relatedTarget as Node)) setDropSide(null);
+              if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+              setDropSide(null);
+              setSwapTarget(false);
             }}
-            onDrop={onBodyDrop}
+            onDrop={(event) => {
+              setSwapTarget(false);
+              setDraggingPane(null);
+              onBodyDrop(event);
+            }}
           />
         )}
+        {swapTarget && <div className="swap-hint">Trade places</div>}
+        {dropSide && draggingPane && <div className="swap-side">Put it here</div>}
 
         {dropSide && <div className={`drop-hint drop-${dropSide}`} />}
       </div>

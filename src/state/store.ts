@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { FOLLOW_APP, resolveTerminalTheme } from '../terminals/themes';
 import { generateSessionName } from '../lib/names';
 import { arrangeGroup, moveGroupTo } from './groups';
-import { closePane, movePane, panePlace, restorePaneAt, splitEmpty, splitOffTabs } from './layout';
+import { closePane, movePane, panePlace, restorePaneAt, splitEmpty, splitOffTabs, swapPanes } from './layout';
 import { GIT_TAB } from './types';
 import type {
   Buffer,
@@ -67,6 +67,7 @@ const DEFAULT_SETTINGS: Settings = {
   sidebarSessionsCollapsed: false,
   sidebarFoldersCollapsed: false,
   sidebarOrder: ['sessions', 'folders'],
+  sidebarSectionSizes: { sessions: 1, folders: 1 },
 };
 
 /** Whether the interface is currently dark, resolving `system` against the OS. */
@@ -158,6 +159,12 @@ interface State {
   draggingSessionId: string | null;
   /** Group currently being dragged as a unit, or null. */
   draggingGroupId: string | null;
+  /**
+   * A whole section in flight, or null. Held here rather than in the pane that
+   * started it: every *other* pane has to arm its drop layer, and only the one
+   * being dragged would know otherwise.
+   */
+  draggingPaneId: string | null;
   /** Who each profile is signed in as, keyed by profile id. */
   authByProfile: Record<string, AuthStatus>;
   /** The open session context menu. Held here so one instance serves every list. */
@@ -214,6 +221,10 @@ interface State {
   reorderTab(tabId: string, targetLeafId: string, index: number): void;
   splitActive(direction: 'row' | 'column'): Promise<void>;
   closePane(leafId: string): void;
+  /** Put one section where another is, and the other where this one was. */
+  swapSections(a: string, b: string): void;
+  /** Take a whole section and put it on one side of another. */
+  moveSection(paneId: string, targetLeafId: string, side: 'left' | 'right' | 'top' | 'bottom'): void;
   resizeSplit(splitId: string, sizes: number[]): void;
   evenSplits(): void;
   toggleZoom(): void;
@@ -261,6 +272,7 @@ interface State {
   setRenamingSessionId(sessionId: string | null): void;
   setDraggingSessionId(sessionId: string | null): void;
   setDraggingGroupId(groupId: string | null): void;
+  setDraggingPaneId(leafId: string | null): void;
   openContextMenu(sessionId: string, x: number, y: number): void;
   closeContextMenu(): void;
   refreshAuth(profileId: string, force?: boolean): Promise<AuthStatus | null>;
@@ -381,6 +393,7 @@ export const useStore = create<State>((set, get) => ({
   renamingSessionId: null,
   draggingSessionId: null,
   draggingGroupId: null,
+  draggingPaneId: null,
   authByProfile: {},
   contextMenu: null,
   usageByProfile: {},
@@ -895,6 +908,34 @@ export const useStore = create<State>((set, get) => ({
           : (leaves[0]?.id ?? ''),
       };
     });
+    schedulePersist(get);
+  },
+
+  setDraggingPaneId(leafId) {
+    set({ draggingPaneId: leafId });
+  },
+
+  /**
+   * Relocate a section beside another, keeping it one section.
+   *
+   * The other half of dropping a section: the middle of a pane means "trade
+   * places with this", and an edge means "go there". Both are moves of the whole
+   * thing — its tabs stay together either way, which is what makes a section a
+   * section rather than a pile of tabs.
+   */
+  moveSection(paneId, targetLeafId, side) {
+    if (paneId === targetLeafId) return;
+    set((state) => ({ layout: movePane(state.layout, paneId, targetLeafId, side), draggingPaneId: null }));
+    // The pane it landed in is a new one; focus whatever is now in front there.
+    const moved = get().layout;
+    const leaf = allLeaves(moved).find((entry) => entry.active && findLeaf(moved, entry.id));
+    if (leaf) set({ activeLeafId: leaf.id });
+    schedulePersist(get);
+  },
+
+  swapSections(a, b) {
+    if (a === b) return;
+    set((state) => ({ layout: swapPanes(state.layout, a, b), activeLeafId: b, draggingPaneId: null }));
     schedulePersist(get);
   },
 
