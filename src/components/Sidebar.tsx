@@ -6,7 +6,7 @@ import { SESSION_MIME } from '../lib/drag';
 import { sessionLabel } from '../lib/labels';
 import { compactPath } from '../lib/labels';
 import { PathLabel } from './PathLabel';
-import { AccountsIcon, AppearanceIcon, ExtensionsIcon, HistoryIcon, MonitorIcon, UsageIcon } from './icons';
+import { AccountsIcon, AppearanceIcon, HistoryIcon, MonitorIcon, UsageIcon } from './icons';
 
 /**
  * The narrowest the sidebar will sit at. With the switches down to icons what
@@ -558,8 +558,6 @@ function ActivityBar() {
     (s) => allTabs(s.layout).filter((id) => s.sessions[id]?.status === 'running').length,
   );
   const folderCount = useStore((s) => Object.values(s.panels).filter((p) => asFilePanel(p)?.root).length);
-  /** Extensions with a newer version than the one installed. A count, so it is stable. */
-  const updates = useStore((s) => s.extensions.rows.filter((row) => row.status === 'update').length);
   /** Sessions with something worth looking at — a count, so the selector is stable. */
   const alerts = useStore(
     (s) => Object.values(s.analysisBySession).filter((v) => v.worst === 'high' || v.worst === 'medium').length,
@@ -616,15 +614,6 @@ function ActivityBar() {
       </button>
       <button className="activity" onClick={() => setUsagePanelOpen(true)} data-tip="Usage limits (⌘U)" aria-label="Usage">
         <UsageIcon />
-      </button>
-      <button
-        className="activity"
-        onClick={() => useStore.getState().openExtensions()}
-        data-tip={updates ? `Extensions — ${updates} to update` : 'Extensions'}
-        aria-label="Extensions"
-      >
-        <ExtensionsIcon />
-        {updates > 0 && <span className="activity-count">{updates}</span>}
       </button>
       <button className="activity" onClick={() => setHistoryOpen(true)} data-tip="History (⌘Y)" aria-label="History">
         <HistoryIcon />

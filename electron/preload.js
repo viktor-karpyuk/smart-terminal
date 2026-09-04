@@ -143,17 +143,6 @@ contextBridge.exposeInMainWorld('api', {
     reveal: (file) => ipcRenderer.send('files:reveal', file),
   },
 
-  extensions: {
-    list: () => ipcRenderer.invoke('extensions:list'),
-    install: (id) => ipcRenderer.invoke('extensions:install', id),
-    remove: (id) => ipcRenderer.invoke('extensions:remove', id),
-    enable: (id, on) => ipcRenderer.invoke('extensions:enable', { id, on }),
-    onChanged: (fn) => {
-      const handler = (_e, payload) => fn(payload);
-      ipcRenderer.on('extensions:changed', handler);
-      return () => ipcRenderer.removeListener('extensions:changed', handler);
-    },
-  },
   git: {
     watch: (root) => ipcRenderer.send('git:watch', root),
     unwatch: (root) => ipcRenderer.send('git:unwatch', root),

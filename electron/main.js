@@ -19,7 +19,6 @@ const { summarise, oneLine } = require('./session-analysis');
 const { Advisor } = require('./advisor');
 const { render: renderBrief } = require('./session-brief');
 const { RepoWatcher } = require('./repo-watcher');
-const { discover, gallery, previewRules } = require('./extensions');
 const { Autopilot, looksLikeADecision } = require('./autopilot');
 const { tabsInLayout, minimizedIds, sessionsToRestore, unaccountedTabs } = require('./restore');
 const { MessageBridge } = require('./message-bridge');
@@ -527,26 +526,6 @@ function registerIpc() {
       walBytes: sizeOf('-wal'),
       snapshotBytes: context.diskUsage(),
     };
-  });
-
-  /** Every extension and where it stands, plus what the installed ones turn on. */
-  ipcMain.handle('extensions:list', () => extensionState());
-
-  ipcMain.handle('extensions:install', (_e, id) => {
-    const found = builtInExtensions().find((manifest) => manifest.id === id);
-    if (!found) return extensionState();
-    db.installExtension(found);
-    return sendExtensions();
-  });
-
-  ipcMain.handle('extensions:remove', (_e, id) => {
-    db.removeExtension(id);
-    return sendExtensions();
-  });
-
-  ipcMain.handle('extensions:enable', (_e, { id, on }) => {
-    db.enableExtension(id, on !== false);
-    return sendExtensions();
   });
 
   // Held while a panel has a repository open. Counted, so closing one of two
@@ -1119,13 +1098,6 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   });
   monitor.start();
 
-  // What shipped with the app starts installed; after that the table is the
-  // record of what was decided, and something new arriving later is an offer.
-  try {
-    db.seedExtensions(builtInExtensions());
-  } catch {
-    /* the gallery still works; nothing is on until it is chosen */
-  }
 
   // Judgement, kept apart from measurement on purpose. One shot of `claude -p`
   // per reading: no conversation, so it cannot become the kind of session it is
@@ -1285,44 +1257,6 @@ function tellIfSerious(sessionId, verdict) {
   messages.note(sessionId, `${finding.title}. ${finding.detail}\n\n${finding.suggestion}`, {
     subject: 'this session',
   });
-}
-
-/**
- * The extensions that came with the app.
- *
- * Read from disk on every ask rather than cached: in development the folder is
- * the repository, and having to restart the app to see a manifest you just
- * edited is exactly the friction that stops anyone writing one.
- */
-function builtInExtensions() {
-  const roots = [
-    { root: path.join(app.getAppPath(), 'extensions'), builtIn: true },
-    { root: path.join(app.getPath('userData'), 'extensions'), builtIn: false },
-  ];
-  const found = [];
-  const seen = new Set();
-  for (const { root, builtIn } of roots) {
-    for (const manifest of discover(root, { builtIn })) {
-      // The user's own copy of an id wins: it is the one they put there.
-      if (seen.has(manifest.id)) continue;
-      seen.add(manifest.id);
-      found.push(manifest);
-    }
-  }
-  return found;
-}
-
-/** The gallery, and the rules the renderer needs to act on it. */
-function extensionState() {
-  const rows = gallery(builtInExtensions(), db.installedExtensions());
-  return { rows, previews: previewRules(rows) };
-}
-
-/** Answer the caller and tell every window, since this changes what files open as. */
-function sendExtensions() {
-  const state = extensionState();
-  send('extensions:changed', state);
-  return state;
 }
 
 function liveRoster() {

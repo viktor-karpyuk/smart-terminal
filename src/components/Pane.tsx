@@ -13,7 +13,6 @@ import { SessionTab } from './SessionTab';
 import { GroupChip, GroupTheseTabs } from './GroupChip';
 import { FilesPanel } from './FilesPanel';
 import { MonitorPanel } from './MonitorPanel';
-import { ExtensionsPanel } from './ExtensionsPanel';
 import { PanelTab } from './PanelTab';
 
 export function Pane({ leaf }: { leaf: LeafNode }) {
@@ -361,8 +360,6 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
         {leaf.active && panelIds.includes(leaf.active) ? (
           activePanelKind === 'monitor' ? (
             <MonitorPanel key={leaf.active} panelId={leaf.active} />
-          ) : activePanelKind === 'extensions' ? (
-            <ExtensionsPanel key={leaf.active} />
           ) : (
             <FilesPanel key={leaf.active} panelId={leaf.active} />
           )

@@ -365,30 +365,6 @@ export interface Norms {
   autoCompactions: number;
 }
 
-/** One extension, and where it stands. */
-export interface ExtensionRow {
-  id: string;
-  name: string;
-  version: string;
-  author: string | null;
-  summary: string;
-  description: string;
-  contributes: { previews?: Array<{ kind: string; extensions?: string[]; files?: string[]; prefixes?: string[] }> };
-  builtIn: boolean;
-  enabled: boolean;
-  installedVersion: string | null;
-  installedAt: number | null;
-  /** `available` is an offer, `update` is a newer version than the one installed,
-   *  and `gone` is one that was installed and whose folder is no longer there. */
-  status: 'available' | 'installed' | 'update' | 'gone';
-}
-
-/** The gallery, and the rules the installed ones turn on. */
-export interface ExtensionState {
-  rows: ExtensionRow[];
-  previews: Array<{ kind: string; extensions: string[]; files: string[]; prefixes: string[] }>;
-}
-
 /** One table, with what it holds and roughly what it weighs. */
 export interface DbTable {
   name: string;
@@ -647,13 +623,6 @@ declare global {
       workspace: {
         load(): Promise<PersistedWorkspace>;
         save(state: PersistedWorkspace): void;
-      };
-      extensions: {
-        list(): Promise<ExtensionState>;
-        install(id: string): Promise<ExtensionState>;
-        remove(id: string): Promise<ExtensionState>;
-        enable(id: string, on: boolean): Promise<ExtensionState>;
-        onChanged(fn: (state: ExtensionState) => void): () => void;
       };
       git: {
         watch(root: string): void;
