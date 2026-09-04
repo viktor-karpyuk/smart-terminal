@@ -409,3 +409,16 @@ test('a compaction that grew the context does not report a negative drop', () =>
   ]);
   assert.equal(verdict.compactions[0].droppedTokens, 0);
 });
+
+test('every point on the curve carries what that request cost', () => {
+  const verdict = analyze([
+    request(0, { input: 1000, write: 1000, read: 1000, output: 50 }),
+    request(1, { input: 0, write: 0, read: 10000, output: 20 }),
+  ]);
+  // 1000 fresh + 1250 written + 100 read back
+  assert.equal(verdict.context.curve[0].effective, 2350);
+  assert.equal(verdict.context.curve[1].effective, 1000);
+  // And the points still add up to the session total.
+  const summed = verdict.context.curve.reduce((total, point) => total + point.effective, 0);
+  assert.equal(summed, verdict.effectiveInput);
+});

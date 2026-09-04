@@ -151,11 +151,54 @@ function ContextBar({ share }: { share: number }) {
 }
 
 function Detail({ verdict, showSuggestions }: { verdict: SessionAnalysis; showSuggestions: boolean }) {
+  /**
+   * The stretch of the session being reported on, as indices into the curve.
+   *
+   * Null is not "nothing selected" so much as "all of it, and keep up": with no
+   * selection the figures are the session as it stands, and they move as it
+   * moves. A selection freezes them on a period, which is the only way to ask
+   * what an hour cost rather than what the whole day did.
+   */
+  const [range, setRange] = useState<[number, number] | null>(null);
   const auto = verdict.compactions.filter((c) => c.trigger === 'auto').length;
   const heaviest = verdict.tools[0];
 
+  // A selection is over the curve, so everything derived from it is too.
+  const window = useMemo(() => {
+    if (!range) return null;
+    const [from, to] = range;
+    const points = verdict.context.curve.slice(from, to + 1);
+    if (!points.length) return null;
+    const contexts = points.map((point) => point.context);
+    const at = points.map((point) => point.at).filter(Boolean) as number[];
+    const compactions = verdict.compactions.filter(
+      (entry) => entry.at && at.length && entry.at >= at[0] && entry.at <= at[at.length - 1],
+    );
+    return {
+      requests: points.length,
+      last: contexts[contexts.length - 1],
+      peak: Math.max(...contexts),
+      effective: points.reduce((total, point) => total + point.effective, 0),
+      output: points.reduce((total, point) => total + point.output, 0),
+      spanMs: at.length > 1 ? at[at.length - 1] - at[0] : 0,
+      compactions: compactions.length,
+      autoCompactions: compactions.filter((entry) => entry.trigger === 'auto').length,
+      from: at[0] ?? null,
+      to: at[at.length - 1] ?? null,
+    };
+  }, [range, verdict]);
+
   const stats = useMemo(
-    () => [
+    () => (window
+      ? [
+          { label: 'Context at the end', value: tokens(window.last), note: `${Math.round((window.last / verdict.context.window) * 100)}% of ${tokens(verdict.context.window)}` },
+          { label: 'Peak in range', value: tokens(window.peak), note: `${window.requests} requests` },
+          { label: 'Input, weighted', value: tokens(window.effective), note: 'in this stretch' },
+          { label: 'Output', value: tokens(window.output), note: 'tokens written' },
+          { label: 'Over', value: window.spanMs ? duration(window.spanMs) : '—', note: window.from ? new Date(window.from).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '' },
+          { label: 'Compactions', value: String(window.compactions), note: window.autoCompactions ? `${window.autoCompactions} automatic` : 'none automatic' },
+        ]
+      : [
       { label: 'Context now', value: tokens(verdict.context.last), note: `${Math.round((verdict.context.last / verdict.context.window) * 100)}% of ${tokens(verdict.context.window)}` },
       { label: 'Peak', value: tokens(verdict.context.peak), note: `${verdict.requests} requests` },
       { label: 'Input, weighted', value: tokens(verdict.effectiveInput), note: 'cache priced in' },
@@ -173,13 +216,28 @@ function Detail({ verdict, showSuggestions }: { verdict: SessionAnalysis; showSu
             },
           ]
         : []),
-    ],
-    [verdict, auto],
+    ]),
+    [verdict, auto, window],
   );
 
   return (
     <>
       {verdict.quality && <Quality quality={verdict.quality} />}
+
+      {window && (
+        <div className="monitor-window">
+          <span className="monitor-window-dot" />
+          <span>
+            Showing {window.requests} request{window.requests === 1 ? '' : 's'}
+            {window.from && window.to
+              ? `, ${new Date(window.from).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} to ${new Date(window.to).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+              : ''}
+          </span>
+          <button className="ghost-btn tiny" onClick={() => setRange(null)}>
+            Show the whole session
+          </button>
+        </div>
+      )}
 
       <div className="monitor-stats">
         {stats.map((stat) => (
@@ -191,7 +249,7 @@ function Detail({ verdict, showSuggestions }: { verdict: SessionAnalysis; showSu
         ))}
       </div>
 
-      <Curve verdict={verdict} />
+      <Curve verdict={verdict} range={range} onRange={setRange} />
 
       <Compactions verdict={verdict} />
 
@@ -243,10 +301,37 @@ function Detail({ verdict, showSuggestions }: { verdict: SessionAnalysis; showSu
  * compacting over and over, and a straight run into the ceiling is the one worth
  * doing something about.
  */
-function Curve({ verdict }: { verdict: SessionAnalysis }) {
+function Curve({
+  verdict,
+  range,
+  onRange,
+}: {
+  verdict: SessionAnalysis;
+  range: [number, number] | null;
+  onRange(next: [number, number] | null): void;
+}) {
   const box = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   const [at, setAt] = useState<number | null>(null);
+  /**
+   * Where a drag started, while it is still happening.
+   *
+   * A ref and not state: the press and the moves that follow it can arrive in
+   * one batch, and state read inside that batch is still the value from before
+   * the press — so the drag would never see where it began. Nothing here needs
+   * a redraw either; what the drag produces is the range, and that does.
+   */
+  const dragFrom = useRef<number | null>(null);
+
+  // A release anywhere ends it. Letting go over the tab strip, or outside the
+  // window altogether, is a perfectly ordinary way to finish a drag.
+  useEffect(() => {
+    const done = () => {
+      dragFrom.current = null;
+    };
+    window.addEventListener('mouseup', done);
+    return () => window.removeEventListener('mouseup', done);
+  }, []);
 
   // Measured rather than stretched. A viewBox scaled to fit would squash every
   // label and stroke with it, and the labels are most of what makes this a chart
@@ -313,6 +398,14 @@ function Curve({ verdict }: { verdict: SessionAnalysis }) {
 
   const hovered = at === null ? null : points[at];
 
+  /** Which request the pointer is over, in curve indices. */
+  const indexAt = (clientX: number, element: SVGSVGElement) => {
+    const rect = element.getBoundingClientRect();
+    const ratio = (clientX - rect.left - pad.left) / (plot.w || 1);
+    const index = Math.round(ratio * (points.length - 1));
+    return index >= 0 && index < points.length ? index : null;
+  };
+
   return (
     <div className="monitor-curve-box" ref={box}>
       {width > 120 && (
@@ -321,11 +414,31 @@ function Curve({ verdict }: { verdict: SessionAnalysis }) {
           width={width}
           height={height}
           onMouseLeave={() => setAt(null)}
+          onMouseDown={(event) => {
+            const index = indexAt(event.clientX, event.currentTarget);
+            if (index === null) return;
+            dragFrom.current = index;
+            // A press with no drag after it clears the selection: the quickest
+            // way back to the whole session is the gesture that left it.
+            onRange(null);
+          }}
           onMouseMove={(event) => {
-            const rect = event.currentTarget.getBoundingClientRect();
-            const ratio = (event.clientX - rect.left - pad.left) / (plot.w || 1);
-            const index = Math.round(ratio * (points.length - 1));
-            setAt(index >= 0 && index < points.length ? index : null);
+            const index = indexAt(event.clientX, event.currentTarget);
+            setAt(index);
+            const from = dragFrom.current;
+            // The button has to still be down. Without this a drag released
+            // anywhere but here never ends, and every movement afterwards
+            // redraws a selection nobody is making.
+            if (from !== null && event.buttons !== 1) {
+              dragFrom.current = null;
+              return;
+            }
+            if (from !== null && index !== null && Math.abs(index - from) >= 1) {
+              onRange([Math.min(from, index), Math.max(from, index)]);
+            }
+          }}
+          onMouseUp={() => {
+            dragFrom.current = null;
           }}
         >
           <defs>
@@ -352,6 +465,17 @@ function Curve({ verdict }: { verdict: SessionAnalysis }) {
 
           <path d={area} fill="url(#monitor-fade)" />
           <path d={path} className="monitor-curve-line" />
+
+          {/* What is not selected is dimmed rather than hidden: the shape of the
+              whole session is the context that makes a stretch of it mean
+              anything. */}
+          {range && (
+            <>
+              <rect x={pad.left} y={pad.top} width={Math.max(0, xOf(range[0]) - pad.left)} height={plot.h} className="monitor-outside" />
+              <rect x={xOf(range[1])} y={pad.top} width={Math.max(0, width - pad.right - xOf(range[1]))} height={plot.h} className="monitor-outside" />
+              <rect x={xOf(range[0])} y={pad.top} width={Math.max(1, xOf(range[1]) - xOf(range[0]))} height={plot.h} className="monitor-selection" />
+            </>
+          )}
 
           {marks.map((mark, i) => (
             <g key={`${mark.x}-${i}`}>
@@ -393,7 +517,11 @@ function Curve({ verdict }: { verdict: SessionAnalysis }) {
         ) : (
           <>
             <strong>{tokens(top)}</strong>
-            <span>top of the scale · {points.length} requests{marks.length ? ` · ${marks.length} compaction${marks.length === 1 ? '' : 's'}` : ''}</span>
+            <span>
+              top of the scale · {points.length} requests
+              {marks.length ? ` · ${marks.length} compaction${marks.length === 1 ? '' : 's'}` : ''}
+              {range ? '' : ' · drag across it to read one stretch'}
+            </span>
           </>
         )}
       </div>

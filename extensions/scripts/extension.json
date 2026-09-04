@@ -1,0 +1,33 @@
+{
+  "id": "scripts",
+  "name": "Dockerfiles and shell",
+  "version": "1.0.0",
+  "author": "Smart Terminal",
+  "summary": "Read a script by its own structure.",
+  "description": "There is nothing to render in a script, so what is offered is shape: the instruction on each line picked out, comments set back, line numbers, and the file divided the way it already divides itself — a Dockerfile by its stages, a shell script by its functions and its banner comments.",
+  "contributes": {
+    "previews": [
+      {
+        "kind": "dockerfile",
+        "files": [
+          "dockerfile",
+          "containerfile"
+        ],
+        "prefixes": [
+          "dockerfile."
+        ]
+      },
+      {
+        "kind": "shell",
+        "extensions": [
+          "sh",
+          "bash",
+          "zsh",
+          "ksh",
+          "fish",
+          "command"
+        ]
+      }
+    ]
+  }
+}

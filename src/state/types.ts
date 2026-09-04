@@ -233,8 +233,19 @@ export interface MonitorPanel {
  */
 export const STORAGE = '::storage';
 
+/**
+ * The extensions gallery, as a tab.
+ *
+ * A section for the same reason the monitor is one: it is something you read
+ * while working, and a dialog would cover the thing you were about to change.
+ */
+export interface ExtensionsPanel {
+  id: string;
+  kind: 'extensions';
+}
+
 /** What a section can hold besides a terminal. */
-export type Panel = FilePanel | MonitorPanel;
+export type Panel = FilePanel | MonitorPanel | ExtensionsPanel;
 
 /**
  * Git's place in the content row. A file path is always absolute, so this can
@@ -440,7 +451,7 @@ export interface SessionAnalysis {
     mean: number;
     turnsAbove: number;
     share: number;
-    curve: Array<{ at: number | null; context: number; output: number }>;
+    curve: Array<{ at: number | null; context: number; output: number; effective: number }>;
   };
   latency: { turns: number; p50: number; p95: number; totalMs: number };
   /** Where it is heading at the rate it has been going, or null if it is flat. */

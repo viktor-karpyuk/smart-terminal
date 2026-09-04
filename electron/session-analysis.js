@@ -183,7 +183,19 @@ function measure(rows) {
         // errored turn, or a row written without its accounting. Counting it
         // would put a zero in the curve and make the session look emptied.
         const size = contextOf(usage);
-        if (size > 0) samples.push({ at, context: size, output: num(usage.output_tokens) });
+        if (size > 0) {
+          samples.push({
+            at,
+            context: size,
+            output: num(usage.output_tokens),
+            // What this one request cost, weighted for cache. Carried per sample
+            // so a stretch of the curve can be added up: without it a selection
+            // could show the shape of a period and nothing about its price.
+            effective: Math.round(
+              num(usage.input_tokens) + write * CACHE_WRITE_RATE + num(usage.cache_read_input_tokens) * CACHE_READ_RATE,
+            ),
+          });
+        }
       }
 
       for (const block of blocksOf(row)) {

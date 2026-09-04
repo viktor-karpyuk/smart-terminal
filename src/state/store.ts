@@ -19,7 +19,16 @@ import type {
   SessionGroup,
 } from './types';
 import type { DropSide, LayoutNode, Profile, Session, SessionKind, Settings } from './types';
-import type { AuthStatus, DirEntry, GitBranch, GitCommit, GitFile, GitResult, UsageReport } from '../global';
+import type {
+  AuthStatus,
+  DirEntry,
+  ExtensionState,
+  GitBranch,
+  GitCommit,
+  GitFile,
+  GitResult,
+  UsageReport,
+} from '../global';
 import {
   allLeaves,
   allTabs,
@@ -45,6 +54,9 @@ import {
   readTail,
   writeToTerminal,
 } from '../terminals/registry';
+
+/** Panels whose terminal is being started, so a second press cannot start another. */
+const openingTerminal = new Set<string>();
 
 const DEFAULT_SETTINGS: Settings = {
   fontSize: 13,
@@ -94,6 +106,7 @@ export function asFilePanel(panel: Panel | undefined | null): FilePanel | null {
 /** What to call a section holding a panel — the dock and the tab strip both ask. */
 export function panelLabel(panel: Panel | undefined | null): string {
   if (panel?.kind === 'monitor') return 'Monitor';
+  if (panel?.kind === 'extensions') return 'Extensions';
   const root = panel?.kind === 'files' ? panel.root : '';
   return root.split('/').filter(Boolean).pop() ?? 'section';
 }
@@ -201,6 +214,8 @@ interface State {
   usageByProfile: Record<string, UsageReport>;
   usageLoading: Record<string, boolean>;
   usagePanelOpen: boolean;
+  /** Every extension and where it stands, with the rules the installed ones turn on. */
+  extensions: ExtensionState;
   /** The latest reading for each session, kept current by the monitor. */
   analysisBySession: Record<string, SessionAnalysis>;
   /** What the advisor last said about a session, and whether it is being asked. */
@@ -319,8 +334,10 @@ interface State {
   refreshAllUsage(force?: boolean): Promise<void>;
   setUsagePanelOpen(open: boolean): void;
   openMonitor(sessionId?: string | null): void;
+  openExtensions(): void;
   setMonitorSession(panelId: string, sessionId: string | null): void;
   refreshAnalysis(sessionId: string, force?: boolean): Promise<void>;
+  setExtension(id: string, action: 'install' | 'remove' | 'enable' | 'disable'): Promise<void>;
   askAdvisor(sessionId: string, options?: { question?: string; force?: boolean }): Promise<void>;
   tellSession(sessionId: string, text: string): Promise<void>;
   setRecording(sessionId: string, recording: boolean): Promise<void>;
@@ -446,6 +463,7 @@ export const useStore = create<State>((set, get) => ({
   usageByProfile: {},
   usageLoading: {},
   usagePanelOpen: false,
+  extensions: { rows: [], previews: [] },
   analysisBySession: {},
   adviceBySession: {},
   adviceAsking: {},
@@ -573,6 +591,20 @@ export const useStore = create<State>((set, get) => ({
     window.api.analysis.onChanged(({ sessionId, verdict }) => {
       set((state) => ({ analysisBySession: { ...state.analysisBySession, [sessionId]: verdict } }));
     });
+
+    // A working tree changes under the app constantly — a session runs `git add`,
+    // a build writes a file, a checkout swaps a branch. The panel follows.
+    window.api.git.onChanged(({ root, kind }) => {
+      if (!get().repos[root]) return;
+      // A change inside `.git` moved the repository itself, so the history and
+      // the branch list are stale too; a change in the tree only moved the files.
+      get().refreshRepo(root, kind === 'git' ? 'all' : 'status');
+    });
+
+    // What is installed decides what a file opens as, so it is read before the
+    // first folder is drawn and followed from then on.
+    window.api.extensions.list().then((state) => set({ extensions: state }));
+    window.api.extensions.onChanged((state) => set({ extensions: state }));
 
     // Groups and the session roster belong to the workspace, not to this window.
     window.api.groups.list().then((groups) => set({ groups }));
@@ -1368,6 +1400,11 @@ export const useStore = create<State>((set, get) => ({
   async togglePanelTerminal(panelId) {
     const panel = asFilePanel(get().panels[panelId]);
     if (!panel) return;
+    // Opening one waits on a shell being spawned, and until that returns the
+    // panel still says it has none. A second press in that gap opens a second
+    // shell that nothing points at — a terminal running with no way to see it
+    // and no way to stop it.
+    if (openingTerminal.has(panelId)) return;
 
     if (panel.terminalId) {
       get().closeSession(panel.terminalId);
@@ -1388,16 +1425,29 @@ export const useStore = create<State>((set, get) => ({
     if (!profile) return;
 
     const sessionId = crypto.randomUUID();
-    // Straight to `spawnInto`, never `newSession`: this session must not go into
-    // the layout. It is part of the panel, and a tab appearing for it would be a
-    // second copy of the same terminal in a place nobody put it.
-    await spawnInto(set, get, {
-      sessionId,
-      profile,
-      kind: 'shell',
-      cwd: panel.root || profile.cwd || state.homedir,
-      customTitle: 'Terminal',
-    });
+    openingTerminal.add(panelId);
+    try {
+      // Straight to `spawnInto`, never `newSession`: this session must not go
+      // into the layout. It is part of the panel, and a tab appearing for it
+      // would be a second copy of the same terminal in a place nobody put it.
+      await spawnInto(set, get, {
+        sessionId,
+        profile,
+        kind: 'shell',
+        cwd: panel.root || profile.cwd || state.homedir,
+        customTitle: 'Terminal',
+      });
+    } finally {
+      openingTerminal.delete(panelId);
+    }
+
+    const still = asFilePanel(get().panels[panelId]);
+    if (!still) {
+      // The panel was closed while the shell was starting. Nothing can reach
+      // this one now, so it goes rather than being left running.
+      get().closeSession(sessionId);
+      return;
+    }
 
     set((prev) => {
       const current = asFilePanel(prev.panels[panelId]);
@@ -2233,6 +2283,33 @@ export const useStore = create<State>((set, get) => ({
     schedulePersist(get);
   },
 
+  /** Open the gallery, or bring the one that is already open forward. */
+  openExtensions() {
+    const state = get();
+    const existing = Object.values(state.panels).find((panel) => panel.kind === 'extensions');
+    if (existing) {
+      const leaf = allLeaves(state.layout).find((candidate) => candidate.tabs.includes(existing.id));
+      if (leaf) {
+        get().focusPanel(leaf.id, existing.id);
+        return;
+      }
+      get().restoreMinimized(existing.id);
+      return;
+    }
+
+    const panelId = crypto.randomUUID();
+    const targetLeafId = state.activeLeafId || allLeaves(state.layout)[0]?.id;
+    set((prev) => {
+      const panels = { ...prev.panels, [panelId]: { id: panelId, kind: 'extensions' as const } };
+      if (!targetLeafId || !findLeaf(prev.layout, targetLeafId)) {
+        const leaf = makeLeaf([panelId]);
+        return { panels, layout: leaf, activeLeafId: leaf.id };
+      }
+      return { panels, layout: insertTab(prev.layout, targetLeafId, panelId), activeLeafId: targetLeafId };
+    });
+    schedulePersist(get);
+  },
+
   /**
    * Read one session again.
    *
@@ -2270,6 +2347,24 @@ export const useStore = create<State>((set, get) => ({
   /** Put a reading into the session it is about. Always asked for by name. */
   async tellSession(sessionId, text) {
     await window.api.analysis.tell(sessionId, text);
+  },
+
+  /**
+   * Install one, remove one, or turn one off without removing it.
+   *
+   * The answer replaces the whole state rather than patching it: what an
+   * extension contributes can overlap with what another does, so the effect of
+   * a change is a property of the set and not of the one that changed.
+   */
+  async setExtension(id, action) {
+    const api = window.api.extensions;
+    const next =
+      action === 'install'
+        ? await api.install(id)
+        : action === 'remove'
+          ? await api.remove(id)
+          : await api.enable(id, action === 'enable');
+    set({ extensions: next });
   },
 
   /** Point the monitor at a different session. */

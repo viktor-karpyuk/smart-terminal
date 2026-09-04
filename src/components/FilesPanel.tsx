@@ -8,6 +8,7 @@ import { Editor } from './Editor';
 import { Popover } from './Popover';
 import { FileIcon, colourFor } from '../lib/fileIcons';
 import { previewDocument, previewKind } from '../lib/preview';
+import type { PreviewKind, PreviewRule } from '../lib/preview';
 import { GitPanel } from './GitPanel';
 import { TerminalSlot } from './TerminalSlot';
 
@@ -180,7 +181,7 @@ function TerminalButton({ panelId }: { panelId: string }) {
 
   return (
     <button
-      className={`files-git${open ? ' has-changes' : ''}`}
+      className={`files-tool${open ? ' is-on' : ''}`}
       title={open ? 'Close the terminal' : 'Open a terminal in this folder'}
       aria-label="Terminal"
       onClick={() => toggle(panelId)}
@@ -188,7 +189,6 @@ function TerminalButton({ panelId }: { panelId: string }) {
       <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
         <path d="M2.6 4.4 5.4 7l-2.8 2.6M7.4 9.8h4" />
       </svg>
-      <span>Terminal</span>
     </button>
   );
 }
@@ -202,7 +202,7 @@ function TerminalButton({ panelId }: { panelId: string }) {
  * stated on screen rather than left to be discovered: a page's own scripts do
  * not run and the images beside it do not load.
  */
-function Preview({ path, text, kind }: { path: string; text: string; kind: 'markdown' | 'html' }) {
+function Preview({ path, text, kind }: { path: string; text: string; kind: NonNullable<PreviewKind> }) {
   const dark = useStore((s) => isDarkAppearance(s.settings.theme));
   const doc = useMemo(() => previewDocument(path, text, dark), [path, text, dark]);
 
@@ -295,6 +295,7 @@ function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string;
 
   return (
     <div className="files-tree-header">
+      <div className="files-head-main">
       <div className="files-root-row">
         {/*
           Changing the root walks you down into a folder, so there has to be a way
@@ -319,6 +320,17 @@ function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string;
       </div>
       <div className="files-root-line">
         <span className="files-root-path" title={root}>{short}</span>
+      </div>
+      </div>
+
+      {/*
+        Stacked at the end of the header rather than on a bar of their own.
+        A bar would have cost a row of tree height for two buttons, and bought
+        nothing: the header does not scroll, so they are just as permanently in
+        view here. Icons alone — a strip this narrow spends its width on words
+        before it spends it on anything worth reading.
+      */}
+      <div className="files-head-tools">
         <GitButton panelId={panelId} />
         <TerminalButton panelId={panelId} />
       </div>
@@ -536,8 +548,24 @@ function GitButton({ panelId }: { panelId: string }) {
   const gitRoot = useStore((s) => asFilePanel(s.panels[panelId])?.gitRoot ?? null);
   const changed = useStore((s) => (gitRoot ? (s.repos[gitRoot]?.files.length ?? 0) : 0));
   const branch = useStore((s) => (gitRoot ? (s.repos[gitRoot]?.branch ?? null) : null));
+  const showing = useStore((s) => Boolean(asFilePanel(s.panels[panelId])?.gitOpen));
   const openGit = useStore((s) => s.openGit);
+  const closeGit = useStore((s) => s.closeGit);
   const [isRepo, setIsRepo] = useState<boolean | null>(null);
+
+  /**
+   * Watch the repository for as long as this panel has one.
+   *
+   * Held by the panel rather than by the Git tab: the button carries a count of
+   * what has changed, and a count that only updates when you open the thing it
+   * is a count of is not worth having. Counted in the main process, so two
+   * panels on one repository share a single watch.
+   */
+  useEffect(() => {
+    if (!gitRoot) return;
+    window.api.git.watch(gitRoot);
+    return () => window.api.git.unwatch(gitRoot);
+  }, [gitRoot]);
 
   // Asked once. Offering Git where there is no repository is a button that can
   // only ever disappoint.
@@ -560,9 +588,19 @@ function GitButton({ panelId }: { panelId: string }) {
 
   return (
     <button
-      className={`files-git${changed ? ' has-changes' : ''}`}
-      onClick={() => openGit(panelId)}
-      title={branch ? `Git — on ${branch}${changed ? `, ${changed} changed` : ''}` : 'Git'}
+      // The same button both ways, like the terminal beside it: pressing the
+      // thing that opened something is how anyone expects to shut it again.
+      className={`files-tool${showing ? ' is-on' : ''}${changed ? ' has-changes' : ''}`}
+      onClick={() => (showing ? closeGit(panelId) : openGit(panelId))}
+      aria-label="Git"
+      aria-pressed={showing}
+      title={
+        showing
+          ? 'Close Git'
+          : branch
+            ? `Git — on ${branch}${changed ? `, ${changed} changed` : ''}`
+            : 'Git'
+      }
     >
       <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3">
         <circle cx="3.6" cy="3.2" r="1.7" />
@@ -570,7 +608,6 @@ function GitButton({ panelId }: { panelId: string }) {
         <circle cx="10.4" cy="6.4" r="1.7" />
         <path d="M3.6 4.9v4.2M5.2 3.9c2.6.4 3.8 1.3 4 2.3" />
       </svg>
-      <span>Git</span>
       {changed > 0 && <span className="files-git-count">{changed}</span>}
     </button>
   );
@@ -798,7 +835,10 @@ function OpenFile({
 }) {
   const buffer = useStore((s) => s.buffers[path]);
   const saveBuffer = useStore((s) => s.saveBuffer);
-  const kind = previewKind(path);
+  const rules = useStore((s) => s.extensions.previews) as PreviewRule[];
+  // Which files preview at all is decided by what is installed, so the rules
+  // come from the store rather than from the module's own list.
+  const kind = previewKind(path, rules);
   // Per open file, and not remembered: which way you want to look at a document
   // is a question about this minute, not a setting.
   const [showing, setShowing] = useState<'code' | 'preview' | 'both'>(kind ? 'preview' : 'code');

@@ -30,14 +30,15 @@ export function PanelTab({
 
   if (!panel) return null;
   const monitor = panel.kind === 'monitor';
+  const shop = panel.kind === 'extensions';
   const root = panel.kind === 'files' ? panel.root : '';
-  const name = monitor ? 'Monitor' : (root.split('/').filter(Boolean).pop() ?? 'Files');
+  const name = monitor ? 'Monitor' : shop ? 'Extensions' : (root.split('/').filter(Boolean).pop() ?? 'Files');
 
   return (
     <div
       className={`tab${selected ? ' tab-selected' : ''}`}
       style={{ boxShadow: selected ? 'inset 0 -2px 0 #7aa2f7' : undefined }}
-      title={monitor ? 'How every session is behaving' : root || 'No folder chosen yet'}
+      title={monitor ? 'How every session is behaving' : shop ? 'What the app can be taught to open' : root || 'No folder chosen yet'}
       // A folder tab moves like a session tab: the panes already know how to
       // take a tab, and a folder is one.
       draggable
@@ -53,7 +54,9 @@ export function PanelTab({
       }}
     >
       <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#7aa2f7" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-        {monitor ? (
+        {shop ? (
+          <path d="M2.2 4.6h4.2v4.2H2.2zM7.6 2.4h4v4h-4zM7.6 8.2h4v3.4h-4z" />
+        ) : monitor ? (
           <path d="M1.4 8h2.3l1.4-3.9L7.2 10l1.5-3.2 1 1.2h2.9" />
         ) : (
           <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />

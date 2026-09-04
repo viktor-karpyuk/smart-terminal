@@ -1,0 +1,19 @@
+{
+  "id": "yaml",
+  "name": "YAML",
+  "version": "1.0.0",
+  "author": "Smart Terminal",
+  "summary": "Compose files and workflows, folded by their own indentation.",
+  "description": "Keys, values, anchors and comments coloured apart, and every block foldable — which is what makes a deep manifest readable. A literal block after `run: |` is shown as content, not coloured as though its lines were YAML.",
+  "contributes": {
+    "previews": [
+      {
+        "kind": "yaml",
+        "extensions": [
+          "yml",
+          "yaml"
+        ]
+      }
+    ]
+  }
+}

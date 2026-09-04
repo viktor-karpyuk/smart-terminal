@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { asFilePanel, useStore } from '../state/store';
 import type { GitBranch, GitCommit, GitFile } from '../global';
 import { Popover } from './Popover';
+import { group } from '../lib/gitTree';
+import type { Node } from '../lib/gitTree';
 
 /**
  * Git, as a tab beside the files.
@@ -329,38 +331,86 @@ function BranchMenu({
 
 // --- Changes ---------------------------------------------------------------
 
-/** A node of the changes tree: a folder that holds more, or one changed file. */
-type Node = { kind: 'dir'; key: string; label: string; children: Node[]; count: number } | { kind: 'file'; key: string; file: GitFile };
+/** Every folder key in the tree, however deep — what "collapse everything" means. */
+function allFolders(nodes: Node[]): string[] {
+  const keys: string[] = [];
+  for (const node of nodes) {
+    if (node.kind !== 'dir') continue;
+    keys.push(node.key);
+    keys.push(...allFolders(node.children));
+  }
+  return keys;
+}
 
 /**
- * Group the changed files the way the panel is set to.
+ * One row of the changes tree, and everything under it.
  *
- * Directories with a single child are folded into one row — `src/state`, not
- * `src` then `state` — because otherwise a deep tree is mostly indentation.
+ * Recursive, which the previous version was not: it drew a folder and then its
+ * files, and rendered a folder inside a folder as nothing at all. That was
+ * invisible while every grouping produced one level — and it would have quietly
+ * swallowed whole modules the moment one produced two.
  */
-function group(files: GitFile[], grouping: string): Node[] {
-  if (grouping === 'files') {
-    return [...files]
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((file) => ({ kind: 'file' as const, key: file.path, file }));
+function TreeRow({
+  node,
+  depth,
+  panelId,
+  collapsed,
+  selectedPath,
+  onToggleStage,
+  onFold,
+}: {
+  node: Node;
+  depth: number;
+  panelId: string;
+  collapsed: string[];
+  selectedPath: string | null;
+  onToggleStage(file: GitFile): void;
+  onFold(key: string): void;
+}) {
+  if (node.kind === 'file') {
+    return (
+      <FileRow
+        file={node.file}
+        depth={depth}
+        onToggle={onToggleStage}
+        panelId={panelId}
+        selected={selectedPath === node.file.path}
+      />
+    );
   }
 
-  const byDir = new Map<string, GitFile[]>();
-  for (const file of files) {
-    const key = file.dir;
-    byDir.set(key, [...(byDir.get(key) ?? []), file]);
-  }
-  return [...byDir.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([dir, kids]) => ({
-      kind: 'dir' as const,
-      key: dir || '/',
-      label: dir || '(root)',
-      count: kids.length,
-      children: kids
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .map((file) => ({ kind: 'file' as const, key: file.path, file })),
-    }));
+  const shut = collapsed.includes(node.key);
+  return (
+    <>
+      <div
+        className="git-row is-dir"
+        style={{ paddingLeft: 6 + depth * 12 }}
+        onClick={() => onFold(node.key)}
+      >
+        <svg
+          className={`files-chevron${shut ? '' : ' is-open'}`}
+          width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"
+        >
+          <path d="M4.5 2.5L8 6l-3.5 3.5" />
+        </svg>
+        <span className="git-dir-name">{node.label}</span>
+        <span className="git-count">{node.count}</span>
+      </div>
+      {!shut &&
+        node.children.map((child) => (
+          <TreeRow
+            key={child.key}
+            node={child}
+            depth={depth + 1}
+            panelId={panelId}
+            collapsed={collapsed}
+            selectedPath={selectedPath}
+            onToggleStage={onToggleStage}
+            onFold={onFold}
+          />
+        ))}
+    </>
+  );
 }
 
 const LETTER_COLOUR: Record<string, string> = {
@@ -463,7 +513,10 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
           className="icon-btn"
           title="Collapse everything"
           onClick={() =>
-            patch(panelId, { gitCollapsed: tree.filter((n) => n.kind === 'dir').map((n) => n.key) })
+            // Every folder, not only the ones at the top: with modules over
+            // directories, collapsing the outer row and leaving the inner ones
+            // open means "expand everything" no longer means what it says.
+            patch(panelId, { gitCollapsed: allFolders(tree) })
           }
         >
           –
@@ -499,53 +552,24 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
       <div className="git-changes-body">
       <div className="git-list">
         {files.length === 0 && <p className="files-note">Nothing changed.</p>}
-        {tree.map((node) =>
-          node.kind === 'file' ? (
-            <FileRow
-              key={node.key}
-              file={node.file}
-              depth={0}
-              onToggle={toggle}
-              panelId={panelId}
-              selected={panel.selectedPath === node.file.path}
-            />
-          ) : (
-            <div key={node.key}>
-              <div
-                className="git-row is-dir"
-                onClick={() =>
-                  patch(panelId, {
-                    gitCollapsed: panel.gitCollapsed.includes(node.key)
-                      ? panel.gitCollapsed.filter((k) => k !== node.key)
-                      : [...panel.gitCollapsed, node.key],
-                  })
-                }
-              >
-                <svg
-                  className={`files-chevron${panel.gitCollapsed.includes(node.key) ? '' : ' is-open'}`}
-                  width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"
-                >
-                  <path d="M4.5 2.5L8 6l-3.5 3.5" />
-                </svg>
-                <span className="git-dir-name">{node.label}</span>
-                <span className="git-count">{node.count}</span>
-              </div>
-              {!panel.gitCollapsed.includes(node.key) &&
-                node.children.map((child) =>
-                  child.kind === 'file' ? (
-                    <FileRow
-                      key={child.key}
-                      file={child.file}
-                      depth={1}
-                      onToggle={toggle}
-                      panelId={panelId}
-                      selected={panel.selectedPath === child.file.path}
-                    />
-                  ) : null,
-                )}
-            </div>
-          ),
-        )}
+        {tree.map((node) => (
+          <TreeRow
+            key={node.key}
+            node={node}
+            depth={0}
+            panelId={panelId}
+            collapsed={panel.gitCollapsed}
+            selectedPath={panel.selectedPath}
+            onToggleStage={toggle}
+            onFold={(key) =>
+              patch(panelId, {
+                gitCollapsed: panel.gitCollapsed.includes(key)
+                  ? panel.gitCollapsed.filter((k) => k !== key)
+                  : [...panel.gitCollapsed, key],
+              })
+            }
+          />
+        ))}
       </div>
       {!compact && <Diff root={root} panelId={panelId} />}
       </div>
