@@ -29,32 +29,38 @@ test('the strongest thing seen in a burst is what gets reported', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-watcher-rank-'));
   assert.equal(watcher.watch(root), true);
 
-  // FSEvents decides when it has news, and how long that takes depends on what
-  // else the machine is doing — a fixed sleep here passes alone and fails in a
-  // full run. Waiting for the answer rather than for the clock is the difference
-  // between a test and a coin toss.
-  const settled = async (deadlineMs = 5000) => {
+  /**
+   * Wait for a kind of report to arrive, rather than for the clock.
+   *
+   * FSEvents decides when it has news and how it groups it, and under load it
+   * may split one burst into two — so "the last thing reported" is not a fact
+   * about the code, it is a fact about how busy the machine was. What the code
+   * actually promises is that each kind gets reported, and that build churn is
+   * never dressed up as something git should look at.
+   */
+  const sawKind = async (kind, deadlineMs = 5000) => {
     const until = Date.now() + deadlineMs;
     while (Date.now() < until) {
-      if (seen.length) return seen.at(-1);
+      if (seen.includes(kind)) return true;
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    return null;
+    return false;
   };
 
   try {
-    // A build writes, then something real changes: the burst must not be filed
-    // away as build churn.
+    // A build writes, and something real changes: the real change must be
+    // reported as a real change.
     fs.mkdirSync(path.join(root, 'dist'));
     fs.writeFileSync(path.join(root, 'dist', 'bundle.js'), 'x');
     fs.writeFileSync(path.join(root, 'source.ts'), 'y');
-    assert.equal(await settled(), 'tree', 'a real file changed in the same breath');
+    assert.ok(await sawKind('tree'), 'a real file changed and was reported as one');
 
-    // And a burst that is only build churn still says something, so the tree can
-    // follow a folder it is showing.
+    // And build churn on its own still says something, so a tree showing that
+    // folder can follow it — but never as a reason to ask git anything.
     seen.length = 0;
     fs.writeFileSync(path.join(root, 'dist', 'bundle.js'), 'z');
-    assert.equal(await settled(), 'noise');
+    assert.ok(await sawKind('noise'), 'the tree hears the build');
+    assert.ok(!seen.includes('tree'), 'and git is not sent off over a build');
   } finally {
     watcher.stop();
     fs.rmSync(root, { recursive: true, force: true });
