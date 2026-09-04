@@ -38,7 +38,7 @@ test('the strongest thing seen in a burst is what gets reported', async () => {
    * actually promises is that each kind gets reported, and that build churn is
    * never dressed up as something git should look at.
    */
-  const sawKind = async (kind, deadlineMs = 5000) => {
+  const sawKind = async (kind, deadlineMs = 10000) => {
     const until = Date.now() + deadlineMs;
     while (Date.now() < until) {
       if (seen.includes(kind)) return true;
@@ -47,7 +47,29 @@ test('the strongest thing seen in a burst is what gets reported', async () => {
     return false;
   };
 
+  /**
+   * Wait until the watcher is actually awake before testing what it says.
+   *
+   * `fs.watch` returns before FSEvents has started delivering, so a test that
+   * writes the instant it has a watcher is testing the timing of the operating
+   * system, not the code. Poking the tree until something comes back is the
+   * only way to know the watch is live — and skipping it is what made this test
+   * pass alone and fail in a full run.
+   */
+  const awake = async () => {
+    const until = Date.now() + 10000;
+    while (Date.now() < until) {
+      fs.writeFileSync(path.join(root, 'awake.txt'), String(Date.now()));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (seen.length) return true;
+    }
+    return false;
+  };
+
   try {
+    assert.ok(await awake(), 'the watcher never started delivering');
+    seen.length = 0;
+
     // A build writes, and something real changes: the real change must be
     // reported as a real change.
     fs.mkdirSync(path.join(root, 'dist'));

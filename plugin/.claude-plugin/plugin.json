@@ -1,0 +1,6 @@
+{
+  "name": "smart-terminal",
+  "version": "1.0.0",
+  "description": "Lets Smart Terminal be told what a session is doing instead of working it out by reading files on a timer.",
+  "author": { "name": "Smart Terminal" }
+}

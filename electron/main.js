@@ -20,6 +20,7 @@ const { Advisor } = require('./advisor');
 const { render: renderBrief } = require('./session-brief');
 const { RepoWatcher } = require('./repo-watcher');
 const { discover, gallery, previewRules, withSources, panelViews, withPanelSources } = require('./extensions');
+const { parseReport, replyFor, wantsBrief, compactionNote } = require('./hooks');
 const { Autopilot, looksLikeADecision } = require('./autopilot');
 const { tabsInLayout, minimizedIds, sessionsToRestore, unaccountedTabs } = require('./restore');
 const { MessageBridge } = require('./message-bridge');
@@ -116,6 +117,8 @@ const told = new Map();
 const TELL_COOLDOWN_MS = 30 * 60 * 1000;
 let fileWatcher = null;
 let mcpConfigPath = null;
+/** The app's own plugin, handed to each session with `--plugin-dir`. */
+let pluginPath = null;
 
 /** Keeps sessions moving when the only thing stopping them is nobody saying "go". */
 let autopilot = null;
@@ -280,6 +283,19 @@ function registerIpc() {
       extraArgs.push('--mcp-config', mcpConfigPath);
     }
 
+    /*
+      The app's own plugin, for this session only.
+
+      `--plugin-dir` rather than anything installed: the hooks in it are part of
+      the app and are versioned with it, so a session gets the ones that match
+      the app it is running inside and nothing is left behind on the machine
+      when the app is not there. Nobody has to install anything, and a session
+      started outside the app is unaffected.
+    */
+    if (kind === 'claude' && pluginPath && options.sessionId) {
+      extraArgs.push('--plugin-dir', pluginPath);
+    }
+
     const result = ptys.create({
       profile,
       cwd: workdir,
@@ -288,7 +304,13 @@ function registerIpc() {
       rows: options.rows,
       extraArgs,
       command: options.command || null,
-      env: { SMART_TERMINAL_SESSION_ID: options.sessionId || '' },
+      env: {
+        SMART_TERMINAL_SESSION_ID: options.sessionId || '',
+        // How a hook finds its way home. The MCP server is told the same path
+        // through its own config; a hook is a plain child of Claude, so the
+        // only way it can be told is the environment the shell was given.
+        SMART_TERMINAL_BRIDGE: socketPathFor(app.getPath('userData')),
+      },
     });
 
     const claudeSessionId = options.resumeSessionId || options.claudeSessionId;
@@ -1195,6 +1217,15 @@ function startMessaging() {
   );
   const socketPath = socketPathFor(dir);
 
+  // Packaged, this lives inside the asar, which `node` in a hook cannot read —
+  // the same reason the MCP server is unpacked beside it.
+  const plugin = path.join(__dirname, '..', 'plugin').replace(
+    `app.asar${path.sep}`,
+    `app.asar.unpacked${path.sep}`,
+  );
+  pluginPath = fs.existsSync(path.join(plugin, '.claude-plugin', 'plugin.json')) ? plugin : null;
+  if (!pluginPath) console.log('[hooks] the plugin folder is not there; sessions will run without it');
+
   try {
     fs.writeFileSync(
       mcpConfigPath,
@@ -1231,6 +1262,7 @@ function startMessaging() {
       return false;
     },
     isFree: sessionIsFree,
+    onHook: (request) => handleHook(request),
     // Sessions the app knows but is not running. Without this, a message to a
     // session that has ended comes back as "no such session", which is false and
     // leaves the sender nothing to do but try again.
@@ -1344,6 +1376,83 @@ function sendExtensions() {
   send('extensions:changed', state);
   return state;
 }
+
+/**
+ * Claude just told us something. Do whatever that means, and answer.
+ *
+ * Everything here is best-effort and none of it may throw: the session is
+ * waiting on this, and an exception in the app's bookkeeping must not be
+ * something a person feels while working. The reply is the only part Claude
+ * ever sees, and for three of the four events it is deliberately empty.
+ */
+function handleHook(request) {
+  const report = parseReport(request);
+  if (!report.ok) return { ok: false, error: report.error, reply: {} };
+
+  // The app's own id where it has one; otherwise place the session by the
+  // conversation, which is how a session somebody started by hand is found.
+  let sessionId = report.session && db.getSession(report.session) ? report.session : null;
+  if (!sessionId && report.conversation) {
+    sessionId = liveRoster().find((entry) => entry.conversation === report.conversation)?.id ?? null;
+  }
+  if (!sessionId) return { ok: true, reply: {}, detail: 'not a session this app is following' };
+  if (process.env.SMART_TERMINAL_DEV === '1') {
+    console.log(`[hooks] ${report.event}${report.source ? ` (${report.source})` : ''} from ${sessionId.slice(0, 8)}`);
+  }
+
+  try {
+    if (report.event === 'PreCompact') {
+      // The moment, and only the moment. What was in the context is
+      // reconstructed from the transcript afterwards and reconstructed exactly;
+      // what cannot be had later is that this is happening *now*, whether it
+      // was asked for, and what a manual compaction was told to keep.
+      context?.snapshot(sessionId, { force: true });
+      monitor?.read(sessionId, { force: true });
+      pendingCompaction.set(sessionId, compactionNote(report));
+    }
+
+    if (report.event === 'Stop') {
+      // A turn ended. The monitor reads on a timer and would have found this
+      // within the sweep; being told means the reading is never stale at the
+      // one moment somebody is most likely to be looking at it.
+      monitor?.read(sessionId, { force: true });
+    }
+
+    if (report.event === 'SessionEnd') {
+      context?.snapshot(sessionId, { force: true });
+    }
+
+    if (wantsBrief(report)) {
+      const entry = db.getBrief(sessionId);
+      const row = db.getSession(sessionId);
+      const carried = renderBrief(entry, { name: row?.title ?? null, command: null });
+      if (carried) {
+        if (process.env.SMART_TERMINAL_DEV === '1') {
+          console.log(`[hooks] handed ${sessionId.slice(0, 8)} its brief after ${report.source} (${carried.length} chars)`);
+        }
+        return {
+          ok: true,
+          reply: replyFor(report, carried),
+          detail: `handed ${sessionId} its brief after ${report.source}`,
+        };
+      }
+    }
+  } catch (error) {
+    // Said out loud in the log and nowhere else: the session carries on.
+    console.log(`[hooks] ${report.event} for ${sessionId}: ${error.message}`);
+  }
+
+  return { ok: true, reply: {} };
+}
+
+/**
+ * What a compaction was told, waiting for the transcript to catch up.
+ *
+ * `PreCompact` fires before the compaction is written down, so what it knows —
+ * the trigger, the instructions — arrives before the row it belongs to exists.
+ * It is held here until the monitor files that compaction.
+ */
+const pendingCompaction = new Map();
 
 function liveRoster() {
   const groupNames = new Map(db.listGroups({ limit: 500 }).map((group) => [group.id, group.name]));
