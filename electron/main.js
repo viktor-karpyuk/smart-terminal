@@ -320,7 +320,12 @@ function registerIpc() {
     return result;
   });
 
-  ipcMain.on('pty:write', (_e, { id, data }) => ptys.write(id, data));
+  ipcMain.on('pty:write', (_e, { id, data }) => {
+    // Typing is the cheapest possible hint that the picture is about to change,
+    // and it is what lets the cwd watcher idle without anyone noticing.
+    cwdWatcher?.wake();
+    ptys.write(id, data);
+  });
   ipcMain.on('pty:resize', (_e, { id, cols, rows }) => ptys.resize(id, cols, rows));
   ipcMain.on('pty:kill', (_e, { id }) => {
     cwdWatcher.forget(id);

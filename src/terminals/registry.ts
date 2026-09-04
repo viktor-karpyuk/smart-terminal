@@ -15,9 +15,79 @@ export interface TerminalHandle {
   host: HTMLDivElement;
   lastCols: number;
   lastRows: number;
+  /** The GPU renderer, while this terminal is one of the ones holding one. */
+  webgl: WebglAddon | null;
 }
 
 const handles = new Map<string, TerminalHandle>();
+
+/**
+ * How many terminals may draw on the GPU at once.
+ *
+ * Chromium allows sixteen WebGL contexts per renderer process and no more. Ask
+ * for a seventeenth and it does not fail: it quietly takes the *oldest* context
+ * away, xterm hears a context loss, and that terminal falls back to the DOM
+ * renderer — for good, since the addon used to be disposed and never asked for
+ * again, and with nothing on screen to say it happened. Measured at twenty-one
+ * terminals: sixteen on the GPU, five demoted, fifteen context-loss events. At
+ * eighteen sessions that is not a corner case, it is Tuesday.
+ *
+ * So the contexts are lent rather than handed out: only terminals actually on a
+ * pane hold one, twelve at a time, and the least recently shown gives it up
+ * first. Twelve rather than sixteen leaves room for whatever else on the page
+ * wants a canvas, and no window fits twelve terminals worth reading anyway.
+ */
+const MAX_WEBGL = 12;
+
+/** Who holds a context, least recently shown first. */
+const webglHolders: string[] = [];
+
+function dropWebgl(id: string) {
+  const at = webglHolders.indexOf(id);
+  if (at >= 0) webglHolders.splice(at, 1);
+  const handle = handles.get(id);
+  if (!handle?.webgl) return;
+  try {
+    handle.webgl.dispose();
+  } catch {
+    /* already gone with its context */
+  }
+  handle.webgl = null;
+}
+
+/**
+ * Give this terminal the GPU, taking it from whoever needs it least.
+ *
+ * Called when a terminal goes on screen rather than when it is created, because
+ * a terminal that nobody is looking at has nothing to draw. A context that is
+ * lost anyway is let go and can be asked for again later — the old code disposed
+ * the addon for good, so one bad moment cost that terminal the GPU for the rest
+ * of the session.
+ */
+function lendWebgl(id: string) {
+  const handle = handles.get(id);
+  if (!handle) return;
+
+  const at = webglHolders.indexOf(id);
+  if (at >= 0) {
+    // Already has one; note that it is the most recently wanted.
+    webglHolders.splice(at, 1);
+    webglHolders.push(id);
+    return;
+  }
+
+  while (webglHolders.length >= MAX_WEBGL) dropWebgl(webglHolders[0]);
+
+  try {
+    const webgl = new WebglAddon();
+    webgl.onContextLoss(() => dropWebgl(id));
+    handle.term.loadAddon(webgl);
+    handle.webgl = webgl;
+    webglHolders.push(id);
+  } catch {
+    /* no GPU context to be had; the DOM renderer draws it just the same */
+  }
+}
 
 // Terminals draw to a canvas, so nothing about their size or font is visible in the
 // DOM. Development builds expose the handles so they can be inspected directly;
@@ -34,8 +104,14 @@ function parkingLot(): HTMLDivElement {
   if (!park) {
     park = document.createElement('div');
     park.id = 'terminal-parking';
+    // `visibility: hidden` rather than merely off-screen: an off-screen element
+    // is still painted and composited every frame, and eighteen terminals drawing
+    // for nobody is most of what the renderer was doing. Hidden keeps the layout,
+    // so xterm can still measure its own text and a re-attached pane comes back
+    // the size it was.
     park.style.cssText =
-      'position:fixed;left:-100000px;top:0;width:900px;height:600px;overflow:hidden;pointer-events:none;';
+      'position:fixed;left:-100000px;top:0;width:900px;height:600px;overflow:hidden;'
+      + 'pointer-events:none;visibility:hidden;';
     document.body.appendChild(park);
   }
   return park;
@@ -93,23 +169,16 @@ export function ensureTerminal(id: string, options: CreateOptions): TerminalHand
   parkingLot().appendChild(host);
   term.open(host);
 
-  // WebGL keeps 60fps under Claude Code's redraw-heavy output; fall back quietly
-  // if the GPU context is unavailable or gets dropped.
-  try {
-    const webgl = new WebglAddon();
-    webgl.onContextLoss(() => webgl.dispose());
-    term.loadAddon(webgl);
-  } catch {
-    /* canvas/DOM renderer is fine, just slower */
-  }
-
   term.onData(options.onData);
   term.onBinary((data) => options.onData(data));
   term.onTitleChange(options.onTitle);
   term.onBell(options.onBell);
   term.onResize(({ cols, rows }) => options.onResize(cols, rows));
 
-  const handle: TerminalHandle = { id, term, fit, search, host, lastCols: 0, lastRows: 0 };
+  // No GPU renderer yet: it is lent when the terminal goes on a pane. Terminals
+  // are born parked, and eighteen of them asking for a context at startup is
+  // exactly how the cap gets blown before anything is even on screen.
+  const handle: TerminalHandle = { id, term, fit, search, host, lastCols: 0, lastRows: 0, webgl: null };
   handles.set(id, handle);
   return handle;
 }
@@ -126,12 +195,18 @@ export function attachTerminal(id: string, slot: HTMLElement) {
   const handle = handles.get(id);
   if (!handle) return;
   if (handle.host.parentElement !== slot) slot.appendChild(handle.host);
+  lendWebgl(id);
   fitTerminal(id);
 }
 
 export function parkTerminal(id: string) {
   const handle = handles.get(id);
-  if (handle && handle.host.parentElement !== parkingLot()) parkingLot().appendChild(handle.host);
+  if (!handle) return;
+  // The GPU goes back before the terminal does: a parked terminal is behind a
+  // `visibility: hidden`, so it has nothing to draw and no reason to hold a
+  // context somebody on screen wants.
+  dropWebgl(id);
+  if (handle.host.parentElement !== parkingLot()) parkingLot().appendChild(handle.host);
 }
 
 export function fitTerminal(id: string) {
@@ -232,6 +307,7 @@ export function setTerminalFontSize(id: string, fontSize: number) {
 export function disposeTerminal(id: string) {
   const handle = handles.get(id);
   if (!handle) return;
+  dropWebgl(id);
   handle.host.remove();
   handle.term.dispose();
   handles.delete(id);
