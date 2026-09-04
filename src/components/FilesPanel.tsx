@@ -8,7 +8,7 @@ import { Editor } from './Editor';
 import { Popover } from './Popover';
 import { FileIcon, colourFor } from '../lib/fileIcons';
 import { previewDocument, previewKind } from '../lib/preview';
-import type { PreviewKind } from '../lib/preview';
+import type { PreviewKind, PreviewRule } from '../lib/preview';
 import { GitPanel } from './GitPanel';
 import { TerminalSlot } from './TerminalSlot';
 
@@ -835,7 +835,10 @@ function OpenFile({
 }) {
   const buffer = useStore((s) => s.buffers[path]);
   const saveBuffer = useStore((s) => s.saveBuffer);
-  const kind = previewKind(path);
+  const rules = useStore((s) => s.extensions.previews) as PreviewRule[];
+  // Which files preview at all is decided by what is installed, so the rules
+  // come from the store rather than from the module's own list.
+  const kind = previewKind(path, rules);
   // Per open file, and not remembered: which way you want to look at a document
   // is a question about this minute, not a setting.
   const [showing, setShowing] = useState<'code' | 'preview' | 'both'>(kind ? 'preview' : 'code');

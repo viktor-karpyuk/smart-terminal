@@ -1,0 +1,13 @@
+{
+  "id": "csv",
+  "name": "Tables",
+  "version": "1.0.0",
+  "author": "Smart Terminal",
+  "summary": "Read CSV and TSV as a table instead of as commas.",
+  "description": "Brings its own code: the app has no idea how to read a delimited file, and this extension is what teaches it. Quoted fields, embedded commas and newlines, and doubled quotes are all handled; the first row is treated as a header when it looks like one. Runs in a worker with no access to the app, the disk or the page.",
+  "contributes": {
+    "previews": [
+      { "kind": "csv", "extensions": ["csv", "tsv", "psv"], "render": "render.js" }
+    ]
+  }
+}

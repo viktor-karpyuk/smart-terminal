@@ -233,8 +233,19 @@ export interface MonitorPanel {
  */
 export const STORAGE = '::storage';
 
+/**
+ * The extensions gallery, as a tab.
+ *
+ * A section for the same reason the monitor is one: it is something you read
+ * while working, and a dialog would cover the thing you were about to change.
+ */
+export interface ExtensionsPanel {
+  id: string;
+  kind: 'extensions';
+}
+
 /** What a section can hold besides a terminal. */
-export type Panel = FilePanel | MonitorPanel;
+export type Panel = FilePanel | MonitorPanel | ExtensionsPanel;
 
 /**
  * Git's place in the content row. A file path is always absolute, so this can

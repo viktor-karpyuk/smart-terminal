@@ -42,6 +42,15 @@ export function MonitorIcon() {
   );
 }
 
+/** Blocks that fit together — what an extension does to the app. */
+export function ExtensionsIcon() {
+  return (
+    <svg {...base} aria-hidden>
+      <path d="M2 5.2h4.2v4.2H2zM7.8 2.6h4.2v4.2H7.8zM7.8 8.4h4.2v4.2H7.8z" />
+    </svg>
+  );
+}
+
 export function HistoryIcon() {
   return (
     <svg {...base} aria-hidden>

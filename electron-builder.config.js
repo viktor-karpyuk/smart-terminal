@@ -46,7 +46,10 @@ module.exports = {
     output: 'release',
     buildResources: 'resources',
   },
-  files: ['dist/**', 'electron/**', 'package.json'],
+  // `extensions/**` is not optional: the manifests in it are what the gallery
+  // lists and what decides which files the app offers to open. Left out, the
+  // app ships with every reader switched off and nothing saying why.
+  files: ['dist/**', 'electron/**', 'extensions/**', 'package.json'],
   // node-pty is native; the MCP server has to be a real file on disk because the
   // Claude CLI spawns it as a plain-node child, and plain node cannot read an asar.
   asarUnpack: ['**/node_modules/node-pty/**', 'electron/group-mcp.js'],

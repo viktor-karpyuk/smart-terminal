@@ -22,6 +22,7 @@ import type { DropSide, LayoutNode, Profile, Session, SessionKind, Settings } fr
 import type {
   AuthStatus,
   DirEntry,
+  ExtensionState,
   GitBranch,
   GitCommit,
   GitFile,
@@ -105,6 +106,7 @@ export function asFilePanel(panel: Panel | undefined | null): FilePanel | null {
 /** What to call a section holding a panel — the dock and the tab strip both ask. */
 export function panelLabel(panel: Panel | undefined | null): string {
   if (panel?.kind === 'monitor') return 'Monitor';
+  if (panel?.kind === 'extensions') return 'Extensions';
   const root = panel?.kind === 'files' ? panel.root : '';
   return root.split('/').filter(Boolean).pop() ?? 'section';
 }
@@ -212,6 +214,8 @@ interface State {
   usageByProfile: Record<string, UsageReport>;
   usageLoading: Record<string, boolean>;
   usagePanelOpen: boolean;
+  /** Every extension and where it stands, with the rules the installed ones turn on. */
+  extensions: ExtensionState;
   /** The latest reading for each session, kept current by the monitor. */
   analysisBySession: Record<string, SessionAnalysis>;
   /** What the advisor last said about a session, and whether it is being asked. */
@@ -330,8 +334,10 @@ interface State {
   refreshAllUsage(force?: boolean): Promise<void>;
   setUsagePanelOpen(open: boolean): void;
   openMonitor(sessionId?: string | null): void;
+  openExtensions(): void;
   setMonitorSession(panelId: string, sessionId: string | null): void;
   refreshAnalysis(sessionId: string, force?: boolean): Promise<void>;
+  setExtension(id: string, action: 'install' | 'remove' | 'enable' | 'disable'): Promise<void>;
   askAdvisor(sessionId: string, options?: { question?: string; force?: boolean }): Promise<void>;
   tellSession(sessionId: string, text: string): Promise<void>;
   setRecording(sessionId: string, recording: boolean): Promise<void>;
@@ -457,6 +463,7 @@ export const useStore = create<State>((set, get) => ({
   usageByProfile: {},
   usageLoading: {},
   usagePanelOpen: false,
+  extensions: { rows: [], previews: [] },
   analysisBySession: {},
   adviceBySession: {},
   adviceAsking: {},
@@ -593,6 +600,11 @@ export const useStore = create<State>((set, get) => ({
       // the branch list are stale too; a change in the tree only moved the files.
       get().refreshRepo(root, kind === 'git' ? 'all' : 'status');
     });
+
+    // What is installed decides what a file opens as, so it is read before the
+    // first folder is drawn and followed from then on.
+    window.api.extensions.list().then((state) => set({ extensions: state }));
+    window.api.extensions.onChanged((state) => set({ extensions: state }));
 
     // Groups and the session roster belong to the workspace, not to this window.
     window.api.groups.list().then((groups) => set({ groups }));
@@ -2271,6 +2283,33 @@ export const useStore = create<State>((set, get) => ({
     schedulePersist(get);
   },
 
+  /** Open the gallery, or bring the one that is already open forward. */
+  openExtensions() {
+    const state = get();
+    const existing = Object.values(state.panels).find((panel) => panel.kind === 'extensions');
+    if (existing) {
+      const leaf = allLeaves(state.layout).find((candidate) => candidate.tabs.includes(existing.id));
+      if (leaf) {
+        get().focusPanel(leaf.id, existing.id);
+        return;
+      }
+      get().restoreMinimized(existing.id);
+      return;
+    }
+
+    const panelId = crypto.randomUUID();
+    const targetLeafId = state.activeLeafId || allLeaves(state.layout)[0]?.id;
+    set((prev) => {
+      const panels = { ...prev.panels, [panelId]: { id: panelId, kind: 'extensions' as const } };
+      if (!targetLeafId || !findLeaf(prev.layout, targetLeafId)) {
+        const leaf = makeLeaf([panelId]);
+        return { panels, layout: leaf, activeLeafId: leaf.id };
+      }
+      return { panels, layout: insertTab(prev.layout, targetLeafId, panelId), activeLeafId: targetLeafId };
+    });
+    schedulePersist(get);
+  },
+
   /**
    * Read one session again.
    *
@@ -2308,6 +2347,24 @@ export const useStore = create<State>((set, get) => ({
   /** Put a reading into the session it is about. Always asked for by name. */
   async tellSession(sessionId, text) {
     await window.api.analysis.tell(sessionId, text);
+  },
+
+  /**
+   * Install one, remove one, or turn one off without removing it.
+   *
+   * The answer replaces the whole state rather than patching it: what an
+   * extension contributes can overlap with what another does, so the effect of
+   * a change is a property of the set and not of the one that changed.
+   */
+  async setExtension(id, action) {
+    const api = window.api.extensions;
+    const next =
+      action === 'install'
+        ? await api.install(id)
+        : action === 'remove'
+          ? await api.remove(id)
+          : await api.enable(id, action === 'enable');
+    set({ extensions: next });
   },
 
   /** Point the monitor at a different session. */
