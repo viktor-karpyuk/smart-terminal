@@ -131,7 +131,10 @@ let monitor = null;
  * rather than merely recent. Built once and kept: it is counted per repository,
  * so two panels on the same one share a single watch.
  */
-const repos = new RepoWatcher({ emit: (root, kind) => send('git:changed', { root, kind }) });
+// One watcher for both the Git panel and the file tree: they are looking at the
+// same folder, and a file appearing is news to each of them. Ref-counted inside,
+// so either can hold the same root without blinding the other.
+const repos = new RepoWatcher({ emit: (root, kind) => send('tree:changed', { root, kind }) });
 /** App session ids whose processes this launch started, so quitting can close their rows. */
 const liveSessions = new Set();
 const usageCache = new Map();
@@ -759,6 +762,12 @@ function registerIpc() {
 
   ipcMain.on('files:watch', (_e, { file, mtimeMs }) => fileWatcher?.watch(file, mtimeMs ?? 0));
   ipcMain.on('files:unwatch', (_e, { file }) => fileWatcher?.forget(file));
+  // The tree, as opposed to a file that is open in the editor. A folder a panel
+  // is showing has to notice a file appearing, being renamed or going away —
+  // which the per-file poll cannot see, because it only knows about files
+  // somebody already opened.
+  ipcMain.on('files:watch-tree', (_e, root) => repos.watch(root));
+  ipcMain.on('files:unwatch-tree', (_e, root) => repos.release(root));
   ipcMain.on('files:reveal', (_e, file) => shell.showItemInFolder(file));
 
   /*

@@ -140,6 +140,10 @@ contextBridge.exposeInMainWorld('api', {
     watch: (file, mtimeMs) => ipcRenderer.send('files:watch', { file, mtimeMs }),
     unwatch: (file) => ipcRenderer.send('files:unwatch', { file }),
     onChanged: (handler) => on('files:changed', handler),
+    /** The folder a panel is showing, so the tree notices what appears in it. */
+    watchTree: (root) => ipcRenderer.send('files:watch-tree', root),
+    unwatchTree: (root) => ipcRenderer.send('files:unwatch-tree', root),
+    onTreeChanged: (handler) => on('tree:changed', handler),
     reveal: (file) => ipcRenderer.send('files:reveal', file),
   },
 
@@ -158,9 +162,11 @@ contextBridge.exposeInMainWorld('api', {
     watch: (root) => ipcRenderer.send('git:watch', root),
     unwatch: (root) => ipcRenderer.send('git:unwatch', root),
     onChanged: (fn) => {
+      // The same signal the file tree listens to: one watcher on the folder,
+      // two people interested in what it says.
       const handler = (_e, payload) => fn(payload);
-      ipcRenderer.on('git:changed', handler);
-      return () => ipcRenderer.removeListener('git:changed', handler);
+      ipcRenderer.on('tree:changed', handler);
+      return () => ipcRenderer.removeListener('tree:changed', handler);
     },
     /** One call, named. The names are an allowlist on the other side. */
     call: (name, root, args) => ipcRenderer.invoke('git:call', { name, root, args }),

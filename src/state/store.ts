@@ -159,6 +159,35 @@ const AUTH_RECHECK_EVERY = 5 * 60 * 1000;
 /** React StrictMode mounts effects twice in dev; the workspace must only boot once. */
 let initStarted = false;
 
+/**
+ * Which folder each panel has asked to be told about.
+ *
+ * The watch in the main process is counted, so two panels on one folder both
+ * hold it and the first to close does not blind the second. That only works if
+ * every watch is matched by exactly one release, which is what this map is for:
+ * a panel changes folders or closes, and what it was holding is known rather
+ * than guessed at.
+ */
+const followedRoots = new Map<string, string>();
+
+/**
+ * Follow a folder for this panel, letting go of whatever it followed before.
+ *
+ * Passing `null` is how a panel stops following anything, which is what closing
+ * one does.
+ */
+function followTree(panelId: string, root: string | null) {
+  const before = followedRoots.get(panelId) ?? null;
+  if (before === root) return;
+  if (before) window.api.files.unwatchTree(before);
+  if (root) {
+    window.api.files.watchTree(root);
+    followedRoots.set(panelId, root);
+  } else {
+    followedRoots.delete(panelId);
+  }
+}
+
 /** One repository's picture, refreshed rather than assumed to still be true. */
 interface RepoState {
   loading: boolean;
@@ -595,10 +624,32 @@ export const useStore = create<State>((set, get) => ({
     // A working tree changes under the app constantly — a session runs `git add`,
     // a build writes a file, a checkout swaps a branch. The panel follows.
     window.api.git.onChanged(({ root, kind }) => {
-      if (!get().repos[root]) return;
+      // `noise` is churn inside a build folder: real to the tree, nothing git
+      // should be asked about.
+      if (kind === 'noise' || !get().repos[root]) return;
       // A change inside `.git` moved the repository itself, so the history and
       // the branch list are stale too; a change in the tree only moved the files.
       get().refreshRepo(root, kind === 'git' ? 'all' : 'status');
+    });
+
+    /**
+     * And so does the tree.
+     *
+     * Until now the only thing that noticed a file changing was the poll over
+     * files somebody had already opened — so a process writing into the folder
+     * added files the tree never showed, renamed things it went on listing under
+     * the old name, and deleted things that stayed. The folder itself is watched
+     * now, and every listing under it that is being shown is read again.
+     *
+     * Only the folders already in the cache: those are the ones on screen or
+     * recently on screen, and re-reading a folder nobody has opened would be
+     * work done for nobody.
+     */
+    window.api.files.onTreeChanged(({ root }) => {
+      const inside = `${root.replace(/\/$/, '')}/`;
+      for (const dir of Object.keys(get().dirs)) {
+        if (dir === root || dir.startsWith(inside)) get().loadDir(dir);
+      }
     });
 
     // What is installed decides what a file opens as, so it is read before the
@@ -781,6 +832,7 @@ export const useStore = create<State>((set, get) => ({
       const panel = asFilePanel(any);
       if (!panel) continue;
       if (panel.gitRoot) get().refreshRepo(panel.gitRoot, 'all');
+      if (panel.root) followTree(panel.id, panel.root);
       for (const dir of panel.expanded) get().loadDir(dir);
       if (panel.active) get().openFile(panel.id, panel.active);
       for (const file of panel.open) if (file !== panel.active) get().openFile(panel.id, file);
@@ -1385,7 +1437,10 @@ export const useStore = create<State>((set, get) => ({
       return { panels, layout: result.root, activeLeafId: result.leafId, zoomedLeafId: null };
     });
 
-    if (root) get().loadDir(root);
+    if (root) {
+      get().loadDir(root);
+      followTree(panelId, root);
+    }
     schedulePersist(get);
     return panelId;
   },
@@ -1477,6 +1532,7 @@ export const useStore = create<State>((set, get) => ({
     // it running would be a shell nobody can see and nobody can stop.
     const shell = asFilePanel(panel)?.terminalId;
     if (shell) get().closeSession(shell);
+    followTree(panelId, null);
     // Its buffers are not closed with it: another panel may be showing the same
     // file, and an unsaved edit must never be discarded by closing a view of it.
     set((prev) => {
@@ -1654,6 +1710,7 @@ export const useStore = create<State>((set, get) => ({
         : prev;
     });
     get().loadDir(root);
+    followTree(panelId, root);
     schedulePersist(get);
   },
 

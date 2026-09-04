@@ -13,11 +13,52 @@ test('a change in the working tree is a change to the status', () => {
   assert.equal(interesting('README.md'), 'tree');
 });
 
-test('the noisy directories are ignored, or an npm install would never end', () => {
-  assert.equal(interesting('node_modules/left-pad/index.js'), null);
-  assert.equal(interesting('packages/api/node_modules/x/y.js'), null);
-  assert.equal(interesting('dist/bundle.js'), null);
-  assert.equal(interesting('target/debug/thing'), null);
+test('the noisy directories are noise, not silence', () => {
+  // Not `null`: a build writing into `dist` is exactly what somebody watching
+  // that folder in the tree wants to see. It is `noise` so that the tree hears
+  // it and git — whose refresh is the expensive one — does not.
+  assert.equal(interesting('node_modules/left-pad/index.js'), 'noise');
+  assert.equal(interesting('packages/api/node_modules/x/y.js'), 'noise');
+  assert.equal(interesting('dist/bundle.js'), 'noise');
+  assert.equal(interesting('target/debug/thing'), 'noise');
+});
+
+test('the strongest thing seen in a burst is what gets reported', async () => {
+  const seen = [];
+  const watcher = new RepoWatcher({ emit: (root, kind) => seen.push(kind), settleMs: 20 });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-watcher-rank-'));
+  assert.equal(watcher.watch(root), true);
+
+  // FSEvents decides when it has news, and how long that takes depends on what
+  // else the machine is doing — a fixed sleep here passes alone and fails in a
+  // full run. Waiting for the answer rather than for the clock is the difference
+  // between a test and a coin toss.
+  const settled = async (deadlineMs = 5000) => {
+    const until = Date.now() + deadlineMs;
+    while (Date.now() < until) {
+      if (seen.length) return seen.at(-1);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return null;
+  };
+
+  try {
+    // A build writes, then something real changes: the burst must not be filed
+    // away as build churn.
+    fs.mkdirSync(path.join(root, 'dist'));
+    fs.writeFileSync(path.join(root, 'dist', 'bundle.js'), 'x');
+    fs.writeFileSync(path.join(root, 'source.ts'), 'y');
+    assert.equal(await settled(), 'tree', 'a real file changed in the same breath');
+
+    // And a burst that is only build churn still says something, so the tree can
+    // follow a folder it is showing.
+    seen.length = 0;
+    fs.writeFileSync(path.join(root, 'dist', 'bundle.js'), 'z');
+    assert.equal(await settled(), 'noise');
+  } finally {
+    watcher.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('inside .git, only the parts that mean the repository moved', () => {
@@ -86,17 +127,28 @@ test('a commit outranks the file changes it comes with', async () => {
   watcher.stop();
 });
 
-test('the noisy directories really are quiet', async () => {
+test('the noisy directories never ask git anything', async () => {
   const root = fs.mkdtempSync(path.join(dir, 'c-'));
   fs.mkdirSync(path.join(root, 'node_modules'));
   const seen = [];
-  const watcher = new RepoWatcher({ emit: () => seen.push(1), settleMs: 60 });
+  const watcher = new RepoWatcher({ emit: (_root, kind) => seen.push(kind), settleMs: 60 });
   watcher.watch(root);
 
-  for (let i = 0; i < 20; i += 1) fs.writeFileSync(path.join(root, 'node_modules', `p${i}.js`), 'x');
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  assert.deepEqual(seen, []);
-  watcher.stop();
+  try {
+    for (let i = 0; i < 20; i += 1) fs.writeFileSync(path.join(root, 'node_modules', `p${i}.js`), 'x');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Twenty files, one report at most, and never one that would send anybody
+    // off to run `git status`.
+    assert.ok(seen.length <= 1, `a burst is one report, not ${seen.length}`);
+    assert.ok(
+      seen.every((kind) => kind === 'noise'),
+      'churn under node_modules must never be reported as a change git should look at',
+    );
+  } finally {
+    // In a `finally` because a watcher left running holds the event loop open,
+    // and a failed assertion would hang the whole suite rather than fail it.
+    watcher.stop();
+  }
 });
 
 test('two panels on one repository share a watch, and the first to close keeps it', () => {

@@ -668,7 +668,7 @@ declare global {
       git: {
         watch(root: string): void;
         unwatch(root: string): void;
-        onChanged(fn: (payload: { root: string; kind: 'tree' | 'git' }) => void): () => void;
+        onChanged(fn: (payload: { root: string; kind: 'tree' | 'git' | 'noise' }) => void): () => void;
         call(name: string, root: string, args?: unknown): Promise<GitResult>;
       };
       files: {
@@ -684,6 +684,9 @@ declare global {
         onChanged(
           handler: (changes: Array<{ path: string; mtimeMs: number; gone?: boolean }>) => void,
         ): () => void;
+        watchTree(root: string): void;
+        unwatchTree(root: string): void;
+        onTreeChanged(handler: (payload: { root: string; kind: 'tree' | 'git' | 'noise' }) => void): () => void;
         reveal(file: string): void;
       };
       system: {
