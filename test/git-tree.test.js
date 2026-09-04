@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { group, moduleOf } = require('../.test-build/lib/gitTree');
+const { group, moduleOf, sections } = require('../.test-build/lib/gitTree');
 
 /** A changed file, shaped the way `git status` reports one. */
 function file(path) {
@@ -81,5 +81,47 @@ test('no two nodes share a key, which is what folding turns on', () => {
     keys.length = 0;
     walk(group(files, grouping));
     assert.equal(new Set(keys).size, keys.length, `${grouping} produced a duplicate key`);
+  }
+});
+
+test('new files are their own heap, the way IntelliJ splits them', () => {
+  const changed = { ...file('src/a.ts'), untracked: false };
+  const isNew = { ...file('src/b.ts'), untracked: true };
+  const parts = sections([changed, isNew], 'directory');
+  assert.deepEqual(parts.map((p) => p.id), ['changes', 'unversioned']);
+  assert.deepEqual(parts.map((p) => p.count), [1, 1]);
+  assert.deepEqual(shape(parts[0].nodes), ['src[a.ts]']);
+  assert.deepEqual(shape(parts[1].nodes), ['src[b.ts]']);
+});
+
+test('a section that has nothing in it is not shown at all', () => {
+  const only = [{ ...file('a.ts'), untracked: true }];
+  assert.deepEqual(sections(only, 'directory').map((p) => p.id), ['unversioned']);
+  assert.deepEqual(sections([{ ...file('a.ts'), untracked: false }], 'directory').map((p) => p.id), ['changes']);
+  assert.deepEqual(sections([], 'directory'), []);
+});
+
+test('the same folder in both heaps folds separately', () => {
+  // Without a key per section, collapsing `src` under the changes would collapse
+  // `src` under the new files too — one click, two folds.
+  const parts = sections(
+    [{ ...file('src/a.ts'), untracked: false }, { ...file('src/b.ts'), untracked: true }],
+    'directory',
+  );
+  assert.notEqual(parts[0].nodes[0].key, parts[1].nodes[0].key);
+});
+
+test('splitting keeps every file, in every grouping', () => {
+  const files = [
+    { ...file('a.ts'), untracked: true },
+    { ...file('src/b.ts'), untracked: false },
+    { ...file('packages/x/c.ts'), untracked: true },
+    { ...file('packages/x/deep/d.ts'), untracked: false },
+  ];
+  const counted = (nodes) => nodes.reduce((sum, n) => sum + (n.kind === 'file' ? 1 : counted(n.children)), 0);
+  for (const grouping of ['files', 'directory', 'module', 'both']) {
+    const parts = sections(files, grouping);
+    assert.equal(parts.reduce((sum, p) => sum + counted(p.nodes), 0), files.length, `${grouping} lost a file`);
+    assert.equal(parts.reduce((sum, p) => sum + p.count, 0), files.length, `${grouping} miscounted`);
   }
 });
