@@ -8,6 +8,7 @@ import { Editor } from './Editor';
 import { Popover } from './Popover';
 import { FileIcon, colourFor } from '../lib/fileIcons';
 import { previewDocument, previewKind } from '../lib/preview';
+import { renderWithExtension } from '../lib/extensionRender';
 import type { PreviewKind, PreviewRule } from '../lib/preview';
 import { GitPanel } from './GitPanel';
 import { TerminalSlot } from './TerminalSlot';
@@ -204,15 +205,54 @@ function TerminalButton({ panelId }: { panelId: string }) {
  */
 function Preview({ path, text, kind }: { path: string; text: string; kind: NonNullable<PreviewKind> }) {
   const dark = useStore((s) => isDarkAppearance(s.settings.theme));
-  const doc = useMemo(() => previewDocument(path, text, dark), [path, text, dark]);
+  // The rule that matched, so an extension's own renderer can be found. Only its
+  // source matters here, and a string is a stable thing to select.
+  const source = useStore(
+    (s) => s.extensions.previews.find((rule) => rule.kind === kind)?.source ?? null,
+  );
+  const [fromExtension, setFromExtension] = useState<{ html: string } | { error: string } | null>(null);
+
+  /**
+   * An extension's renderer is asked in a worker, so the answer arrives later.
+   * What is on screen while it does is deliberately the last good answer rather
+   * than a blank: retyping in a file should not make the preview flicker.
+   */
+  useEffect(() => {
+    if (!source) {
+      setFromExtension(null);
+      return;
+    }
+    let alive = true;
+    renderWithExtension(kind, source, { path, text, dark })
+      .then((html) => alive && setFromExtension({ html }))
+      .catch((error: Error) => alive && setFromExtension({ error: error.message }));
+    return () => {
+      alive = false;
+    };
+  }, [kind, source, path, text, dark]);
+
+  const built = useMemo(
+    () => (source ? '' : previewDocument(path, text, dark, 3, kind)),
+    [source, path, text, dark, kind],
+  );
+
+  const failed = fromExtension && 'error' in fromExtension ? fromExtension.error : null;
+  const doc = source ? (fromExtension && 'html' in fromExtension ? fromExtension.html : '') : built;
 
   return (
     <div className="file-preview">
+      {source && !fromExtension && <p className="file-preview-note">Asking the extension…</p>}
+      {failed && (
+        <p className="file-preview-note is-warn">
+          The extension could not render this: {failed}
+        </p>
+      )}
       <iframe
         className="file-preview-frame"
         title={`Preview of ${path.split('/').pop()}`}
         // No allow-scripts and no allow-same-origin: it renders, and can do
-        // nothing else. Everything the preview cannot show follows from this.
+        // nothing else. Everything the preview cannot show follows from this —
+        // including that an extension's own output cannot act either.
         sandbox=""
         srcDoc={doc}
       />

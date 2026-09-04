@@ -386,7 +386,17 @@ export interface ExtensionRow {
 /** The gallery, and the rules the installed ones turn on. */
 export interface ExtensionState {
   rows: ExtensionRow[];
-  previews: Array<{ kind: string; extensions: string[]; files: string[]; prefixes: string[] }>;
+  previews: Array<{
+    kind: string;
+    extensions: string[];
+    files: string[];
+    prefixes: string[];
+    /** The extension's own renderer, as source. Null when the app draws this kind. */
+    source: string | null;
+    /** Which extension contributed it, and why its renderer could not be read. */
+    from: string;
+    error?: string;
+  }>;
 }
 
 /** One table, with what it holds and roughly what it weighs. */
