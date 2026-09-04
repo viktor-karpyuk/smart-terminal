@@ -93,7 +93,17 @@ export function SessionTab({ sessionId, selected, tight, grouped }: Props) {
         openContextMenu(sessionId, event.clientX, event.clientY);
       }}
     >
-      <span className="tab-dot" style={{ background: color }} />
+      {/*
+        The account, as a colour rather than as words. It used to be spelled out
+        in front of every tab, which cost more room than the name of the session
+        itself — and the name is the part you are reading. The dot says the same
+        thing in seven pixels, and hovering it says it in words.
+      */}
+      <span
+        className="tab-dot"
+        style={{ background: color }}
+        title={`${profile?.name ?? 'account'}${profile?.configDir ? '' : ' (default config)'}`}
+      />
       {alert && (
         <span
           className={`tab-alert is-${alert}`}
@@ -104,9 +114,6 @@ export function SessionTab({ sessionId, selected, tight, grouped }: Props) {
           }}
         />
       )}
-      <span className="tab-account" style={{ color }}>
-        {profile?.name ?? 'account'}
-      </span>
       {session.handoffFrom && (
         <span className="tab-handoff" title={`Conversation carried over from ${cameFrom ?? 'another account'}`}>
           ↷
