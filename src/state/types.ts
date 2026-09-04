@@ -244,8 +244,27 @@ export interface ExtensionsPanel {
   kind: 'extensions';
 }
 
+/**
+ * A view an extension contributes, as a section of its own.
+ *
+ * It carries the folder rather than looking one up, because a panel that
+ * follows whatever happens to be focused is a panel that changes what it is
+ * showing while you are reading it. This one was opened on a repository and
+ * stays on that repository until it is closed.
+ */
+export interface ExtensionViewPanel {
+  id: string;
+  kind: 'extension';
+  /** Which contributed panel this is — `contributes.panels[].id`. */
+  viewId: string;
+  /** What it is called, kept here so the tab has a name before the frame loads. */
+  title: string;
+  /** The repository it was opened on, for a panel that needs one. */
+  root: string | null;
+}
+
 /** What a section can hold besides a terminal. */
-export type Panel = FilePanel | MonitorPanel | ExtensionsPanel;
+export type Panel = FilePanel | MonitorPanel | ExtensionsPanel | ExtensionViewPanel;
 
 /**
  * Git's place in the content row. A file path is always absolute, so this can

@@ -373,6 +373,7 @@ function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string;
       <div className="files-head-tools">
         <GitButton panelId={panelId} />
         <TerminalButton panelId={panelId} />
+        <ExtensionButtons panelId={panelId} />
       </div>
       {open && (
         <Popover anchorEl={buttonRef.current} onClose={() => setOpen(false)}>
@@ -650,6 +651,53 @@ function GitButton({ panelId }: { panelId: string }) {
       </svg>
       {changed > 0 && <span className="files-git-count">{changed}</span>}
     </button>
+  );
+}
+
+/**
+ * A button for every view an extension contributes to a folder.
+ *
+ * Nothing here knows what any of them do. An extension says it has a panel and
+ * what that panel needs, and this offers it where what it needs is there — so
+ * the app grows a button without the app being edited, which is the whole point
+ * of the thing being an extension rather than a feature.
+ */
+function ExtensionButtons({ panelId }: { panelId: string }) {
+  const root = useStore((s) => asFilePanel(s.panels[panelId])?.root ?? '');
+  const gitRoot = useStore((s) => asFilePanel(s.panels[panelId])?.gitRoot ?? null);
+  // Ids only: a selector that builds a fresh array of objects re-renders this
+  // for ever, which is a lesson this file has already learned once.
+  const viewIds = useStore(
+    useShallow((s) => s.extensions.panels.map((view) => `${view.id}\u0000${view.title}\u0000${view.needs ?? ''}`)),
+  );
+  const openExtensionView = useStore((s) => s.openExtensionView);
+  if (!viewIds.length) return null;
+
+  return (
+    <>
+      {viewIds.map((packed) => {
+        const [id, title, needs] = packed.split('\u0000');
+        // A panel that needs a repository is not offered on a folder that is
+        // not one: a button whose only possible outcome is an apology.
+        if (needs === 'repository' && !gitRoot) return null;
+        return (
+          <button
+            key={id}
+            className="files-tool"
+            onClick={() => openExtensionView(id, needs === 'repository' ? gitRoot : root || null)}
+            aria-label={title}
+            title={title}
+          >
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3">
+              <path d="M2 10.5V3.2M2 3.2a1.4 1.4 0 1 0 0-.1M2 10.8a1.4 1.4 0 1 0 0 .1" />
+              <path d="M7 11.2V6.4c0-1 .8-1.8 1.8-1.8H11" />
+              <circle cx="7" cy="12" r="1.4" />
+              <circle cx="12" cy="4.6" r="1.4" />
+            </svg>
+          </button>
+        );
+      })}
+    </>
   );
 }
 

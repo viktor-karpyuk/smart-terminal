@@ -107,6 +107,7 @@ export function asFilePanel(panel: Panel | undefined | null): FilePanel | null {
 export function panelLabel(panel: Panel | undefined | null): string {
   if (panel?.kind === 'monitor') return 'Monitor';
   if (panel?.kind === 'extensions') return 'Extensions';
+  if (panel?.kind === 'extension') return panel.title;
   const root = panel?.kind === 'files' ? panel.root : '';
   return root.split('/').filter(Boolean).pop() ?? 'section';
 }
@@ -364,6 +365,10 @@ interface State {
   setUsagePanelOpen(open: boolean): void;
   openMonitor(sessionId?: string | null): void;
   openExtensions(): void;
+  /** Open a view an extension contributes, on a folder. */
+  openExtensionView(viewId: string, root: string | null): void;
+  /** Show a file somewhere sensible — the app decides where, the asker does not. */
+  revealFile(root: string, path: string): void;
   setMonitorSession(panelId: string, sessionId: string | null): void;
   refreshAnalysis(sessionId: string, force?: boolean): Promise<void>;
   setExtension(id: string, action: 'install' | 'remove' | 'enable' | 'disable'): Promise<void>;
@@ -492,7 +497,7 @@ export const useStore = create<State>((set, get) => ({
   usageByProfile: {},
   usageLoading: {},
   usagePanelOpen: false,
-  extensions: { rows: [], previews: [] },
+  extensions: { rows: [], previews: [], panels: [] },
   analysisBySession: {},
   adviceBySession: {},
   adviceAsking: {},
@@ -2365,6 +2370,83 @@ export const useStore = create<State>((set, get) => ({
       return { panels, layout: insertTab(prev.layout, targetLeafId, panelId), activeLeafId: targetLeafId };
     });
     schedulePersist(get);
+  },
+
+  /**
+   * Open a view an extension contributes.
+   *
+   * Keyed on the view *and* the folder: two repositories are two different
+   * things to look at, and bringing forward the graph of another repository
+   * because it happens to be the same extension would be the wrong answer to
+   * "show me this one".
+   */
+  openExtensionView(viewId, root) {
+    const state = get();
+    const view = state.extensions.panels.find((candidate) => candidate.id === viewId);
+    const existing = Object.values(state.panels).find(
+      (panel) => panel.kind === 'extension' && panel.viewId === viewId && panel.root === root,
+    );
+    if (existing) {
+      const leaf = allLeaves(state.layout).find((candidate) => candidate.tabs.includes(existing.id));
+      if (leaf) {
+        get().focusPanel(leaf.id, existing.id);
+        return;
+      }
+      get().restoreMinimized(existing.id);
+      return;
+    }
+
+    const panelId = crypto.randomUUID();
+    const targetLeafId = state.activeLeafId || allLeaves(state.layout)[0]?.id;
+    const panel = {
+      id: panelId,
+      kind: 'extension' as const,
+      viewId,
+      title: view?.title ?? viewId,
+      root,
+    };
+    set((prev) => {
+      const panels = { ...prev.panels, [panelId]: panel };
+      if (!targetLeafId || !findLeaf(prev.layout, targetLeafId)) {
+        const leaf = makeLeaf([panelId]);
+        return { panels, layout: leaf, activeLeafId: leaf.id };
+      }
+      return { panels, layout: insertTab(prev.layout, targetLeafId, panelId), activeLeafId: targetLeafId };
+    });
+    schedulePersist(get);
+  },
+
+  /**
+   * Show a file, without being told where to put it.
+   *
+   * Asked for by a panel that has no idea what else is open — an extension can
+   * say "show this file" and nothing more, which is the right amount of power
+   * for it to have. Somewhere sensible means: a folder tab already on that
+   * repository, preferring the one in front; failing that, a new one.
+   */
+  revealFile(root, path) {
+    const state = get();
+    const leaves = allLeaves(state.layout);
+    const active = leaves.find((leaf) => leaf.id === state.activeLeafId);
+
+    const suits = (panel: Panel | undefined) => {
+      const files = asFilePanel(panel);
+      return Boolean(files && (files.gitRoot === root || (files.root && path.startsWith(files.root))));
+    };
+
+    // The one in front first: opening a file into a tab somebody is looking at
+    // is the answer they expected, even when an older tab would also have fit.
+    const inFront = active?.tabs.map((id) => state.panels[id]).find(suits);
+    const anywhere = inFront ?? Object.values(state.panels).find(suits);
+    if (anywhere) {
+      const leaf = leaves.find((candidate) => candidate.tabs.includes(anywhere.id));
+      if (leaf) get().focusPanel(leaf.id, anywhere.id);
+      get().openFile(anywhere.id, path);
+      return;
+    }
+
+    const panelId = get().openFilePanel({ root });
+    if (panelId) get().openFile(panelId, path);
   },
 
   /**

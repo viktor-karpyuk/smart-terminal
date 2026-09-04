@@ -19,7 +19,7 @@ const { summarise, oneLine } = require('./session-analysis');
 const { Advisor } = require('./advisor');
 const { render: renderBrief } = require('./session-brief');
 const { RepoWatcher } = require('./repo-watcher');
-const { discover, gallery, previewRules, withSources } = require('./extensions');
+const { discover, gallery, previewRules, withSources, panelViews, withPanelSources } = require('./extensions');
 const { Autopilot, looksLikeADecision } = require('./autopilot');
 const { tabsInLayout, minimizedIds, sessionsToRestore, unaccountedTabs } = require('./restore');
 const { MessageBridge } = require('./message-bridge');
@@ -1331,7 +1331,11 @@ function extensionState() {
   const rows = gallery(builtInExtensions(), db.installedExtensions());
   // The renderer needs the code, not a path to it: it runs in a worker built
   // from a blob, which has no filesystem to read one from.
-  return { rows, previews: withSources(previewRules(rows)) };
+  return {
+    rows,
+    previews: withSources(previewRules(rows)),
+    panels: withPanelSources(panelViews(rows)),
+  };
 }
 
 /** Answer the caller and tell every window, since this changes what files open as. */

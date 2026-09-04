@@ -1,0 +1,19 @@
+{
+  "id": "git-graph",
+  "name": "Git Graph",
+  "version": "1.0.0",
+  "author": "Smart Terminal",
+  "summary": "The history as a graph you can work in, not a list you can read.",
+  "description": "Every branch and every merge drawn as lanes, with the uncommitted work sitting at the top of them where it actually is. Branches, remotes and tags ride on the commit they point at, and clicking one checks it out. Select a commit for its whole message, its files and their line counts, and for the things you can do from there — check out, revert, branch, merge, rebase. Search runs over messages, authors and hashes and steps between the matches rather than hiding the shape of the history. Handles a long history because it only draws what is on screen. This is a panel, not a preview: it brings its own code and runs it in a frame with an origin of its own, with no reach into the app except a fixed list of git operations, two of which stop to ask you first.",
+  "contributes": {
+    "panels": [
+      {
+        "id": "git-graph",
+        "title": "Git Graph",
+        "summary": "The history as a graph.",
+        "needs": "repository",
+        "render": "panel.html"
+      }
+    ]
+  }
+}

@@ -397,6 +397,26 @@ export interface ExtensionState {
     from: string;
     error?: string;
   }>;
+  panels: ExtensionPanelView[];
+}
+
+/**
+ * A whole view an extension contributes, as the document it is.
+ *
+ * Not a render function like a preview: a panel is worked in rather than looked
+ * at, so it ships a document that runs in a frame of its own and talks to the
+ * app by message.
+ */
+export interface ExtensionPanelView {
+  id: string;
+  title: string;
+  summary: string;
+  /** What it cannot work without — `"repository"` means a folder that is one. */
+  needs: string | null;
+  render: string;
+  from: string;
+  source: string | null;
+  error?: string;
 }
 
 /** One table, with what it holds and roughly what it weighs. */

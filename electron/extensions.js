@@ -178,6 +178,67 @@ function previewRules(rows) {
 }
 
 /**
+ * The panels an installed extension contributes.
+ *
+ * A preview turns the text of a file into HTML and stops there. A panel is a
+ * different animal: it is a view somebody works in, so it has to react to a
+ * click, ask the app a question and get an answer back. That is why a panel
+ * brings a whole document rather than a render function — it is shown in a
+ * sandboxed frame that runs its scripts in an origin of its own, and talks to
+ * the app through messages rather than by reaching into it.
+ *
+ * `needs: "repository"` is the panel saying what it cannot work without, so the
+ * app can say why it is empty instead of drawing an empty thing.
+ */
+function panelViews(rows) {
+  const panels = [];
+  for (const row of rows) {
+    if (row.status === 'available' || row.status === 'gone' || !row.enabled) continue;
+    for (const panel of row.contributes?.panels ?? []) {
+      if (!panel?.id || !panel.render) continue;
+      panels.push({
+        id: String(panel.id),
+        title: String(panel.title ?? panel.id),
+        summary: String(panel.summary ?? ''),
+        needs: panel.needs ? String(panel.needs) : null,
+        render: String(panel.render),
+        from: row.id,
+        dir: row.dir ?? null,
+      });
+    }
+  }
+  return panels;
+}
+
+/**
+ * Read a file an extension brought, refusing anything outside its own folder.
+ *
+ * Shared by previews and panels because it is the same question both times, and
+ * a containment check written twice is a containment check that will one day
+ * only be right once.
+ */
+function readInside(dir, relative) {
+  const target = path.resolve(dir, relative);
+  if (!target.startsWith(path.resolve(dir) + path.sep)) {
+    return { source: null, error: 'it points outside the extension folder' };
+  }
+  try {
+    return { source: fs.readFileSync(target, 'utf8'), error: null };
+  } catch (error) {
+    return { source: null, error: `it could not be read — ${String(error?.message ?? error)}` };
+  }
+}
+
+/** The panels, with the document each one is. */
+function withPanelSources(panels) {
+  return panels.map((panel) => {
+    if (!panel.dir) return { ...panel, source: null, error: 'the extension has no folder' };
+    const { source, error } = readInside(panel.dir, panel.render);
+    return error ? { ...panel, source: null, error } : { ...panel, source };
+  });
+}
+
+/**
  * Load the code an extension renders with.
  *
  * Read here and handed over as text rather than imported: it is going to be run
@@ -190,16 +251,19 @@ function withSources(rules) {
   return rules.map((rule) => {
     if (!rule.render || !rule.dir) return { ...rule, source: null };
     // Nothing outside the extension's own folder, whatever the manifest says.
-    const target = path.resolve(rule.dir, rule.render);
-    if (!target.startsWith(path.resolve(rule.dir) + path.sep)) {
-      return { ...rule, source: null, error: 'its renderer is outside the extension folder' };
-    }
-    try {
-      return { ...rule, source: fs.readFileSync(target, 'utf8') };
-    } catch (error) {
-      return { ...rule, source: null, error: `its renderer could not be read — ${String(error?.message ?? error)}` };
-    }
+    const { source, error } = readInside(rule.dir, rule.render);
+    return error ? { ...rule, source: null, error: `its renderer: ${error}` } : { ...rule, source };
   });
 }
 
-module.exports = { readManifest, discover, gallery, compareVersions, previewRules, withSources, validate };
+module.exports = {
+  readManifest,
+  discover,
+  gallery,
+  compareVersions,
+  previewRules,
+  withSources,
+  panelViews,
+  withPanelSources,
+  validate,
+};

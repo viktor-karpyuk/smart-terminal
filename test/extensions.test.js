@@ -4,7 +4,16 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { readManifest, discover, gallery, compareVersions, previewRules, validate } = require('../electron/extensions.js');
+const {
+  readManifest,
+  discover,
+  gallery,
+  compareVersions,
+  previewRules,
+  panelViews,
+  withPanelSources,
+  validate,
+} = require('../electron/extensions.js');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-test-'));
 
@@ -41,8 +50,45 @@ test('the real manifests in the repository are all valid', () => {
   for (const manifest of found) {
     assert.equal(manifest.broken, undefined, `${manifest.id ?? manifest.dir} is broken`);
     assert.ok(manifest.summary, `${manifest.id} has no summary`);
-    assert.ok(manifest.contributes.previews?.length, `${manifest.id} contributes nothing`);
+    const contributes =
+      (manifest.contributes.previews?.length ?? 0) + (manifest.contributes.panels?.length ?? 0);
+    assert.ok(contributes > 0, `${manifest.id} contributes nothing`);
   }
+});
+
+test('a panel says what it is and what file draws it', () => {
+  const found = discover(path.join(__dirname, '..', 'extensions'), { builtIn: true });
+  for (const manifest of found) {
+    for (const panel of manifest.contributes.panels ?? []) {
+      assert.ok(panel.id, `${manifest.id} has a panel with no id`);
+      assert.ok(panel.title, `${manifest.id}/${panel.id} has no title`);
+      assert.ok(panel.render, `${manifest.id}/${panel.id} names no document to draw it`);
+      // A panel that needs something must say something the app understands,
+      // or it will be offered where it cannot possibly work.
+      if (panel.needs) assert.equal(panel.needs, 'repository', `${manifest.id}/${panel.id} needs something unknown`);
+    }
+  }
+});
+
+test('a panel is read as a whole document, and never from outside its folder', () => {
+  const rows = discover(path.join(__dirname, '..', 'extensions'), { builtIn: true }).map((manifest) => ({
+    ...manifest,
+    status: 'installed',
+    enabled: true,
+  }));
+  const panels = withPanelSources(panelViews(rows));
+  const graph = panels.find((panel) => panel.id === 'git-graph');
+  assert.ok(graph, 'the git graph panel was not found');
+  assert.equal(graph.error, undefined, graph.error);
+  assert.ok(graph.source.includes('host.ready()'), 'the panel does not talk to the app');
+
+  // The containment check is the one thing here that is a security property
+  // rather than a convenience, so it is tested rather than trusted.
+  const escaping = withPanelSources([
+    { id: 'x', title: 'x', needs: null, render: '../../../etc/passwd', from: 'x', dir: __dirname },
+  ]);
+  assert.equal(escaping[0].source, null);
+  assert.match(escaping[0].error, /outside the extension folder/);
 });
 
 // --- versions --------------------------------------------------------------

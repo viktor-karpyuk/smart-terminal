@@ -13,10 +13,13 @@ import type { ExtensionRow } from '../global';
  * quietly dropped: something has stopped contributing, and that is worth being
  * told rather than noticing later.
  *
- * What an extension can do today is narrow and worth saying plainly: it decides
- * which files the app offers to render, and for which names. Nothing here runs
- * code that came with an extension — that is a different problem with a
- * different safety story, and pretending otherwise would be the dishonest part.
+ * What an extension can do is worth saying plainly, because it is no longer
+ * only a switch. It decides which files the app offers to render and under
+ * which names; it can bring the code that does that rendering; and it can bring
+ * a whole panel. Both kinds of code run, and neither runs here: a renderer runs
+ * in a worker with no DOM, a panel in a frame with an origin of its own, and
+ * the only thing either can reach is a fixed list of operations the app agreed
+ * to perform.
  */
 export function ExtensionsPanel() {
   const rows = useStore((s) => s.extensions.rows);
