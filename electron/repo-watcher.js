@@ -24,11 +24,17 @@ const path = require('node:path');
 const SETTLE_MS = 400;
 
 /**
- * Directories whose churn is never a change worth reporting.
+ * Directories whose churn is not worth asking git about.
  *
  * Not a nicety: `npm install` writes tens of thousands of files into
- * `node_modules`, and a watcher that reports each one would run `git status`
- * until the machine gave up.
+ * `node_modules`, and a watcher that ran `git status` for each one would keep
+ * the machine busy until it finished.
+ *
+ * They are not silence, though — that was the old mistake. A build writing into
+ * `dist` is exactly the thing somebody watching that folder in the tree wants to
+ * see appear, and the tree only re-reads the folders it is already showing,
+ * which costs a `readdir` and nothing else. So churn in here is reported as
+ * `noise`: the tree listens to it, git does not.
  */
 const IGNORED = new Set(['node_modules', 'dist', 'release', '.next', '__pycache__', '.venv', 'target', 'build', '.turbo']);
 
@@ -52,9 +58,12 @@ function interesting(relative) {
     if (inside.endsWith('.lock')) return null;
     return GIT_INTERESTING.test(inside) ? 'git' : null;
   }
-  for (const part of parts) if (IGNORED.has(part)) return null;
+  for (const part of parts) if (IGNORED.has(part)) return 'noise';
   return 'tree';
 }
+
+/** Which of two reports says more; the stronger one is what gets sent. */
+const RANK = { noise: 0, tree: 1, git: 2 };
 
 class RepoWatcher {
   /**
@@ -91,7 +100,7 @@ class RepoWatcher {
       return false;
     }
     watcher.on('error', () => this.release(root, true));
-    this.watching.set(root, { watcher, holders: 1, timer: null, kind: 'tree' });
+    this.watching.set(root, { watcher, holders: 1, timer: null, kind: 'noise' });
     return true;
   }
 
@@ -128,14 +137,15 @@ class RepoWatcher {
     const entry = this.watching.get(root);
     if (!entry) return;
 
-    // The stronger of what has been seen since the last report wins: a commit
+    // The strongest of what has been seen since the last report wins: a commit
     // touches the tree as well, and reporting that as a mere file change would
-    // leave the history and the branch list stale.
-    if (kind === 'git') entry.kind = 'git';
+    // leave the history and the branch list stale — while a build writing into
+    // `dist` must not be dressed up as a change git should look at.
+    if (RANK[kind] > RANK[entry.kind]) entry.kind = kind;
     if (entry.timer) clearTimeout(entry.timer);
     entry.timer = setTimeout(() => {
       const reporting = entry.kind;
-      entry.kind = 'tree';
+      entry.kind = 'noise';
       entry.timer = null;
       this.emit(root, reporting);
     }, this.settleMs);

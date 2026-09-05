@@ -19,6 +19,8 @@ const { summarise, oneLine } = require('./session-analysis');
 const { Advisor } = require('./advisor');
 const { render: renderBrief } = require('./session-brief');
 const { RepoWatcher } = require('./repo-watcher');
+const { discover, gallery, previewRules, withSources, panelViews, withPanelSources } = require('./extensions');
+const { parseReport, replyFor, wantsBrief, compactionNote } = require('./hooks');
 const { Autopilot, looksLikeADecision } = require('./autopilot');
 const { tabsInLayout, minimizedIds, sessionsToRestore, unaccountedTabs } = require('./restore');
 const { MessageBridge } = require('./message-bridge');
@@ -115,6 +117,8 @@ const told = new Map();
 const TELL_COOLDOWN_MS = 30 * 60 * 1000;
 let fileWatcher = null;
 let mcpConfigPath = null;
+/** The app's own plugin, handed to each session with `--plugin-dir`. */
+let pluginPath = null;
 
 /** Keeps sessions moving when the only thing stopping them is nobody saying "go". */
 let autopilot = null;
@@ -130,7 +134,10 @@ let monitor = null;
  * rather than merely recent. Built once and kept: it is counted per repository,
  * so two panels on the same one share a single watch.
  */
-const repos = new RepoWatcher({ emit: (root, kind) => send('git:changed', { root, kind }) });
+// One watcher for both the Git panel and the file tree: they are looking at the
+// same folder, and a file appearing is news to each of them. Ref-counted inside,
+// so either can hold the same root without blinding the other.
+const repos = new RepoWatcher({ emit: (root, kind) => send('tree:changed', { root, kind }) });
 /** App session ids whose processes this launch started, so quitting can close their rows. */
 const liveSessions = new Set();
 const usageCache = new Map();
@@ -276,6 +283,32 @@ function registerIpc() {
       extraArgs.push('--mcp-config', mcpConfigPath);
     }
 
+    /*
+      The app's own plugin, for this session only.
+
+      `--plugin-dir` rather than anything installed: the hooks in it are part of
+      the app and are versioned with it, so a session gets the ones that match
+      the app it is running inside and nothing is left behind on the machine
+      when the app is not there. Nobody has to install anything, and a session
+      started outside the app is unaffected.
+    */
+    if (kind === 'claude' && pluginPath && options.sessionId) {
+      extraArgs.push('--plugin-dir', pluginPath);
+    }
+
+    /*
+      When Claude compacts by itself.
+
+      The monitor could always say a session was filling up; this is the only
+      thing that lets that be acted on rather than only reported. Validated
+      here rather than trusted: this becomes a command-line argument, and the
+      only shapes Claude accepts are `auto` or a token count.
+    */
+    if (kind === 'claude' && options.autocompact) {
+      const wanted = String(options.autocompact).trim().toLowerCase();
+      if (wanted === 'auto' || /^\d+k?$/.test(wanted)) extraArgs.push('--autocompact', wanted);
+    }
+
     const result = ptys.create({
       profile,
       cwd: workdir,
@@ -284,7 +317,13 @@ function registerIpc() {
       rows: options.rows,
       extraArgs,
       command: options.command || null,
-      env: { SMART_TERMINAL_SESSION_ID: options.sessionId || '' },
+      env: {
+        SMART_TERMINAL_SESSION_ID: options.sessionId || '',
+        // How a hook finds its way home. The MCP server is told the same path
+        // through its own config; a hook is a plain child of Claude, so the
+        // only way it can be told is the environment the shell was given.
+        SMART_TERMINAL_BRIDGE: socketPathFor(app.getPath('userData')),
+      },
     });
 
     const claudeSessionId = options.resumeSessionId || options.claudeSessionId;
@@ -319,7 +358,12 @@ function registerIpc() {
     return result;
   });
 
-  ipcMain.on('pty:write', (_e, { id, data }) => ptys.write(id, data));
+  ipcMain.on('pty:write', (_e, { id, data }) => {
+    // Typing is the cheapest possible hint that the picture is about to change,
+    // and it is what lets the cwd watcher idle without anyone noticing.
+    cwdWatcher?.wake();
+    ptys.write(id, data);
+  });
   ipcMain.on('pty:resize', (_e, { id, cols, rows }) => ptys.resize(id, cols, rows));
   ipcMain.on('pty:kill', (_e, { id }) => {
     cwdWatcher.forget(id);
@@ -528,6 +572,26 @@ function registerIpc() {
     };
   });
 
+  /** Every extension and where it stands, plus what the installed ones turn on. */
+  ipcMain.handle('extensions:list', () => extensionState());
+
+  ipcMain.handle('extensions:install', (_e, id) => {
+    const found = builtInExtensions().find((manifest) => manifest.id === id);
+    if (!found) return extensionState();
+    db.installExtension(found);
+    return sendExtensions();
+  });
+
+  ipcMain.handle('extensions:remove', (_e, id) => {
+    db.removeExtension(id);
+    return sendExtensions();
+  });
+
+  ipcMain.handle('extensions:enable', (_e, { id, on }) => {
+    db.enableExtension(id, on !== false);
+    return sendExtensions();
+  });
+
   // Held while a panel has a repository open. Counted, so closing one of two
   // panels on the same repository does not blind the other.
   ipcMain.on('git:watch', (_e, root) => repos.watch(root));
@@ -733,6 +797,12 @@ function registerIpc() {
 
   ipcMain.on('files:watch', (_e, { file, mtimeMs }) => fileWatcher?.watch(file, mtimeMs ?? 0));
   ipcMain.on('files:unwatch', (_e, { file }) => fileWatcher?.forget(file));
+  // The tree, as opposed to a file that is open in the editor. A folder a panel
+  // is showing has to notice a file appearing, being renamed or going away —
+  // which the per-file poll cannot see, because it only knows about files
+  // somebody already opened.
+  ipcMain.on('files:watch-tree', (_e, root) => repos.watch(root));
+  ipcMain.on('files:unwatch-tree', (_e, root) => repos.release(root));
   ipcMain.on('files:reveal', (_e, file) => shell.showItemInFolder(file));
 
   /*
@@ -1098,6 +1168,13 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   });
   monitor.start();
 
+  // What shipped with the app starts installed; after that the table is the
+  // record of what was decided, and something new arriving later is an offer.
+  try {
+    db.seedExtensions(builtInExtensions());
+  } catch {
+    /* the gallery still works; nothing is on until it is chosen */
+  }
 
   // Judgement, kept apart from measurement on purpose. One shot of `claude -p`
   // per reading: no conversation, so it cannot become the kind of session it is
@@ -1153,6 +1230,15 @@ function startMessaging() {
   );
   const socketPath = socketPathFor(dir);
 
+  // Packaged, this lives inside the asar, which `node` in a hook cannot read —
+  // the same reason the MCP server is unpacked beside it.
+  const plugin = path.join(__dirname, '..', 'plugin').replace(
+    `app.asar${path.sep}`,
+    `app.asar.unpacked${path.sep}`,
+  );
+  pluginPath = fs.existsSync(path.join(plugin, '.claude-plugin', 'plugin.json')) ? plugin : null;
+  if (!pluginPath) console.log('[hooks] the plugin folder is not there; sessions will run without it');
+
   try {
     fs.writeFileSync(
       mcpConfigPath,
@@ -1189,6 +1275,7 @@ function startMessaging() {
       return false;
     },
     isFree: sessionIsFree,
+    onHook: (request) => handleHook(request),
     // Sessions the app knows but is not running. Without this, a message to a
     // session that has ended comes back as "no such session", which is false and
     // leaves the sender nothing to do but try again.
@@ -1258,6 +1345,127 @@ function tellIfSerious(sessionId, verdict) {
     subject: 'this session',
   });
 }
+
+/**
+ * The extensions that came with the app.
+ *
+ * Read from disk on every ask rather than cached: in development the folder is
+ * the repository, and having to restart the app to see a manifest you just
+ * edited is exactly the friction that stops anyone writing one.
+ */
+function builtInExtensions() {
+  const roots = [
+    { root: path.join(app.getAppPath(), 'extensions'), builtIn: true },
+    { root: path.join(app.getPath('userData'), 'extensions'), builtIn: false },
+  ];
+  const found = [];
+  const seen = new Set();
+  for (const { root, builtIn } of roots) {
+    for (const manifest of discover(root, { builtIn })) {
+      // The user's own copy of an id wins: it is the one they put there.
+      if (seen.has(manifest.id)) continue;
+      seen.add(manifest.id);
+      found.push(manifest);
+    }
+  }
+  return found;
+}
+
+/** The gallery, and the rules the renderer needs to act on it. */
+function extensionState() {
+  const rows = gallery(builtInExtensions(), db.installedExtensions());
+  // The renderer needs the code, not a path to it: it runs in a worker built
+  // from a blob, which has no filesystem to read one from.
+  return {
+    rows,
+    previews: withSources(previewRules(rows)),
+    panels: withPanelSources(panelViews(rows)),
+  };
+}
+
+/** Answer the caller and tell every window, since this changes what files open as. */
+function sendExtensions() {
+  const state = extensionState();
+  send('extensions:changed', state);
+  return state;
+}
+
+/**
+ * Claude just told us something. Do whatever that means, and answer.
+ *
+ * Everything here is best-effort and none of it may throw: the session is
+ * waiting on this, and an exception in the app's bookkeeping must not be
+ * something a person feels while working. The reply is the only part Claude
+ * ever sees, and for three of the four events it is deliberately empty.
+ */
+function handleHook(request) {
+  const report = parseReport(request);
+  if (!report.ok) return { ok: false, error: report.error, reply: {} };
+
+  // The app's own id where it has one; otherwise place the session by the
+  // conversation, which is how a session somebody started by hand is found.
+  let sessionId = report.session && db.getSession(report.session) ? report.session : null;
+  if (!sessionId && report.conversation) {
+    sessionId = liveRoster().find((entry) => entry.conversation === report.conversation)?.id ?? null;
+  }
+  if (!sessionId) return { ok: true, reply: {}, detail: 'not a session this app is following' };
+  if (process.env.SMART_TERMINAL_DEV === '1') {
+    console.log(`[hooks] ${report.event}${report.source ? ` (${report.source})` : ''} from ${sessionId.slice(0, 8)}`);
+  }
+
+  try {
+    if (report.event === 'PreCompact') {
+      // The moment, and only the moment. What was in the context is
+      // reconstructed from the transcript afterwards and reconstructed exactly;
+      // what cannot be had later is that this is happening *now*, whether it
+      // was asked for, and what a manual compaction was told to keep.
+      context?.snapshot(sessionId, { force: true });
+      monitor?.read(sessionId, { force: true });
+      pendingCompaction.set(sessionId, compactionNote(report));
+    }
+
+    if (report.event === 'Stop') {
+      // A turn ended. The monitor reads on a timer and would have found this
+      // within the sweep; being told means the reading is never stale at the
+      // one moment somebody is most likely to be looking at it.
+      monitor?.read(sessionId, { force: true });
+    }
+
+    if (report.event === 'SessionEnd') {
+      context?.snapshot(sessionId, { force: true });
+    }
+
+    if (wantsBrief(report)) {
+      const entry = db.getBrief(sessionId);
+      const row = db.getSession(sessionId);
+      const carried = renderBrief(entry, { name: row?.title ?? null, command: null });
+      if (carried) {
+        if (process.env.SMART_TERMINAL_DEV === '1') {
+          console.log(`[hooks] handed ${sessionId.slice(0, 8)} its brief after ${report.source} (${carried.length} chars)`);
+        }
+        return {
+          ok: true,
+          reply: replyFor(report, carried),
+          detail: `handed ${sessionId} its brief after ${report.source}`,
+        };
+      }
+    }
+  } catch (error) {
+    // Said out loud in the log and nowhere else: the session carries on.
+    console.log(`[hooks] ${report.event} for ${sessionId}: ${error.message}`);
+  }
+
+  return { ok: true, reply: {} };
+}
+
+/**
+ * What a compaction was told, waiting for the transcript to catch up.
+ *
+ * `PreCompact` fires before the compaction is written down, so what it knows —
+ * the trigger, the instructions — arrives before the row it belongs to exists.
+ * It is held here until the monitor files that compaction.
+ */
+const pendingCompaction = new Map();
 
 function liveRoster() {
   const groupNames = new Map(db.listGroups({ limit: 500 }).map((group) => [group.id, group.name]));

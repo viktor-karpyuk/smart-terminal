@@ -97,3 +97,46 @@ export function group(files: GitFile[], grouping: string): Node[] {
   );
 }
 
+
+/**
+ * The two heaps a working tree really has.
+ *
+ * git reports one list, but two of the things in it are not the same kind of
+ * thing. A modified file is a change to something the repository knows about; an
+ * untracked file is not in the repository at all, and nothing will happen to it
+ * — not a commit, not a stash, not a checkout — until somebody adds it. Mixed
+ * into one list, a new file looks like a change that is already being kept, and
+ * that is how a new file gets left out of the commit that needed it.
+ *
+ * So they are split, the way IntelliJ splits them: the changes, and the files
+ * that are not versioned yet. Keys are prefixed per section because the same
+ * folder can appear in both and folding one must not fold the other.
+ */
+export type Section = { id: 'changes' | 'unversioned'; label: string; count: number; nodes: Node[] };
+
+function prefixed(nodes: Node[], id: string): Node[] {
+  return nodes.map((node) =>
+    node.kind === 'file'
+      ? { ...node, key: `${id}:${node.key}` }
+      : { ...node, key: `${id}:${node.key}`, children: prefixed(node.children, id) },
+  );
+}
+
+/** The changed files, split into sections and grouped inside each one. */
+export function sections(files: GitFile[], grouping: string): Section[] {
+  const tracked = files.filter((file) => !file.untracked);
+  const untracked = files.filter((file) => file.untracked);
+  const out: Section[] = [];
+  if (tracked.length) {
+    out.push({ id: 'changes', label: 'Changes', count: tracked.length, nodes: prefixed(group(tracked, grouping), 'changes') });
+  }
+  if (untracked.length) {
+    out.push({
+      id: 'unversioned',
+      label: 'Unversioned files',
+      count: untracked.length,
+      nodes: prefixed(group(untracked, grouping), 'unversioned'),
+    });
+  }
+  return out;
+}

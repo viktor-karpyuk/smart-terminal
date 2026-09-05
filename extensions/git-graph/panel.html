@@ -1,0 +1,767 @@
+<!--
+  Git Graph — the history as a graph you can work in.
+
+  This file is the whole extension. It runs in a frame with an origin of its
+  own: no DOM of the app, no `window.api`, no filesystem, no modules. Everything
+  it knows it asked for through `host.call`, and everything it does it asked the
+  app to do. If it throws, the app does not notice.
+
+  The head of the document belongs to the app — the reset, the theme variables
+  and the `host` bridge are already in place before anything below runs.
+-->
+
+<style>
+  #app { display: flex; flex-direction: column; height: 100%; }
+
+  /* ---------- the bar across the top ---------- */
+
+  .bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; flex: 0 0 auto;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-panel);
+  }
+  .bar .grow { flex: 1; }
+  .btn {
+    padding: 3px 9px; border-radius: 5px; font-size: 11.5px;
+    border: 1px solid var(--border-strong); color: var(--text-dim);
+    white-space: nowrap;
+  }
+  .btn:hover { color: var(--text); border-color: var(--accent); }
+  .btn[disabled] { opacity: 0.4; cursor: not-allowed; }
+  .btn.is-on { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
+  .icon-btn { padding: 2px 6px; border-radius: 5px; color: var(--text-dim); font-size: 13px; }
+  .icon-btn:hover { color: var(--text); background: var(--bg-elevated); }
+
+  .where { display: flex; align-items: center; gap: 6px; font-size: 11.5px; min-width: 0; }
+  .where .head {
+    font-weight: 600; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px;
+  }
+  .ahead, .behind { font-size: 10.5px; color: var(--text-dim); }
+
+  .find { display: flex; align-items: center; gap: 4px; }
+  .find input {
+    width: 170px; padding: 3px 7px; font: inherit; font-size: 11.5px;
+    background: var(--bg-input); color: var(--text);
+    border: 1px solid var(--border-strong); border-radius: 5px;
+  }
+  .find input:focus { outline: none; border-color: var(--accent); }
+  .find .count { font-size: 10.5px; color: var(--text-faint); min-width: 46px; text-align: right; }
+
+  /* ---------- the two halves ---------- */
+
+  .body { flex: 1; display: flex; min-height: 0; }
+  .list { flex: 1; overflow: auto; position: relative; min-width: 0; }
+  .spacer { position: relative; }
+  #lanes { position: absolute; left: 0; top: 0; pointer-events: none; }
+  #rows { position: absolute; left: 0; top: 0; right: 0; }
+
+  .row {
+    position: absolute; left: 0; right: 0;
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 12px 0 0;
+    white-space: nowrap; cursor: default;
+  }
+  .row:hover { background: var(--bg-elevated); }
+  .row.is-selected { background: var(--accent-soft); }
+  .row.is-match { box-shadow: inset 2px 0 0 var(--accent); }
+  .row.is-dim .subject, .row.is-dim .who, .row.is-dim .when { opacity: 0.45; }
+
+  .subject { flex: 1; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+  .row.is-wip .subject { color: var(--git-new); font-style: italic; }
+  .who { display: flex; align-items: center; gap: 5px; color: var(--text-dim); font-size: 11px; flex: 0 0 auto; }
+  .pip {
+    width: 15px; height: 15px; border-radius: 50%; flex: 0 0 auto;
+    display: grid; place-content: center;
+    font-size: 8px; font-weight: 700; letter-spacing: 0.02em;
+    color: #0b0d13;
+  }
+  .who .name { max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
+  .when { color: var(--text-faint); font-size: 10.5px; flex: 0 0 auto; width: 52px; text-align: right; }
+  .sha {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px; color: var(--text-faint); flex: 0 0 auto;
+  }
+
+  /* Refs ride on the commit they point at, which is the whole idea. */
+  .ref {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 0 6px; height: 16px; border-radius: 8px;
+    font-size: 10px; font-weight: 600; flex: 0 0 auto;
+    border: 1px solid; cursor: pointer; max-width: 190px;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .ref.is-local { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+  .ref.is-remote { color: var(--text-dim); border-color: var(--border-strong); }
+  .ref.is-tag { color: var(--git-new); border-color: var(--git-new); background: transparent; }
+  .ref.is-head { box-shadow: 0 0 0 1px var(--accent); }
+  .ref .dot { width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
+
+  /* ---------- the detail on the right ---------- */
+
+  .detail {
+    flex: 0 0 340px; border-left: 1px solid var(--border);
+    background: var(--bg-panel); overflow: auto; padding: 10px 12px;
+  }
+  .detail.is-hidden { display: none; }
+  .detail h2 { margin: 0 0 2px; font-size: 12.5px; font-weight: 600; }
+  .detail .meta { color: var(--text-faint); font-size: 11px; margin-bottom: 10px; }
+  .detail pre {
+    margin: 0 0 12px; padding: 8px 9px; white-space: pre-wrap; word-break: break-word;
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+    font: inherit; font-size: 11.5px; color: var(--text);
+  }
+  .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .files { display: grid; gap: 1px; }
+  .file {
+    display: flex; align-items: center; gap: 7px; width: 100%;
+    padding: 2px 4px; border-radius: 4px; font-size: 11.5px; text-align: left;
+  }
+  .file:hover { background: var(--bg-elevated); }
+  .file .path { flex: 1; overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); direction: rtl; }
+  .file .add { color: var(--ok); font-size: 10.5px; }
+  .file .del { color: var(--danger); font-size: 10.5px; }
+
+  .naming { display: flex; gap: 6px; margin-bottom: 12px; }
+  .naming input {
+    flex: 1; min-width: 0; padding: 3px 7px; font: inherit; font-size: 11.5px;
+    background: var(--bg-input); color: var(--text);
+    border: 1px solid var(--border-strong); border-radius: 5px;
+  }
+  .naming input:focus { outline: none; border-color: var(--accent); }
+
+  .note { color: var(--text-faint); padding: 14px; font-size: 11.5px; }
+  .bad { color: var(--danger); padding: 10px 12px; font-size: 11.5px; }
+  .busy { color: var(--text-faint); font-size: 11px; }
+</style>
+
+<div id="app">
+  <header class="bar">
+    <span class="where">
+      <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="var(--accent)" stroke-width="1.3">
+        <circle cx="3.6" cy="3.2" r="1.7" /><circle cx="3.6" cy="10.8" r="1.7" /><circle cx="10.4" cy="6.4" r="1.7" />
+        <path d="M3.6 4.9v4.2M5.2 3.9c2.6.4 3.8 1.3 4 2.3" />
+      </svg>
+      <span class="head" id="head">…</span>
+      <span class="ahead" id="ahead"></span>
+      <span class="behind" id="behind"></span>
+    </span>
+
+    <button class="btn" id="fetch">Fetch</button>
+    <button class="btn" id="pull">Pull</button>
+    <button class="btn" id="push">Push</button>
+
+    <span class="grow"></span>
+    <span class="busy" id="busy"></span>
+
+    <span class="find">
+      <input id="find" type="search" placeholder="Search message, author, hash" spellcheck="false" />
+      <span class="count" id="found"></span>
+      <button class="icon-btn" id="prev" title="Previous match">↑</button>
+      <button class="icon-btn" id="next" title="Next match">↓</button>
+    </span>
+
+    <button class="btn" id="density" title="Row height">Compact</button>
+    <button class="icon-btn" id="reload" title="Read the history again">⟳</button>
+  </header>
+
+  <div class="body">
+    <div class="list" id="list">
+      <div class="spacer" id="spacer">
+        <svg id="lanes" fill="none" stroke-width="1.9" stroke-linecap="round"></svg>
+        <div id="rows"></div>
+      </div>
+      <div id="empty"></div>
+    </div>
+    <aside class="detail is-hidden" id="detail"></aside>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------------------------------------------------------------- state
+
+  var state = {
+    root: null,
+    commits: [],
+    rowOf: new Map(),   // sha -> index into commits
+    width: 1,
+    status: null,       // the working tree, for the row at the top
+    refs: null,
+    selected: null,     // a sha, or the string 'wip'
+    query: '',
+    matches: [],
+    at: -1,             // which match the search is sitting on
+    limit: 500,
+    rowH: 28,
+    error: null,
+  };
+
+  var LANE_W = 15;
+  var OVERSCAN = 12;
+
+  var el = {
+    list: document.getElementById('list'),
+    spacer: document.getElementById('spacer'),
+    lanes: document.getElementById('lanes'),
+    rows: document.getElementById('rows'),
+    empty: document.getElementById('empty'),
+    detail: document.getElementById('detail'),
+    head: document.getElementById('head'),
+    ahead: document.getElementById('ahead'),
+    behind: document.getElementById('behind'),
+    busy: document.getElementById('busy'),
+    find: document.getElementById('find'),
+    found: document.getElementById('found'),
+  };
+
+  // ---------------------------------------------------------------- helpers
+
+  function h(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  function svg(tag, attrs) {
+    var node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (var key in attrs) node.setAttribute(key, attrs[key]);
+    return node;
+  }
+
+  /**
+   * A colour for a name, so the same person is the same colour every time.
+   *
+   * Derived from the name rather than assigned in order: assigning in order
+   * means somebody's colour changes when a different person commits, which is
+   * exactly the thing a colour is supposed to stop happening.
+   */
+  function colourFor(name) {
+    var hash = 0;
+    for (var i = 0; i < name.length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) % 360;
+    return 'hsl(' + hash + ' 58% 68%)';
+  }
+
+  function initials(name) {
+    var parts = String(name || '?').trim().split(/\s+/);
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+
+  /** How long ago, in the shortest form that is still true. */
+  function ago(iso) {
+    var then = Date.parse(iso);
+    if (!then) return '';
+    var seconds = (Date.now() - then) / 1000;
+    if (seconds < 60) return 'now';
+    if (seconds < 3600) return Math.round(seconds / 60) + 'm';
+    if (seconds < 86400) return Math.round(seconds / 3600) + 'h';
+    if (seconds < 86400 * 30) return Math.round(seconds / 86400) + 'd';
+    if (seconds < 86400 * 365) return Math.round(seconds / (86400 * 30)) + 'mo';
+    return Math.round(seconds / (86400 * 365)) + 'y';
+  }
+
+  function busy(text) {
+    el.busy.textContent = text || '';
+  }
+
+  /** Ask the app for something, and say so plainly when it will not. */
+  function call(name, args) {
+    return host.call(name, args).then(function (result) {
+      if (result && result.ok === false) throw new Error(result.error || 'git said no');
+      return result;
+    });
+  }
+
+  /** A verb that changes the repository: run it, say what happened, reload. */
+  function act(label, name, args) {
+    busy(label + '…');
+    return call(name, args)
+      .then(function () {
+        busy('');
+        host.emit('notify', { text: label + ' — done' });
+        return load();
+      })
+      .catch(function (error) {
+        busy('');
+        host.emit('notify', { text: label + ' failed: ' + error.message, kind: 'bad' });
+      });
+  }
+
+  // ---------------------------------------------------------------- loading
+
+  function load() {
+    if (!state.root) return Promise.resolve();
+    busy('Reading…');
+    return Promise.all([
+      call('graph', { limit: state.limit }),
+      call('status', {}),
+      call('refs', {}),
+    ])
+      .then(function (answers) {
+        state.commits = answers[0].commits || [];
+        state.width = Math.max(1, answers[0].width || 1);
+        state.status = answers[1];
+        state.refs = answers[2];
+        state.error = null;
+
+        // A map, not a scan. Every merge line has to find the row of its
+        // parent, and doing that by walking the list turns a long history into
+        // something quadratic — which is the difference between this being
+        // usable at five thousand commits and not.
+        state.rowOf = new Map();
+        for (var i = 0; i < state.commits.length; i += 1) state.rowOf.set(state.commits[i].sha, i);
+
+        busy('');
+        search(state.query);
+        drawBar();
+        draw();
+      })
+      .catch(function (error) {
+        state.error = error.message;
+        busy('');
+        draw();
+      });
+  }
+
+  // ---------------------------------------------------------------- the bar
+
+  function drawBar() {
+    var status = state.status || {};
+    el.head.textContent = status.detached ? 'detached HEAD' : (status.branch || '—');
+    el.ahead.textContent = status.ahead ? '↑' + status.ahead : '';
+    el.behind.textContent = status.behind ? '↓' + status.behind : '';
+  }
+
+  // ---------------------------------------------------------------- searching
+
+  function search(query) {
+    state.query = query;
+    var term = query.trim().toLowerCase();
+    state.matches = [];
+    if (term) {
+      for (var i = 0; i < state.commits.length; i += 1) {
+        var commit = state.commits[i];
+        if (
+          String(commit.subject || '').toLowerCase().indexOf(term) >= 0 ||
+          String(commit.author || '').toLowerCase().indexOf(term) >= 0 ||
+          commit.sha.indexOf(term) === 0
+        ) {
+          state.matches.push(i);
+        }
+      }
+    }
+    state.at = state.matches.length ? 0 : -1;
+    el.found.textContent = term ? (state.matches.length ? (state.at + 1) + '/' + state.matches.length : 'none') : '';
+  }
+
+  function step(by) {
+    if (!state.matches.length) return;
+    state.at = (state.at + by + state.matches.length) % state.matches.length;
+    el.found.textContent = (state.at + 1) + '/' + state.matches.length;
+    var index = state.matches[state.at];
+    select(state.commits[index].sha);
+    scrollTo(index);
+  }
+
+  function scrollTo(commitIndex) {
+    var row = commitIndex + wipRows();
+    var top = row * state.rowH;
+    var view = el.list.clientHeight;
+    if (top < el.list.scrollTop || top + state.rowH > el.list.scrollTop + view) {
+      el.list.scrollTop = Math.max(0, top - view / 3);
+    }
+  }
+
+  // ---------------------------------------------------------------- drawing
+
+  /** Whether the working tree gets a row of its own at the top. */
+  function wipRows() {
+    return state.status && state.status.files && state.status.files.length ? 1 : 0;
+  }
+
+  function totalRows() {
+    return state.commits.length + wipRows();
+  }
+
+  var laneX = function (lane) { return 11 + lane * LANE_W; };
+
+  function draw() {
+    drawnWindow = Math.floor(el.list.scrollTop / state.rowH) + ':' + Math.ceil(el.list.clientHeight / state.rowH);
+    el.rows.textContent = '';
+    while (el.lanes.firstChild) el.lanes.removeChild(el.lanes.firstChild);
+
+    el.empty.textContent = '';
+    if (state.error) {
+      el.spacer.style.height = '0px';
+      el.empty.appendChild(h('p', 'bad', state.error));
+      return;
+    }
+    if (!state.commits.length) {
+      el.spacer.style.height = '0px';
+      el.empty.appendChild(h('p', 'note', 'No commits yet.'));
+      return;
+    }
+
+    var rows = totalRows();
+    var height = rows * state.rowH;
+    var graphW = state.width * LANE_W + 14;
+    el.spacer.style.height = height + 'px';
+    el.lanes.setAttribute('width', graphW);
+    el.lanes.setAttribute('height', height);
+    el.rows.style.left = graphW + 'px';
+
+    // Only what is on screen, plus a little either side so a fast scroll does
+    // not show empty space before it catches up.
+    var first = Math.max(0, Math.floor(el.list.scrollTop / state.rowH) - OVERSCAN);
+    var last = Math.min(rows - 1, Math.ceil((el.list.scrollTop + el.list.clientHeight) / state.rowH) + OVERSCAN);
+
+    var offset = wipRows();
+    for (var row = first; row <= last; row += 1) {
+      if (offset && row === 0) {
+        drawWip();
+        continue;
+      }
+      drawCommit(row - offset, row);
+    }
+  }
+
+  /**
+   * The uncommitted work, sitting on top of the branch it is on.
+   *
+   * A history that starts at the last commit is a history that leaves out the
+   * part you are actually in the middle of. It is drawn as an open circle on a
+   * dashed line so that it never reads as something that happened.
+   */
+  function drawWip() {
+    var top = state.commits[0];
+    var lane = top ? top.lane : 0;
+    var colour = top ? top.colour : 'var(--accent)';
+    var y = state.rowH / 2;
+
+    el.lanes.appendChild(svg('path', {
+      d: 'M' + laneX(lane) + ' ' + y + ' V ' + state.rowH,
+      stroke: colour,
+      'stroke-dasharray': '3 3',
+      opacity: '0.8',
+    }));
+    el.lanes.appendChild(svg('circle', {
+      cx: laneX(lane), cy: y, r: 4.5,
+      fill: 'var(--bg)', stroke: colour, 'stroke-dasharray': '2.5 2.5',
+    }));
+
+    var node = h('div', 'row is-wip' + (state.selected === 'wip' ? ' is-selected' : ''));
+    node.style.top = '0px';
+    node.style.height = state.rowH + 'px';
+    var count = state.status.files.length;
+    node.appendChild(h('span', 'subject', 'Uncommitted — ' + count + (count === 1 ? ' file' : ' files')));
+    node.addEventListener('click', function () { select('wip'); });
+    el.rows.appendChild(node);
+  }
+
+  function drawCommit(index, row) {
+    var commit = state.commits[index];
+    var y = row * state.rowH + state.rowH / 2;
+    var top = row * state.rowH;
+
+    // Lanes that only pass this row: an unbroken vertical, or the trunk looks
+    // like it stops and starts again at every branch point.
+    for (var t = 0; t < commit.through.length; t += 1) {
+      var lane = commit.through[t];
+      el.lanes.appendChild(svg('path', {
+        d: 'M' + laneX(lane.lane) + ' ' + top + ' V ' + (top + state.rowH),
+        stroke: lane.colour,
+      }));
+    }
+
+    for (var e = 0; e < commit.edges.length; e += 1) {
+      var edge = commit.edges[e];
+      var target = state.rowOf.has(edge.sha) ? state.rowOf.get(edge.sha) : -1;
+      // A parent below the end of what was read still gets a stub, so the line
+      // leaves the page rather than stopping in mid-air.
+      var endY = target === -1 ? y + state.rowH : (target + wipRows()) * state.rowH + state.rowH / 2;
+      var x1 = laneX(edge.from);
+      var x2 = laneX(edge.to);
+
+      if (x1 === x2) {
+        el.lanes.appendChild(svg('path', { d: 'M' + x1 + ' ' + y + ' V ' + endY, stroke: edge.colour }));
+      } else {
+        // A curve rather than a diagonal. The bend happens in the row the
+        // branch leaves from, so the rest of the line is vertical and the eye
+        // can follow it down the page.
+        var bend = Math.min(state.rowH, Math.abs(endY - y)) * 0.75;
+        el.lanes.appendChild(svg('path', {
+          d: 'M' + x1 + ' ' + y +
+             ' C ' + x1 + ' ' + (y + bend) + ', ' + x2 + ' ' + (y + bend * 0.4) + ', ' + x2 + ' ' + Math.min(endY, y + bend * 1.3) +
+             ' V ' + endY,
+          stroke: edge.colour,
+        }));
+      }
+    }
+
+    el.lanes.appendChild(svg('circle', {
+      cx: laneX(commit.lane), cy: y,
+      r: commit.merge ? 5.2 : 4,
+      fill: commit.merge ? commit.colour : 'var(--bg)',
+      stroke: commit.colour,
+    }));
+
+    var dim = state.query.trim() && state.matches.indexOf(index) < 0;
+    var node = h('div', 'row' +
+      (state.selected === commit.sha ? ' is-selected' : '') +
+      (state.matches.indexOf(index) >= 0 ? ' is-match' : '') +
+      (dim ? ' is-dim' : ''));
+    node.style.top = top + 'px';
+    node.style.height = state.rowH + 'px';
+
+    for (var r = 0; r < commit.refs.length; r += 1) node.appendChild(refPill(commit.refs[r]));
+
+    node.appendChild(h('span', 'subject', commit.subject || '(no message)'));
+
+    var who = h('div', 'who');
+    var pip = h('span', 'pip', initials(commit.author));
+    pip.style.background = colourFor(String(commit.author || ''));
+    who.appendChild(pip);
+    who.appendChild(h('span', 'name', commit.author || ''));
+    node.appendChild(who);
+
+    var when = h('span', 'when', ago(commit.date));
+    when.title = new Date(commit.date).toLocaleString();
+    node.appendChild(when);
+    node.appendChild(h('span', 'sha', commit.sha.slice(0, 7)));
+
+    node.addEventListener('click', function () { select(commit.sha); });
+    el.rows.appendChild(node);
+  }
+
+  /**
+   * A branch, a remote or a tag, on the commit it points at.
+   *
+   * Clickable, because a label you can see but not use is half a feature: a
+   * local branch checks out, a remote one is checked out as a local branch that
+   * tracks it, and a tag checks out where it points.
+   */
+  function refPill(ref) {
+    var pill = h('button', 'ref is-' + ref.kind + (ref.head ? ' is-head' : ''), ref.name);
+    pill.title =
+      ref.kind === 'local' ? 'Local branch — click to check out'
+      : ref.kind === 'remote' ? 'On the remote — click to check it out as a local branch'
+      : ref.kind === 'tag' ? 'Tag — click to check out'
+      : ref.kind;
+    if (ref.kind !== 'head') pill.appendChild(h('span', 'dot'));
+    pill.addEventListener('click', function (event) {
+      event.stopPropagation();
+      if (ref.kind === 'remote') {
+        var local = ref.name.split('/').slice(1).join('/');
+        act('Checking out ' + local, 'trackRemote', { remote: ref.name, local: local });
+      } else if (ref.kind === 'local' || ref.kind === 'tag') {
+        act('Checking out ' + ref.name, 'checkout', { ref: ref.name });
+      }
+    });
+    return pill;
+  }
+
+  // ---------------------------------------------------------------- the detail
+
+  function select(what) {
+    state.selected = state.selected === what ? null : what;
+    draw();
+    drawDetail();
+  }
+
+  function drawDetail() {
+    el.detail.textContent = '';
+    if (!state.selected) {
+      el.detail.className = 'detail is-hidden';
+      return;
+    }
+    el.detail.className = 'detail';
+
+    if (state.selected === 'wip') {
+      el.detail.appendChild(h('h2', null, 'Uncommitted changes'));
+      el.detail.appendChild(h('p', 'meta', 'Not committed anywhere yet.'));
+      var list = h('div', 'files');
+      var files = (state.status && state.status.files) || [];
+      for (var i = 0; i < files.length; i += 1) list.appendChild(fileRow(files[i].path, files[i].added, files[i].removed, files[i].letter));
+      el.detail.appendChild(list);
+      return;
+    }
+
+    var commit = state.commits[state.rowOf.get(state.selected)];
+    if (!commit) return;
+
+    el.detail.appendChild(h('h2', null, commit.subject || '(no message)'));
+    el.detail.appendChild(h('p', 'meta',
+      commit.sha.slice(0, 10) + ' · ' + commit.author + ' · ' + new Date(commit.date).toLocaleString()));
+
+    var acts = h('div', 'acts');
+    acts.appendChild(action('Check out', function () {
+      act('Checking out ' + commit.sha.slice(0, 7), 'checkout', { ref: commit.sha });
+    }));
+    acts.appendChild(action('Branch here', function () {
+      // Asked for inline rather than in a dialog. A frame like this one has no
+      // modals — and should not: a panel able to stop the app until it is
+      // answered is a panel able to stop the app.
+      naming(commit.sha);
+    }));
+    acts.appendChild(action('Revert', function () {
+      act('Reverting ' + commit.sha.slice(0, 7), 'revert', { sha: commit.sha });
+    }));
+    acts.appendChild(action('Merge into current', function () {
+      act('Merging ' + commit.sha.slice(0, 7), 'merge', { ref: commit.sha });
+    }));
+    el.detail.appendChild(acts);
+
+    var files = h('div', 'files');
+    files.appendChild(h('p', 'note', 'Reading the files…'));
+    el.detail.appendChild(files);
+
+    var wanted = commit.sha;
+    call('commitFiles', { sha: commit.sha }).then(function (result) {
+      if (state.selected !== wanted) return;
+      files.textContent = '';
+      var listed = result.files || [];
+      if (!listed.length) files.appendChild(h('p', 'note', 'No files in it — an empty commit.'));
+      for (var i = 0; i < listed.length; i += 1) {
+        files.appendChild(fileRow(listed[i].path, listed[i].added, listed[i].removed, null));
+      }
+    }).catch(function (error) {
+      if (state.selected !== wanted) return;
+      files.textContent = '';
+      files.appendChild(h('p', 'bad', error.message));
+    });
+  }
+
+  /** Ask for a branch name in the panel itself, and start it at this commit. */
+  function naming(sha) {
+    if (el.detail.querySelector('.naming')) return;
+    var box = h('div', 'naming');
+    var field = document.createElement('input');
+    field.type = 'text';
+    field.placeholder = 'New branch at ' + sha.slice(0, 7);
+    field.spellcheck = false;
+    var go = h('button', 'btn', 'Create');
+    var stop = h('button', 'btn', 'Cancel');
+    box.appendChild(field);
+    box.appendChild(go);
+    box.appendChild(stop);
+
+    var create = function () {
+      var name = field.value.trim();
+      if (!name) return;
+      act('Creating ' + name, 'createBranch', { name: name, from: sha });
+    };
+    go.addEventListener('click', create);
+    stop.addEventListener('click', function () { box.remove(); });
+    field.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') create();
+      if (event.key === 'Escape') box.remove();
+    });
+
+    el.detail.insertBefore(box, el.detail.querySelector('.files'));
+    field.focus();
+  }
+
+  function action(label, run) {
+    var button = h('button', 'btn', label);
+    button.addEventListener('click', run);
+    return button;
+  }
+
+  function fileRow(path, added, removed, letter) {
+    var row = h('button', 'file');
+    if (letter) {
+      var mark = h('span', 'sha', letter);
+      row.appendChild(mark);
+    }
+    // Right-to-left so the ellipsis eats the start of a long path and leaves
+    // the filename, which is the part anybody is looking for.
+    row.appendChild(h('span', 'path', path));
+    if (added) row.appendChild(h('span', 'add', '+' + added));
+    if (removed) row.appendChild(h('span', 'del', '−' + removed));
+    row.title = path;
+    row.addEventListener('click', function () {
+      host.emit('openFile', { path: state.root + '/' + path });
+    });
+    return row;
+  }
+
+  // ---------------------------------------------------------------- wiring
+
+  /**
+   * Redraw on scroll, but only when a different set of rows is on screen.
+   *
+   * A scroll event fires far more often than the window changes, and rebuilding
+   * sixty rows and their lanes for a two-pixel move is work nobody asked for.
+   */
+  var drawnWindow = '';
+  el.list.addEventListener('scroll', function () {
+    var first = Math.floor(el.list.scrollTop / state.rowH);
+    var key = first + ':' + Math.ceil(el.list.clientHeight / state.rowH);
+    if (key === drawnWindow) return;
+    drawnWindow = key;
+    draw();
+  });
+  window.addEventListener('resize', function () { draw(); });
+
+  document.getElementById('reload').addEventListener('click', load);
+  document.getElementById('fetch').addEventListener('click', function () { act('Fetching', 'fetch', {}); });
+  document.getElementById('pull').addEventListener('click', function () { act('Pulling', 'pull', {}); });
+  document.getElementById('push').addEventListener('click', function () {
+    var status = state.status || {};
+    act('Pushing', 'push', status.upstream ? {} : { setUpstream: status.branch });
+  });
+
+  document.getElementById('density').addEventListener('click', function () {
+    var compact = state.rowH !== 22;
+    state.rowH = compact ? 22 : 28;
+    this.textContent = compact ? 'Comfortable' : 'Compact';
+    this.className = 'btn' + (compact ? ' is-on' : '');
+    draw();
+  });
+
+  el.find.addEventListener('input', function () {
+    search(this.value);
+    draw();
+    if (state.matches.length) scrollTo(state.matches[0]);
+  });
+  el.find.addEventListener('keydown', function (event) {
+    if (event.key === 'Enter') step(event.shiftKey ? -1 : 1);
+  });
+  document.getElementById('next').addEventListener('click', function () { step(1); });
+  document.getElementById('prev').addEventListener('click', function () { step(-1); });
+
+  document.addEventListener('keydown', function (event) {
+    if (event.target === el.find) return;
+    if (event.key === '/' ) { event.preventDefault(); el.find.focus(); return; }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    event.preventDefault();
+    var index = state.selected && state.selected !== 'wip' ? state.rowOf.get(state.selected) : -1;
+    var next = Math.max(0, Math.min(state.commits.length - 1, (index === undefined ? 0 : index) + (event.key === 'ArrowDown' ? 1 : -1)));
+    state.selected = state.commits[next].sha;
+    draw();
+    drawDetail();
+    scrollTo(next);
+  });
+
+  // The app answers `ready` with where we are, and tells us when the working
+  // tree moves. Everything else this panel knows, it asked for.
+  host.on('context', function (context) {
+    state.root = context.root;
+    load();
+  });
+  var settle = null;
+  host.on('changed', function () {
+    // A build can produce a change notice every few hundred milliseconds. The
+    // history is not moving that fast, and three git calls per notice would be
+    // the panel making the machine busy to tell you nothing new.
+    if (settle) clearTimeout(settle);
+    settle = setTimeout(function () { settle = null; load(); }, 900);
+  });
+  host.ready();
+})();
+</script>

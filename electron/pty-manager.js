@@ -6,6 +6,9 @@ const pty = require('node-pty');
 
 const DEFAULT_SHELL = process.env.SHELL || (process.platform === 'win32' ? 'powershell.exe' : '/bin/zsh');
 
+/** One screen refresh. Output is batched into frames; see `#queue`. */
+const FRAME_MS = 16;
+
 /** Interactive login shell so the user's PATH, nvm, aliases and prompt all load normally. */
 function shellArgs(shell) {
   if (process.platform === 'win32') return [];
@@ -164,11 +167,18 @@ class PtyManager {
     return { id, pid: proc.pid, cwd: workdir, shell, kind, profileId: profile.id };
   }
 
-  /** Coalesce PTY output into ~8ms frames so a chatty process cannot flood IPC. */
+  /**
+   * Coalesce PTY output into one frame's worth so a chatty process cannot flood IPC.
+   *
+   * 16ms rather than 8: the screen is redrawn sixty times a second, so two
+   * messages inside one frame arrive in time for the same paint. The second one
+   * buys nothing anybody can see and costs a trip through IPC, the renderer and
+   * xterm's parser — halved here, per session, for as long as the app is open.
+   */
   #queue(session, chunk) {
     session.pending += chunk;
     if (session.flushTimer) return;
-    session.flushTimer = setTimeout(() => this.#flush(session), 8);
+    session.flushTimer = setTimeout(() => this.#flush(session), FRAME_MS);
   }
 
   #flush(session) {

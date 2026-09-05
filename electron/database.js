@@ -70,6 +70,15 @@ class Database {
       CREATE INDEX IF NOT EXISTS sessions_profile  ON sessions (profile_id, started_at DESC);
       CREATE INDEX IF NOT EXISTS sessions_open     ON sessions (ended_at);
 
+      CREATE TABLE IF NOT EXISTS extensions (
+        id           TEXT PRIMARY KEY,
+        name         TEXT,
+        version      TEXT NOT NULL,
+        installed_at INTEGER NOT NULL,
+        updated_at   INTEGER,
+        enabled      INTEGER NOT NULL DEFAULT 1
+      );
+
       CREATE TABLE IF NOT EXISTS session_compactions (
         session_id      TEXT NOT NULL,
         at              INTEGER NOT NULL,
@@ -470,6 +479,60 @@ class Database {
       .prepare(`SELECT * FROM sessions WHERE ${clauses.join(' OR ')} ORDER BY started_at`)
       .all(...values)
       .map(decorate);
+  }
+
+  // --- extensions ------------------------------------------------------------
+
+  /** What the person has decided about each extension. */
+  installedExtensions() {
+    return this.db
+      .prepare('SELECT * FROM extensions ORDER BY id')
+      .all()
+      .map((row) => ({
+        id: row.id,
+        name: row.name,
+        version: row.version,
+        installedAt: row.installed_at,
+        updatedAt: row.updated_at,
+        enabled: row.enabled !== 0,
+      }));
+  }
+
+  /** Install one, or move an installed one to a new version. */
+  installExtension({ id, name, version }) {
+    const at = Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO extensions (id, name, version, installed_at, updated_at, enabled)
+         VALUES (?, ?, ?, ?, ?, 1)
+         ON CONFLICT (id) DO UPDATE SET name = excluded.name, version = excluded.version, updated_at = excluded.updated_at`,
+      )
+      .run(id, name ?? id, version, at, at);
+  }
+
+  removeExtension(id) {
+    this.db.prepare('DELETE FROM extensions WHERE id = ?').run(id);
+  }
+
+  /** On without removing: the record of the decision stays either way. */
+  enableExtension(id, on) {
+    this.db.prepare('UPDATE extensions SET enabled = ? WHERE id = ?').run(on ? 1 : 0, id);
+  }
+
+  /**
+   * The first run, and only the first.
+   *
+   * Everything that shipped with the app starts installed, because it was
+   * working yesterday and an upgrade that quietly switches features off is an
+   * upgrade that broke them. After that the table is the record of decisions,
+   * and something new arriving in a later version is an offer rather than a
+   * change made on somebody's behalf.
+   */
+  seedExtensions(builtIns) {
+    const already = this.db.prepare('SELECT COUNT(*) AS n FROM extensions').get().n ?? 0;
+    if (already > 0) return false;
+    for (const manifest of builtIns) this.installExtension(manifest);
+    return true;
   }
 
   /**

@@ -1091,7 +1091,9 @@ function Advisor({ sessionId }: { sessionId: string }) {
         {!advice && !asking && (
           <p className="usage-note">
             The figures above are free. This asks a model what to make of them — one short request,
-            given the measurements only.
+            on the session's own account, given the measurements only. It is the one thing in the
+            app that spends anything, so it is capped at five cents a time and never asked for on
+            its own.
           </p>
         )}
         {asking && <p className="usage-note">Asking…</p>}

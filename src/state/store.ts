@@ -22,6 +22,7 @@ import type { DropSide, LayoutNode, Profile, Session, SessionKind, Settings } fr
 import type {
   AuthStatus,
   DirEntry,
+  ExtensionState,
   GitBranch,
   GitCommit,
   GitFile,
@@ -68,6 +69,7 @@ const DEFAULT_SETTINGS: Settings = {
   defaultProfileId: null,
   recordConversations: true,
   recordCommandOutput: true,
+  autocompact: '',
   limitPattern:
     'usage limit reached|reached your usage limit|limit will reset|out of (?:credits|usage)|rate limit exceeded',
   theme: 'system',
@@ -105,6 +107,8 @@ export function asFilePanel(panel: Panel | undefined | null): FilePanel | null {
 /** What to call a section holding a panel — the dock and the tab strip both ask. */
 export function panelLabel(panel: Panel | undefined | null): string {
   if (panel?.kind === 'monitor') return 'Monitor';
+  if (panel?.kind === 'extensions') return 'Extensions';
+  if (panel?.kind === 'extension') return panel.title;
   const root = panel?.kind === 'files' ? panel.root : '';
   return root.split('/').filter(Boolean).pop() ?? 'section';
 }
@@ -156,6 +160,35 @@ const AUTH_RECHECK_EVERY = 5 * 60 * 1000;
 
 /** React StrictMode mounts effects twice in dev; the workspace must only boot once. */
 let initStarted = false;
+
+/**
+ * Which folder each panel has asked to be told about.
+ *
+ * The watch in the main process is counted, so two panels on one folder both
+ * hold it and the first to close does not blind the second. That only works if
+ * every watch is matched by exactly one release, which is what this map is for:
+ * a panel changes folders or closes, and what it was holding is known rather
+ * than guessed at.
+ */
+const followedRoots = new Map<string, string>();
+
+/**
+ * Follow a folder for this panel, letting go of whatever it followed before.
+ *
+ * Passing `null` is how a panel stops following anything, which is what closing
+ * one does.
+ */
+function followTree(panelId: string, root: string | null) {
+  const before = followedRoots.get(panelId) ?? null;
+  if (before === root) return;
+  if (before) window.api.files.unwatchTree(before);
+  if (root) {
+    window.api.files.watchTree(root);
+    followedRoots.set(panelId, root);
+  } else {
+    followedRoots.delete(panelId);
+  }
+}
 
 /** One repository's picture, refreshed rather than assumed to still be true. */
 interface RepoState {
@@ -212,6 +245,8 @@ interface State {
   usageByProfile: Record<string, UsageReport>;
   usageLoading: Record<string, boolean>;
   usagePanelOpen: boolean;
+  /** Every extension and where it stands, with the rules the installed ones turn on. */
+  extensions: ExtensionState;
   /** The latest reading for each session, kept current by the monitor. */
   analysisBySession: Record<string, SessionAnalysis>;
   /** What the advisor last said about a session, and whether it is being asked. */
@@ -330,8 +365,14 @@ interface State {
   refreshAllUsage(force?: boolean): Promise<void>;
   setUsagePanelOpen(open: boolean): void;
   openMonitor(sessionId?: string | null): void;
+  openExtensions(): void;
+  /** Open a view an extension contributes, on a folder. */
+  openExtensionView(viewId: string, root: string | null): void;
+  /** Show a file somewhere sensible — the app decides where, the asker does not. */
+  revealFile(root: string, path: string): void;
   setMonitorSession(panelId: string, sessionId: string | null): void;
   refreshAnalysis(sessionId: string, force?: boolean): Promise<void>;
+  setExtension(id: string, action: 'install' | 'remove' | 'enable' | 'disable'): Promise<void>;
   askAdvisor(sessionId: string, options?: { question?: string; force?: boolean }): Promise<void>;
   tellSession(sessionId: string, text: string): Promise<void>;
   setRecording(sessionId: string, recording: boolean): Promise<void>;
@@ -457,6 +498,7 @@ export const useStore = create<State>((set, get) => ({
   usageByProfile: {},
   usageLoading: {},
   usagePanelOpen: false,
+  extensions: { rows: [], previews: [], panels: [] },
   analysisBySession: {},
   adviceBySession: {},
   adviceAsking: {},
@@ -588,11 +630,38 @@ export const useStore = create<State>((set, get) => ({
     // A working tree changes under the app constantly — a session runs `git add`,
     // a build writes a file, a checkout swaps a branch. The panel follows.
     window.api.git.onChanged(({ root, kind }) => {
-      if (!get().repos[root]) return;
+      // `noise` is churn inside a build folder: real to the tree, nothing git
+      // should be asked about.
+      if (kind === 'noise' || !get().repos[root]) return;
       // A change inside `.git` moved the repository itself, so the history and
       // the branch list are stale too; a change in the tree only moved the files.
       get().refreshRepo(root, kind === 'git' ? 'all' : 'status');
     });
+
+    /**
+     * And so does the tree.
+     *
+     * Until now the only thing that noticed a file changing was the poll over
+     * files somebody had already opened — so a process writing into the folder
+     * added files the tree never showed, renamed things it went on listing under
+     * the old name, and deleted things that stayed. The folder itself is watched
+     * now, and every listing under it that is being shown is read again.
+     *
+     * Only the folders already in the cache: those are the ones on screen or
+     * recently on screen, and re-reading a folder nobody has opened would be
+     * work done for nobody.
+     */
+    window.api.files.onTreeChanged(({ root }) => {
+      const inside = `${root.replace(/\/$/, '')}/`;
+      for (const dir of Object.keys(get().dirs)) {
+        if (dir === root || dir.startsWith(inside)) get().loadDir(dir);
+      }
+    });
+
+    // What is installed decides what a file opens as, so it is read before the
+    // first folder is drawn and followed from then on.
+    window.api.extensions.list().then((state) => set({ extensions: state }));
+    window.api.extensions.onChanged((state) => set({ extensions: state }));
 
     // Groups and the session roster belong to the workspace, not to this window.
     window.api.groups.list().then((groups) => set({ groups }));
@@ -769,6 +838,7 @@ export const useStore = create<State>((set, get) => ({
       const panel = asFilePanel(any);
       if (!panel) continue;
       if (panel.gitRoot) get().refreshRepo(panel.gitRoot, 'all');
+      if (panel.root) followTree(panel.id, panel.root);
       for (const dir of panel.expanded) get().loadDir(dir);
       if (panel.active) get().openFile(panel.id, panel.active);
       for (const file of panel.open) if (file !== panel.active) get().openFile(panel.id, file);
@@ -1373,7 +1443,10 @@ export const useStore = create<State>((set, get) => ({
       return { panels, layout: result.root, activeLeafId: result.leafId, zoomedLeafId: null };
     });
 
-    if (root) get().loadDir(root);
+    if (root) {
+      get().loadDir(root);
+      followTree(panelId, root);
+    }
     schedulePersist(get);
     return panelId;
   },
@@ -1465,6 +1538,7 @@ export const useStore = create<State>((set, get) => ({
     // it running would be a shell nobody can see and nobody can stop.
     const shell = asFilePanel(panel)?.terminalId;
     if (shell) get().closeSession(shell);
+    followTree(panelId, null);
     // Its buffers are not closed with it: another panel may be showing the same
     // file, and an unsaved edit must never be discarded by closing a view of it.
     set((prev) => {
@@ -1642,6 +1716,7 @@ export const useStore = create<State>((set, get) => ({
         : prev;
     });
     get().loadDir(root);
+    followTree(panelId, root);
     schedulePersist(get);
   },
 
@@ -2271,6 +2346,110 @@ export const useStore = create<State>((set, get) => ({
     schedulePersist(get);
   },
 
+  /** Open the gallery, or bring the one that is already open forward. */
+  openExtensions() {
+    const state = get();
+    const existing = Object.values(state.panels).find((panel) => panel.kind === 'extensions');
+    if (existing) {
+      const leaf = allLeaves(state.layout).find((candidate) => candidate.tabs.includes(existing.id));
+      if (leaf) {
+        get().focusPanel(leaf.id, existing.id);
+        return;
+      }
+      get().restoreMinimized(existing.id);
+      return;
+    }
+
+    const panelId = crypto.randomUUID();
+    const targetLeafId = state.activeLeafId || allLeaves(state.layout)[0]?.id;
+    set((prev) => {
+      const panels = { ...prev.panels, [panelId]: { id: panelId, kind: 'extensions' as const } };
+      if (!targetLeafId || !findLeaf(prev.layout, targetLeafId)) {
+        const leaf = makeLeaf([panelId]);
+        return { panels, layout: leaf, activeLeafId: leaf.id };
+      }
+      return { panels, layout: insertTab(prev.layout, targetLeafId, panelId), activeLeafId: targetLeafId };
+    });
+    schedulePersist(get);
+  },
+
+  /**
+   * Open a view an extension contributes.
+   *
+   * Keyed on the view *and* the folder: two repositories are two different
+   * things to look at, and bringing forward the graph of another repository
+   * because it happens to be the same extension would be the wrong answer to
+   * "show me this one".
+   */
+  openExtensionView(viewId, root) {
+    const state = get();
+    const view = state.extensions.panels.find((candidate) => candidate.id === viewId);
+    const existing = Object.values(state.panels).find(
+      (panel) => panel.kind === 'extension' && panel.viewId === viewId && panel.root === root,
+    );
+    if (existing) {
+      const leaf = allLeaves(state.layout).find((candidate) => candidate.tabs.includes(existing.id));
+      if (leaf) {
+        get().focusPanel(leaf.id, existing.id);
+        return;
+      }
+      get().restoreMinimized(existing.id);
+      return;
+    }
+
+    const panelId = crypto.randomUUID();
+    const targetLeafId = state.activeLeafId || allLeaves(state.layout)[0]?.id;
+    const panel = {
+      id: panelId,
+      kind: 'extension' as const,
+      viewId,
+      title: view?.title ?? viewId,
+      root,
+    };
+    set((prev) => {
+      const panels = { ...prev.panels, [panelId]: panel };
+      if (!targetLeafId || !findLeaf(prev.layout, targetLeafId)) {
+        const leaf = makeLeaf([panelId]);
+        return { panels, layout: leaf, activeLeafId: leaf.id };
+      }
+      return { panels, layout: insertTab(prev.layout, targetLeafId, panelId), activeLeafId: targetLeafId };
+    });
+    schedulePersist(get);
+  },
+
+  /**
+   * Show a file, without being told where to put it.
+   *
+   * Asked for by a panel that has no idea what else is open — an extension can
+   * say "show this file" and nothing more, which is the right amount of power
+   * for it to have. Somewhere sensible means: a folder tab already on that
+   * repository, preferring the one in front; failing that, a new one.
+   */
+  revealFile(root, path) {
+    const state = get();
+    const leaves = allLeaves(state.layout);
+    const active = leaves.find((leaf) => leaf.id === state.activeLeafId);
+
+    const suits = (panel: Panel | undefined) => {
+      const files = asFilePanel(panel);
+      return Boolean(files && (files.gitRoot === root || (files.root && path.startsWith(files.root))));
+    };
+
+    // The one in front first: opening a file into a tab somebody is looking at
+    // is the answer they expected, even when an older tab would also have fit.
+    const inFront = active?.tabs.map((id) => state.panels[id]).find(suits);
+    const anywhere = inFront ?? Object.values(state.panels).find(suits);
+    if (anywhere) {
+      const leaf = leaves.find((candidate) => candidate.tabs.includes(anywhere.id));
+      if (leaf) get().focusPanel(leaf.id, anywhere.id);
+      get().openFile(anywhere.id, path);
+      return;
+    }
+
+    const panelId = get().openFilePanel({ root });
+    if (panelId) get().openFile(panelId, path);
+  },
+
   /**
    * Read one session again.
    *
@@ -2308,6 +2487,24 @@ export const useStore = create<State>((set, get) => ({
   /** Put a reading into the session it is about. Always asked for by name. */
   async tellSession(sessionId, text) {
     await window.api.analysis.tell(sessionId, text);
+  },
+
+  /**
+   * Install one, remove one, or turn one off without removing it.
+   *
+   * The answer replaces the whole state rather than patching it: what an
+   * extension contributes can overlap with what another does, so the effect of
+   * a change is a property of the set and not of the one that changed.
+   */
+  async setExtension(id, action) {
+    const api = window.api.extensions;
+    const next =
+      action === 'install'
+        ? await api.install(id)
+        : action === 'remove'
+          ? await api.remove(id)
+          : await api.enable(id, action === 'enable');
+    set({ extensions: next });
   },
 
   /** Point the monitor at a different session. */
@@ -3000,6 +3197,9 @@ async function spawnInto(
       record: args.record,
       recordCommands: get().settings.recordCommandOutput,
       startCwd: args.startCwd,
+      // Empty means say nothing and let Claude's own default apply, which is
+      // what every session did before this was a setting.
+      autocompact: get().settings.autocompact || null,
       ...(args.resumeSessionId
         ? { resumeSessionId: args.resumeSessionId }
         : claudeSessionId

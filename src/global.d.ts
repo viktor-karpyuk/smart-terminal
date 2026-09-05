@@ -28,6 +28,8 @@ export interface PtyCreateOptions {
   record?: boolean;
   /** Include what commands printed in the kept copy. */
   recordCommands?: boolean;
+  /** `auto`, a token window like `200k`, or null to let Claude decide. */
+  autocompact?: string | null;
   cwd?: string;
   kind?: 'claude' | 'shell' | 'login';
   cols?: number;
@@ -365,6 +367,60 @@ export interface Norms {
   autoCompactions: number;
 }
 
+/** One extension, and where it stands. */
+export interface ExtensionRow {
+  id: string;
+  name: string;
+  version: string;
+  author: string | null;
+  summary: string;
+  description: string;
+  contributes: { previews?: Array<{ kind: string; extensions?: string[]; files?: string[]; prefixes?: string[] }> };
+  builtIn: boolean;
+  enabled: boolean;
+  installedVersion: string | null;
+  installedAt: number | null;
+  /** `available` is an offer, `update` is a newer version than the one installed,
+   *  and `gone` is one that was installed and whose folder is no longer there. */
+  status: 'available' | 'installed' | 'update' | 'gone';
+}
+
+/** The gallery, and the rules the installed ones turn on. */
+export interface ExtensionState {
+  rows: ExtensionRow[];
+  previews: Array<{
+    kind: string;
+    extensions: string[];
+    files: string[];
+    prefixes: string[];
+    /** The extension's own renderer, as source. Null when the app draws this kind. */
+    source: string | null;
+    /** Which extension contributed it, and why its renderer could not be read. */
+    from: string;
+    error?: string;
+  }>;
+  panels: ExtensionPanelView[];
+}
+
+/**
+ * A whole view an extension contributes, as the document it is.
+ *
+ * Not a render function like a preview: a panel is worked in rather than looked
+ * at, so it ships a document that runs in a frame of its own and talks to the
+ * app by message.
+ */
+export interface ExtensionPanelView {
+  id: string;
+  title: string;
+  summary: string;
+  /** What it cannot work without — `"repository"` means a folder that is one. */
+  needs: string | null;
+  render: string;
+  from: string;
+  source: string | null;
+  error?: string;
+}
+
 /** One table, with what it holds and roughly what it weighs. */
 export interface DbTable {
   name: string;
@@ -624,10 +680,17 @@ declare global {
         load(): Promise<PersistedWorkspace>;
         save(state: PersistedWorkspace): void;
       };
+      extensions: {
+        list(): Promise<ExtensionState>;
+        install(id: string): Promise<ExtensionState>;
+        remove(id: string): Promise<ExtensionState>;
+        enable(id: string, on: boolean): Promise<ExtensionState>;
+        onChanged(fn: (state: ExtensionState) => void): () => void;
+      };
       git: {
         watch(root: string): void;
         unwatch(root: string): void;
-        onChanged(fn: (payload: { root: string; kind: 'tree' | 'git' }) => void): () => void;
+        onChanged(fn: (payload: { root: string; kind: 'tree' | 'git' | 'noise' }) => void): () => void;
         call(name: string, root: string, args?: unknown): Promise<GitResult>;
       };
       files: {
@@ -643,6 +706,9 @@ declare global {
         onChanged(
           handler: (changes: Array<{ path: string; mtimeMs: number; gone?: boolean }>) => void,
         ): () => void;
+        watchTree(root: string): void;
+        unwatchTree(root: string): void;
+        onTreeChanged(handler: (payload: { root: string; kind: 'tree' | 'git' | 'noise' }) => void): () => void;
         reveal(file: string): void;
       };
       system: {

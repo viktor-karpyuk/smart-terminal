@@ -13,11 +13,80 @@ test('a change in the working tree is a change to the status', () => {
   assert.equal(interesting('README.md'), 'tree');
 });
 
-test('the noisy directories are ignored, or an npm install would never end', () => {
-  assert.equal(interesting('node_modules/left-pad/index.js'), null);
-  assert.equal(interesting('packages/api/node_modules/x/y.js'), null);
-  assert.equal(interesting('dist/bundle.js'), null);
-  assert.equal(interesting('target/debug/thing'), null);
+test('the noisy directories are noise, not silence', () => {
+  // Not `null`: a build writing into `dist` is exactly what somebody watching
+  // that folder in the tree wants to see. It is `noise` so that the tree hears
+  // it and git — whose refresh is the expensive one — does not.
+  assert.equal(interesting('node_modules/left-pad/index.js'), 'noise');
+  assert.equal(interesting('packages/api/node_modules/x/y.js'), 'noise');
+  assert.equal(interesting('dist/bundle.js'), 'noise');
+  assert.equal(interesting('target/debug/thing'), 'noise');
+});
+
+test('the strongest thing seen in a burst is what gets reported', async () => {
+  const seen = [];
+  const watcher = new RepoWatcher({ emit: (root, kind) => seen.push(kind), settleMs: 20 });
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-watcher-rank-'));
+  assert.equal(watcher.watch(root), true);
+
+  /**
+   * Wait for a kind of report to arrive, rather than for the clock.
+   *
+   * FSEvents decides when it has news and how it groups it, and under load it
+   * may split one burst into two — so "the last thing reported" is not a fact
+   * about the code, it is a fact about how busy the machine was. What the code
+   * actually promises is that each kind gets reported, and that build churn is
+   * never dressed up as something git should look at.
+   */
+  const sawKind = async (kind, deadlineMs = 10000) => {
+    const until = Date.now() + deadlineMs;
+    while (Date.now() < until) {
+      if (seen.includes(kind)) return true;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return false;
+  };
+
+  /**
+   * Wait until the watcher is actually awake before testing what it says.
+   *
+   * `fs.watch` returns before FSEvents has started delivering, so a test that
+   * writes the instant it has a watcher is testing the timing of the operating
+   * system, not the code. Poking the tree until something comes back is the
+   * only way to know the watch is live — and skipping it is what made this test
+   * pass alone and fail in a full run.
+   */
+  const awake = async () => {
+    const until = Date.now() + 10000;
+    while (Date.now() < until) {
+      fs.writeFileSync(path.join(root, 'awake.txt'), String(Date.now()));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (seen.length) return true;
+    }
+    return false;
+  };
+
+  try {
+    assert.ok(await awake(), 'the watcher never started delivering');
+    seen.length = 0;
+
+    // A build writes, and something real changes: the real change must be
+    // reported as a real change.
+    fs.mkdirSync(path.join(root, 'dist'));
+    fs.writeFileSync(path.join(root, 'dist', 'bundle.js'), 'x');
+    fs.writeFileSync(path.join(root, 'source.ts'), 'y');
+    assert.ok(await sawKind('tree'), 'a real file changed and was reported as one');
+
+    // And build churn on its own still says something, so a tree showing that
+    // folder can follow it — but never as a reason to ask git anything.
+    seen.length = 0;
+    fs.writeFileSync(path.join(root, 'dist', 'bundle.js'), 'z');
+    assert.ok(await sawKind('noise'), 'the tree hears the build');
+    assert.ok(!seen.includes('tree'), 'and git is not sent off over a build');
+  } finally {
+    watcher.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('inside .git, only the parts that mean the repository moved', () => {
@@ -86,17 +155,28 @@ test('a commit outranks the file changes it comes with', async () => {
   watcher.stop();
 });
 
-test('the noisy directories really are quiet', async () => {
+test('the noisy directories never ask git anything', async () => {
   const root = fs.mkdtempSync(path.join(dir, 'c-'));
   fs.mkdirSync(path.join(root, 'node_modules'));
   const seen = [];
-  const watcher = new RepoWatcher({ emit: () => seen.push(1), settleMs: 60 });
+  const watcher = new RepoWatcher({ emit: (_root, kind) => seen.push(kind), settleMs: 60 });
   watcher.watch(root);
 
-  for (let i = 0; i < 20; i += 1) fs.writeFileSync(path.join(root, 'node_modules', `p${i}.js`), 'x');
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  assert.deepEqual(seen, []);
-  watcher.stop();
+  try {
+    for (let i = 0; i < 20; i += 1) fs.writeFileSync(path.join(root, 'node_modules', `p${i}.js`), 'x');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Twenty files, one report at most, and never one that would send anybody
+    // off to run `git status`.
+    assert.ok(seen.length <= 1, `a burst is one report, not ${seen.length}`);
+    assert.ok(
+      seen.every((kind) => kind === 'noise'),
+      'churn under node_modules must never be reported as a change git should look at',
+    );
+  } finally {
+    // In a `finally` because a watcher left running holds the event loop open,
+    // and a failed assertion would hang the whole suite rather than fail it.
+    watcher.stop();
+  }
 });
 
 test('two panels on one repository share a watch, and the first to close keeps it', () => {

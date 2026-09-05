@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { asFilePanel, useStore } from '../state/store';
 import type { GitBranch, GitCommit, GitFile } from '../global';
 import { Popover } from './Popover';
-import { group } from '../lib/gitTree';
-import type { Node } from '../lib/gitTree';
+import { sections } from '../lib/gitTree';
+import type { Node, Section } from '../lib/gitTree';
 
 /**
  * Git, as a tab beside the files.
@@ -343,6 +343,81 @@ function allFolders(nodes: Node[]): string[] {
 }
 
 /**
+ * One heap of changes, under a heading that says which heap it is.
+ *
+ * The heading is a fold as well as a label, because "the eleven files I have not
+ * added yet" is exactly the thing you want out of the way once you have decided
+ * about them. Adding them all is offered here rather than only file by file: a
+ * new folder of source arrives as thirty untracked files at once, and ticking
+ * thirty boxes is thirty git processes and thirty refreshes.
+ */
+function SectionRows({
+  section,
+  named,
+  panelId,
+  collapsed,
+  selectedPath,
+  onToggleStage,
+  onAddAll,
+  onFold,
+}: {
+  section: Section;
+  named: boolean;
+  panelId: string;
+  collapsed: string[];
+  selectedPath: string | null;
+  onToggleStage(file: GitFile): void;
+  onAddAll(): void;
+  onFold(key: string): void;
+}) {
+  const key = `section:${section.id}`;
+  const shut = named && collapsed.includes(key);
+
+  return (
+    <>
+      {named && (
+        <div className={`git-row is-section is-${section.id}`} onClick={() => onFold(key)}>
+          <svg
+            className={`files-chevron${shut ? '' : ' is-open'}`}
+            width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"
+          >
+            <path d="M4.5 2.5L8 6l-3.5 3.5" />
+          </svg>
+          <span className="git-section-name">{section.label}</span>
+          <span className="git-count">{section.count}</span>
+          <span style={{ flex: 1 }} />
+          {section.id === 'unversioned' && (
+            <button
+              className="link-btn"
+              title="Add every one of these to git"
+              onClick={(event) => {
+                event.stopPropagation();
+                onAddAll();
+              }}
+            >
+              Add all
+            </button>
+          )}
+        </div>
+      )}
+      {!shut &&
+        section.nodes.map((node) => (
+          <TreeRow
+            key={node.key}
+            node={node}
+            depth={named ? 1 : 0}
+            panelId={panelId}
+            collapsed={collapsed}
+            selectedPath={selectedPath}
+            onToggleStage={onToggleStage}
+            onFold={onFold}
+          />
+        ))}
+    </>
+  );
+}
+
+/**
  * One row of the changes tree, and everything under it.
  *
  * Recursive, which the previous version was not: it drew a folder and then its
@@ -353,6 +428,7 @@ function allFolders(nodes: Node[]): string[] {
 function TreeRow({
   node,
   depth,
+  inFolder = false,
   panelId,
   collapsed,
   selectedPath,
@@ -361,6 +437,8 @@ function TreeRow({
 }: {
   node: Node;
   depth: number;
+  /** Whether a folder row already says where this file is; a section heading does not. */
+  inFolder?: boolean;
   panelId: string;
   collapsed: string[];
   selectedPath: string | null;
@@ -372,6 +450,7 @@ function TreeRow({
       <FileRow
         file={node.file}
         depth={depth}
+        showDir={!inFolder}
         onToggle={onToggleStage}
         panelId={panelId}
         selected={selectedPath === node.file.path}
@@ -402,6 +481,7 @@ function TreeRow({
             key={child.key}
             node={child}
             depth={depth + 1}
+            inFolder
             panelId={panelId}
             collapsed={collapsed}
             selectedPath={selectedPath}
@@ -415,6 +495,17 @@ function TreeRow({
 
 const LETTER_COLOUR: Record<string, string> = {
   A: '#9ece6a', M: '#7aa2f7', D: '#f7768e', R: '#bb9af7', C: '#bb9af7', '?': '#e0af68', '!': '#f7768e',
+};
+
+/** What each letter means, for the people who have not memorised git's alphabet. */
+const LETTER_MEANS: Record<string, string> = {
+  A: 'Added — new, and already in git',
+  M: 'Modified',
+  D: 'Deleted',
+  R: 'Renamed',
+  C: 'Copied',
+  '?': 'Untracked — git has never seen this file, and will not keep it until it is added',
+  '!': 'Conflicted',
 };
 
 export function Changes({ panelId, compact = false }: { panelId: string; compact?: boolean }) {
@@ -461,7 +552,7 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
   };
 
   const files = repo?.files ?? [];
-  const tree = useMemo(() => group(files, panel?.gitGrouping ?? 'directory'), [files, panel?.gitGrouping]);
+  const parts = useMemo(() => sections(files, panel?.gitGrouping ?? 'directory'), [files, panel?.gitGrouping]);
   const staged = files.filter((file) => file.staged || file.partial);
   const allStaged = files.length > 0 && staged.length === files.length;
   const someStaged = staged.length > 0 && !allStaged;
@@ -516,7 +607,12 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
             // Every folder, not only the ones at the top: with modules over
             // directories, collapsing the outer row and leaving the inner ones
             // open means "expand everything" no longer means what it says.
-            patch(panelId, { gitCollapsed: allFolders(tree) })
+            patch(panelId, {
+              gitCollapsed: [
+                ...parts.map((section) => `section:${section.id}`),
+                ...parts.flatMap((section) => allFolders(section.nodes)),
+              ],
+            })
           }
         >
           –
@@ -552,15 +648,25 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
       <div className="git-changes-body">
       <div className="git-list">
         {files.length === 0 && <p className="files-note">Nothing changed.</p>}
-        {tree.map((node) => (
-          <TreeRow
-            key={node.key}
-            node={node}
-            depth={0}
+        {parts.map((section) => (
+          <SectionRows
+            key={section.id}
+            section={section}
+            /*
+              With nothing new about, the one heading would name what is already
+              the whole list. The unversioned heading is never hidden, though,
+              even when it is the only one: that a file is not in git yet is the
+              thing being said, and a folder of brand new files with no heading
+              over it says nothing at all.
+            */
+            named={parts.length > 1 || section.id === 'unversioned'}
             panelId={panelId}
             collapsed={panel.gitCollapsed}
             selectedPath={panel.selectedPath}
             onToggleStage={toggle}
+            onAddAll={() =>
+              gitDo(root, 'stage', { paths: files.filter((file) => file.untracked).map((file) => file.path) }, 'Adding to git')
+            }
             onFold={(key) =>
               patch(panelId, {
                 gitCollapsed: panel.gitCollapsed.includes(key)
@@ -694,12 +800,14 @@ function Amending({ root, panelId }: { root: string; panelId: string }) {
 function FileRow({
   file,
   depth,
+  showDir = true,
   onToggle,
   panelId,
   selected,
 }: {
   file: GitFile;
   depth: number;
+  showDir?: boolean;
   onToggle(file: GitFile): void;
   panelId: string;
   selected?: boolean;
@@ -709,7 +817,7 @@ function FileRow({
 
   return (
     <div
-      className={`git-row${selected ? ' is-selected' : ''}`}
+      className={`git-row${selected ? ' is-selected' : ''}${file.untracked ? ' is-untracked' : ''}`}
       style={{ paddingLeft: 8 + depth * 16 }}
       // One click shows what changed; opening it to edit is the deliberate
       // second act, because most looks at a changed file are only looks.
@@ -719,10 +827,23 @@ function FileRow({
       <button
         className={`git-box${file.staged ? ' is-on' : file.partial ? ' is-partial' : ''}`}
         onClick={() => onToggle(file)}
-        title={file.staged ? 'Staged — click to take it out' : 'Not staged — click to stage it'}
-        aria-label="Stage"
+        title={
+          file.untracked
+            ? 'Not in git at all — click to add it'
+            : file.staged
+              ? 'Staged — click to take it out'
+              : 'Not staged — click to stage it'
+        }
+        aria-label={file.untracked ? 'Add to git' : 'Stage'}
       />
-      <span className="git-letter" style={{ color: LETTER_COLOUR[file.letter] ?? '#7b849c' }}>
+      <span
+        className="git-letter"
+        // Untracked takes its colour from the row instead, so that the letter and
+        // the name are one mark rather than two, and so the light theme can pick
+        // a tone that can actually be read on white.
+        style={file.untracked ? undefined : { color: LETTER_COLOUR[file.letter] ?? '#7b849c' }}
+        title={LETTER_MEANS[file.letter] ?? undefined}
+      >
         {file.letter}
       </span>
       <span
@@ -730,7 +851,7 @@ function FileRow({
         title={file.from ? `${file.from} → ${file.path}` : file.path}
         // Back to the files, with this one open — the same tab, so nothing moves.
       >
-        {depth === 0 && file.dir ? `${file.dir}/` : ''}
+        {showDir && file.dir ? `${file.dir}/` : ''}
         {file.name}
       </span>
       {(file.added !== null || file.removed !== null) && (

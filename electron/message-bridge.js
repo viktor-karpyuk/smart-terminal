@@ -54,7 +54,7 @@ class MessageBridge {
    * @param {(id: string) => boolean} deps.isFree   idle at a Claude prompt, no dialog up
    * @param {object} deps.store               the queue: queue/pending/markDelivered/markRead
    */
-  constructor({ socketPath, reach, roster, write, isFree, store, health = null, lookup = null }) {
+  constructor({ socketPath, reach, roster, write, isFree, store, health = null, lookup = null, onHook = null }) {
     this.socketPath = socketPath;
     this.reach = reach;
     this.roster = roster;
@@ -67,6 +67,9 @@ class MessageBridge {
     /** Sessions the app knows but is not running, so "gone" can be told from
      *  "never existed" — two answers that need completely different replies. */
     this.lookup = lookup;
+    /** What to do when Claude reports one of its own moments. Optional: without
+     *  it the channel still carries messages, it just hears nothing. */
+    this.onHook = onHook;
     this.server = null;
     this.sweep = null;
   }
@@ -211,6 +214,19 @@ class MessageBridge {
   /** Every request, resolved against the live roster. Kept separate so it is testable. */
   async handle(request) {
     const { op, from } = request ?? {};
+
+    /*
+      A hook is not a session asking for something, so it does not go through
+      any of what follows. It has no `from`, it is not in the roster, and it is
+      not subject to reach — it is Claude telling the app what it is doing, on
+      the app's own socket, about a session the app started. It is answered
+      first and separately for exactly that reason.
+    */
+    if (op === 'hook') {
+      if (!this.onHook) return { ok: false, error: 'Smart Terminal is not listening for hooks.' };
+      return this.onHook(request);
+    }
+
     if (!from) return { ok: false, error: 'This session did not identify itself.' };
 
     const reach = normalizeReach(this.reach());

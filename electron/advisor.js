@@ -33,6 +33,15 @@ const DEFAULT_SHELL = process.env.SHELL || '/bin/zsh';
 const TIMEOUT = 90000;
 
 /** One reading per session per this long. It is a paragraph, not a subscription. */
+/**
+ * The most one piece of advice may cost.
+ *
+ * Small on purpose, and enforced by the CLI rather than by hoping the prompt
+ * stays short. This is the only thing in the app that spends money, and it does
+ * it while the user is doing something else.
+ */
+const BUDGET_USD = 0.05;
+
 const COOLDOWN_MS = 10 * 60 * 1000;
 
 /**
@@ -162,7 +171,22 @@ async function runOnce(profile, prompt) {
   const bin = profile.claudeCommand || 'claude';
   // `command` bypasses a shell function of the same name, which would pick its
   // own config dir and answer on an account nobody chose.
-  const line = `${bin.includes('/') ? '' : 'command '}${bin} -p`;
+  //
+  // `--max-budget-usd` is the important half of this line. Everything else the
+  // app does costs nothing — it reads files that already exist — and this one
+  // call is the exception: it spends the user's money on their own account,
+  // without them being at the keyboard. A ceiling the CLI enforces is worth more
+  // than any amount of care taken over the length of the prompt.
+  const line = [
+    `${bin.includes('/') ? '' : 'command '}${bin}`,
+    '-p',
+    `--max-budget-usd ${BUDGET_USD}`,
+    // Nothing about a session's numbers needs the strongest model, and this is
+    // the app spending rather than the person.
+    '--model sonnet',
+    // No conversation is kept for a one-shot question that will never be resumed.
+    '--no-session-persistence',
+  ].join(' ');
 
   return new Promise((resolve) => {
     const child = execFile(
@@ -189,4 +213,4 @@ async function runOnce(profile, prompt) {
   });
 }
 
-module.exports = { Advisor, buildPrompt, COOLDOWN_MS };
+module.exports = { Advisor, buildPrompt, COOLDOWN_MS, BUDGET_USD };

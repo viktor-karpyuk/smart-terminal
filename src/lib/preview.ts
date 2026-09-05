@@ -26,7 +26,15 @@ const XML = new Set([
 /** Shells and the things that read like them. */
 const SHELL = new Set(['sh', 'bash', 'zsh', 'ksh', 'fish', 'command']);
 
-export type PreviewKind = 'markdown' | 'html' | 'xml' | 'svg' | 'dockerfile' | 'shell' | 'yaml' | null;
+/**
+ * What a file opens as.
+ *
+ * The names the app draws itself, plus whatever an extension calls its own. The
+ * `(string & {})` keeps the known ones offered while leaving the door open: an
+ * extension is allowed to invent a kind, and the app is not entitled to a list
+ * of every name anyone will ever choose.
+ */
+export type PreviewKind = 'markdown' | 'html' | 'xml' | 'svg' | 'dockerfile' | 'shell' | 'yaml' | (string & {}) | null;
 
 /**
  * What decides which files a renderer is offered for.
@@ -148,13 +156,12 @@ function styles(dark: boolean): string {
  * would be showing something other than the file. Its own `<style>` applies;
  * anything it loads from beside itself does not.
  */
-export function previewDocument(path: string, text: string, dark: boolean, openTo = 3): string {
-  const kind = previewKind(path);
+export function previewDocument(path: string, text: string, dark: boolean, openTo = 3, kind = previewKind(path)): string {
   // An SVG and an HTML page are both already documents; anything done to them
   // would be showing something other than the file.
   if (kind === 'html' || kind === 'svg') return text;
   if (kind === 'xml') return xmlDocument(text, dark, openTo);
-  if (kind === 'dockerfile' || kind === 'shell') return scriptDocument(text, kind, dark, openTo);
+  if (kind === 'dockerfile' || kind === 'shell') return scriptDocument(text, kind === 'dockerfile' ? 'dockerfile' : 'shell', dark, openTo);
   if (kind === 'yaml') return yamlDocument(text, dark, openTo);
 
   const body = marked.parse(text, { async: false, gfm: true, breaks: false }) as string;

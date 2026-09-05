@@ -233,8 +233,38 @@ export interface MonitorPanel {
  */
 export const STORAGE = '::storage';
 
+/**
+ * The extensions gallery, as a tab.
+ *
+ * A section for the same reason the monitor is one: it is something you read
+ * while working, and a dialog would cover the thing you were about to change.
+ */
+export interface ExtensionsPanel {
+  id: string;
+  kind: 'extensions';
+}
+
+/**
+ * A view an extension contributes, as a section of its own.
+ *
+ * It carries the folder rather than looking one up, because a panel that
+ * follows whatever happens to be focused is a panel that changes what it is
+ * showing while you are reading it. This one was opened on a repository and
+ * stays on that repository until it is closed.
+ */
+export interface ExtensionViewPanel {
+  id: string;
+  kind: 'extension';
+  /** Which contributed panel this is — `contributes.panels[].id`. */
+  viewId: string;
+  /** What it is called, kept here so the tab has a name before the frame loads. */
+  title: string;
+  /** The repository it was opened on, for a panel that needs one. */
+  root: string | null;
+}
+
 /** What a section can hold besides a terminal. */
-export type Panel = FilePanel | MonitorPanel;
+export type Panel = FilePanel | MonitorPanel | ExtensionsPanel | ExtensionViewPanel;
 
 /**
  * Git's place in the content row. A file path is always absolute, so this can
@@ -312,6 +342,19 @@ export interface Settings {
   defaultProfileId: string | null;
   /** Regex matched against session output to notice a usage limit. */
   limitPattern: string;
+  /**
+   * When Claude compacts a session by itself.
+   *
+   * The monitor has always been able to *say* that a session was running out of
+   * room; this is the one thing that lets it be acted on. `auto` leaves Claude
+   * to decide. A number is a window in tokens — a smaller one compacts sooner
+   * and more often, which trades some history for never hitting the wall
+   * mid-task; a larger one keeps more and compacts later.
+   *
+   * Empty means the app says nothing and Claude's own default applies, which is
+   * what every session did before this existed.
+   */
+  autocompact: string;
   /** Keep a readable, searchable copy of every conversation in the database. */
   recordConversations: boolean;
   /** Include what each command printed. This is most of what the copies weigh. */

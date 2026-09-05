@@ -8,7 +8,8 @@ import { Editor } from './Editor';
 import { Popover } from './Popover';
 import { FileIcon, colourFor } from '../lib/fileIcons';
 import { previewDocument, previewKind } from '../lib/preview';
-import type { PreviewKind } from '../lib/preview';
+import { renderWithExtension } from '../lib/extensionRender';
+import type { PreviewKind, PreviewRule } from '../lib/preview';
 import { GitPanel } from './GitPanel';
 import { TerminalSlot } from './TerminalSlot';
 
@@ -204,15 +205,54 @@ function TerminalButton({ panelId }: { panelId: string }) {
  */
 function Preview({ path, text, kind }: { path: string; text: string; kind: NonNullable<PreviewKind> }) {
   const dark = useStore((s) => isDarkAppearance(s.settings.theme));
-  const doc = useMemo(() => previewDocument(path, text, dark), [path, text, dark]);
+  // The rule that matched, so an extension's own renderer can be found. Only its
+  // source matters here, and a string is a stable thing to select.
+  const source = useStore(
+    (s) => s.extensions.previews.find((rule) => rule.kind === kind)?.source ?? null,
+  );
+  const [fromExtension, setFromExtension] = useState<{ html: string } | { error: string } | null>(null);
+
+  /**
+   * An extension's renderer is asked in a worker, so the answer arrives later.
+   * What is on screen while it does is deliberately the last good answer rather
+   * than a blank: retyping in a file should not make the preview flicker.
+   */
+  useEffect(() => {
+    if (!source) {
+      setFromExtension(null);
+      return;
+    }
+    let alive = true;
+    renderWithExtension(kind, source, { path, text, dark })
+      .then((html) => alive && setFromExtension({ html }))
+      .catch((error: Error) => alive && setFromExtension({ error: error.message }));
+    return () => {
+      alive = false;
+    };
+  }, [kind, source, path, text, dark]);
+
+  const built = useMemo(
+    () => (source ? '' : previewDocument(path, text, dark, 3, kind)),
+    [source, path, text, dark, kind],
+  );
+
+  const failed = fromExtension && 'error' in fromExtension ? fromExtension.error : null;
+  const doc = source ? (fromExtension && 'html' in fromExtension ? fromExtension.html : '') : built;
 
   return (
     <div className="file-preview">
+      {source && !fromExtension && <p className="file-preview-note">Asking the extension…</p>}
+      {failed && (
+        <p className="file-preview-note is-warn">
+          The extension could not render this: {failed}
+        </p>
+      )}
       <iframe
         className="file-preview-frame"
         title={`Preview of ${path.split('/').pop()}`}
         // No allow-scripts and no allow-same-origin: it renders, and can do
-        // nothing else. Everything the preview cannot show follows from this.
+        // nothing else. Everything the preview cannot show follows from this —
+        // including that an extension's own output cannot act either.
         sandbox=""
         srcDoc={doc}
       />
@@ -333,6 +373,7 @@ function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string;
       <div className="files-head-tools">
         <GitButton panelId={panelId} />
         <TerminalButton panelId={panelId} />
+        <ExtensionButtons panelId={panelId} />
       </div>
       {open && (
         <Popover anchorEl={buttonRef.current} onClose={() => setOpen(false)}>
@@ -613,6 +654,53 @@ function GitButton({ panelId }: { panelId: string }) {
   );
 }
 
+/**
+ * A button for every view an extension contributes to a folder.
+ *
+ * Nothing here knows what any of them do. An extension says it has a panel and
+ * what that panel needs, and this offers it where what it needs is there — so
+ * the app grows a button without the app being edited, which is the whole point
+ * of the thing being an extension rather than a feature.
+ */
+function ExtensionButtons({ panelId }: { panelId: string }) {
+  const root = useStore((s) => asFilePanel(s.panels[panelId])?.root ?? '');
+  const gitRoot = useStore((s) => asFilePanel(s.panels[panelId])?.gitRoot ?? null);
+  // Ids only: a selector that builds a fresh array of objects re-renders this
+  // for ever, which is a lesson this file has already learned once.
+  const viewIds = useStore(
+    useShallow((s) => s.extensions.panels.map((view) => `${view.id}\u0000${view.title}\u0000${view.needs ?? ''}`)),
+  );
+  const openExtensionView = useStore((s) => s.openExtensionView);
+  if (!viewIds.length) return null;
+
+  return (
+    <>
+      {viewIds.map((packed) => {
+        const [id, title, needs] = packed.split('\u0000');
+        // A panel that needs a repository is not offered on a folder that is
+        // not one: a button whose only possible outcome is an apology.
+        if (needs === 'repository' && !gitRoot) return null;
+        return (
+          <button
+            key={id}
+            className="files-tool"
+            onClick={() => openExtensionView(id, needs === 'repository' ? gitRoot : root || null)}
+            aria-label={title}
+            title={title}
+          >
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3">
+              <path d="M2 10.5V3.2M2 3.2a1.4 1.4 0 1 0 0-.1M2 10.8a1.4 1.4 0 1 0 0 .1" />
+              <path d="M7 11.2V6.4c0-1 .8-1.8 1.8-1.8H11" />
+              <circle cx="7" cy="12" r="1.4" />
+              <circle cx="12" cy="4.6" r="1.4" />
+            </svg>
+          </button>
+        );
+      })}
+    </>
+  );
+}
+
 /** Git's own tab in the content row, first, with a close of its own. */
 function GitTab({ panelId, selected }: { panelId: string; selected: boolean }) {
   const gitRoot = useStore((s) => asFilePanel(s.panels[panelId])?.gitRoot ?? null);
@@ -835,7 +923,10 @@ function OpenFile({
 }) {
   const buffer = useStore((s) => s.buffers[path]);
   const saveBuffer = useStore((s) => s.saveBuffer);
-  const kind = previewKind(path);
+  const rules = useStore((s) => s.extensions.previews) as PreviewRule[];
+  // Which files preview at all is decided by what is installed, so the rules
+  // come from the store rather than from the module's own list.
+  const kind = previewKind(path, rules);
   // Per open file, and not remembered: which way you want to look at a document
   // is a question about this minute, not a setting.
   const [showing, setShowing] = useState<'code' | 'preview' | 'both'>(kind ? 'preview' : 'code');

@@ -2,7 +2,29 @@
 const { execFile } = require('node:child_process');
 
 const LSOF = '/usr/sbin/lsof';
+
+/**
+ * How often to ask, when something is actually happening.
+ *
+ * Every tick spawns two processes — `lsof` over the session pids, and a `ps`
+ * that walks every process on the machine. At 2.5s that is forty-eight process
+ * spawns a minute, for ever, whether or not anything has moved.
+ */
 const INTERVAL = 2500;
+
+/**
+ * How often to ask when nothing has changed for a while.
+ *
+ * A session that has not moved in a minute is a session nobody is typing in, and
+ * the answer to "where is it" is the same answer as last time. The moment
+ * anything does change the poll snaps back to `INTERVAL`, so the case that needs
+ * to feel immediate still does — this only stops the app asking a question it
+ * already knows the answer to, hundreds of times an hour.
+ */
+const IDLE_INTERVAL = 10000;
+
+/** Quiet for this long, and the poll slows down. */
+const QUIET_BEFORE_IDLE = 60000;
 
 /**
  * Reports each session's *live* working directory and what is running in it.
@@ -27,23 +49,48 @@ class CwdWatcher {
     this.known = new Map();
     this.timer = null;
     this.running = false;
+    this.everyMs = INTERVAL;
+    this.lastChange = Date.now();
     this.supported = process.platform === 'darwin' || process.platform === 'linux';
   }
 
   start() {
     if (this.timer || !this.supported) return;
-    this.timer = setInterval(() => this.poll(), INTERVAL);
+    // A watcher that starts after a long stop must start responsive, not carry
+    // in the quiet it was stopped during.
+    this.lastChange = Date.now();
+    this.#schedule(INTERVAL);
+  }
+
+  /** Re-arm at a given rate, replacing whatever was running. */
+  #schedule(everyMs) {
+    if (this.timer) clearInterval(this.timer);
+    this.everyMs = everyMs;
+    this.timer = setInterval(() => this.poll(), everyMs);
     this.timer.unref?.();
   }
 
   stop() {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.everyMs = INTERVAL;
     this.known.clear();
   }
 
   forget(id) {
     this.known.delete(id);
+  }
+
+  /**
+   * Somebody is doing something; ask at full rate again.
+   *
+   * A keystroke is the one signal that beats any polling interval: `cd` has been
+   * typed before the next tick either way, and this is what keeps the backoff
+   * from ever being something you can feel.
+   */
+  wake() {
+    this.lastChange = Date.now();
+    if (this.timer && this.everyMs !== INTERVAL) this.#schedule(INTERVAL);
   }
 
   poll() {
@@ -75,7 +122,13 @@ class CwdWatcher {
           this.known.set(session.id, { cwd: cwd ?? previous?.cwd, foreground, command });
           changes.push({ id: session.id, cwd: cwd ?? previous?.cwd, foreground, command });
         }
-        if (changes.length) this.onChange(changes);
+        if (changes.length) {
+          this.lastChange = Date.now();
+          if (this.everyMs !== INTERVAL) this.#schedule(INTERVAL);
+          this.onChange(changes);
+        } else if (this.everyMs === INTERVAL && Date.now() - this.lastChange > QUIET_BEFORE_IDLE) {
+          this.#schedule(IDLE_INTERVAL);
+        }
       })
       .catch(() => {
         /* a transient failure just means this tick reports nothing */

@@ -1,0 +1,30 @@
+{
+  "id": "xml",
+  "name": "XML",
+  "version": "1.0.0",
+  "author": "Smart Terminal",
+  "summary": "XML as a folding tree instead of a wall of angle brackets.",
+  "description": "Elements, attributes, values, comments and CDATA each coloured for what they are, folded by nesting. Written to show a broken file rather than refuse it: a stray close tag, an unclosed element or a truncated document all still open.",
+  "contributes": {
+    "previews": [
+      {
+        "kind": "xml",
+        "extensions": [
+          "xml",
+          "xsd",
+          "xsl",
+          "xslt",
+          "rss",
+          "atom",
+          "plist",
+          "pom",
+          "csproj",
+          "nuspec",
+          "wsdl",
+          "kml",
+          "gpx"
+        ]
+      }
+    ]
+  }
+}
