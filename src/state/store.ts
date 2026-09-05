@@ -69,6 +69,7 @@ const DEFAULT_SETTINGS: Settings = {
   defaultProfileId: null,
   recordConversations: true,
   recordCommandOutput: true,
+  autocompact: '',
   limitPattern:
     'usage limit reached|reached your usage limit|limit will reset|out of (?:credits|usage)|rate limit exceeded',
   theme: 'system',
@@ -3196,6 +3197,9 @@ async function spawnInto(
       record: args.record,
       recordCommands: get().settings.recordCommandOutput,
       startCwd: args.startCwd,
+      // Empty means say nothing and let Claude's own default apply, which is
+      // what every session did before this was a setting.
+      autocompact: get().settings.autocompact || null,
       ...(args.resumeSessionId
         ? { resumeSessionId: args.resumeSessionId }
         : claudeSessionId

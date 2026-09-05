@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const { Advisor, buildPrompt } = require('../electron/advisor.js');
+const { Advisor, buildPrompt , BUDGET_USD } = require('../electron/advisor.js');
 
 /** A verdict shaped the way the monitor hands them out. */
 function verdict({ requests = 30, last = 700000, window = 1000000, findings = [] } = {}) {
@@ -101,4 +101,11 @@ test('the cooldown is per session, not shared', async () => {
   assert.equal(answer.ok, false);
   // 'b' has never been asked, so it is not held back by 'a'.
   assert.equal(advisor.lastAsked.has('b'), false);
+});
+
+test('the one thing that spends money has a ceiling the CLI enforces', () => {
+  // Everything else the app does reads files that already exist. This call is
+  // the exception, and it happens while nobody is watching — so the limit is
+  // asserted here rather than left to the length of the prompt.
+  assert.ok(BUDGET_USD > 0 && BUDGET_USD <= 0.25, `a budget of $${BUDGET_USD} is not a ceiling`);
 });

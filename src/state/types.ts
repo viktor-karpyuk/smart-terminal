@@ -342,6 +342,19 @@ export interface Settings {
   defaultProfileId: string | null;
   /** Regex matched against session output to notice a usage limit. */
   limitPattern: string;
+  /**
+   * When Claude compacts a session by itself.
+   *
+   * The monitor has always been able to *say* that a session was running out of
+   * room; this is the one thing that lets it be acted on. `auto` leaves Claude
+   * to decide. A number is a window in tokens — a smaller one compacts sooner
+   * and more often, which trades some history for never hitting the wall
+   * mid-task; a larger one keeps more and compacts later.
+   *
+   * Empty means the app says nothing and Claude's own default applies, which is
+   * what every session did before this existed.
+   */
+  autocompact: string;
   /** Keep a readable, searchable copy of every conversation in the database. */
   recordConversations: boolean;
   /** Include what each command printed. This is most of what the copies weigh. */

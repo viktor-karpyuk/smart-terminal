@@ -28,6 +28,8 @@ export interface PtyCreateOptions {
   record?: boolean;
   /** Include what commands printed in the kept copy. */
   recordCommands?: boolean;
+  /** `auto`, a token window like `200k`, or null to let Claude decide. */
+  autocompact?: string | null;
   cwd?: string;
   kind?: 'claude' | 'shell' | 'login';
   cols?: number;

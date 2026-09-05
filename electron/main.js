@@ -296,6 +296,19 @@ function registerIpc() {
       extraArgs.push('--plugin-dir', pluginPath);
     }
 
+    /*
+      When Claude compacts by itself.
+
+      The monitor could always say a session was filling up; this is the only
+      thing that lets that be acted on rather than only reported. Validated
+      here rather than trusted: this becomes a command-line argument, and the
+      only shapes Claude accepts are `auto` or a token count.
+    */
+    if (kind === 'claude' && options.autocompact) {
+      const wanted = String(options.autocompact).trim().toLowerCase();
+      if (wanted === 'auto' || /^\d+k?$/.test(wanted)) extraArgs.push('--autocompact', wanted);
+    }
+
     const result = ptys.create({
       profile,
       cwd: workdir,

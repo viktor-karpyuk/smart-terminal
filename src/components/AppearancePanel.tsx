@@ -445,6 +445,28 @@ function ConversationStorage() {
         after itself at any time with the <code>session_health</code> tool, which costs nothing.
       </p>
 
+      <h3>Context</h3>
+      <label className="field">
+        <span>Compact by itself at</span>
+        <select
+          value={settings.autocompact}
+          onChange={(event) => updateSettings({ autocompact: event.target.value })}
+        >
+          <option value="">Claude decides</option>
+          <option value="auto">Automatic</option>
+          <option value="100k">100k tokens</option>
+          <option value="200k">200k tokens</option>
+          <option value="400k">400k tokens</option>
+          <option value="800k">800k tokens</option>
+        </select>
+      </label>
+      <p className="form-hint">
+        The monitor could always tell you a session was filling up; this is the part that lets you
+        do something about it. A smaller window compacts sooner and more often, trading some history
+        for never hitting the wall in the middle of a task — a larger one keeps more and compacts
+        later. It applies to sessions started from now on, since it is decided when Claude launches.
+      </p>
+
       <h3>Conversations</h3>
       <label className="checkbox">
         <input
