@@ -255,6 +255,28 @@ class Database {
       this.db.exec('ALTER TABLE windows ADD COLUMN minimized TEXT');
     }
 
+    /*
+     * What each tab that is not a session actually is.
+     *
+     * A layout is a tree of tab ids. For a session that is enough — the session
+     * is a row of its own and can be looked up. A folder tab, the monitor, the
+     * extensions gallery and a panel an extension brought are not sessions and
+     * have no row anywhere, so an id is all that survived: the layout came back
+     * naming tabs with nothing behind them, and they were dropped as dead.
+     *
+     * The renderer has always sent these and always expected them back. The
+     * columns to put them in were simply never added, so every folder tab in
+     * every window was quietly lost on restart.
+     */
+    if (windowColumns.size && !windowColumns.has('panels')) {
+      this.db.exec('ALTER TABLE windows ADD COLUMN panels TEXT');
+    }
+    // And the sections set aside whole, which hold tabs that are in neither the
+    // layout nor the dock — so nothing else names them at all.
+    if (windowColumns.size && !windowColumns.has('sections')) {
+      this.db.exec('ALTER TABLE windows ADD COLUMN sections TEXT');
+    }
+
     // How a group was laid out, so closing it and bringing it back is not the same
     // as bringing back a pile of tabs that happen to share a name.
     const groupColumns = new Set(
@@ -1068,17 +1090,22 @@ class Database {
 
   // --- workspace -----------------------------------------------------------
 
-  saveWorkspace(windowId, { layout, settings, activeLeaf, bounds, groups, minimized }) {
+  saveWorkspace(windowId, { layout, settings, activeLeaf, bounds, groups, minimized, panels, sections }) {
+    // An empty list still has to be written — closing the last folder tab is a
+    // change that must be recorded — while an absent one leaves what was there.
+    const list = (value) => (value === undefined || value === null ? null : JSON.stringify(value));
     this.db
       .prepare(
-        `INSERT INTO windows (id, layout, settings, active_leaf, bounds, groups, minimized, opened_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO windows (id, layout, settings, active_leaf, bounds, groups, minimized, panels, sections, opened_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            layout = excluded.layout, settings = excluded.settings,
            active_leaf = excluded.active_leaf,
            bounds = COALESCE(excluded.bounds, windows.bounds),
            groups = COALESCE(excluded.groups, windows.groups),
            minimized = COALESCE(excluded.minimized, windows.minimized),
+           panels = COALESCE(excluded.panels, windows.panels),
+           sections = COALESCE(excluded.sections, windows.sections),
            closed_at = NULL,
            updated_at = excluded.updated_at`,
       )
@@ -1089,9 +1116,9 @@ class Database {
         activeLeaf ?? null,
         bounds ? JSON.stringify(bounds) : null,
         groups ? JSON.stringify(groups) : null,
-        // An empty dock still has to be written, or restoring the last minimized
-        // tab could never be recorded. Only an absent one is left as it was.
-        minimized === undefined || minimized === null ? null : JSON.stringify(minimized),
+        list(minimized),
+        list(panels),
+        list(sections),
         Date.now(),
         Date.now(),
       );
@@ -1213,6 +1240,11 @@ class Database {
       activeLeaf: row.active_leaf,
       groups: parse(row.groups, []),
       minimized: parse(row.minimized, []) ?? [],
+      // The tabs that are not sessions, and the sections set aside whole. The
+      // renderer puts these back before anything prunes the layout, which is
+      // what stops their tabs looking like sessions that died.
+      panels: parse(row.panels, []) ?? [],
+      sections: parse(row.sections, []) ?? [],
       updatedAt: row.updated_at,
     };
   }

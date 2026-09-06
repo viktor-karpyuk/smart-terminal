@@ -173,6 +173,14 @@ let initStarted = false;
 const followedRoots = new Map<string, string>();
 
 /**
+ * Folders that changed again while they were being read.
+ *
+ * The listing that is on its way back is already out of date, so the read is
+ * repeated once it lands rather than the request being dropped.
+ */
+const staleDirs = new Set<string>();
+
+/**
  * Follow a folder for this panel, letting go of whatever it followed before.
  *
  * Passing `null` is how a panel stops following anything, which is what closing
@@ -1720,8 +1728,27 @@ export const useStore = create<State>((set, get) => ({
     schedulePersist(get);
   },
 
+  /**
+   * Read one folder again.
+   *
+   * A read already in flight is not a reason to skip this one, it is a reason
+   * to do it again afterwards. Dropping it was safe while the only caller was a
+   * click — nobody expands a folder twice in the same instant — but the watcher
+   * calls this whenever the folder changes, and two changes close together are
+   * ordinary. The first read would answer with a listing taken before the second
+   * change, the second call would be thrown away, and the tree would sit there
+   * wrong until something else happened to move.
+   *
+   * Reading a folder is a `readdir`, so doing it once more costs nothing worth
+   * protecting against.
+   */
   async loadDir(path) {
-    if (get().dirs[path]?.loading) return;
+    if (get().dirs[path]?.loading) {
+      // Somebody wants this folder read as it is *now*, not as it was when the
+      // read in flight started. Noted, and done the moment that one lands.
+      staleDirs.add(path);
+      return;
+    }
     set((prev) => ({
       dirs: { ...prev.dirs, [path]: { entries: prev.dirs[path]?.entries ?? [], error: null, loading: true } },
     }));
@@ -1736,6 +1763,7 @@ export const useStore = create<State>((set, get) => ({
         },
       },
     }));
+    if (staleDirs.delete(path)) get().loadDir(path);
   },
 
   toggleDir(panelId, path) {
