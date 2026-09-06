@@ -110,6 +110,16 @@ function ListResizer({ above, below }: { above: string; below: string }) {
 const SECTION_MIME = 'application/x-smart-terminal-section';
 
 /**
+ * Which heading is being dragged, kept outside the drag event.
+ *
+ * `dataTransfer.getData` returns nothing during `dragover` — the browser hides
+ * the payload until the drop, deliberately. That is fine for a drop handler and
+ * useless for reordering as the pointer moves, which needs to know what is being
+ * dragged *now*. So it is remembered when the drag starts.
+ */
+let draggingSection: SidebarList | null = null;
+
+/**
  * A foldable heading, the way an editor's sidebar has them.
  *
  * Two different acts, and they are not the same thing: the chevron folds the
@@ -146,10 +156,16 @@ function SectionHeader({
  * insertion, or dragging the last onto the first would leave the middle one
  * where it was and look like nothing happened.
  */
-  const moveHere = (dragged: string) => {
-    if (dragged === id) return;
+  const moveHere = (dragged: string | null) => {
+    if (!dragged || dragged === id) return;
     const next = order.filter((entry) => entry !== dragged);
-    next.splice(next.indexOf(id), 0, dragged as SidebarList);
+    const at = next.indexOf(id);
+    if (at === -1) return;
+    next.splice(at, 0, dragged as SidebarList);
+    // Reordering on every pointer move means this runs many times a second, and
+    // most of those times the answer is the order it already has. Writing it
+    // again would be a settings save per frame.
+    if (next.length === order.length && next.every((entry, i) => entry === order[i])) return;
     updateSettings({ sidebarOrder: next });
   };
 
@@ -159,22 +175,33 @@ function SectionHeader({
       onClick={onToggle}
       draggable
       onDragStart={(event) => {
+        draggingSection = id;
         event.dataTransfer.setData(SECTION_MIME, id);
         event.dataTransfer.effectAllowed = 'move';
+      }}
+      onDragEnd={() => {
+        draggingSection = null;
+        setOver(false);
       }}
       onDragOver={(event) => {
         if (!event.dataTransfer.types.includes(SECTION_MIME)) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = 'move';
         setOver(true);
+        // Move it now, not on the drop. Waiting until the button comes up meant
+        // nothing on screen answered the pointer for the whole length of the
+        // drag — the list stayed put and then jumped, which reads as the cursor
+        // having run ahead of it. Reordering as the pointer crosses each heading
+        // is what makes the list follow the hand.
+        moveHere(draggingSection);
       }}
       onDragLeave={() => setOver(false)}
       onDrop={(event) => {
-        const dragged = event.dataTransfer.getData(SECTION_MIME);
-        setOver(false);
-        if (!dragged) return;
         event.preventDefault();
-        moveHere(dragged);
+        setOver(false);
+        // The order is already right — the drag put it there. This only ends it.
+        moveHere(draggingSection ?? event.dataTransfer.getData(SECTION_MIME));
+        draggingSection = null;
       }}
     >
       <svg
