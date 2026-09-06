@@ -35,9 +35,22 @@ function minimizedIds(minimized = []) {
     .filter(Boolean);
 }
 
-/** Every session this window is answerable for: the ones in panes and the ones docked. */
-function windowTabs(layout, minimized = []) {
-  return [...tabsInLayout(layout), ...minimizedIds(minimized)];
+/**
+ * The tabs of sections that were set aside whole.
+ *
+ * A third place a tab can be, and the easiest to forget: a section put aside is
+ * in neither the layout nor the dock, so nothing else in this file names it.
+ * Leaving it out loses every session in that section on the next launch —
+ * exactly the failure the layout list exists to prevent, one level up.
+ */
+function sectionIds(sections = []) {
+  if (!Array.isArray(sections)) return [];
+  return sections.flatMap((entry) => (Array.isArray(entry?.tabs) ? entry.tabs.filter(Boolean) : []));
+}
+
+/** Every session this window is answerable for: in panes, docked, or set aside. */
+function windowTabs(layout, minimized = [], sections = []) {
+  return [...tabsInLayout(layout), ...minimizedIds(minimized), ...sectionIds(sections)];
 }
 
 /**
@@ -48,8 +61,8 @@ function windowTabs(layout, minimized = []) {
  * session from being spawned twice. A row belonging to a window that is not
  * coming back is nobody's — so the layout naming it wins, and it comes home.
  */
-function sessionsToRestore({ windowId, layout, minimized = [], rows = [], openWindowIds = [] }) {
-  const named = new Set(windowTabs(layout, minimized));
+function sessionsToRestore({ windowId, layout, minimized = [], sections = [], rows = [], openWindowIds = [] }) {
+  const named = new Set(windowTabs(layout, minimized, sections));
   const otherWindows = new Set(openWindowIds.filter((id) => id && id !== windowId));
   return rows.filter((row) => {
     if (row.windowId && row.windowId !== windowId && otherWindows.has(row.windowId)) return false;
@@ -58,9 +71,9 @@ function sessionsToRestore({ windowId, layout, minimized = [], rows = [], openWi
 }
 
 /** Ids the window names that no row answers for — a pane or dock entry that cannot be revived. */
-function unaccountedTabs(layout, rows = [], minimized = []) {
+function unaccountedTabs(layout, rows = [], minimized = [], sections = []) {
   const present = new Set(rows.map((row) => row.id));
-  return windowTabs(layout, minimized).filter((id) => !present.has(id));
+  return windowTabs(layout, minimized, sections).filter((id) => !present.has(id));
 }
 
-module.exports = { tabsInLayout, minimizedIds, windowTabs, sessionsToRestore, unaccountedTabs };
+module.exports = { tabsInLayout, minimizedIds, sectionIds, windowTabs, sessionsToRestore, unaccountedTabs };

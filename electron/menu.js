@@ -5,7 +5,7 @@ const { Menu, app, shell } = require('electron');
  * App menu. Accelerators live here rather than in the renderer so they fire
  * reliably even while xterm has keyboard focus.
  */
-function buildMenu(send, newWindow) {
+function buildMenu(send, newWindow, reopenWindow = () => {}) {
   const isMac = process.platform === 'darwin';
   const action = (id) => () => send('menu:action', { id });
 
@@ -51,6 +51,13 @@ function buildMenu(send, newWindow) {
       label: 'Session',
       submenu: [
         { label: 'New Window', accelerator: 'CmdOrCtrl+Shift+N', click: () => newWindow() },
+        // The browser shortcut, because it is the same act: the window you just
+        // closed, back with everything that was in it.
+        {
+          label: 'Reopen Closed Window',
+          accelerator: 'CmdOrCtrl+Shift+T',
+          click: () => reopenWindow(),
+        },
         { type: 'separator' },
         { label: 'New Claude Session', accelerator: 'CmdOrCtrl+T', click: action('new-claude') },
         { label: 'New Shell', accelerator: 'CmdOrCtrl+Shift+T', click: action('new-shell') },

@@ -1216,6 +1216,26 @@ class Database {
     this.db.prepare('UPDATE windows SET closed_at = ? WHERE id = ?').run(Date.now(), windowId);
   }
 
+  /**
+   * The last window that was closed on purpose, so it can be opened again.
+   *
+   * Its whole record is still there — layout, panels, sections, bounds — because
+   * closing a window only writes a time against it. What was missing was any way
+   * to ask for it back, which is the difference between a window you closed and
+   * a window you lost.
+   *
+   * Only windows that are not open right now: reopening one that is already on
+   * screen would be a second window fighting the first for the same sessions.
+   */
+  lastClosedWindow(openIds = []) {
+    const rows = this.db
+      .prepare('SELECT id, bounds FROM windows WHERE closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 20')
+      .all();
+    const open = new Set(openIds);
+    const found = rows.find((row) => !open.has(row.id));
+    return found ? { id: found.id, bounds: safeParse(found.bounds) } : null;
+  }
+
   /** Windows that were open last time, so a launch brings them all back. */
   openWindows() {
     return this.db

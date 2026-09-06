@@ -22,7 +22,7 @@ const { RepoWatcher } = require('./repo-watcher');
 const { discover, gallery, previewRules, withSources, panelViews, withPanelSources } = require('./extensions');
 const { parseReport, replyFor, wantsBrief, compactionNote } = require('./hooks');
 const { Autopilot, looksLikeADecision } = require('./autopilot');
-const { tabsInLayout, minimizedIds, sessionsToRestore, unaccountedTabs } = require('./restore');
+const { tabsInLayout, minimizedIds, sectionIds, sessionsToRestore, unaccountedTabs } = require('./restore');
 const { MessageBridge } = require('./message-bridge');
 const { listDir, readTextFile, writeTextFile, FileWatcher } = require('./files');
 const git = require('./git');
@@ -189,7 +189,36 @@ function createWindow(windowId = randomUUID(), bounds = null) {
   });
 
   windows.set(windowId, win);
-  win.once('ready-to-show', () => win.show());
+
+  /*
+   * Put the window back where it was, and mean it.
+   *
+   * macOS cascades new windows so they do not sit exactly on top of one
+   * another, and it does that *after* the constructor has been given a
+   * position. The window then fires `moved`, the new position is written down
+   * as though the user had dragged it there, and every relaunch shifts every
+   * window a little further down and to the right for ever.
+   *
+   * Setting the bounds again once the window exists is what beats the cascade,
+   * and `placed` is what stops the cascade's own `moved` from being recorded as
+   * a preference.
+   */
+  let placed = !bounds;
+  win.once('ready-to-show', () => {
+    if (bounds && Number.isFinite(bounds.x) && Number.isFinite(bounds.y)) {
+      win.setBounds({
+        x: Math.round(bounds.x),
+        y: Math.round(bounds.y),
+        width: Math.round(bounds.width ?? 1500),
+        height: Math.round(bounds.height ?? 950),
+      });
+    }
+    win.show();
+    // Anything after this really is the user moving the window.
+    setTimeout(() => {
+      placed = true;
+    }, 400);
+  });
 
   if (isDev) {
     // Surface renderer errors in the terminal running `npm run dev`.
@@ -203,7 +232,7 @@ function createWindow(windowId = randomUUID(), bounds = null) {
   }
 
   const rememberBounds = () => {
-    if (win.isDestroyed() || win.isMinimized()) return;
+    if (win.isDestroyed() || win.isMinimized() || !placed) return;
     db?.saveWorkspace(windowId, { ...(db.loadWorkspace(windowId) ?? {}), bounds: win.getBounds() });
   };
   win.on('resized', rememberBounds);
@@ -701,11 +730,15 @@ function registerIpc() {
     // The dock is asked for by the same call: a minimized session has no pane to
     // name it, so leaving it out here is the whole of losing it.
     const minimized = stored.minimized ?? [];
+    // A section set aside whole holds tabs that are in neither the layout nor
+    // the dock, so its sessions have to be asked for by name or they come back
+    // as ids with nothing behind them.
+    const sections = stored.sections ?? [];
     const rows = db.sessionsForRestore(
-      [...tabsInLayout(stored.layout), ...minimizedIds(minimized)],
+      [...tabsInLayout(stored.layout), ...minimizedIds(minimized), ...sectionIds(sections)],
       windowId,
     );
-    const missing = unaccountedTabs(stored.layout, rows, minimized);
+    const missing = unaccountedTabs(stored.layout, rows, minimized, sections);
     if (missing.length) {
       console.log(`[workspace] ${missing.length} pane(s) name a session with no row left`);
     }
@@ -726,6 +759,7 @@ function registerIpc() {
         windowId,
         layout: stored.layout,
         minimized,
+        sections,
         rows,
         // Every window this launch is bringing back, so a session held by one of
         // the others is left to it instead of being started twice.
@@ -1062,6 +1096,21 @@ function registerIpc() {
   });
 
   ipcMain.on('window:new', () => createWindow());
+
+  /**
+   * Open the last window that was closed, exactly as it was.
+   *
+   * Closing a window has always kept its whole record — layout, panels,
+   * sections, bounds — and killed its sessions. Bringing it back is therefore
+   * the same act as bringing a window back at startup, which is code that
+   * already exists and is already trusted: create the window under its own id,
+   * and the renderer's own restore does the rest, conversations included.
+   */
+  ipcMain.on('window:reopen', () => {
+    const found = db.lastClosedWindow([...windows.keys()]);
+    if (!found) return;
+    createWindow(found.id, found.bounds);
+  });
   ipcMain.handle('app:version', () => buildInfo);
   ipcMain.handle('system:homedir', () => os.homedir());
   ipcMain.handle('system:paths', () => ({ home: os.homedir(), accountsRoot: accountsRoot() }));
@@ -1203,7 +1252,10 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   if (orphans) console.log(`[db] removed ${orphans} orphaned conversation copies`);
 
   registerIpc();
-  buildMenu(sendToFocused, () => createWindow());
+  buildMenu(sendToFocused, () => createWindow(), () => {
+    const found = db.lastClosedWindow([...windows.keys()]);
+    if (found) createWindow(found.id, found.bounds);
+  });
 
   // Bring back every window that was open, the way an editor does.
   const previous = db.openWindows();

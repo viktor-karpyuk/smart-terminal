@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('api', {
   platform: process.platform,
   windowId,
   newWindow: () => ipcRenderer.send('window:new'),
+  /** Open the last window that was closed, with everything that was in it. */
+  reopenWindow: () => ipcRenderer.send('window:reopen'),
   version: () => ipcRenderer.invoke('app:version'),
 
   pty: {

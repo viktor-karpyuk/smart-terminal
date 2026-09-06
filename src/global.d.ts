@@ -506,6 +506,8 @@ declare global {
       platform: string;
       windowId: string;
       newWindow(): void;
+      /** Open the last window that was closed, with everything that was in it. */
+      reopenWindow(): void;
       version(): Promise<{
         version: string;
         build: number | null;

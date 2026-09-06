@@ -7,6 +7,7 @@ const {
   windowTabs,
   sessionsToRestore,
   unaccountedTabs,
+  sectionIds,
 } = require('../electron/restore');
 
 const leaf = (id, tabs) => ({ id, type: 'leaf', tabs, active: tabs[0] ?? null });
@@ -171,4 +172,43 @@ test('a window with no dock behaves exactly as before', () => {
   const layout = split(leaf('l1', ['a']), leaf('l2', ['b']));
   assert.deepStrictEqual(windowTabs(layout).sort(), ['a', 'b']);
   assert.deepStrictEqual(unaccountedTabs(layout, [{ id: 'a' }, { id: 'b' }]), []);
+});
+
+test('a section set aside whole still names its sessions', () => {
+  // The third place a tab can be, and the easiest to forget: not in the layout,
+  // not in the dock. Leaving it out lost every session in that section on the
+  // next launch — the exact failure the layout list exists to prevent.
+  const layout = { type: 'leaf', tabs: ['a'] };
+  const sections = [{ id: 's1', tabs: ['b', 'c'], at: 1 }];
+  assert.deepEqual(sectionIds(sections), ['b', 'c']);
+  assert.deepEqual(windowTabs(layout, [], sections).sort(), ['a', 'b', 'c']);
+
+  const rows = [
+    { id: 'a', windowId: 'w1' },
+    { id: 'b', windowId: 'w1' },
+    { id: 'c', windowId: 'w1' },
+  ];
+  const restored = sessionsToRestore({ windowId: 'w1', layout, sections, rows, openWindowIds: ['w1'] });
+  assert.deepEqual(restored.map((r) => r.id).sort(), ['a', 'b', 'c']);
+});
+
+test('a set-aside section belonging to another open window is left to it', () => {
+  const layout = { type: 'leaf', tabs: [] };
+  const rows = [{ id: 'b', windowId: 'w2' }];
+  const restored = sessionsToRestore({
+    windowId: 'w1',
+    layout,
+    sections: [{ id: 's1', tabs: ['b'] }],
+    rows,
+    openWindowIds: ['w1', 'w2'],
+  });
+  assert.deepEqual(restored, [], 'w2 is coming back and owns it');
+});
+
+test('sections that are missing or malformed are not an error', () => {
+  const layout = { type: 'leaf', tabs: ['a'] };
+  assert.deepEqual(sectionIds(undefined), []);
+  assert.deepEqual(sectionIds('nonsense'), []);
+  assert.deepEqual(sectionIds([{ id: 's', tabs: null }, null, { tabs: ['x', null] }]), ['x']);
+  assert.deepEqual(windowTabs(layout, [], undefined), ['a']);
 });
