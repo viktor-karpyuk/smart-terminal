@@ -56,6 +56,11 @@ contextBridge.exposeInMainWorld('api', {
     read: (profileId, force = false) => ipcRenderer.invoke('usage:read', { profileId, force }),
   },
 
+  session: {
+    /** Interrupt it, write down where it was, and put it down. */
+    pause: (sessionId, ptyId) => ipcRenderer.invoke('session:pause', { sessionId, ptyId }),
+  },
+
   analysis: {
     session: (sessionId, force = false) => ipcRenderer.invoke('analysis:session', { sessionId, force }),
     all: () => ipcRenderer.invoke('analysis:all'),

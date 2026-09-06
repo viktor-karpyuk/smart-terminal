@@ -59,7 +59,7 @@ export function SessionTab({ sessionId, selected, tight, grouped }: Props) {
 
   return (
     <div
-      className={`tab${selected ? ' tab-selected' : ''}${session.status === 'exited' ? ' tab-exited' : ''}${tight ? ' is-tight' : ''}${grouped || ownColor ? ' is-grouped' : ''}`}
+      className={`tab${selected ? ' tab-selected' : ''}${session.status === 'exited' ? ' tab-exited' : ''}${session.status === 'paused' ? ' tab-paused' : ''}${tight ? ' is-tight' : ''}${grouped || ownColor ? ' is-grouped' : ''}`}
       style={{
         // A grouped tab is underlined in its group's colour, selected or not:
         // the run of matching underlines is what shows the group at a glance.

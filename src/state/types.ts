@@ -98,7 +98,12 @@ export interface Session {
   autopilotState: 'off' | 'watching' | 'working' | 'nudged' | 'waiting-for-you' | 'done';
   /** The tool it is asking permission for, while it waits on you. */
   autopilotAsking: string | null;
-  status: 'starting' | 'running' | 'exited';
+  /**
+   * `paused` is not a kind of `exited`. Exited is what happened to it; paused is
+   * a decision about it, and the difference is what it does next: an exited tab
+   * offers to restart, a paused one offers to pick up exactly where it stopped.
+   */
+  status: 'starting' | 'running' | 'exited' | 'paused';
   exitCode: number | null;
   /** Output seen since the session was last focused. */
   unread: boolean;

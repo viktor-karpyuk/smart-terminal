@@ -63,7 +63,7 @@ export interface PersistedWorkspace {
       | 'color'
       | 'fontSize'
       | 'autopilot'
-    > & { startCwd?: string; lastCommand?: string | null; resumeCommand?: boolean }
+    > & { startCwd?: string; lastCommand?: string | null; resumeCommand?: boolean; paused?: boolean }
   >;
   settings: Partial<Settings>;
   /** Which pane had focus, so a crash restores it too. */
@@ -566,6 +566,9 @@ declare global {
       };
       usage: {
         read(profileId: string, force?: boolean): Promise<UsageReport>;
+      };
+      session: {
+        pause(sessionId: string, ptyId: string | null): Promise<{ ok: boolean; error?: string; brief?: string | null; conversation?: string | null }>;
       };
       analysis: {
         session(sessionId: string, force?: boolean): Promise<SessionAnalysis | null>;

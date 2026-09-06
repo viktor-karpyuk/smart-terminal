@@ -58,6 +58,7 @@ function Menu({
   // offering "Run Claude here" while Claude is running types the words into
   // Claude's own prompt, which is worse than not offering it at all.
   const exited = session.status === 'exited';
+  const paused = session.status === 'paused';
   const foreground = session.foreground ?? null;
   const claudeUp = Boolean(foreground?.includes('claude'));
   const settling = !exited && !claudeUp && session.status === 'starting';
@@ -128,6 +129,27 @@ function Menu({
 
       {exited && (
         <MenuItem label="Start again" hint="⌘R" onClick={run(() => store.restartSession(sessionId))} />
+      )}
+
+      {/*
+        Paused is its own state, so it gets its own pair of verbs. Picking one
+        up is not restarting it — the conversation is still there and comes back
+        whole, which is the entire point of having put it down.
+      */}
+      {paused && (
+        <MenuItem
+          label="Pick it up"
+          hint="same conversation"
+          onClick={run(() => store.resumeSession(sessionId))}
+        />
+      )}
+
+      {!exited && !paused && hostsClaude && (
+        <MenuItem
+          label="Pause"
+          hint="stops it, keeps everything"
+          onClick={run(() => store.pauseSession(sessionId))}
+        />
       )}
 
       {/*

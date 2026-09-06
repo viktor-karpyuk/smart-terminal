@@ -673,6 +673,54 @@ function registerIpc() {
    */
   ipcMain.on('analysis:forget', (_e, sessionId) => monitor?.forget(sessionId));
 
+  /**
+   * Put a session down without losing where it was.
+   *
+   * Three things in an order that matters. The turn is interrupted first, the
+   * way Escape interrupts it, so the shell stops at a boundary of its own
+   * choosing instead of being cut off mid-write. Then the conversation is
+   * copied and what it was doing is written down — both have to happen while
+   * the transcript is still being written to, because after the process is gone
+   * a partial last line is all anybody would get. Only then is it killed.
+   *
+   * What comes back is the brief, so the caller can show it and hand it over
+   * again when the session is picked up.
+   */
+  ipcMain.handle('session:pause', async (_e, { sessionId, ptyId } = {}) => {
+    if (!sessionId) return { ok: false, error: 'no session' };
+    const row = db.getSession(sessionId);
+
+    if (ptyId) {
+      // Escape, twice. Claude takes the first as "stop what you are doing" and
+      // the second as "and do not carry on" — one on its own can leave a turn
+      // that resumes the moment the prompt comes back.
+      ptys.write(ptyId, '\x1b');
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      ptys.write(ptyId, '\x1b');
+      // Long enough for the interrupt to land and the last turn to be flushed
+      // to the transcript, short enough that pausing still feels immediate.
+      await new Promise((resolve) => setTimeout(resolve, 900));
+    }
+
+    let brief = null;
+    try {
+      context?.snapshot(sessionId, { force: true });
+      monitor?.read(sessionId, { force: true });
+      const entry = db.getBrief(sessionId);
+      if (entry) {
+        brief = renderBrief(entry, { command: row?.lastCommand ?? null, name: row?.title ?? null });
+      }
+    } catch (error) {
+      console.log(`[pause] could not write down ${sessionId}: ${error.message}`);
+    }
+
+    if (ptyId) ptys.kill(ptyId);
+    // Ended in the record, but not forgotten: the conversation id stays on the
+    // row, which is the whole of what makes picking it up again possible.
+    db.pauseSession?.(sessionId);
+    return { ok: true, brief, conversation: row?.claudeSessionId ?? null };
+  });
+
   /** How one session has been doing over time, and what typical looks like. */
   ipcMain.handle('analysis:history', (_e, sessionId) => {
     if (!sessionId) return { samples: [], norms: null, compactions: [] };
@@ -779,6 +827,9 @@ function registerIpc() {
           // What it was running, and whether it was told to start that again.
           lastCommand: row.lastCommand ?? null,
           resumeCommand: row.resumeCommand ?? false,
+          // Put down on purpose. It comes back as the tab it was, not as a
+          // process — the point of pausing was not to be running.
+          paused: row.paused ?? false,
           handoffFrom: null,
         })),
     };

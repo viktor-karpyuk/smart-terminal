@@ -239,6 +239,17 @@ class Database {
     if (!present.has('resume_command')) {
       this.db.exec('ALTER TABLE sessions ADD COLUMN resume_command INTEGER DEFAULT 0');
     }
+    /*
+     * Put down on purpose, rather than over.
+     *
+     * A column of its own instead of reading it off `ended_at`, because they
+     * answer different questions and the answers differ: a session that ended
+     * is history, and one that was paused is a tab still on the workspace that
+     * nobody has picked up yet. Restoring treats them completely differently.
+     */
+    if (!present.has('paused')) {
+      this.db.exec('ALTER TABLE sessions ADD COLUMN paused INTEGER DEFAULT 0');
+    }
     this.db.exec('CREATE INDEX IF NOT EXISTS sessions_group ON sessions (group_id)');
 
     const windowColumns = new Set(
@@ -454,6 +465,25 @@ class Database {
     this.db
       .prepare('UPDATE sessions SET ended_at = ?, exit_code = ?, last_active_at = ? WHERE id = ? AND ended_at IS NULL')
       .run(Date.now(), exitCode, Date.now(), id);
+  }
+
+  /**
+   * A session put down on purpose, which is not the same as one that ended.
+   *
+   * Ended is what happened; paused is a decision, and the difference matters on
+   * the next launch: an ended session is history, a paused one is a tab that is
+   * still there and still yours, waiting to be picked up. The conversation id
+   * stays on the row either way — that is what makes picking it up possible.
+   */
+  pauseSession(id) {
+    this.db
+      .prepare('UPDATE sessions SET paused = 1, ended_at = ?, last_active_at = ? WHERE id = ?')
+      .run(Date.now(), Date.now(), id);
+  }
+
+  /** Picked up again: no longer waiting, and open once more. */
+  unpauseSession(id) {
+    this.db.prepare('UPDATE sessions SET paused = 0 WHERE id = ?').run(id);
   }
 
   /** Anything still marked open at startup died with the previous run. */
@@ -1677,6 +1707,8 @@ function decorate(row) {
     groupId: row.group_id,
     lastCommand: row.last_command ?? null,
     resumeCommand: Boolean(row.resume_command),
+    /** Put down on purpose. It comes back as a tab, not as a running session. */
+    paused: Boolean(row.paused),
     storeTranscript: Boolean(row.store_transcript),
     transcriptBytes: row.transcript_bytes,
     open: endedAt === null,

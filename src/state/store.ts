@@ -302,6 +302,10 @@ interface State {
   }): Promise<string | null>;
   closeSession(sessionId: string): void;
   restartSession(sessionId: string, options?: { fresh?: boolean }): Promise<void>;
+  /** Stop it where it is, keeping everything, so it can be picked up later. */
+  pauseSession(sessionId: string): Promise<void>;
+  /** Pick a paused session up again, on the same conversation. */
+  resumeSession(sessionId: string): Promise<void>;
   duplicateSession(sessionId: string): Promise<void>;
   renameSession(sessionId: string, title: string | null): void;
   focusSession(sessionId: string, options?: { startClaude?: boolean }): void;
@@ -780,6 +784,47 @@ export const useStore = create<State>((set, get) => ({
       for (const descriptor of restorable) {
         const profile =
           profiles.find((p) => p.id === descriptor.profileId) ?? profiles[0];
+
+        /*
+         * A session that was put down stays down.
+         *
+         * Its tab comes back and its conversation is still there, but starting
+         * it would be the app undoing the one thing pausing was for. It sits as
+         * a tab until somebody picks it up.
+         */
+        if (descriptor.paused) {
+          set((state) => ({
+            sessions: {
+              ...state.sessions,
+              [descriptor.id]: {
+                id: descriptor.id,
+                profileId: profile?.id ?? descriptor.profileId,
+                kind: descriptor.kind,
+                cwd: descriptor.cwd,
+                startCwd: descriptor.startCwd ?? descriptor.cwd,
+                customTitle: descriptor.customTitle ?? null,
+                title: descriptor.customTitle ?? '',
+                claudeSessionId: descriptor.claudeSessionId ?? null,
+                groupId: descriptor.groupId ?? null,
+                color: descriptor.color ?? null,
+                fontSize: descriptor.fontSize ?? null,
+                autopilot: false,
+                autopilotState: 'off',
+                autopilotAsking: null,
+                handoffFrom: null,
+                ptyId: null,
+                pid: null,
+                status: 'paused',
+                exitCode: null,
+                unread: false,
+                busy: false,
+                createdAt: Date.now(),
+              } as Session,
+            },
+          }));
+          continue;
+        }
+
         await spawnInto(set, get, {
           sessionId: descriptor.id,
           profile,
@@ -1029,6 +1074,90 @@ export const useStore = create<State>((set, get) => ({
     // lands when Claude is at its prompt rather than into whatever it is
     // printing while it starts up.
     if (brief?.text) window.api.analysis.handOver(sessionId, brief.text);
+  },
+
+  /**
+   * Put a session down without losing it.
+   *
+   * Worth being exact about what this can and cannot do. A turn that is already
+   * in flight cannot be frozen and continued from the same word — there is no
+   * such thing to ask for. What happens instead is that Claude is interrupted
+   * the way pressing Escape interrupts it, the conversation is written down as
+   * it stands, and the process is stopped. Picking it up again resumes that
+   * conversation: everything said, every file already written, every command
+   * already run. The one thing that does not survive is a turn that was
+   * half-spoken, and that turn is stopped on purpose rather than lost.
+   *
+   * What it buys is real: a paused session holds no process. Twenty sessions
+   * are several gigabytes of Claude that a paused one gives back, and it stops
+   * being something to keep an eye on.
+   */
+  async pauseSession(sessionId) {
+    const session = get().sessions[sessionId];
+    if (!session || session.status === 'paused') return;
+
+    set((state) => ({
+      sessions: { ...state.sessions, [sessionId]: { ...state.sessions[sessionId], busy: false } },
+    }));
+    announce(sessionId, `\r\n\x1b[38;5;244m── pausing: interrupting, then writing down where it got to ──\x1b[0m\r\n`);
+
+    const result = await window.api.session.pause(sessionId, session.ptyId ?? null);
+    if (session.ptyId) ptyIndex.delete(session.ptyId);
+
+    set((state) => ({
+      sessions: {
+        ...state.sessions,
+        [sessionId]: {
+          ...state.sessions[sessionId],
+          status: 'paused',
+          ptyId: null,
+          pid: null,
+          busy: false,
+          // Kept, because it is the whole of what makes picking it up possible.
+          claudeSessionId: result?.conversation ?? state.sessions[sessionId].claudeSessionId,
+        },
+      },
+    }));
+    announce(
+      sessionId,
+      `\x1b[38;5;244m── paused. Nothing was lost; pick it up from the tab's menu ──\x1b[0m\r\n`,
+    );
+    schedulePersist(get);
+  },
+
+  /**
+   * Pick a paused session up again.
+   *
+   * The same act as restarting one that kept its conversation, which is code
+   * that already exists and is already trusted — so this is that, plus handing
+   * back what it was in the middle of, since a resumed conversation knows what
+   * was said but not which of it was still outstanding.
+   */
+  async resumeSession(sessionId) {
+    const session = get().sessions[sessionId];
+    if (!session || session.status !== 'paused') return;
+
+    const profile = get().profiles.find((p) => p.id === session.profileId) ?? get().profiles[0];
+    if (!profile) return;
+
+    getTerminal(sessionId)?.term.reset();
+    await spawnInto(set, get, {
+      sessionId,
+      profile,
+      kind: session.kind,
+      cwd: session.cwd || session.startCwd,
+      customTitle: session.customTitle,
+      startCwd: session.startCwd,
+      groupId: session.groupId ?? null,
+      color: session.color ?? null,
+      fontSize: session.fontSize ?? null,
+      autopilot: session.autopilot ?? false,
+      ...(session.claudeSessionId && session.kind === 'claude'
+        ? { resumeSessionId: session.claudeSessionId }
+        : {}),
+    });
+    get().focusSession(sessionId);
+    schedulePersist(get);
   },
 
   async duplicateSession(sessionId) {
