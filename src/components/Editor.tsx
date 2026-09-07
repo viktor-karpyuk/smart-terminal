@@ -10,7 +10,8 @@ import {
   syntaxHighlighting,
   StreamLanguage,
 } from '@codemirror/language';
-import { tags } from '@lezer/highlight';
+import { Tag, tags } from '@lezer/highlight';
+import { opensYamlBlock, xmlSpans, yamlSpans, type Span } from '../lib/preview';
 import { javascript } from '@codemirror/lang-javascript';
 import { css } from '@codemirror/lang-css';
 import { json } from '@codemirror/lang-json';
@@ -64,6 +65,101 @@ const theme = EditorView.theme(
   { dark: true },
 );
 
+/**
+ * The tokens YAML and XML are painted with, named the way the preview names
+ * them so the two cannot drift apart.
+ */
+const INK = {
+  key: '#7aa2f7',
+  str: '#9ece6a',
+  num: '#ff9e64',
+  const: '#bb9af7',
+  quiet: '#565f89',
+  tag: '#e0af68',
+  punct: '#7b849c',
+};
+
+const yamlTags = {
+  'x-name': Tag.define(),
+  'x-attr': Tag.define(),
+  'x-value': Tag.define(),
+  'x-comment': Tag.define(),
+  'x-pi': Tag.define(),
+  'y-key': Tag.define(),
+  'y-colon': Tag.define(),
+  'y-dash': Tag.define(),
+  'y-str': Tag.define(),
+  'y-num': Tag.define(),
+  'y-const': Tag.define(),
+  'y-anchor': Tag.define(),
+  'y-block': Tag.define(),
+  'y-tag': Tag.define(),
+  'y-punct': Tag.define(),
+  'y-comment': Tag.define(),
+  'y-doc': Tag.define(),
+};
+
+/**
+ * YAML and XML, tokenised by the same rules the preview paints with.
+ *
+ * Not a grammar: this asks `yamlSpans` where the colours go, which is the same
+ * question the preview asks, so a file being edited looks like the same file
+ * being read. Nothing is parsed twice and nothing can disagree — the rules live
+ * in one place and both callers use them.
+ */
+function previewLanguage(spansFor: (line: string, state: LineState) => Span[]) {
+  return StreamLanguage.define<LineState>({
+    name: 'preview',
+    startState: () => ({ inBlock: false, blockIndent: -1 }),
+    token(stream, state) {
+      if (stream.sol()) {
+        const line = stream.string;
+        state.spans = spansFor(line, state);
+        state.at = 0;
+      }
+      const spans = state.spans ?? [];
+      const next = spans[state.at ?? 0];
+      // Nothing coloured from here on: take the rest of the line plainly.
+      if (!next) {
+        stream.skipToEnd();
+        return null;
+      }
+      if (stream.pos < next.from) {
+        // The gap before the next coloured stretch, left exactly as it is.
+        stream.pos = next.from;
+        return null;
+      }
+      stream.pos = next.to;
+      state.at = (state.at ?? 0) + 1;
+      return next.cls;
+    },
+    tokenTable: yamlTags,
+  });
+}
+
+type LineState = { inBlock: boolean; blockIndent: number; spans?: Span[]; at?: number };
+
+/**
+ * YAML, with the one piece of state a line cannot work out for itself:
+ * everything under a `|` or a `>` is text, however much it looks like YAML.
+ */
+const yamlLanguage = previewLanguage((line, state) => {
+  const indent = line.length - line.trimStart().length;
+  if (state.inBlock && line.trim() && indent <= state.blockIndent) state.inBlock = false;
+  const spans = yamlSpans(line, state.inBlock);
+  if (!state.inBlock && opensYamlBlock(line)) {
+    state.inBlock = true;
+    state.blockIndent = indent;
+  }
+  return spans;
+});
+
+const xmlLanguage = previewLanguage((line, state) => {
+  const answer = xmlSpans(line, state.inBlock);
+  state.inBlock = answer.inComment;
+  return answer.spans;
+});
+
 const highlight = HighlightStyle.define([
   { tag: [tags.keyword, tags.modifier, tags.controlKeyword], color: '#bb9af7' },
   { tag: [tags.string, tags.special(tags.string)], color: '#9ece6a' },
@@ -76,6 +172,25 @@ const highlight = HighlightStyle.define([
   { tag: [tags.heading], color: '#7aa2f7', fontWeight: '600' },
   { tag: [tags.link, tags.url], color: '#7dcfff', textDecoration: 'underline' },
   { tag: [tags.invalid], color: '#f7768e' },
+
+  // And the ones the preview defines, in the preview's colours.
+  { tag: yamlTags['y-key'], color: INK.key },
+  { tag: yamlTags['y-colon'], color: INK.quiet },
+  { tag: yamlTags['y-dash'], color: INK.quiet },
+  { tag: yamlTags['y-str'], color: INK.str },
+  { tag: yamlTags['y-num'], color: INK.num },
+  { tag: yamlTags['y-const'], color: INK.const },
+  { tag: yamlTags['y-anchor'], color: INK.const },
+  { tag: yamlTags['y-block'], color: INK.tag },
+  { tag: yamlTags['y-tag'], color: INK.tag },
+  { tag: yamlTags['y-punct'], color: INK.punct },
+  { tag: yamlTags['y-comment'], color: INK.quiet, fontStyle: 'italic' },
+  { tag: yamlTags['y-doc'], color: INK.quiet },
+  { tag: yamlTags['x-name'], color: INK.key },
+  { tag: yamlTags['x-attr'], color: INK.tag },
+  { tag: yamlTags['x-value'], color: INK.str },
+  { tag: yamlTags['x-comment'], color: INK.quiet, fontStyle: 'italic' },
+  { tag: yamlTags['x-pi'], color: INK.const },
 ]);
 
 /** Enough languages to cover what is actually in these repositories. */
@@ -92,7 +207,15 @@ function languageFor(path: string): Extension[] {
   if (['py', 'pyi'].includes(ext)) return [python()];
   if (['sql'].includes(ext)) return [sql()];
   // Shell, config and everything else: no grammar, but still an editor.
-  if (['sh', 'zsh', 'bash', 'env', 'conf', 'ini', 'toml', 'yaml', 'yml'].includes(ext)) {
+  /*
+   * The two the app already knows how to draw beautifully. Editing one used to
+   * be a wall of grey with a shell tokenizer guessing at it, which is a strange
+   * thing to offer beside a preview that reads perfectly — so the editor asks
+   * the preview's own rules where the colours go.
+   */
+  if (['yaml', 'yml'].includes(ext)) return [yamlLanguage];
+  if (['xml', 'xsd', 'xsl', 'xslt', 'svg', 'plist', 'pom'].includes(ext)) return [xmlLanguage];
+  if (['sh', 'zsh', 'bash', 'env', 'conf', 'ini', 'toml'].includes(ext)) {
     return [StreamLanguage.define(simpleShell)];
   }
   return [];

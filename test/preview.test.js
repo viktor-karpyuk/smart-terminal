@@ -301,3 +301,118 @@ test('the literal block after a key is content, not more YAML', () => {
   assert.equal(block[0].line.kind, 'raw', 'a colon inside a literal block is text');
   assert.equal(nodes[1].line.key, 'after', 'and the block ends when the indent does');
 });
+
+/*
+ * The spans an editor colours by. They come from the same rules the preview
+ * paints with, which is the whole point: a file being edited should look like
+ * the same file being read, and neither should be a reimplementation of the
+ * other.
+ */
+const spanText = (line, spans) => spans.map((s) => [line.slice(s.from, s.to), s.cls]);
+
+test('a line of YAML is coloured by the same rules the preview uses', () => {
+  const line = '  image: nginx:latest   # pinned';
+  assert.deepEqual(spanText(line, P.yamlSpans(line)), [
+    ['image', 'y-key'],
+    [':', 'y-colon'],
+    // A colon inside a value is not a separator: `nginx:latest` is one string.
+    ['nginx:latest', 'y-str'],
+    ['# pinned', 'y-comment'],
+  ]);
+
+  const flow = '  branches: [main, develop]';
+  assert.deepEqual(spanText(flow, P.yamlSpans(flow)), [
+    ['branches', 'y-key'],
+    [':', 'y-colon'],
+    ['[', 'y-punct'],
+    ['main', 'y-str'],
+    [',', 'y-punct'],
+    ['develop', 'y-str'],
+    [']', 'y-punct'],
+  ]);
+
+  const item = '  - name: "key: with colon"';
+  assert.deepEqual(spanText(item, P.yamlSpans(item)), [
+    ['-', 'y-dash'],
+    ['name', 'y-key'],
+    [':', 'y-colon'],
+    ['"key: with colon"', 'y-str'],
+  ]);
+
+  const tagged = '  role: !Ref MyRole';
+  assert.deepEqual(spanText(tagged, P.yamlSpans(tagged)), [
+    ['role', 'y-key'],
+    [':', 'y-colon'],
+    ['!Ref', 'y-tag'],
+    ['MyRole', 'y-str'],
+  ]);
+
+  assert.deepEqual(P.yamlSpans(''), []);
+  assert.deepEqual(P.yamlSpans('    '), []);
+  // Everything under a block scalar is text, however much it looks like YAML.
+  assert.deepEqual(P.yamlSpans('    key: not a pair in here', true), []);
+  assert.equal(P.opensYamlBlock('  script: |'), true);
+  assert.equal(P.opensYamlBlock('  script: echo hi'), false);
+});
+
+test('the spans never move a character of what is on the line', () => {
+  // An editor cannot reflow: every span has to sit exactly over its own text.
+  const lines = [
+    'name: test',
+    '  - {a: 1, b: "two"}',
+    'on:',
+    '  push: {branches: [main]}',
+    '%YAML 1.2',
+    '# just a comment',
+    'weird:    spaced   out',
+  ];
+  for (const line of lines) {
+    let last = -1;
+    for (const span of P.yamlSpans(line)) {
+      assert.ok(span.from >= last, `overlapping spans in ${JSON.stringify(line)}`);
+      assert.ok(span.to <= line.length, `span past the end of ${JSON.stringify(line)}`);
+      assert.ok(span.to > span.from, `empty span in ${JSON.stringify(line)}`);
+      last = span.to;
+    }
+  }
+});
+
+test('XML is scanned line by line, and a comment carries across', () => {
+  const tag = '  <dependency scope="test">';
+  assert.deepEqual(spanText(tag, P.xmlSpans(tag).spans), [
+    ['dependency', 'x-name'],
+    ['scope', 'x-attr'],
+    ['"test"', 'x-value'],
+  ]);
+
+  const pair = '    <artifactId>junit</artifactId>';
+  assert.deepEqual(spanText(pair, P.xmlSpans(pair).spans), [
+    ['artifactId', 'x-name'],
+    ['artifactId', 'x-name'],
+  ]);
+
+  assert.deepEqual(spanText('<?xml version="1.0"?>', P.xmlSpans('<?xml version="1.0"?>').spans), [
+    ['<?xml version="1.0"?>', 'x-pi'],
+  ]);
+
+  // A comment that does not finish on its line says so, and the next line
+  // starts inside it.
+  const opened = P.xmlSpans('  <!-- a comment that');
+  assert.equal(opened.inComment, true);
+  const closed = P.xmlSpans('     keeps going --> <tag a=1>', true);
+  assert.equal(closed.inComment, false);
+  assert.deepEqual(spanText('     keeps going --> <tag a=1>', closed.spans), [
+    ['     keeps going -->', 'x-comment'],
+    ['tag', 'x-name'],
+    ['a', 'x-attr'],
+    ['1', 'x-value'],
+  ]);
+
+  // A tag broken across lines is coloured up to where it stops.
+  const unfinished = '  <element attr="value"';
+  assert.deepEqual(spanText(unfinished, P.xmlSpans(unfinished).spans), [
+    ['element', 'x-name'],
+    ['attr', 'x-attr'],
+    ['"value"', 'x-value'],
+  ]);
+});

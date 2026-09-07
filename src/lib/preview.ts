@@ -324,6 +324,80 @@ function renderNode(node: XmlNode, depth: number, openTo: number): string {
 }
 
 /** The stylesheet for the tree. Passed in whole: the frame cannot fetch one. */
+/**
+ * One line of XML, as the stretches that get a colour.
+ *
+ * A scanner rather than the parser above it, and deliberately: the parser reads
+ * a whole document and gives back a tree, which is right for a preview and
+ * useless for an editor, where half the file is mid-sentence while somebody
+ * types it. This colours what is on the line and never refuses.
+ *
+ * `inComment` is the one thing that carries between lines. A tag broken across
+ * lines is coloured up to where it stops, which is what an editor should do
+ * with something that is not finished yet.
+ */
+export function xmlSpans(text: string, inComment = false): { spans: Span[]; inComment: boolean } {
+  const spans: Span[] = [];
+  let comment = inComment;
+  let i = 0;
+
+  while (i < text.length) {
+    if (comment) {
+      const end = text.indexOf('-->', i);
+      const to = end === -1 ? text.length : end + 3;
+      spans.push({ from: i, to, cls: 'x-comment' });
+      if (end === -1) return { spans, inComment: true };
+      comment = false;
+      i = to;
+      continue;
+    }
+
+    const open = text.indexOf('<', i);
+    if (open === -1) break;
+
+    if (text.startsWith('<!--', open)) {
+      comment = true;
+      i = open;
+      continue;
+    }
+    // A declaration or an instruction: `<?xml …?>`, `<!DOCTYPE …>`.
+    if (text.startsWith('<?', open) || text.startsWith('<!', open)) {
+      const shut = text.indexOf('>', open);
+      const to = shut === -1 ? text.length : shut + 1;
+      spans.push({ from: open, to, cls: 'x-pi' });
+      i = to;
+      continue;
+    }
+
+    const shut = text.indexOf('>', open);
+    const to = shut === -1 ? text.length : shut + 1;
+    spans.push(...tagSpans(text.slice(open, to), open));
+    i = to;
+  }
+  return { spans, inComment: comment };
+}
+
+/** Inside one `<…>`: its name, and each attribute with its value. */
+function tagSpans(tag: string, offset: number): Span[] {
+  const spans: Span[] = [];
+  const name = /^<\/?\s*([^\s/>]+)/.exec(tag);
+  if (!name) return spans;
+  const at = tag.indexOf(name[1]);
+  spans.push({ from: offset + at, to: offset + at + name[1].length, cls: 'x-name' });
+
+  // Attributes, quoted or not, in the order they appear.
+  const attribute = /([^\s=/<>"']+)\s*=\s*("[^"]*"|'[^']*'|[^\s/>]+)/g;
+  let found = attribute.exec(tag);
+  while (found) {
+    const key = found.index;
+    spans.push({ from: offset + key, to: offset + key + found[1].length, cls: 'x-attr' });
+    const value = tag.indexOf(found[2], key + found[1].length);
+    spans.push({ from: offset + value, to: offset + value + found[2].length, cls: 'x-value' });
+    found = attribute.exec(tag);
+  }
+  return spans;
+}
+
 function xmlStyles(dark: boolean): string {
   const ink = dark ? '#c0caf5' : '#2a2f3a';
   const paper = dark ? '#1a1b26' : '#ffffff';
@@ -617,6 +691,9 @@ const BLOCK_OPENER = /:\s*[|>][-+]?\d*\s*(#.*)?$/;
  * has to be followed by space or end of line to separate anything — otherwise
  * `image: nginx:latest` and `url: https://x` split in the wrong place.
  */
+/** A coloured stretch of one line: where it starts, where it ends, what it is. */
+export type Span = { from: number; to: number; cls: string };
+
 function keyColon(text: string): number {
   let quote: string | null = null;
   for (let i = 0; i < text.length; i += 1) {
@@ -746,15 +823,25 @@ function yamlValue(value: string): string {
   return `${scalar(body)}${comment}`;
 }
 
+/**
+ * What a plain value plainly is.
+ *
+ * Its own function because two things need the answer and they must not be
+ * allowed to disagree: the preview, which paints it, and the editor, which
+ * paints the same file while you are typing in it. One rule, two renderers.
+ */
+export function scalarClass(body: string): string {
+  if (/^(true|false|yes|no|on|off|null|~)$/i.test(body)) return 'y-const';
+  if (/^-?\d[\d_]*(\.\d+)?([eE][-+]?\d+)?$/.test(body)) return 'y-num';
+  if (/^[&*]/.test(body)) return 'y-anchor';
+  if (/^[|>]/.test(body)) return 'y-block';
+  return 'y-str';
+}
+
 /** One plain value, coloured by what it plainly is rather than by what it means. */
 function scalar(body: string): string {
   if (!body) return '';
-  let className = 'y-str';
-  if (/^(true|false|yes|no|on|off|null|~)$/i.test(body)) className = 'y-const';
-  else if (/^-?\d[\d_]*(\.\d+)?([eE][-+]?\d+)?$/.test(body)) className = 'y-num';
-  else if (/^[&*]/.test(body)) className = 'y-anchor';
-  else if (/^[|>]/.test(body)) className = 'y-block';
-  return `<span class="${className}">${escapeHtml(body)}</span>`;
+  return `<span class="${scalarClass(body)}">${escapeHtml(body)}</span>`;
 }
 
 /**
@@ -764,20 +851,42 @@ function scalar(body: string): string {
  * closes should still colour everything up to where it stops rather than give
  * up on the line. Quotes are respected so a comma inside one is text.
  */
-function flow(body: string): string {
-  let out = '';
+/**
+ * A flow collection, walked once into pieces with positions.
+ *
+ * Walked rather than parsed: this is for reading, so a bracket that never
+ * closes should still colour everything up to where it stops rather than give
+ * up on the line. Quotes are respected so a comma inside one is text.
+ *
+ * Positions, because the same walk serves two masters — the preview, which
+ * throws the gaps away and reflows, and the editor, which must not move a
+ * single character of what somebody is typing.
+ */
+function flowTokens(body: string): Span[] {
+  const spans: Span[] = [];
+  let start = 0;
   let token = '';
   let quote: string | null = null;
-  const flush = () => {
+
+  const flush = (end: number) => {
     const trimmed = token.trim();
     if (trimmed) {
+      // Where the trimmed part actually sits, so a leading space is not coloured.
+      const from = start + token.indexOf(trimmed);
       const at = keyColon(trimmed);
-      out +=
-        at > 0
-          ? `<span class="y-key">${escapeHtml(trimmed.slice(0, at))}</span><span class="y-punct">:</span> ${scalar(trimmed.slice(at + 1).trim())}`
-          : scalar(trimmed);
+      if (at > 0) {
+        spans.push({ from, to: from + trimmed.slice(0, at).trimEnd().length, cls: 'y-key' });
+        spans.push({ from: from + at, to: from + at + 1, cls: 'y-punct' });
+        const value = trimmed.slice(at + 1);
+        const lead = value.length - value.trimStart().length;
+        const rest = value.trim();
+        if (rest) spans.push({ from: from + at + 1 + lead, to: from + trimmed.length, cls: scalarClass(rest) });
+      } else {
+        spans.push({ from, to: from + trimmed.length, cls: scalarClass(trimmed) });
+      }
     }
     token = '';
+    start = end;
   };
 
   for (let i = 0; i < body.length; i += 1) {
@@ -796,18 +905,29 @@ function flow(body: string): string {
       continue;
     }
     if ('[]{},'.includes(ch)) {
-      flush();
-      out += `<span class="y-punct">${ch}</span>`;
-      if (ch === ',') out += ' ';
+      flush(i);
+      spans.push({ from: i, to: i + 1, cls: 'y-punct' });
+      start = i + 1;
       continue;
     }
+    if (!token) start = i;
     token += ch;
   }
-  flush();
+  flush(body.length);
+  return spans;
+}
+
+function flow(body: string): string {
+  let out = '';
+  for (const span of flowTokens(body)) {
+    const text = body.slice(span.from, span.to);
+    out += `<span class="${span.cls}">${escapeHtml(text)}</span>`;
+    // The preview reflows: one space after a comma, whatever was there.
+    if (span.cls === 'y-punct' && text === ',') out += ' ';
+  }
   return out;
 }
 
-/** `nginx:latest # the one we pin` — but not a `#` inside quotes. */
 function splitTrailingComment(value: string): string[] {
   let quote: string | null = null;
   for (let i = 0; i < value.length; i += 1) {
@@ -820,6 +940,86 @@ function splitTrailingComment(value: string): string[] {
     else if (ch === '#' && (i === 0 || /\s/.test(value[i - 1]))) return [value.slice(0, i), value.slice(i + 1)];
   }
   return [value];
+}
+
+/**
+ * One line of YAML, as the stretches that get a colour.
+ *
+ * The same rules the preview paints with, in a form an editor can use: the
+ * preview builds HTML and throws the positions away, and an editor needs
+ * exactly the positions. Sharing the *rules* rather than the output is what
+ * makes editing a file look like reading it, without either one being a
+ * reimplementation of the other that drifts.
+ *
+ * `inBlock` is the one thing a line cannot know by itself — everything under a
+ * `|` or a `>` is text, however much it looks like YAML.
+ */
+export function yamlSpans(text: string, inBlock = false): Span[] {
+  if (inBlock || !text.trim()) return [];
+  const line = classify(text, 0);
+  const indent = text.length - text.trimStart().length;
+  const end = text.trimEnd().length;
+
+  if (line.kind === 'comment') return [{ from: indent, to: end, cls: 'y-comment' }];
+  if (line.kind === 'doc') return [{ from: indent, to: end, cls: 'y-doc' }];
+  if (line.kind === 'raw') return [];
+
+  const spans: Span[] = [];
+  let at = indent;
+  if (line.kind === 'item') {
+    spans.push({ from: at, to: at + 1, cls: 'y-dash' });
+    at += 1;
+    while (at < text.length && /\s/.test(text[at])) at += 1;
+  }
+
+  const rest = text.slice(at, end);
+  const colon = keyColon(rest);
+  if (colon > 0) {
+    spans.push({ from: at, to: at + rest.slice(0, colon).trimEnd().length, cls: 'y-key' });
+    spans.push({ from: at + colon, to: at + colon + 1, cls: 'y-colon' });
+    at += colon + 1;
+    while (at < end && /\s/.test(text[at])) at += 1;
+  }
+  return spans.concat(valueSpans(text.slice(at, end), at));
+}
+
+/** A value, coloured by the same rules `yamlValue` paints it with. */
+function valueSpans(body: string, offset: number): Span[] {
+  if (!body) return [];
+  if (body.startsWith('#')) return [{ from: offset, to: offset + body.length, cls: 'y-comment' }];
+
+  const [head, rest] = splitTrailingComment(body);
+  const spans: Span[] =
+    rest === undefined ? [] : [{ from: offset + head.length, to: offset + body.length, cls: 'y-comment' }];
+
+  const lead = head.length - head.trimStart().length;
+  const value = head.trim();
+  const from = offset + lead;
+  if (!value) return spans;
+
+  // A tag says what the value *is* — `!Ref`, `!!str` — and is not part of it.
+  const tagged = /^(!!?[^\s]*)\s*(.*)$/.exec(value);
+  if (tagged) {
+    spans.unshift({ from, to: from + tagged[1].length, cls: 'y-tag' });
+    if (tagged[2]) {
+      const after = value.indexOf(tagged[2], tagged[1].length);
+      spans.push({ from: from + after, to: from + after + tagged[2].length, cls: scalarClass(tagged[2]) });
+    }
+    return spans;
+  }
+
+  if (/^[[{]/.test(value)) {
+    return flowTokens(value)
+      .map((span) => ({ from: from + span.from, to: from + span.to, cls: span.cls }))
+      .concat(spans);
+  }
+  return [{ from, to: from + value.length, cls: scalarClass(value) }, ...spans];
+}
+
+/** Whether a line opens a literal block, so what follows it is text. */
+export function opensYamlBlock(text: string): boolean {
+  const line = classify(text, 0);
+  return Boolean(line.opensBlock);
 }
 
 function renderYamlLine(line: YamlLine): string {

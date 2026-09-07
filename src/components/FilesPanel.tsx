@@ -965,9 +965,20 @@ function OpenFile({
   // Which files preview at all is decided by what is installed, so the rules
   // come from the store rather than from the module's own list.
   const kind = previewKind(path, rules);
-  // Per open file, and not remembered: which way you want to look at a document
-  // is a question about this minute, not a setting.
-  const [showing, setShowing] = useState<'code' | 'preview' | 'both'>(kind ? 'preview' : 'code');
+  /*
+   * Per open file, and not remembered: which way you want to look at a document
+   * is a question about this minute, not a setting.
+   *
+   * YAML and XML open in the editor rather than the preview, unlike everything
+   * else that previews. Their preview adds folding and a tree — worth having,
+   * and a button away — but the colours are now the same on both sides, and
+   * opening a file you meant to edit in a thing you cannot type into is a
+   * detour when the editor already reads as well.
+   */
+  const readsWellInTheEditor = kind === 'yaml' || kind === 'xml';
+  const [showing, setShowing] = useState<'code' | 'preview' | 'both'>(
+    kind && !readsWellInTheEditor ? 'preview' : 'code',
+  );
   const revertBuffer = useStore((s) => s.revertBuffer);
   const sendSelectionTo = useStore((s) => s.sendSelectionTo);
   // Sessions working in this folder — the ones a selection can usefully go to.
