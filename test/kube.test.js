@@ -319,6 +319,26 @@ test('the two commands that are meant to go on carry no request timeout', () => 
   assert.throws(() => kube.forwardArgs({ name: '-rf', local: 1, remote: 2 }), /cannot start with/);
 });
 
+test('a name going into a URL is held to a stricter rule than one going into an array', () => {
+  /*
+   * `safeArg` guards an argument array, where a slash is harmless — an EKS
+   * context is an ARN and is full of them. A path built by interpolation is a
+   * different question: a namespace with slashes in it walks out of the proxy
+   * URL and turns one fixed request into any GET at all against the API server.
+   */
+  assert.equal(kube.isDnsName('prometheus-kube-prometheus-prometheus'), true);
+  assert.equal(kube.isDnsName('monitoring-dev'), true);
+  assert.equal(kube.isDnsName('kube-system'), true);
+  assert.equal(kube.isDnsName('default/services/x:1/proxy/../../../api/v1/namespaces/kube-system/secrets'), false);
+  assert.equal(kube.isDnsName('../etc'), false);
+  assert.equal(kube.isDnsName('has space'), false);
+  assert.equal(kube.isDnsName(''), false);
+  assert.equal(kube.isDnsName('-leading'), false);
+  // And it is not the check for a context, which legitimately has slashes.
+  assert.equal(kube.isDnsName('arn:aws:eks:sa-east-1:1:cluster/k8s'), false);
+  assert.equal(kube.safeArg('arn:aws:eks:sa-east-1:1:cluster/k8s', 'the context').length > 0, true);
+});
+
 test('Prometheus is found rather than configured', () => {
   const services = {
     items: [

@@ -49,6 +49,20 @@ function safeArg(value, what) {
 }
 
 /**
+ * Is this a name a cluster could actually have?
+ *
+ * `safeArg` is the right check for `execFile`, where a slash is harmless — an
+ * EKS context is an ARN and is full of them. It is the wrong check for a path
+ * built by interpolation, where a slash is a way out: a namespace of
+ * `x/services/y:1/proxy/../../../api/v1/...` turns one fixed URL into any GET
+ * at all against the API server. Kubernetes names are DNS labels, so requiring
+ * one costs nothing and closes it.
+ */
+function isDnsName(value) {
+  return /^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/i.test(String(value ?? '').trim());
+}
+
+/**
  * The flags that go *before* the subcommand, and the one that cannot.
  *
  * `--context` and `--namespace` belong to kubectl itself, so they lead. But
@@ -771,8 +785,14 @@ function contextsFrom(config) {
  * a cluster whose Prometheus is not exposed outside at all.
  */
 async function promQuery({ service, port = 9090, namespace, query, minutes = 60, step, context }) {
-  const at = safeArg(namespace, 'the monitoring namespace');
-  const name = safeArg(service, 'the Prometheus service');
+  // These go into a URL rather than into an argument array, so: a DNS label,
+  // a DNS label, and a number.
+  const at = String(namespace ?? '').trim();
+  const name = String(service ?? '').trim();
+  const onPort = Number(port);
+  if (!isDnsName(at)) return { ok: false, error: `Not a namespace a cluster could have: ${at}` };
+  if (!isDnsName(name)) return { ok: false, error: `Not a service a cluster could have: ${name}` };
+  if (!Number.isInteger(onPort) || onPort < 1 || onPort > 65535) return { ok: false, error: `Not a port: ${port}` };
   const end = Math.floor(Date.now() / 1000);
   const start = end - Math.max(60, Number(minutes) || 60) * 60;
   const seconds = Number(step) || Math.max(60, Math.round(((end - start) / 60) * 2));
@@ -783,7 +803,7 @@ async function promQuery({ service, port = 9090, namespace, query, minutes = 60,
     end: String(end),
     step: String(seconds),
   });
-  const path = `/api/v1/namespaces/${at}/services/${name}:${port}/proxy/api/v1/query_range?${search}`;
+  const path = `/api/v1/namespaces/${at}/services/${name}:${onPort}/proxy/api/v1/query_range?${search}`;
 
   const result = await run([...scope({ context }), 'get', '--raw', path], { timeout: 20000 });
   if (!result.ok) return result;
@@ -1491,6 +1511,7 @@ module.exports = {
   seriesFrom,
   findPrometheus,
   safeArg,
+  isDnsName,
   scope,
   everywhere,
   cleanError,

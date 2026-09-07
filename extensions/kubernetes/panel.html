@@ -280,7 +280,7 @@
     /** Which rows are ticked, by uid. Ticking is not the same act as opening. */
     picked: [],
     /** The open watch, if any: what it is watching and whether a redraw is due. */
-    watch: { id: null, kind: null, token: 0, draw: 0 },
+    watch: { id: null, kind: null, of: null, token: 0, draw: 0 },
     /** Where this cluster's Prometheus is, and what it has said so far. */
     prom: { checked: false, found: null, series: {} },
   };
@@ -701,12 +701,28 @@
     return null;
   }
 
+  /** How many subjects' charts to keep. Past this, the oldest is forgotten. */
+  var CHART_MEMORY = 40;
+
   function loadCharts(row) {
     var prom = state.prom.found;
     var wanted = queriesFor(row);
     if (!prom || !wanted) return;
     var key = row ? row.uid : 'cluster';
     if (state.prom.series[key]) return;
+
+    /*
+     * Bounded, because this is keyed by object and a person going down a list
+     * of two hundred pods would otherwise be holding two hundred sets of
+     * points, none of which they will look at again. The cluster's own is never
+     * dropped: it is the one that is always on screen.
+     */
+    var keys = Object.keys(state.prom.series);
+    if (keys.length >= CHART_MEMORY) {
+      for (var n = 0; n < keys.length - CHART_MEMORY + 1; n += 1) {
+        if (keys[n] !== 'cluster') delete state.prom.series[keys[n]];
+      }
+    }
     state.prom.series[key] = { loading: true };
 
     Promise.all(['cpu', 'memory'].map(function (which) {
@@ -791,10 +807,17 @@
    * fast and finite and a watch is neither. This takes over from there.
    * ---------------------------------------------------------------------- */
   function startWatch(kind) {
+    var at = scopeFor(kind);
+    // What this watch is *of*: the kind and the scope both. Comparing only the
+    // kind would have kept a watch pointed at the namespace you just left.
+    var what = kind + '\u0000' + (at.namespace || (at.allNamespaces ? '*' : ''));
+    // Already watching exactly that: the resync that just ran is not a reason
+    // to drop the connection and open another one.
+    if (state.watch.id && state.watch.of === what) return;
     stopWatch();
     if (!state.showing) return;
     var mine = (state.watch.token += 1);
-    call('kube.watch', assign({ kind: kind, as: titleOf(kind) }, scopeFor(kind)))
+    call('kube.watch', assign({ kind: kind, as: titleOf(kind) }, at))
       .then(function (result) {
         // The view moved on while this was starting; the stream belongs to
         // nothing now and would otherwise stay open for ever.
@@ -804,6 +827,7 @@
         }
         state.watch.id = result.id;
         state.watch.kind = kind;
+        state.watch.of = what;
       })
       .catch(function () { /* a kind that cannot be watched is still a table */ });
   }
@@ -813,6 +837,7 @@
     if (state.watch.id) call('kube.stopWatch', { id: state.watch.id }).catch(function () {});
     state.watch.id = null;
     state.watch.kind = null;
+    state.watch.of = null;
   }
 
   /**
@@ -843,7 +868,15 @@
       if (event.type === 'DELETED') {
         if (at >= 0) { state.table.rows.splice(at, 1); changed = true; }
       } else if (at >= 0) {
-        state.table.rows[at] = event.row;
+        /*
+         * Carried across, because the API server does not know about them: CPU
+         * and memory come from `kubectl top`, are folded in afterwards, and
+         * were being wiped by the first watch event about the row — so a busy
+         * pod's two columns went blank a second after they arrived, on exactly
+         * the pods that change most.
+         */
+        var was = state.table.rows[at];
+        state.table.rows[at] = assign(event.row, { cpu: was.cpu, memory: was.memory });
         changed = true;
       } else {
         state.table.rows.push(event.row);
@@ -1552,7 +1585,7 @@
    */
   function openStreamTab(title, id) {
     state.logs.push({
-      id: id, name: title, namespace: '', context: state.context,
+      id: id, name: title, namespace: '', context: state.context, oneOff: true,
       containers: [], container: null,
       lines: [], pending: '', drawn: 0, following: true, wrap: true, search: '', loading: false,
     });
@@ -1654,6 +1687,10 @@
         '<button class="x" data-close="' + at + '">✕</button></span>';
     }).join('');
 
+    // A drain shares the dock with the logs because it reads like one, but it is
+    // not a pod: Follow and Previous would call `kubectl logs` on a pod named
+    // "drain ip-10-0-1-2", which is nothing.
+    var isLog = log.namespace !== null && log.namespace !== undefined && !log.oneOff;
     var containers = (log.containers || []).length > 1
       ? '<select id="log-container">' + log.containers.map(function (container) {
           return '<option value="' + esc(container.name) + '"' + (container.name === log.container ? ' selected' : '') +
@@ -1664,14 +1701,17 @@
     var shown = shownLines(log);
     var count = log.search ? shown.length + ' of ' + log.lines.length : '';
 
-    var tools = containers +
+    var tools = (isLog ? containers : '') +
       '<input id="log-search" placeholder="Search this log" value="' + esc(log.search) + '" />' +
       (count ? '<span class="dim" id="log-count">' + esc(count) + '</span>' : '') +
-      '<button class="btn' + (log.following ? ' on' : '') + '" data-do="follow">' + (log.following ? 'Following' : 'Follow') + '</button>' +
-      '<button class="btn" data-do="previous" title="The log of the run that stopped">Previous</button>' +
+      (isLog
+        ? '<button class="btn' + (log.following ? ' on' : '') + '" data-do="follow">' +
+          (log.following ? 'Following' : 'Follow') + '</button>' +
+          '<button class="btn" data-do="previous" title="The log of the run that stopped">Previous</button>'
+        : '') +
       '<button class="btn' + (log.wrap ? ' on' : '') + '" data-do="wrap">Wrap</button>' +
       '<button class="btn" data-do="copy-log">Copy</button>' +
-      '<button class="btn" data-do="ask-log" title="Open a Claude session about this pod">Ask Claude</button>' +
+      (isLog ? '<button class="btn" data-do="ask-log" title="Open a Claude session about this pod">Ask Claude</button>' : '') +
       '<button class="btn" data-do="dock">' + (state.dockOpen ? '▾' : '▴') + '</button>';
 
     var body = log.loading
