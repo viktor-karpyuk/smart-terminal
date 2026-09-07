@@ -227,3 +227,77 @@ test('every line is numbered and nothing becomes markup', () => {
   assert.equal(/<script>/.test(doc), false);
   assert.deepEqual((doc.match(/<span class="y-n">\d+<\/span>/g) || []).length, 2);
 });
+
+// --- YAML: the things a real workflow or manifest actually contains ---------
+
+test('a quoted key keeps everything inside its quotes', () => {
+  // `"on":` is in every GitHub workflow, because bare `on` is a boolean in YAML
+  // 1.1. Splitting at the first colon it saw made the key `"key` and left the
+  // rest as the value.
+  const [pair] = P.parseYaml('"key: with a colon": value');
+  assert.equal(pair.line.kind, 'key');
+  assert.equal(pair.line.key, '"key: with a colon"');
+  assert.equal(pair.line.value, 'value');
+
+  const [hash] = P.parseYaml('"has#hash": yes');
+  assert.equal(hash.line.kind, 'key', 'a # inside quotes is not a comment');
+  assert.equal(hash.line.key, '"has#hash"');
+  assert.equal(hash.line.value, 'yes');
+});
+
+test('a colon that separates nothing does not split a line', () => {
+  // A colon only separates when a space or the end of the line follows it.
+  for (const [text, key, value] of [
+    ['url: https://example.com/a:b', 'url', 'https://example.com/a:b'],
+    ['image: nginx:latest', 'image', 'nginx:latest'],
+    ['time: 12:30:00', 'time', '12:30:00'],
+  ]) {
+    const [node] = P.parseYaml(text);
+    assert.equal(node.line.key, key, text);
+    assert.equal(node.line.value, value, text);
+  }
+});
+
+test('a comment outside quotes still ends the line', () => {
+  const [node] = P.parseYaml('# just a comment: not a pair');
+  assert.equal(node.line.kind, 'comment');
+});
+
+test('a directive is document furniture, not an unreadable line', () => {
+  assert.equal(P.parseYaml('%YAML 1.2')[0].line.kind, 'doc');
+  assert.equal(P.parseYaml('%TAG !e! tag:example.com,2000:')[0].line.kind, 'doc');
+});
+
+test('a tag is what the value is, and is not shown as the value', () => {
+  const html = P.previewDocument('/x/a.yml', 'image: !Ref MyImage\n', true);
+  assert.match(html, /<span class="y-tag">!Ref<\/span>/);
+  assert.match(html, /<span class="y-str">MyImage<\/span>/);
+});
+
+test('a flow collection is structure, not one long string', () => {
+  const html = P.previewDocument('/x/a.yml', 'branches: [main, develop]\nenv: {A: 1}\n', true);
+  assert.match(html, /<span class="y-punct">\[<\/span>/);
+  assert.match(html, /<span class="y-str">main<\/span>/);
+  // A key inside braces is a key, and a number inside them is a number.
+  assert.match(html, /<span class="y-key">A<\/span>/);
+  assert.match(html, /<span class="y-num">1<\/span>/);
+});
+
+test('a comma inside quotes is text, not a separator', () => {
+  const html = P.previewDocument('/x/a.yml', 'names: ["a, b", c]\n', true);
+  assert.match(html, /<span class="y-str">&quot;a, b&quot;<\/span>/);
+});
+
+test('a bracket that never closes still colours what came before it', () => {
+  // Written to show a broken file rather than refuse it, like the XML preview.
+  const html = P.previewDocument('/x/a.yml', 'broken: [a, b\n', true);
+  assert.match(html, /<span class="y-str">a<\/span>/);
+  assert.match(html, /<span class="y-str">b<\/span>/);
+});
+
+test('the literal block after a key is content, not more YAML', () => {
+  const nodes = P.parseYaml('multi: |\n  line one: not a key\n  line two\nafter: 1\n');
+  const block = nodes[0].children;
+  assert.equal(block[0].line.kind, 'raw', 'a colon inside a literal block is text');
+  assert.equal(nodes[1].line.key, 'after', 'and the block ends when the indent does');
+});

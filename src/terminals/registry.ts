@@ -252,6 +252,42 @@ export function focusTerminal(id: string) {
  * document, so it has to be asked for; anything else on screen is a normal
  * selection and the browser can take it.
  */
+/**
+ * The terminal the keyboard is actually in.
+ *
+ * Not the same question as "which tab is active", and that difference is what
+ * broke copying in a folder's terminal: the active tab there is the folder
+ * panel, so Cmd+C went looking for a terminal under the panel's id, found
+ * nothing, and quietly did nothing. A terminal knows when it has focus, so ask
+ * it rather than working it out from the layout.
+ */
+export function focusedTerminalId(): string | null {
+  const active = document.activeElement;
+  if (!(active instanceof Element)) return null;
+  const host = active.closest('.terminal-host[data-terminal-id]');
+  return host?.getAttribute('data-terminal-id') ?? null;
+}
+
+/**
+ * Everything the terminal is holding, as text.
+ *
+ * The whole scrollback, not the last few lines: "copy the output" means the
+ * output, and a person who wanted the last twenty lines can select them. Blank
+ * lines at the end are dropped because a terminal is always padded out to its
+ * own height and nobody wants forty empty lines pasted.
+ */
+export function readAll(id: string): string {
+  const term = handles.get(id)?.term;
+  if (!term) return '';
+  const buffer = term.buffer.active;
+  const lines: string[] = [];
+  for (let y = 0; y < buffer.baseY + term.rows; y += 1) {
+    lines.push(buffer.getLine(y)?.translateToString(true).trimEnd() ?? '');
+  }
+  while (lines.length && !lines[lines.length - 1]) lines.pop();
+  return lines.join('\n');
+}
+
 export function copySelection(id: string | null): boolean {
   const term = id ? handles.get(id)?.term : null;
   if (term?.hasSelection()) {

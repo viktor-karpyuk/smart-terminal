@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { isDarkAppearance, useStore } from './state/store';
 import { findLeaf } from './state/layout';
-import { copySelection, getTerminal, selectAllIn } from './terminals/registry';
+import { copySelection, focusedTerminalId, getTerminal, selectAllIn } from './terminals/registry';
 import { LayoutView } from './components/LayoutView';
 import { Pane } from './components/Pane';
 import { Sidebar, SIDEBAR_MIN } from './components/Sidebar';
@@ -130,6 +130,15 @@ function activeSessionId(): string | null {
 function handleMenuAction(id: string) {
   const store = useStore.getState();
   const sessionId = activeSessionId();
+  /*
+   * Anything aimed at a terminal goes to the one with the keyboard in it.
+   *
+   * The active tab is the right answer for everything else, and the wrong one
+   * for this: a folder's terminal lives inside a panel, so the active tab there
+   * is the panel. Asking which terminal has focus is the same answer as the
+   * active tab in every other case, and the only correct one in this one.
+   */
+  const terminalId = focusedTerminalId() ?? sessionId;
 
   switch (id) {
     case 'new-claude':
@@ -212,13 +221,13 @@ function handleMenuAction(id: string) {
       store.setFindOpenFor(sessionId);
       break;
     case 'clear':
-      if (sessionId) getTerminal(sessionId)?.term.clear();
+      if (terminalId) getTerminal(terminalId)?.term.clear();
       break;
     case 'copy':
-      copySelection(sessionId);
+      copySelection(terminalId);
       break;
     case 'select-all':
-      selectAllIn(sessionId);
+      selectAllIn(terminalId);
       break;
     case 'font-bigger':
       store.updateSettings({ fontSize: Math.min(24, store.settings.fontSize + 1) });

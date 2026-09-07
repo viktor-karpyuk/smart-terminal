@@ -12,6 +12,7 @@ import { renderWithExtension } from '../lib/extensionRender';
 import type { PreviewKind, PreviewRule } from '../lib/preview';
 import { GitPanel } from './GitPanel';
 import { TerminalSlot } from './TerminalSlot';
+import { readAll } from '../terminals/registry';
 
 /**
  * A folder on the left, the file you are looking at on the right.
@@ -98,6 +99,7 @@ export function FilesPanel({ panelId }: { panelId: string }) {
               */}
               <header className="files-terminal-head">
                 <TerminalName sessionId={panel.terminalId} />
+                <CopyOutput sessionId={panel.terminalId} />
                 <button
                   className="tab-close"
                   title="Close the terminal"
@@ -134,6 +136,38 @@ function TerminalName({ sessionId }: { sessionId: string }) {
     <span className="files-terminal-name" title={full}>
       Terminal — {cwd === homedir ? '~' : here}
     </span>
+  );
+}
+
+/**
+ * Take everything the terminal has said.
+ *
+ * A selection is the answer when you want part of it; this is the answer when
+ * you want the lot — the output of the build you just ran, to paste somewhere
+ * that is not this app. It says what it took, because a copy button that gives
+ * no sign of having worked is a button people press twice.
+ */
+function CopyOutput({ sessionId }: { sessionId: string }) {
+  const [took, setTook] = useState<number | null>(null);
+
+  return (
+    <button
+      className="files-terminal-copy"
+      title="Copy everything in this terminal"
+      onClick={() => {
+        const text = readAll(sessionId);
+        if (!text) {
+          setTook(0);
+          window.setTimeout(() => setTook(null), 1600);
+          return;
+        }
+        navigator.clipboard.writeText(text);
+        setTook(text.split('\n').length);
+        window.setTimeout(() => setTook(null), 1600);
+      }}
+    >
+      {took === null ? 'Copy output' : took === 0 ? 'Nothing yet' : `Copied ${took} lines`}
+    </button>
   );
 }
 

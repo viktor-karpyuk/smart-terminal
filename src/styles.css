@@ -2489,6 +2489,16 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
   border-bottom: 1px solid var(--border);
 }
 
+.files-terminal-copy {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  border: 1px solid transparent;
+}
+.files-terminal-copy:hover { color: var(--text); border-color: var(--border-strong); }
+
 .files-terminal-name {
   font-size: 10.5px;
   text-transform: uppercase;

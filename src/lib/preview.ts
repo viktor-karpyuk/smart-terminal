@@ -606,6 +606,47 @@ type YamlNode = { line: YamlLine; children: YamlNode[] };
 
 const BLOCK_OPENER = /:\s*[|>][-+]?\d*\s*(#.*)?$/;
 
+/**
+ * Where the colon that makes this a pair is, or -1.
+ *
+ * A regular expression cannot answer this, and the one that used to try got
+ * three ordinary things wrong. `"key: with a colon": value` was split at the
+ * first colon it saw, inside the quotes, so the key came out as `"key`.
+ * `"has#hash": yes` was not recognised as a pair at all, because `#` was
+ * excluded from keys everywhere rather than only outside quotes. And a colon
+ * has to be followed by space or end of line to separate anything — otherwise
+ * `image: nginx:latest` and `url: https://x` split in the wrong place.
+ */
+function keyColon(text: string): number {
+  let quote: string | null = null;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === '\\') {
+        i += 1;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    // A comment before any colon means the line was never a pair.
+    if (ch === '#' && (i === 0 || /\s/.test(text[i - 1]))) return -1;
+    if (ch === ':' && (i + 1 === text.length || /\s/.test(text[i + 1]))) return i;
+  }
+  return -1;
+}
+
+/** `key: value` split where the key may be quoted and hold anything at all. */
+function splitPair(text: string): { key: string; value: string } | null {
+  const at = keyColon(text);
+  if (at <= 0) return null;
+  return { key: text.slice(0, at).trim(), value: text.slice(at + 1).trim() };
+}
+
 function classify(text: string, n: number): YamlLine {
   const indent = text.length - text.trimStart().length;
   const trimmed = text.trim();
@@ -613,24 +654,27 @@ function classify(text: string, n: number): YamlLine {
   if (!trimmed) return { n, indent, text, kind: 'blank' };
   if (trimmed.startsWith('#')) return { n, indent, text, kind: 'comment' };
   if (trimmed === '---' || trimmed === '...' || trimmed.startsWith('--- ')) return { n, indent, text, kind: 'doc' };
+  // `%YAML 1.2`, `%TAG !x! tag:example.com,2000:` — a document-level instruction
+  // rather than data, and it used to be shown as an unparseable line.
+  if (trimmed.startsWith('%')) return { n, indent, text, kind: 'doc' };
 
   if (trimmed.startsWith('- ') || trimmed === '-') {
     const inner = trimmed.slice(1).trim();
-    const pair = /^([^:#]+):(?:\s+(.*))?$/.exec(inner);
+    const pair = splitPair(inner);
     return pair
-      ? { n, indent, text, kind: 'item', key: pair[1].trim(), value: (pair[2] ?? '').trim(), opensBlock: BLOCK_OPENER.test(inner) }
+      ? { n, indent, text, kind: 'item', key: pair.key, value: pair.value, opensBlock: BLOCK_OPENER.test(inner) }
       : { n, indent, text, kind: 'item', value: inner };
   }
 
-  const pair = /^([^:#]+):(?:\s+(.*))?$/.exec(trimmed);
+  const pair = splitPair(trimmed);
   if (pair) {
     return {
       n,
       indent,
       text,
       kind: 'key',
-      key: pair[1].trim(),
-      value: (pair[2] ?? '').trim(),
+      key: pair.key,
+      value: pair.value,
       opensBlock: BLOCK_OPENER.test(trimmed),
     };
   }
@@ -685,13 +729,82 @@ function yamlValue(value: string): string {
   const body = head.trim();
   const comment = rest === undefined ? '' : ` <span class="y-comment">#${escapeHtml(rest)}</span>`;
 
+  // A tag says what the value *is* — `!Ref`, `!!str`, `!secret` — and it is not
+  // part of the value. Colouring it as one made a CloudFormation or a Compose
+  // file read as though half of it were strings.
+  const tagged = /^(!!?[^\s]*)\s*(.*)$/.exec(body);
+  if (tagged) {
+    const rest = tagged[2] ? ` ${scalar(tagged[2])}` : '';
+    return `<span class="y-tag">${escapeHtml(tagged[1])}</span>${rest}${comment}`;
+  }
+
+  // `[main, develop]` and `{A: 1, B: 2}` are structure, not text. Shown as one
+  // grey string they were the least readable thing in a workflow file, which is
+  // where they are most used.
+  if (/^[[{]/.test(body)) return `${flow(body)}${comment}`;
+
+  return `${scalar(body)}${comment}`;
+}
+
+/** One plain value, coloured by what it plainly is rather than by what it means. */
+function scalar(body: string): string {
+  if (!body) return '';
   let className = 'y-str';
   if (/^(true|false|yes|no|on|off|null|~)$/i.test(body)) className = 'y-const';
   else if (/^-?\d[\d_]*(\.\d+)?([eE][-+]?\d+)?$/.test(body)) className = 'y-num';
   else if (/^[&*]/.test(body)) className = 'y-anchor';
   else if (/^[|>]/.test(body)) className = 'y-block';
+  return `<span class="${className}">${escapeHtml(body)}</span>`;
+}
 
-  return `<span class="${className}">${escapeHtml(body)}</span>${comment}`;
+/**
+ * A flow collection, with its punctuation set apart from its contents.
+ *
+ * Walked rather than parsed: this is for reading, so a bracket that never
+ * closes should still colour everything up to where it stops rather than give
+ * up on the line. Quotes are respected so a comma inside one is text.
+ */
+function flow(body: string): string {
+  let out = '';
+  let token = '';
+  let quote: string | null = null;
+  const flush = () => {
+    const trimmed = token.trim();
+    if (trimmed) {
+      const at = keyColon(trimmed);
+      out +=
+        at > 0
+          ? `<span class="y-key">${escapeHtml(trimmed.slice(0, at))}</span><span class="y-punct">:</span> ${scalar(trimmed.slice(at + 1).trim())}`
+          : scalar(trimmed);
+    }
+    token = '';
+  };
+
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i];
+    if (quote) {
+      token += ch;
+      if (ch === '\\') {
+        token += body[i + 1] ?? '';
+        i += 1;
+      } else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      token += ch;
+      continue;
+    }
+    if ('[]{},'.includes(ch)) {
+      flush();
+      out += `<span class="y-punct">${ch}</span>`;
+      if (ch === ',') out += ' ';
+      continue;
+    }
+    token += ch;
+  }
+  flush();
+  return out;
 }
 
 /** `nginx:latest # the one we pin` — but not a `#` inside quotes. */
@@ -746,6 +859,7 @@ function yamlStyles(dark: boolean): string {
   const num = dark ? '#ff9e64' : '#b5540a';
   const cons = dark ? '#bb9af7' : '#8250df';
   const quiet = dark ? '#565f89' : '#8b93a7';
+  const tag = dark ? '#e0af68' : '#8a5a12';
   const rule = dark ? '#2c3049' : '#e3e6ee';
   const inset = dark ? '#20222f' : '#f4f6fa';
 
@@ -779,6 +893,10 @@ function yamlStyles(dark: boolean): string {
     .y-const { color: ${cons}; }
     .y-anchor { color: ${cons}; }
     .y-block { color: ${quiet}; }
+    /* A tag says what a value is, so it reads as a label rather than as text. */
+    .y-tag { color: ${tag}; font-style: italic; }
+    /* Punctuation inside a flow collection: present, and out of the way. */
+    .y-punct { color: ${quiet}; }
     .y-comment { color: ${quiet}; font-style: italic; }
     .y-doc { color: ${cons}; }
     .y-raw { color: ${ink}; opacity: 0.85; }
