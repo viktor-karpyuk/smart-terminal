@@ -80,6 +80,8 @@ const KUBE_READ = [
   'top',
   'summary',
   'brief',
+  'prometheus',
+  'promQuery',
 ] as const;
 
 /**
@@ -92,8 +94,12 @@ const KUBE_READ = [
  */
 const KUBE_WRITE = ['remove', 'scale', 'restart', 'apply', 'cordon'] as const;
 
-/** The two long-running ones: following a log, holding a port open. */
-const KUBE_STREAM = ['follow', 'stopFollow', 'forward', 'stopForward'] as const;
+/**
+ * The long-running ones: following a log, holding a port open, and watching a
+ * kind for changes — which is the same shape as the other two and replaces the
+ * asking-again that a table would otherwise have to do.
+ */
+const KUBE_STREAM = ['follow', 'stopFollow', 'forward', 'stopForward', 'watch', 'stopWatch', 'drain'] as const;
 
 /**
  * The two that reach into the app rather than into a cluster.
@@ -182,6 +188,11 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
   if (name.startsWith('kube.')) {
     const where = whereItIs(args);
     const what = `${String(args.kind ?? 'resource')} ${String(args.name ?? '')}`.trim();
+    // Several at once first: the count is the part that is easy to get wrong,
+    // and one question for the lot beats five that get waved through.
+    if (name === 'kube.remove' && Number(args.count) > 1) {
+      return `Delete ${String(args.count)} ${String(args.kind ?? 'object')}s${where}?\n\nNothing brings them back.`;
+    }
     if (name === 'kube.remove') return `Delete ${what}${where}?\n\nNothing brings it back.`;
     // A dry run is a question, not a change: the server validates it and throws
     // it away. Asking about that is asking about nothing.
@@ -206,6 +217,19 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
     if (name === 'kube.cordon' && args.on !== false) {
       return `Stop scheduling new pods onto ${String(args.name ?? 'this node')}${where}?`;
     }
+    /*
+     * The one that was deliberately left out until it could be watched. A drain
+     * moves everything off a node — which is a normal thing to do before
+     * replacing one, and an outage if the thing being moved has nowhere to go.
+     */
+    if (name === 'kube.drain') {
+      return (
+        `Move everything off ${String(args.name ?? 'this node')}${where}?\n\n` +
+        'Every pod on it is evicted, one at a time. It stops if a disruption budget will not allow it, ' +
+        'and you will see that happen in the dock.'
+      );
+    }
+
   }
 /*
    * Helm's two. A rollback is not obviously destructive until you have watched

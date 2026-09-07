@@ -19,7 +19,11 @@ test('every call is routed by name, and an unknown name goes nowhere', () => {
   assert.equal(H.route('kube.shell'), 'app');
 
   assert.equal(H.route('kube.exec'), null, 'there is no verb that runs a command of the extension’s choosing');
-  assert.equal(H.route('kube.drain'), null);
+  // Drain arrived once it could be watched: it is a stream, because the whole
+  // point is seeing it stop against a disruption budget.
+  assert.equal(H.route('kube.drain'), 'kube-stream');
+  assert.equal(H.route('kube.edit'), null, 'there is no verb that opens an editor of its own');
+  assert.equal(H.route('kube.patch'), null);
   assert.equal(H.route('kube.'), null);
   assert.equal(H.route('list'), null, 'a bare list would not say which subsystem it means');
   assert.equal(H.route('eval'), null);
@@ -75,6 +79,17 @@ test('the questions asked before changing a cluster name where, not just what', 
   assert.match(owned, /next upgrade of that release will put it back/);
   assert.ok(!/Helm installed/.test(H.needsConsent('kube.apply', { yaml: 'kind: ConfigMap' }) ?? ''));
   assert.match(H.needsConsent('kube.cordon', { name: 'node-1' }), /Stop scheduling/);
+
+  const drain = H.needsConsent('kube.drain', { name: 'ip-10-0-1-2', context: 'live' });
+  assert.match(drain, /Move everything off ip-10-0-1-2 on live/);
+  assert.match(drain, /disruption budget/);
+
+  // Several at once: the count is the part that is easy to get wrong.
+  assert.match(
+    H.needsConsent('kube.remove', { kind: 'Pod', count: 7, namespace: 'prod' }),
+    /Delete 7 Pods in namespace prod/,
+  );
+  assert.match(H.needsConsent('kube.remove', { kind: 'Pod', name: 'one', count: 1 }), /Delete Pod one/);
   assert.equal(H.needsConsent('kube.cordon', { name: 'node-1', on: false }), null, 'putting a node back is not destructive');
 
   // The git ones still behave the way they did.

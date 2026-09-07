@@ -319,6 +319,95 @@ test('the two commands that are meant to go on carry no request timeout', () => 
   assert.throws(() => kube.forwardArgs({ name: '-rf', local: 1, remote: 2 }), /cannot start with/);
 });
 
+test('Prometheus is found rather than configured', () => {
+  const services = {
+    items: [
+      { metadata: { name: 'argocd-server', namespace: 'argocd' }, spec: { ports: [{ port: 80 }] } },
+      { metadata: { name: 'prometheus-operated', namespace: 'monitoring' }, spec: { ports: [{ port: 9090 }] } },
+      { metadata: { name: 'prometheus-kube-prometheus-prometheus', namespace: 'monitoring' }, spec: { ports: [{ port: 9090 }, { port: 8080 }] } },
+    ],
+  };
+  // The operated one is the StatefulSet's headless service; the plain one is
+  // what everything else talks to.
+  assert.deepEqual(kube.findPrometheus(services), {
+    name: 'prometheus-kube-prometheus-prometheus',
+    namespace: 'monitoring',
+  });
+
+  // A cluster without one gets no charts and no apology.
+  assert.equal(kube.findPrometheus({ items: [services.items[0]] }), null);
+  assert.equal(kube.findPrometheus({}), null);
+  // Something else on 9090 is not Prometheus.
+  assert.equal(kube.findPrometheus({ items: [{ metadata: { name: 'my-app' }, spec: { ports: [{ port: 9090 }] } }] }), null);
+});
+
+test('a range answer becomes points a line can be drawn from', () => {
+  const { series, empty } = kube.seriesFrom({
+    data: {
+      result: [
+        { metric: { pod: 'api-1' }, values: [[1788819000, '0.5'], [1788819300, '0.75']] },
+        // Prometheus sends every value as a string, and NaN happens.
+        { metric: { node: 'node-1' }, values: [[1788819000, 'NaN'], [1788819300, '2']] },
+      ],
+    },
+  });
+  assert.equal(series[0].name, 'api-1');
+  assert.deepEqual(series[0].points, [[1788819000000, 0.5], [1788819300000, 0.75]]);
+  assert.deepEqual(series[1].points, [[1788819300000, 2]], 'a NaN is a gap, not a zero');
+  assert.equal(empty, false);
+
+  assert.equal(kube.seriesFrom({ data: { result: [] } }).empty, true);
+  assert.equal(kube.seriesFrom({ data: { result: [{ metric: {}, values: [] }] } }).empty, true);
+});
+
+test('a watch streams changes only, and says what kind of change', () => {
+  // `--watch-only` because the first picture came from a plain `get`; without
+  // `--output-watch-events` kubectl prints the object and says nothing about
+  // whether it was added, changed, or deleted.
+  assert.deepEqual(
+    kube.watchArgs({ kind: 'pods', context: 'prod', namespace: 'web' }),
+    ['--context', 'prod', '--namespace', 'web', 'get', 'pods', '--watch-only', '--output-watch-events', '-o', 'json'],
+  );
+  assert.ok(!kube.watchArgs({ kind: 'pods' }).includes('--request-timeout'), 'a watch is meant to go on');
+  assert.ok(kube.watchArgs({ kind: 'pods', allNamespaces: true }).includes('--all-namespaces'));
+});
+
+test('a half-arrived event waits for the rest of itself', () => {
+  // One compact object per line is what makes this cheap — but a pod is
+  // seventeen kilobytes and almost never lands on a boundary.
+  const first = kube.wholeLines('{"a":1}\n{"b":2}\n{"par');
+  assert.deepEqual(first.lines, ['{"a":1}', '{"b":2}']);
+  assert.equal(first.rest, '{"par');
+  const second = kube.wholeLines(first.rest + 'tial":3}\n');
+  assert.deepEqual(second.lines, ['{"partial":3}']);
+  assert.equal(second.rest, '');
+});
+
+test('a watch event becomes the row a table draws', () => {
+  const pod = {
+    kind: 'Pod',
+    metadata: { name: 'api', namespace: 'web', uid: 'u1', creationTimestamp: ago(3600 * 1000) },
+    spec: { containers: [{ name: 'api' }] },
+    status: { phase: 'Running', containerStatuses: [{ name: 'api', ready: false, restartCount: 4, state: { waiting: { reason: 'CrashLoopBackOff' } } }] },
+  };
+  const event = kube.watchRow('Pod', JSON.stringify({ type: 'MODIFIED', object: pod }), NOW);
+  assert.equal(event.type, 'MODIFIED');
+  assert.equal(event.row.name, 'api');
+  assert.equal(event.row.status, 'CrashLoopBackOff');
+  assert.equal(event.row.health, 'bad');
+  assert.equal(event.row.restarts, 4);
+
+  // A watch that has fallen behind the cluster's history says so, and that is
+  // not a row — it means read everything again.
+  const stale = kube.watchRow('Pod', JSON.stringify({ type: 'ERROR', object: { message: 'too old resource version' } }), NOW);
+  assert.equal(stale.type, 'ERROR');
+  assert.match(stale.error, /too old/);
+
+  // Anything unreadable is not an event, and there is nothing to do with it.
+  assert.equal(kube.watchRow('Pod', 'not json', NOW), null);
+  assert.equal(kube.watchRow('Pod', '{"type":"ADDED"}', NOW), null);
+});
+
 test('the port a forward actually got is read from what kubectl says', () => {
   assert.equal(kube.forwardedPort('Forwarding from 127.0.0.1:54123 -> 8080'), 54123);
   assert.equal(kube.forwardedPort('Forwarding from [::1]:54123 -> 8080'), 54123);

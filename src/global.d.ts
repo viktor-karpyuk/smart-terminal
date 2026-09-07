@@ -754,15 +754,18 @@ declare global {
         call(name: string, args?: unknown): Promise<KubeResult>;
         stream(
           id: string,
-          op: 'logs' | 'portForward',
+          op: 'logs' | 'portForward' | 'watch' | 'drain',
           args?: unknown,
         ): Promise<{ ok: boolean; id?: string; error?: string }>;
         stopStream(id: string): Promise<{ ok: boolean }>;
         onStream(
           handler: (payload: {
             id: string;
+            /** Log and port-forward output. A watch sends `events` instead. */
             text: string;
             stream?: 'out' | 'err';
+            /** What a watch saw, already shaped into rows. */
+            events?: Array<{ type: string; row?: KubeRow; error?: string }>;
             done: boolean;
             code?: number | null;
           }) => void,

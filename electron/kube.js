@@ -762,6 +762,86 @@ function contextsFrom(config) {
 }
 
 /**
+ * Prometheus, through the API server rather than around it.
+ *
+ * `kubectl get --raw` on the service proxy path, which is how Lens does it and
+ * is the only way that needs nothing new: no port-forward to keep alive, no
+ * second set of credentials, no ingress that may not exist. The same token that
+ * reads pods reads this, and it works from wherever kubectl works — including
+ * a cluster whose Prometheus is not exposed outside at all.
+ */
+async function promQuery({ service, port = 9090, namespace, query, minutes = 60, step, context }) {
+  const at = safeArg(namespace, 'the monitoring namespace');
+  const name = safeArg(service, 'the Prometheus service');
+  const end = Math.floor(Date.now() / 1000);
+  const start = end - Math.max(60, Number(minutes) || 60) * 60;
+  const seconds = Number(step) || Math.max(60, Math.round(((end - start) / 60) * 2));
+
+  const search = new URLSearchParams({
+    query: String(query ?? ''),
+    start: String(start),
+    end: String(end),
+    step: String(seconds),
+  });
+  const path = `/api/v1/namespaces/${at}/services/${name}:${port}/proxy/api/v1/query_range?${search}`;
+
+  const result = await run([...scope({ context }), 'get', '--raw', path], { timeout: 20000 });
+  if (!result.ok) return result;
+  try {
+    return { ok: true, ...seriesFrom(JSON.parse(result.stdout)) };
+  } catch (error) {
+    return { ok: false, error: `Prometheus answered with something unreadable — ${String(error?.message ?? error)}` };
+  }
+}
+
+/**
+ * A range answer, as points a line can be drawn from.
+ *
+ * Prometheus sends every value as a string, and gaps as missing samples rather
+ * than as nulls — so a series that stopped for five minutes has fewer points
+ * than its neighbour, and anything that assumes they line up draws a lie.
+ */
+function seriesFrom(answer) {
+  const result = answer?.data?.result ?? [];
+  const series = result.map((entry) => ({
+    name:
+      entry.metric?.pod ??
+      entry.metric?.node ??
+      entry.metric?.instance ??
+      entry.metric?.__name__ ??
+      '',
+    points: (entry.values ?? [])
+      .map(([at, value]) => [Number(at) * 1000, Number(value)])
+      .filter(([, value]) => Number.isFinite(value)),
+  }));
+  return { series, empty: series.every((one) => !one.points.length) };
+}
+
+/**
+ * Where this cluster keeps its Prometheus, if it keeps one.
+ *
+ * Found rather than configured, because on a cluster with kube-prometheus-stack
+ * installed it is always in the same shape — a service on 9090 with prometheus
+ * in its name — and asking somebody to type that in is asking them to look it
+ * up. A cluster without one gets no charts and no apology.
+ */
+function findPrometheus(services) {
+  const items = services?.items ?? [];
+  const candidates = items
+    .filter((item) => (item.spec?.ports ?? []).some((port) => port.port === 9090))
+    .map((item) => ({
+      name: item.metadata?.name ?? '',
+      namespace: item.metadata?.namespace ?? '',
+    }))
+    .filter((item) => /prometheus|thanos-query|mimir/i.test(item.name));
+
+  // The operated one is the StatefulSet's headless service; the plain one is
+  // what everything else talks to, so it is the better guess.
+  const plain = candidates.find((item) => !/operated|headless/i.test(item.name));
+  return plain ?? candidates[0] ?? null;
+}
+
+/**
  * `kubectl top`, as a lookup rather than a table.
  *
  * Merged into rows the panel already has, so metrics never decide whether a row
@@ -1063,6 +1143,15 @@ async function brief({ kind, name, namespace, context, container, question }) {
   } };
 }
 
+/** Look for a Prometheus in this cluster. Reads services and nothing else. */
+async function prometheus({ context } = {}) {
+  const result = await runJson([...scope({ context }), 'get', 'services', '--all-namespaces', '-o', 'json'], {
+    timeout: 20000,
+  });
+  if (!result.ok) return { ok: true, found: null };
+  return { ok: true, found: findPrometheus(result.data) };
+}
+
 /* ---- the ones that change something ---- */
 
 async function remove({ kind, name, ...rest }) {
@@ -1168,6 +1257,34 @@ async function useContext({ name }) {
   return result.ok ? { ok: true, text: result.stdout.trim() } : result;
 }
 
+/**
+ * The arguments for draining a node.
+ *
+ * A stream, not a call, and that is the whole reason it is safe to offer: a
+ * drain evicts every pod on a node one at a time and waits for each, and it
+ * stops dead against a PodDisruptionBudget that will not let the last replica
+ * go. Watching that happen is the difference between a drain and a mystery, so
+ * this goes to the same dock the logs do.
+ *
+ * `--ignore-daemonsets` because a DaemonSet pod comes straight back and without
+ * it the drain refuses to start at all. Local data is *not* deleted by default:
+ * `--delete-emptydir-data` is asked for explicitly, because that flag is how
+ * you throw away something nobody meant to lose.
+ */
+function drainArgs({ name, force = false, emptyDir = false, ...rest }) {
+  const args = [
+    ...scope({ ...rest, forever: true }),
+    'drain',
+    safeArg(name, 'the node'),
+    '--ignore-daemonsets',
+    '--timeout=300s',
+  ];
+  if (emptyDir) args.push('--delete-emptydir-data');
+  // Pods no controller owns are not coming back anywhere. Off unless asked for.
+  if (force) args.push('--force');
+  return args;
+}
+
 async function cordon({ name, on = true, ...rest }) {
   const result = await run([...scope(rest), on ? 'cordon' : 'uncordon', safeArg(name, 'the node')]);
   return result.ok ? { ok: true, text: result.stdout.trim() } : result;
@@ -1244,6 +1361,68 @@ function followArgs({ pod, container, tail = 200, timestamps = false, ...rest })
   return args;
 }
 
+/**
+ * The arguments for watching a kind.
+ *
+ * `--watch-only`, so it streams changes and does not re-send the world. The
+ * first picture comes from an ordinary `get`, which is fast and finite, and
+ * this takes over from there. Anything that happens in the second between the
+ * two is caught by the slow resync the panel keeps running — a smaller and much
+ * rarer cost than sending four megabytes twice on every open.
+ *
+ * `--output-watch-events` is what makes this usable at all: without it kubectl
+ * prints the object and leaves you guessing whether it was added or changed,
+ * and says nothing whatsoever about a deletion.
+ */
+function watchArgs({ kind, ...rest }) {
+  return [
+    ...scope({ ...rest, forever: true }),
+    'get',
+    safeArg(kind, 'the resource kind'),
+    ...everywhere(rest),
+    '--watch-only',
+    '--output-watch-events',
+    '-o',
+    'json',
+  ];
+}
+
+/**
+ * Whole lines out of what has arrived, keeping the half-line for next time.
+ *
+ * `--output-watch-events -o json` writes one compact object per line, which is
+ * the one thing that makes this cheap — but a pod's JSON is seventeen kilobytes
+ * and arrives in several pieces, so the tail almost never lands on a boundary.
+ */
+function wholeLines(buffer) {
+  const parts = String(buffer ?? '').split('\n');
+  const rest = parts.pop() ?? '';
+  return { lines: parts.filter((line) => line.trim()), rest };
+}
+
+/**
+ * A watch event, as the row a table draws.
+ *
+ * Shaped here for the same reason lists are: what crosses to the panel is a
+ * row, not the seventeen kilobytes the API server had to say about a pod whose
+ * restart count went up by one.
+ */
+function watchRow(kind, line, now = Date.now()) {
+  let event;
+  try {
+    event = JSON.parse(line);
+  } catch {
+    return null; // a line that is not JSON is not an event; there is nothing to do with it
+  }
+  const object = event?.object;
+  if (!object || !event.type) return null;
+  // A watch can report an error — most often "too old resource version", which
+  // means the connection is stale and everything has to be read again.
+  if (event.type === 'ERROR') return { type: 'ERROR', error: object.message ?? 'the watch failed' };
+  const shape = shapeFor(kind);
+  return { type: event.type, row: { kind: object.kind ?? kind, ...shape.row(object, now) } };
+}
+
 /** The arguments for a port-forward. `local` may be 0, which lets the OS choose. */
 function forwardArgs({ kind = 'pod', name, local, remote, ...rest }) {
   const localPort = Number(local);
@@ -1277,6 +1456,8 @@ module.exports = {
   top,
   summary,
   brief,
+  promQuery,
+  prometheus,
   // changing
   remove,
   scale,
@@ -1288,6 +1469,10 @@ module.exports = {
   // long-running
   Streams,
   followArgs,
+  drainArgs,
+  watchArgs,
+  wholeLines,
+  watchRow,
   forwardArgs,
   forwardedPort,
   // pure, and tested as such
@@ -1303,6 +1488,8 @@ module.exports = {
   whatToRemove,
   metrics,
   overview,
+  seriesFrom,
+  findPrometheus,
   safeArg,
   scope,
   everywhere,

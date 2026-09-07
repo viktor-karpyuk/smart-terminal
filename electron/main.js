@@ -1042,6 +1042,8 @@ function registerIpc() {
     top: (args) => kube.top(args),
     summary: (args) => kube.summary(args),
     brief: (args) => kube.brief(args),
+    prometheus: (args) => kube.prometheus(args),
+    promQuery: (args) => kube.promQuery(args),
     remove: (args) => kube.remove(args),
     scale: (args) => kube.scale(args),
     restart: (args) => kube.restart(args),
@@ -1076,7 +1078,14 @@ function registerIpc() {
 
     let argv;
     try {
-      argv = op === 'portForward' ? kube.forwardArgs(args ?? {}) : kube.followArgs(args ?? {});
+      argv =
+        op === 'portForward'
+          ? kube.forwardArgs(args ?? {})
+          : op === 'watch'
+            ? kube.watchArgs(args ?? {})
+            : op === 'drain'
+              ? kube.drainArgs(args ?? {})
+              : kube.followArgs(args ?? {});
     } catch (error) {
       return { ok: false, error: String(error?.message ?? error) };
     }
@@ -1085,9 +1094,28 @@ function registerIpc() {
     const push = (channel, payload) => {
       if (!sender.isDestroyed()) sender.send(channel, payload);
     };
+
+    /*
+     * A watch is turned into rows here rather than sent on raw.
+     *
+     * The API server has seventeen kilobytes to say about a pod whose restart
+     * count went up by one, and the table has six columns. Shaping on this side
+     * is the same decision as for lists, and it matters more here: a busy
+     * namespace produces these continuously.
+     */
+    const kind = op === 'watch' ? String(args?.as || args?.kind || '') : null;
+    let pending = '';
+    const onData = (payload) => {
+      if (op !== 'watch') return push('kube:stream-data', payload);
+      const { lines, rest } = kube.wholeLines(pending + payload.text);
+      pending = rest;
+      const events = lines.map((line) => kube.watchRow(kind, line)).filter(Boolean);
+      if (events.length) push('kube:stream-data', { id: payload.id, events });
+    };
+
     kubeStreamOwners.set(streamId, windowId);
     return kubeStreams.start(streamId, argv, {
-      onData: (payload) => push('kube:stream-data', payload),
+      onData,
       onEnd: (payload) => {
         kubeStreamOwners.delete(streamId);
         push('kube:stream-end', payload);
@@ -1961,6 +1989,17 @@ function retireLegacyWorkspace() {
  * is gone.
  */
 app.on('will-quit', () => kubeStreams.stopAll());
+
+/*
+ * One hole, stated rather than papered over: a `kill` from outside.
+ *
+ * Electron's main process terminates on SIGTERM without running any JavaScript,
+ * so a handler here would be a promise that is never kept — measured, not
+ * assumed. Quitting, closing the window and `app.quit()` all reap properly; a
+ * force-kill can leave a `kubectl` watching a cluster for an app that is gone,
+ * and the honest answer is that it happens during development and not to
+ * anybody using the app.
+ */
 
 app.on('before-quit', (event) => {
   if (!quitConfirmed) {

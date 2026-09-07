@@ -211,7 +211,7 @@ function Frame({
      * not.
      */
     async function stream(verb: string, args: Record<string, unknown>) {
-      if (verb === 'stopFollow' || verb === 'stopForward') {
+      if (verb === 'stopFollow' || verb === 'stopForward' || verb === 'stopWatch') {
         const id = String(args.id ?? '');
         if (!streams.current.has(id)) return { ok: false, error: 'that is not a stream this panel started' };
         streams.current.delete(id);
@@ -219,7 +219,9 @@ function Frame({
       }
       const id = crypto.randomUUID();
       streams.current.add(id);
-      const started = await window.api.kube.stream(id, verb === 'forward' ? 'portForward' : 'logs', args);
+      const op =
+        verb === 'forward' ? 'portForward' : verb === 'watch' ? 'watch' : verb === 'drain' ? 'drain' : 'logs';
+      const started = await window.api.kube.stream(id, op, args);
       if (!started.ok) streams.current.delete(id);
       return { ...started, id };
     }

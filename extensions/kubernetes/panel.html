@@ -5,7 +5,7 @@
    * like comes from the app's own tokens — so it is the app's light or dark, its
    * accent and its radius, without knowing which of them it is in.
    */
-  #app { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; height: 100%; min-height: 0; }
+  #app { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto auto; height: 100%; min-height: 0; }
 
   .top {
     display: flex; align-items: center; gap: 8px;
@@ -70,6 +70,20 @@
   .scroll { overflow: auto; min-height: 0; }
 
   table { border-collapse: collapse; width: 100%; font-size: 11.5px; }
+  th.tick, td.tick { width: 24px; padding-right: 0; }
+  td.tick input, th.tick input { cursor: pointer; margin: 0; vertical-align: middle; }
+  th.more, td.more { width: 22px; padding: 0; text-align: center; }
+  td.more button { color: var(--text-faint); padding: 2px 4px; border-radius: var(--radius); opacity: 0; }
+  tbody tr:hover td.more button, tbody tr.on td.more button { opacity: 1; }
+  td.more button:hover { color: var(--text); background: var(--bg-elevated); }
+  .row-menu {
+    position: fixed; z-index: 8; display: flex; flex-direction: column; gap: 2px; padding: 4px;
+    background: var(--bg-elevated); border: 1px solid var(--border-strong);
+    border-radius: var(--radius); box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45);
+  }
+  .row-menu .btn { border-color: transparent; text-align: left; }
+  .row-menu .btn:hover { border-color: var(--border); }
+
   th {
     position: sticky; top: 0; z-index: 1; text-align: left; font-weight: 550;
     padding: 5px 9px; background: var(--bg-panel); color: var(--text-faint);
@@ -131,6 +145,22 @@
   .facts { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 11px; }
   .facts dt { color: var(--text-faint); }
   .facts dd { margin: 0; color: var(--text); word-break: break-word; }
+
+  .charts { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
+  .chart {
+    flex: 1 1 220px; min-width: 190px;
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 9px 5px;
+    background: var(--bg-panel);
+  }
+  .chart-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 10.5px; color: var(--text-faint); }
+  .chart-head b { font-size: 13px; font-weight: 550; color: var(--text); }
+  .chart svg { display: block; width: 100%; height: 46px; margin: 3px 0 2px; }
+  .chart-line { fill: none; stroke: var(--accent); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+  .chart-fill { fill: var(--accent-soft); stroke: none; }
+  .chart-foot { display: flex; justify-content: space-between; font-size: 9.5px; color: var(--text-faint); }
+
+  /* On the overview the charts sit under the cards, so they take that padding. */
+  #table > .charts { padding: 0 12px; }
 
   .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; padding: 12px; }
   .card { border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 11px; background: var(--bg-panel); }
@@ -215,6 +245,7 @@
   </div>
 
   <div id="dock-slot"></div>
+  <div class="bar" id="picked"></div>
   <div class="bar" id="bar"></div>
 </div>
 
@@ -246,6 +277,12 @@
     editing: false, draft: null,
     /** Whether this cluster has releases, asked once rather than on a timer. */
     helm: { checked: false, releases: 0 },
+    /** Which rows are ticked, by uid. Ticking is not the same act as opening. */
+    picked: [],
+    /** The open watch, if any: what it is watching and whether a redraw is due. */
+    watch: { id: null, kind: null, token: 0, draw: 0 },
+    /** Where this cluster's Prometheus is, and what it has said so far. */
+    prom: { checked: false, found: null, series: {} },
   };
 
   var $ = function (id) { return document.getElementById(id); };
@@ -431,6 +468,8 @@
    * Loading.
    * ---------------------------------------------------------------------- */
   function show(view) {
+    stopWatch();
+    state.picked = [];
     state.view = view;
     // You cannot be looking at something inside a folded group.
     if (view.type === 'kind') {
@@ -468,13 +507,14 @@
       if (mine !== loadToken) return;
       state.loading = false;
       state.error = null;
-      if (state.view.type === 'overview') state.overview = result;
+      if (state.view.type === 'overview') { state.overview = result; loadCharts(null); }
       else {
         state.table = result;
         if (state.view.name) state.counts[state.view.name] = (result.rows || []).length;
       }
       draw();
       if (state.view.name === 'pods' || state.view.name === 'nodes') withMetrics(mine, state.view.name);
+      if (state.view.type === 'kind') startWatch(state.view.name);
     }).catch(function (error) {
       state.busy = false;
       state.tookMs = Date.now() - started;
@@ -586,10 +626,12 @@
   }
 
   function loadForContext() {
+    stopWatch();
     state.resources = [];
     state.namespaces = [];
     state.counts = {};
     state.helm = { checked: false, releases: 0 };
+    state.prom = { checked: false, found: null, series: {} };
     drawNav();
     drawTop();
 
@@ -605,7 +647,221 @@
       drawTop();
       load();
       lookForHelm();
+      lookForPrometheus();
     });
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * Charts.
+   *
+   * `kubectl top` says what a thing is using now; this says what it has been
+   * doing, which is the question actually being asked when somebody opens a
+   * pod that got killed twenty minutes ago. It comes from the cluster's own
+   * Prometheus through the API server, so there is nothing to install and
+   * nothing to keep alive — and a cluster without one simply has no charts.
+   * ---------------------------------------------------------------------- */
+  function lookForPrometheus() {
+    if (state.prom.checked) return;
+    state.prom.checked = true;
+    call('kube.prometheus', { context: state.context })
+      .then(function (result) {
+        state.prom.found = result.found || null;
+        if (state.prom.found && state.selected) loadCharts(state.selected);
+      })
+      .catch(function () { /* no Prometheus: no charts, and nothing to apologise for */ });
+  }
+
+  /** A PromQL label value. Names cannot contain these; a value from elsewhere might. */
+  function label(value) {
+    return String(value == null ? '' : value).replace(/["\\\n]/g, '');
+  }
+
+  /** What to ask about the thing on screen. Null when it is not a thing with a shape in Prometheus. */
+  function queriesFor(row) {
+    if (!row) {
+      return {
+        cpu: 'sum(rate(container_cpu_usage_seconds_total{container!=""}[5m]))',
+        memory: 'sum(container_memory_working_set_bytes{container!=""})',
+      };
+    }
+    if (row.kind === 'Pod') {
+      var pod = '{namespace="' + label(row.namespace) + '",pod="' + label(row.name) + '",container!=""}';
+      return {
+        cpu: 'sum(rate(container_cpu_usage_seconds_total' + pod + '[5m]))',
+        memory: 'sum(container_memory_working_set_bytes' + pod + ')',
+      };
+    }
+    if (row.kind === 'Node') {
+      var node = '{node="' + label(row.name) + '",container!=""}';
+      return {
+        cpu: 'sum(rate(container_cpu_usage_seconds_total' + node + '[5m]))',
+        memory: 'sum(container_memory_working_set_bytes' + node + ')',
+      };
+    }
+    return null;
+  }
+
+  function loadCharts(row) {
+    var prom = state.prom.found;
+    var wanted = queriesFor(row);
+    if (!prom || !wanted) return;
+    var key = row ? row.uid : 'cluster';
+    if (state.prom.series[key]) return;
+    state.prom.series[key] = { loading: true };
+
+    Promise.all(['cpu', 'memory'].map(function (which) {
+      return call('kube.promQuery', {
+        context: state.context, namespace: prom.namespace, service: prom.name,
+        query: wanted[which], minutes: 60,
+      }).then(function (r) { return r.empty ? null : (r.series[0] || null); }).catch(function () { return null; });
+    })).then(function (answers) {
+      state.prom.series[key] = { cpu: answers[0], memory: answers[1] };
+      if (row ? state.selected === row : state.view.type === 'overview') draw();
+    });
+  }
+
+  /** Cores, the way Kubernetes writes them. */
+  function cores(value) {
+    return value >= 1 ? value.toFixed(2) : Math.round(value * 1000) + 'm';
+  }
+
+  /** Bytes, in the unit a person would have said. */
+  function bytes(value) {
+    var units = ['B', 'Ki', 'Mi', 'Gi', 'Ti'];
+    var at = 0;
+    while (value >= 1024 && at < units.length - 1) { value /= 1024; at += 1; }
+    return (value >= 100 || at === 0 ? Math.round(value) : value.toFixed(1)) + units[at];
+  }
+
+  /**
+   * One series, as a line.
+   *
+   * Drawn by hand in SVG rather than with a charting library, and not only
+   * because this frame cannot load one: what is wanted here is a shape and a
+   * last value, and two hundred kilobytes of axis logic would buy nothing. The
+   * scale starts at zero so the height of the line means something — a chart
+   * that crops its own baseline turns a two-percent wobble into a cliff.
+   */
+  function chart(series, format, title) {
+    if (!series || !series.points.length) return '';
+    var points = series.points;
+    var top = 0;
+    for (var i = 0; i < points.length; i += 1) top = Math.max(top, points[i][1]);
+    if (top <= 0) top = 1;
+
+    var W = 240;
+    var H = 46;
+    var first = points[0][0];
+    var span = Math.max(1, points[points.length - 1][0] - first);
+    var path = points.map(function (point, at) {
+      var x = ((point[0] - first) / span) * W;
+      var y = H - (point[1] / top) * (H - 4) - 2;
+      return (at ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1);
+    }).join(' ');
+
+    var last = points[points.length - 1][1];
+    return '<div class="chart">' +
+      '<div class="chart-head"><span>' + esc(title) + '</span><b>' + esc(format(last)) + '</b></div>' +
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true">' +
+      '<path d="' + path + ' L' + W + ' ' + H + ' L0 ' + H + ' Z" class="chart-fill" />' +
+      '<path d="' + path + '" class="chart-line" />' +
+      '</svg>' +
+      '<div class="chart-foot"><span>peak ' + esc(format(top)) + '</span><span>last hour</span></div>' +
+      '</div>';
+  }
+
+  /** Both charts for one subject, or nothing at all. */
+  function chartsFor(row) {
+    var key = row ? row.uid : 'cluster';
+    var got = state.prom.series[key];
+    if (!got || got.loading) return '';
+    var html = chart(got.cpu, cores, 'CPU') + chart(got.memory, bytes, 'Memory');
+    return html ? '<div class="charts">' + html + '</div>' : '';
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * Watching, instead of asking again.
+   *
+   * A table used to be a photograph taken every ten seconds; this makes it a
+   * thing that changes when the cluster does. The API server tells us what
+   * changed and nothing else, so a pod going into CrashLoopBackOff costs one
+   * row rather than four megabytes.
+   *
+   * The first picture still comes from an ordinary `get`, because a list is
+   * fast and finite and a watch is neither. This takes over from there.
+   * ---------------------------------------------------------------------- */
+  function startWatch(kind) {
+    stopWatch();
+    if (!state.showing) return;
+    var mine = (state.watch.token += 1);
+    call('kube.watch', assign({ kind: kind, as: titleOf(kind) }, scopeFor(kind)))
+      .then(function (result) {
+        // The view moved on while this was starting; the stream belongs to
+        // nothing now and would otherwise stay open for ever.
+        if (mine !== state.watch.token) {
+          call('kube.stopWatch', { id: result.id }).catch(function () {});
+          return;
+        }
+        state.watch.id = result.id;
+        state.watch.kind = kind;
+      })
+      .catch(function () { /* a kind that cannot be watched is still a table */ });
+  }
+
+  function stopWatch() {
+    state.watch.token += 1;
+    if (state.watch.id) call('kube.stopWatch', { id: state.watch.id }).catch(function () {});
+    state.watch.id = null;
+    state.watch.kind = null;
+  }
+
+  /**
+   * What the cluster just said, folded into the table.
+   *
+   * Upserting by uid, because ADDED for something already known is what a
+   * reconnect looks like and there is nothing to gain from treating it as new.
+   * Redrawing is left to an animation frame: a rollout produces dozens of these
+   * in a second, and the table only has to be right once per frame.
+   */
+  function applyWatch(events) {
+    if (!state.table) return;
+    var changed = false;
+    for (var i = 0; i < events.length; i += 1) {
+      var event = events[i];
+      if (event.type === 'ERROR') {
+        // The watch has fallen behind the cluster's history. Nothing to
+        // reconcile — read the whole thing again.
+        stopWatch();
+        load(true);
+        return;
+      }
+      if (!event.row) continue;
+      var at = -1;
+      for (var n = 0; n < state.table.rows.length; n += 1) {
+        if (state.table.rows[n].uid === event.row.uid) at = n;
+      }
+      if (event.type === 'DELETED') {
+        if (at >= 0) { state.table.rows.splice(at, 1); changed = true; }
+      } else if (at >= 0) {
+        state.table.rows[at] = event.row;
+        changed = true;
+      } else {
+        state.table.rows.push(event.row);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    if (state.view.name) state.counts[state.view.name] = state.table.rows.length;
+    if (!state.watch.draw) {
+      state.watch.draw = requestAnimationFrame(function () {
+        state.watch.draw = 0;
+        // Never over an editor, and never while a question is open.
+        if (state.editing || document.getElementById('prompt')) return;
+        drawTable();
+        drawCrumb();
+        drawNav();
+      });
+    }
   }
 
   /* ---------------------------------------------------------------------- *
@@ -668,6 +924,7 @@
     else drawTable();
     drawDetail();
     drawDock();
+    drawPicked();
     drawBar();
   }
 
@@ -727,6 +984,7 @@
   var CAP = 700;
 
   function drawTable() {
+    closeRowMenu();
     if (state.error) {
       $('table').innerHTML = '<div class="note error">' + esc(state.error) + '</div>' + advice(state.error);
       return;
@@ -750,10 +1008,12 @@
       return !(column === 'namespace' && state.namespace);
     });
 
-    var head = '<tr>' + columns.map(function (column) {
+    var head = '<tr><th class="tick"><input type="checkbox" id="tick-all"' +
+      (state.picked.length && state.picked.length === rows.length ? ' checked' : '') + ' /></th>' +
+      columns.map(function (column) {
       var arrow = state.sort.column === column ? '<span class="arrow">' + (state.sort.dir > 0 ? '↑' : '↓') + '</span>' : '';
       return '<th data-column="' + esc(column) + '">' + esc(HEADINGS[column] || column) + arrow + '</th>';
-    }).join('') + '</tr>';
+    }).join('') + '<th class="more"></th></tr>';
 
     var body = '';
     var drawn = Math.min(rows.length, CAP);
@@ -761,7 +1021,11 @@
       var row = rows[i];
       var on = state.selected && state.selected.uid === row.uid;
       body += '<tr data-uid="' + esc(row.uid) + '" class="' + (on ? 'on' : '') + '">';
+      body += '<td class="tick"><input type="checkbox" data-tick="' + esc(row.uid) + '"' +
+        (state.picked.indexOf(row.uid) >= 0 ? ' checked' : '') + ' /></td>';
       for (var c = 0; c < columns.length; c += 1) body += cell(row, columns[c]);
+      // What you can do to this one, without opening it first.
+      body += '<td class="more"><button data-more="' + esc(row.uid) + '" aria-label="What can be done">⋮</button></td>';
       body += '</tr>';
     }
 
@@ -790,6 +1054,35 @@
   }
 
   $('table').addEventListener('click', function (event) {
+    /*
+     * A tick is not a selection. Clicking a row opens it; ticking rows says
+     * which ones an action is about, and the two must not be the same gesture
+     * or ticking the fifth thing to delete would open it instead.
+     */
+    var more = event.target.closest('[data-more]');
+    if (more) {
+      event.stopPropagation();
+      openRowMenu(more.dataset.more, more);
+      return;
+    }
+    var tick = event.target.closest('[data-tick]');
+    if (tick) {
+      event.stopPropagation();
+      var uid = tick.dataset.tick;
+      var at = state.picked.indexOf(uid);
+      if (at >= 0) state.picked.splice(at, 1);
+      else state.picked.push(uid);
+      drawPicked();
+      return;
+    }
+    if (event.target.id === 'tick-all') {
+      event.stopPropagation();
+      var all = visible().map(function (row) { return row.uid; });
+      state.picked = state.picked.length === all.length ? [] : all;
+      drawTable();
+      drawPicked();
+      return;
+    }
     var heading = event.target.closest('th');
     if (heading) {
       var column = heading.dataset.column;
@@ -821,6 +1114,41 @@
   function stopEditing() {
     state.draft = null;
     state.editing = false;
+  }
+
+  /**
+   * The same things the detail pane offers, without opening it.
+   *
+   * It selects the row on the way, because every one of these acts on "the
+   * selected thing" — and because after a delete or a restart, that is the
+   * thing you want in front of you anyway.
+   */
+  function openRowMenu(uid, near) {
+    closeRowMenu();
+    var rows = (state.table && state.table.rows) || [];
+    var row = null;
+    for (var i = 0; i < rows.length; i += 1) if (rows[i].uid === uid) row = rows[i];
+    if (!row) return;
+    state.selected = row;
+
+    var box = document.createElement('div');
+    box.className = 'row-menu';
+    box.innerHTML = actionsFor(row);
+    document.body.appendChild(box);
+
+    var at = near.getBoundingClientRect();
+    // Above the button when there is no room below it.
+    var below = window.innerHeight - at.bottom > box.offsetHeight + 8;
+    box.style.left = Math.max(6, Math.min(at.right - box.offsetWidth, window.innerWidth - box.offsetWidth - 6)) + 'px';
+    box.style.top = (below ? at.bottom + 4 : at.top - box.offsetHeight - 4) + 'px';
+
+    // One click anywhere closes it, including the one that chose something.
+    setTimeout(function () { document.addEventListener('click', closeRowMenu, { once: true }); }, 0);
+  }
+
+  function closeRowMenu() {
+    var open = document.querySelector('.row-menu');
+    if (open) open.remove();
   }
 
   function select(uid) {
@@ -887,7 +1215,7 @@
         }).join('') + '</tbody></table>';
     }
 
-    $('table').innerHTML = '<div class="cards">' + cards + '</div>' + trouble + recent;
+    $('table').innerHTML = '<div class="cards">' + cards + '</div>' + chartsFor(null) + trouble + recent;
   }
 
   /**
@@ -986,6 +1314,7 @@
     if ((row.forwardable || []).length) buttons.push('<button class="btn" data-do="forward">Forward…</button>');
     if (row.kind === 'Node') {
       buttons.push('<button class="btn" data-do="cordon">' + (row.schedulable ? 'Cordon' : 'Uncordon') + '</button>');
+      buttons.push('<button class="btn bad" data-do="drain">Drain…</button>');
     }
     buttons.push('<button class="btn bad" data-do="delete">Delete</button>');
     return buttons.join('');
@@ -1006,7 +1335,7 @@
         ? '<h4 class="dim" style="margin:12px 0 4px;font-size:10.5px">Labels</h4><pre>' +
           esc(Object.keys(row.labels).map(function (key) { return key + '=' + row.labels[key]; }).join('\n')) + '</pre>'
         : '';
-      return facts + labels +
+      return chartsFor(row) + facts + labels +
         '<h4 class="dim" style="margin:12px 0 4px;font-size:10.5px">describe</h4>' +
         '<pre>' + esc(loaded == null ? 'reading…' : loaded) + '</pre>';
     }
@@ -1114,6 +1443,7 @@
     var at = { context: state.context, kind: row.kind, name: row.name };
     if (row.namespace) at.namespace = row.namespace;
 
+    if (state.detail.tab === 'overview') loadCharts(row);
     if (state.detail.tab === 'overview' && state.detailData.describe == null) {
       call('kube.describe', at).then(function (result) {
         if (state.selected === row) { state.detailData.describe = result.text || ''; drawDetail(); }
@@ -1212,6 +1542,24 @@
   }
 
   function currentLog() { return state.logs[state.logAt] || null; }
+
+  /**
+   * A dock tab for something that is not a log but reads like one.
+   *
+   * A drain prints a line per pod as it evicts it and then sits there when a
+   * disruption budget will not let the last one go — which is exactly the shape
+   * the log dock is already for.
+   */
+  function openStreamTab(title, id) {
+    state.logs.push({
+      id: id, name: title, namespace: '', context: state.context,
+      containers: [], container: null,
+      lines: [], pending: '', drawn: 0, following: true, wrap: true, search: '', loading: false,
+    });
+    state.logAt = state.logs.length - 1;
+    state.dockOpen = true;
+    drawDock();
+  }
 
   function closeLog(at) {
     var log = state.logs[at];
@@ -1452,6 +1800,21 @@
   });
 
   host.on('stream', function (payload) {
+    if (payload.id === state.watch.id) {
+      if (payload.done) {
+        /*
+         * The API server closes a watch every few minutes; that is normal and
+         * not an error. What is not safe is assuming nothing happened while it
+         * was down, so the table is read again and the watch reopened.
+         */
+        state.watch.id = null;
+        if (state.showing && state.view.type === 'kind') load(true);
+        return;
+      }
+      if (payload.events) applyWatch(payload.events);
+      return;
+    }
+
     for (var i = 0; i < state.logs.length; i += 1) {
       var log = state.logs[i];
       if (log.id !== payload.id) continue;
@@ -1517,6 +1880,39 @@
    * Doing things.
    * ---------------------------------------------------------------------- */
   function act(what) {
+    if (what === 'pick-none') { state.picked = []; drawTable(); drawPicked(); return; }
+    if (what === 'pick-delete' || what === 'pick-restart') {
+      var chosen = pickedRows();
+      if (!chosen.length) return;
+      /*
+       * One question for the whole lot, naming the count — asking five times is
+       * how the fifth one gets waved through — and then one call each, because
+       * `delete` with several names either all works or reports which did not,
+       * and knowing which did not is the point.
+       */
+      var verb = what === 'pick-delete' ? 'kube.remove' : 'kube.restart';
+      var first = chosen[0];
+      call(verb, {
+        context: state.context, namespace: first.namespace, kind: first.kind,
+        name: first.name, count: chosen.length,
+      }).then(function () {
+        var rest = chosen.slice(1).map(function (row) {
+          return call(verb, { context: state.context, namespace: row.namespace, kind: row.kind, name: row.name })
+            .then(function () { return null; })
+            .catch(function (error) { return row.name + ': ' + String(error.message || error); });
+        });
+        return Promise.all(rest).then(function (failed) {
+          var bad = failed.filter(Boolean);
+          say(bad.length
+            ? (chosen.length - bad.length) + ' of ' + chosen.length + ' done. ' + bad[0]
+            : 'All ' + chosen.length + ' done.', bad.length > 0);
+          state.picked = [];
+          setTimeout(function () { load(true); }, 1200);
+        });
+      }).catch(function (error) { say(String(error.message || error), true); });
+      return;
+    }
+
     var log = currentLog();
     if (log) {
       if (what === 'follow') { followLog(log); return; }
@@ -1542,6 +1938,16 @@
     var at = { context: state.context, namespace: row.namespace, kind: row.kind, name: row.name };
 
     if (what === 'logs') { openLog(row); return; }
+
+    if (what === 'drain') {
+      call('kube.drain', { context: state.context, name: row.name })
+        .then(function (result) {
+          openStreamTab('drain ' + row.name, result.id);
+          say('Draining ' + row.name + '. Its progress is at the bottom.');
+        })
+        .catch(function (error) { say(String(error.message || error), true); });
+      return;
+    }
 
     if (what === 'values-all') {
       state.helmAll = !state.helmAll;
@@ -1702,6 +2108,32 @@
     }).catch(function (error) { say(String(error.message || error), true); });
   }
 
+  /**
+   * What is ticked, and what can be done to all of it at once.
+   *
+   * It lives in the same strip as the port-forwards because it is the same kind
+   * of thing: something that is going on, that you can end. And the count is in
+   * every sentence, because "delete these" with an unread number beside it is
+   * how the wrong number of things get deleted.
+   */
+  function drawPicked() {
+    var bar = document.getElementById('picked');
+    if (!state.picked.length) { bar.innerHTML = ''; return; }
+    var rows = pickedRows();
+    if (!rows.length) { bar.innerHTML = ''; return; }
+    var kind = rows[0].kind || 'object';
+    var restartable = rows.every(function (row) { return row.restartable; });
+    bar.innerHTML = '<span>' + rows.length + ' ' + esc(kind) + (rows.length === 1 ? '' : 's') + ' ticked</span>' +
+      (restartable ? '<button class="btn" data-do="pick-restart">Restart them</button>' : '') +
+      '<button class="btn bad" data-do="pick-delete">Delete them</button>' +
+      '<button class="btn" data-do="pick-none">Clear</button>';
+  }
+
+  function pickedRows() {
+    var rows = (state.table && state.table.rows) || [];
+    return rows.filter(function (row) { return state.picked.indexOf(row.uid) >= 0; });
+  }
+
   function drawBar() {
     if (!state.forwards.length) { $('bar').innerHTML = ''; return; }
     $('bar').innerHTML = '<span class="dim">Forwarding</span>' + state.forwards.map(function (forward) {
@@ -1815,6 +2247,13 @@
   function scheduleRefresh() {
     var took = state.tookMs || 0;
     var wait = Math.max(state.everyMs, Math.min(60000, took * 3));
+    /*
+     * With a watch open this is no longer the way the table stays true — it is
+     * the safety net under it. A watch can miss the second between the list and
+     * itself, and a table that is quietly wrong is worse than one that is
+     * slowly right, so it is still read from time to time. Rarely.
+     */
+    if (state.watch.id) wait = Math.max(wait, 120000);
     setTimeout(function () {
       scheduleRefresh();
       // `showing` is the app saying whether this tab is in front; `hidden` is
@@ -1840,7 +2279,12 @@
   host.on('showing', function (payload) {
     var was = state.showing;
     state.showing = !payload || payload.showing !== false;
-    if (!state.showing) return;
+    if (!state.showing) {
+      // A table nobody is looking at does not need to be kept true, and a watch
+      // is a connection held open against a cluster.
+      stopWatch();
+      return;
+    }
     // Its first look: everything it needs, now that somebody wants it.
     if (!state.started) { begin(); return; }
     // Coming back: find out what changed while it was away, rather than
