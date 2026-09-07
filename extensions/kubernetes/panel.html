@@ -116,6 +116,18 @@
   pre.wrapless { white-space: pre; word-break: normal; }
   .log-line.err { color: var(--danger); }
 
+  .yaml-tools { display: flex; align-items: center; gap: 5px; margin-bottom: 7px; flex-wrap: wrap; }
+  .yaml-tools .dim { font-size: 10.5px; }
+  #yaml-edit {
+    width: 100%; min-height: 320px; height: calc(100% - 34px); resize: vertical;
+    font-family: "JetBrains Mono", "SF Mono", Menlo, ui-monospace, monospace;
+    font-size: 10.5px; line-height: 1.55; tab-size: 2;
+    color: var(--text); background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 8px;
+    white-space: pre; overflow-wrap: normal; overflow-x: auto;
+  }
+  #yaml-edit:focus { outline: none; border-color: var(--accent); }
+
   .facts { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 11px; }
   .facts dt { color: var(--text-faint); }
   .facts dd { margin: 0; color: var(--text); word-break: break-word; }
@@ -230,6 +242,10 @@
     forwards: [],
     /** Whether a request is in the air, and how long the last one took. */
     busy: false, tookMs: 0, showing: true, started: false,
+    /** Whether a caret is in the YAML box, and what has been typed into it. */
+    editing: false, draft: null,
+    /** Whether this cluster has releases, asked once rather than on a timer. */
+    helm: { checked: false, releases: 0 },
   };
 
   var $ = function (id) { return document.getElementById(id); };
@@ -362,6 +378,19 @@
       if (held) html += heading(group.title, held) + rows;
     }
 
+    /*
+     * Helm, when there is a Helm. Plenty of clusters have none, and a section
+     * that can only ever say "no releases" is a section in the way — so this
+     * appears once `helm list` has actually found something.
+     */
+    if (state.helm.releases > 0) {
+      var onHelm = state.view.type === 'helm';
+      html += heading('Helm', state.helm.releases);
+      if (open['Helm']) {
+        html += '<button class="nav-item' + (onHelm ? ' on' : '') + '" data-view="helm">Releases</button>';
+      }
+    }
+
     var custom = customResources();
     if (custom.length) {
       html += heading('Custom Resources', custom.length);
@@ -391,6 +420,8 @@
       drawNav();
     } else if (button.dataset.view === 'overview') {
       show({ type: 'overview' });
+    } else if (button.dataset.view === 'helm') {
+      show({ type: 'helm' });
     } else if (button.dataset.kind) {
       show({ type: 'kind', name: button.dataset.kind });
     }
@@ -423,9 +454,11 @@
 
     var request = state.view.type === 'overview'
       ? call('kube.summary', { context: state.context })
-      : state.view.name === 'events'
-        ? call('kube.events', where())
-        : call('kube.list', assign({ kind: state.view.name }, scopeFor(state.view.name)));
+      : state.view.type === 'helm'
+        ? call('helm.releases', helmWhere()).then(asHelmTable)
+        : state.view.name === 'events'
+          ? call('kube.events', where())
+          : call('kube.list', assign({ kind: state.view.name }, scopeFor(state.view.name)));
 
     request.then(function (result) {
       state.busy = false;
@@ -480,6 +513,49 @@
     }).catch(function () { /* no metrics-server; the table is the table */ });
   }
 
+  /** A release lives in a namespace, but "all namespaces" is the useful default. */
+  function helmWhere() {
+    var at = { context: state.context };
+    if (state.namespace) at.namespace = state.namespace;
+    return at;
+  }
+
+  /**
+   * Releases as a table, in the shape every other table here has.
+   *
+   * `kind: 'Release'` on every row is what the detail pane branches on: a
+   * release is not a Kubernetes object and its tabs are different questions —
+   * what changed, what were the values, put it back.
+   */
+  function asHelmTable(result) {
+    state.helm.releases = (result.rows || []).length;
+    state.helm.checked = true;
+    return {
+      kind: 'Release',
+      columns: ['name', 'namespace', 'chart', 'chartVersion', 'appVersion', 'revision', 'status', 'age'],
+      rows: (result.rows || []).map(function (row) { return assign({ kind: 'Release' }, row); }),
+    };
+  }
+
+  /**
+   * Whether this cluster has any releases at all.
+   *
+   * Asked once, quietly, and never on the refresh timer: `helm list -A` reads a
+   * secret in every namespace and takes eight seconds on a real cluster. It
+   * decides whether the Helm heading exists, which is not a question worth
+   * asking again every ten seconds.
+   */
+  function lookForHelm() {
+    if (state.helm.checked) return;
+    state.helm.checked = true;
+    call('helm.releases', { context: state.context })
+      .then(function (result) {
+        state.helm.releases = (result.rows || []).length;
+        drawNav();
+      })
+      .catch(function () { /* no helm, or no releases: the heading stays away */ });
+  }
+
   function assign(target, extra) {
     for (var key in extra) if (Object.prototype.hasOwnProperty.call(extra, key)) target[key] = extra[key];
     return target;
@@ -513,6 +589,7 @@
     state.resources = [];
     state.namespaces = [];
     state.counts = {};
+    state.helm = { checked: false, releases: 0 };
     drawNav();
     drawTop();
 
@@ -527,6 +604,7 @@
       drawNav();
       drawTop();
       load();
+      lookForHelm();
     });
   }
 
@@ -596,9 +674,10 @@
   function drawCrumb() {
     var bits = [];
     if (state.view.type === 'overview') bits.push('<strong>Overview</strong>');
+    else if (state.view.type === 'helm') bits.push('<strong>Helm releases</strong>');
     else bits.push('<strong>' + esc(LABELS[state.view.name] || titleOf(state.view.name)) + '</strong>');
     bits.push(esc(state.namespace || 'all namespaces'));
-    if (state.table && state.view.type === 'kind') {
+    if (state.table && state.view.type !== 'overview') {
       var total = (state.table.rows || []).length;
       var shown = visible().length;
       bits.push(shown === total ? total + ' items' : shown + ' of ' + total);
@@ -641,6 +720,7 @@
     capacity: 'Capacity', keys: 'Keys', schedule: 'Schedule', active: 'Active', lastRun: 'Last run',
     duration: 'Duration', message: 'Message', count: 'Count', object: 'Object',
     cpu: 'CPU', memory: 'Memory',
+    chart: 'Chart', chartVersion: 'Version', appVersion: 'App', revision: 'Rev',
   };
 
   /** How many rows are drawn at once. Past this, scrolling costs more than it is worth. */
@@ -724,7 +804,27 @@
     select(row.dataset.uid);
   });
 
+  /**
+   * What has been typed into this object's YAML, if anything.
+   *
+   * Kept against the object rather than the tab, so switching to Events and
+   * back finds the text still there. Nothing is ever asked about losing it,
+   * because nothing loses it: it goes when the edit is applied, when it is
+   * reverted on purpose, or when a different object is selected — and that last
+   * one is the only case where the text stops meaning anything.
+   */
+  function draftFor(row) {
+    var draft = state.draft;
+    return draft && row && draft.uid === row.uid ? draft.text : null;
+  }
+
+  function stopEditing() {
+    state.draft = null;
+    state.editing = false;
+  }
+
   function select(uid) {
+    stopEditing();
     var rows = (state.table && state.table.rows) || [];
     var found = null;
     for (var i = 0; i < rows.length; i += 1) if (rows[i].uid === uid) found = rows[i];
@@ -816,6 +916,12 @@
    * The detail pane.
    * ---------------------------------------------------------------------- */
   function drawDetail() {
+    /*
+     * Never over somebody's typing. The detail pane is rebuilt wholesale, and a
+     * refresh landing mid-edit would take the text out from under them — which
+     * is the sort of thing that makes people stop trusting an editor.
+     */
+    if (state.editing) return;
     var chosen = state.selected;
     $('body').className = 'body' + (chosen ? ' with-detail' : '');
     var existing = document.querySelector('aside');
@@ -824,12 +930,29 @@
     var aside = existing || document.createElement('aside');
     if (!existing) $('body').appendChild(aside);
 
-    var tabs = ['overview', 'yaml', 'events'];
+    /*
+     * A release is asked different questions than an object is. Not "what does
+     * it look like now" but "what changed, what was it configured with, and can
+     * I put it back" — so it gets its own tabs rather than empty versions of
+     * these.
+     */
+    var release = chosen.kind === 'Release';
+    var tabs = release ? ['revisions', 'values', 'manifest', 'notes'] : ['overview', 'yaml', 'events'];
+    if (release && ['revisions', 'values', 'manifest', 'notes'].indexOf(state.detail.tab) < 0) {
+      state.detail.tab = 'revisions';
+    }
+    if (!release && ['overview', 'yaml', 'events'].indexOf(state.detail.tab) < 0) {
+      state.detail.tab = 'overview';
+    }
 
     aside.innerHTML =
       '<div class="detail-head">' +
         '<h3>' + esc(chosen.name) + '</h3>' +
-        '<small>' + esc(chosen.kind) + (chosen.namespace ? ' · ' + esc(chosen.namespace) : '') + ' · ' + esc(chosen.age) + ' old</small>' +
+        '<small>' +
+          (release
+            ? esc(chosen.chart + ' ' + chosen.chartVersion) + ' · revision ' + esc(chosen.revision)
+            : esc(chosen.kind)) +
+          (chosen.namespace ? ' · ' + esc(chosen.namespace) : '') + ' · ' + esc(chosen.age) + ' old</small>' +
         '<div class="detail-actions">' + actionsFor(chosen) + '</div>' +
         '<div class="ask">' +
           '<input id="question" placeholder="Ask Claude something about this" />' +
@@ -839,12 +962,21 @@
       '<div class="tabs">' + tabs.map(function (tab) {
         return '<button data-tab="' + tab + '" class="' + (state.detail.tab === tab ? 'on' : '') + '">' +
           (tab === 'yaml' ? 'YAML' : tab[0].toUpperCase() + tab.slice(1)) + '</button>';
-      }).join('') + '</div>' +
+      }).join('') +
+        (release && state.detail.tab === 'values'
+          ? '<span class="spacer"></span><button class="btn' + (state.helmAll ? ' on' : '') +
+            '" data-do="values-all" title="Every value the chart used, defaults included">All</button>'
+          : '') +
+      '</div>' +
       '<div class="detail-body" id="detail-body">' + detailBody(chosen) + '</div>';
   }
 
   function actionsFor(row) {
     var buttons = [];
+    if (row.kind === 'Release') {
+      return '<button class="btn" data-do="helm-diff" title="What this revision put in the cluster">Manifest</button>' +
+        '<button class="btn bad" data-do="helm-uninstall">Uninstall…</button>';
+    }
     if (row.kind === 'Pod') {
       buttons.push('<button class="btn" data-do="logs">Logs</button>');
       buttons.push('<button class="btn" data-do="shell">Shell</button>');
@@ -861,6 +993,7 @@
 
   function detailBody(row) {
     var tab = state.detail.tab;
+    if (row.kind === 'Release') return releaseBody(row, tab);
     if (tab === 'overview') {
       var loaded = state.detailData.describe;
       var facts = '<dl class="facts">' + Object.keys(row).filter(function (key) {
@@ -878,7 +1011,21 @@
         '<pre>' + esc(loaded == null ? 'reading…' : loaded) + '</pre>';
     }
     if (tab === 'yaml') {
-      return '<pre class="wrapless">' + esc(state.detailData.yaml == null ? 'reading…' : state.detailData.yaml) + '</pre>';
+      if (state.detailData.yaml == null) return '<pre>reading…</pre>';
+      var draft = draftFor(row);
+      /*
+       * Editable, and plainly so. No syntax colouring: this frame cannot reach
+       * the app's editor, and a hand-rolled highlighter that is wrong about a
+       * block scalar is worse than none — it would be lying about the one thing
+       * YAML is hard to read for.
+       */
+      return '<div class="yaml-tools">' +
+        '<button class="btn" data-do="yaml-apply">Apply</button>' +
+        '<button class="btn" data-do="yaml-check" title="Ask the server whether this is legal, and change nothing">Dry run</button>' +
+        '<button class="btn" data-do="yaml-revert">Revert</button>' +
+        '<span class="dim" id="yaml-state">' + (draft == null ? 'as it is in the cluster' : 'edited') + '</span>' +
+        '</div>' +
+        '<textarea id="yaml-edit" spellcheck="false">' + esc(draft == null ? state.detailData.yaml : draft) + '</textarea>';
     }
     if (tab === 'events') {
       var events = state.detailData.events;
@@ -893,9 +1040,63 @@
     return '';
   }
 
+  /**
+   * A release's history, its values, and what it actually installed.
+   *
+   * The revisions are the point. Every row is a state this release has been in,
+   * and the one thing you want at three in the morning is to put it back into
+   * one of them — so every row that is not the current one carries the button
+   * that does it, rather than making you find a menu.
+   */
+  function releaseBody(row, tab) {
+    if (tab === 'revisions') {
+      var rows = state.detailData.history;
+      if (!rows) return '<pre>reading…</pre>';
+      if (!rows.length) return '<div class="dim">No history. Helm keeps a limited number of revisions.</div>';
+      return '<table><tbody>' + rows.map(function (entry) {
+        return '<tr>' +
+          '<td class="name"><span class="dot ' + esc(entry.health) + '"></span>' + entry.revision + '</td>' +
+          '<td class="dim">' + esc(entry.age) + '</td>' +
+          '<td class="dim">' + esc(entry.chart) + '</td>' +
+          '<td class="grow dim">' + esc(entry.description) + '</td>' +
+          '<td>' + (entry.current
+            ? '<span class="dim">now</span>'
+            : '<button class="btn" data-rollback="' + entry.revision + '">Roll back</button>') + '</td>' +
+          '</tr>';
+      }).join('') + '</tbody></table>';
+    }
+    if (tab === 'values') {
+      var yaml = state.detailData.values;
+      if (yaml == null) return '<pre>reading…</pre>';
+      return '<pre class="wrapless">' + esc(yaml.trim() || 'This release overrode nothing; it is running the chart\u2019s defaults.') + '</pre>';
+    }
+    if (tab === 'manifest') {
+      return '<pre class="wrapless">' + esc(state.detailData.helmManifest == null ? 'reading…' : state.detailData.helmManifest) + '</pre>';
+    }
+    return '<pre>' + esc(state.detailData.notes == null ? 'reading…' : (state.detailData.notes.trim() || 'This chart left no notes.')) + '</pre>';
+  }
+
   document.addEventListener('click', function (event) {
+    var back = event.target.closest('[data-rollback]');
+    if (back && state.selected) {
+      var to = Number(back.dataset.rollback);
+      var release = state.selected;
+      call('helm.rollback', { context: state.context, namespace: release.namespace, name: release.name, revision: to })
+        .then(function (result) {
+          say(result.text || ('Rolled ' + release.name + ' back to revision ' + to + '.'));
+          state.detailData.history = null;
+          drawDetail();
+          loadDetail();
+          setTimeout(function () { load(true); }, 1200);
+        })
+        .catch(function (error) { say(String(error.message || error), true); });
+      return;
+    }
     var tab = event.target.closest('[data-tab]');
     if (tab) {
+      // Whatever was typed stays typed; it is kept against the object, so it is
+      // still here on the way back.
+      state.editing = false;
       state.detail.tab = tab.dataset.tab;
       drawDetail();
       loadDetail();
@@ -909,6 +1110,7 @@
   function loadDetail() {
     var row = state.selected;
     if (!row) return;
+    if (row.kind === 'Release') return loadReleaseDetail(row);
     var at = { context: state.context, kind: row.kind, name: row.name };
     if (row.namespace) at.namespace = row.namespace;
 
@@ -932,6 +1134,37 @@
       }).catch(function () {
         if (state.selected === row) { state.detailData.events = []; drawDetail(); }
       });
+    }
+  }
+
+  /** The four questions a release answers, each fetched the first time it is asked. */
+  function loadReleaseDetail(row) {
+    var at = { context: state.context, namespace: row.namespace, name: row.name };
+    var keep = function (key, value) {
+      if (state.selected !== row) return;
+      state.detailData[key] = value;
+      drawDetail();
+    };
+    var failed = function (key) {
+      return function (error) { keep(key, String(error.message || error)); };
+    };
+
+    if (state.detail.tab === 'revisions' && !state.detailData.history) {
+      call('helm.history', at).then(function (r) { keep('history', r.rows || []); }).catch(function (error) {
+        keep('history', []);
+        say(String(error.message || error), true);
+      });
+    }
+    if (state.detail.tab === 'values' && state.detailData.values == null) {
+      call('helm.values', assign({ all: Boolean(state.helmAll) }, at))
+        .then(function (r) { keep('values', r.yaml || ''); })
+        .catch(failed('values'));
+    }
+    if (state.detail.tab === 'manifest' && state.detailData.helmManifest == null) {
+      call('helm.manifest', at).then(function (r) { keep('helmManifest', r.yaml || ''); }).catch(failed('helmManifest'));
+    }
+    if (state.detail.tab === 'notes' && state.detailData.notes == null) {
+      call('helm.notes', at).then(function (r) { keep('notes', r.text || ''); }).catch(failed('notes'));
     }
   }
 
@@ -1169,6 +1402,17 @@
   });
 
   document.addEventListener('input', function (event) {
+    if (event.target.id === 'yaml-edit') {
+      var was = state.editing;
+      state.editing = true;
+      // Kept as it is typed, so a redraw restores it rather than losing it.
+      state.draft = { uid: state.selected ? state.selected.uid : null, text: event.target.value };
+      if (!was) {
+        var mark = document.getElementById('yaml-state');
+        if (mark) mark.textContent = 'edited';
+      }
+      return;
+    }
     if (event.target.id !== 'log-search') return;
     var log = currentLog();
     if (!log) return;
@@ -1299,6 +1543,44 @@
 
     if (what === 'logs') { openLog(row); return; }
 
+    if (what === 'values-all') {
+      state.helmAll = !state.helmAll;
+      state.detailData.values = null;
+      drawDetail();
+      loadDetail();
+      return;
+    }
+    if (what === 'helm-diff') {
+      state.detail.tab = 'manifest';
+      drawDetail();
+      loadDetail();
+      return;
+    }
+    if (what === 'helm-uninstall') {
+      call('helm.uninstall', { context: state.context, namespace: row.namespace, name: row.name })
+        .then(function (result) {
+          say(result.text || ('Uninstalled ' + row.name + '.'));
+          state.selected = null;
+          draw();
+          setTimeout(function () { load(true); }, 1200);
+        })
+        .catch(function (error) { say(String(error.message || error), true); });
+      return;
+    }
+    if (what === 'yaml-revert') {
+      stopEditing();
+      state.detailData.yaml = null;
+      drawDetail();
+      loadDetail();
+      return;
+    }
+    if (what === 'yaml-check' || what === 'yaml-apply') {
+      var field = document.getElementById('yaml-edit');
+      if (!field) return;
+      applyYaml(field.value, what === 'yaml-check');
+      return;
+    }
+
     if (what === 'shell') {
       call('kube.shell', {
         context: state.context, namespace: row.namespace, pod: row.name,
@@ -1349,6 +1631,42 @@
             });
         });
     }
+  }
+
+  /**
+   * Send an edited manifest, after asking the server whether it is legal.
+   *
+   * Always the dry run first, even when the button said Apply. The server
+   * validates it against the real schemas and the real admission webhooks and
+   * then throws it away, which is the whole difference between learning about a
+   * bad indent and learning about an outage. Only if that passes does the real
+   * one go.
+   */
+  function applyYaml(text, checkOnly) {
+    var at = { context: state.context, yaml: text, dryRun: true };
+    if (state.selected && state.selected.namespace) at.namespace = state.selected.namespace;
+    say('Asking the server whether this is legal…');
+
+    call('kube.apply', at).then(function (dry) {
+      if (checkOnly) {
+        say(dry.text || 'The server accepted it. Nothing was changed.');
+        return null;
+      }
+      return call('kube.apply', assign({}, { context: at.context, namespace: at.namespace, yaml: text }))
+        .then(function (done) {
+          stopEditing();
+          say(done.text || 'Applied.');
+          state.detailData.yaml = null;
+          drawDetail();
+          loadDetail();
+          setTimeout(function () { load(true); }, 900);
+          return null;
+        });
+    }).catch(function (error) {
+      // The server's own words. Ours would be a worse version of
+      // "error validating data: unknown field spec.replicaz".
+      say(String(error.message || error), true);
+    });
   }
 
   /**
@@ -1457,7 +1775,7 @@
   document.addEventListener('keydown', function (event) {
     if (event.key === 'Escape') {
       // The question closes itself; this is only for what is behind it.
-      if (document.getElementById('prompt')) return;
+      if (document.getElementById('prompt') || state.editing) return;
       if (state.selected) { state.selected = null; draw(); }
       return;
     }

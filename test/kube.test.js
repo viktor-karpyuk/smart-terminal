@@ -351,6 +351,33 @@ test('the client library’s retry logging is not the error message', () => {
   );
 });
 
+test('an API server error is cut down to the part a person can act on', () => {
+  /*
+   * kubectl echoes the whole patch it tried to send. This is the shape of a
+   * real one: four kilobytes of JSON with the reason at the very end, which is
+   * a place nobody reads.
+   */
+  const huge =
+    'The request is invalid: patch: Invalid value: "map[metadata:map[annotations:map[' +
+    'x'.repeat(3800) +
+    ']] spec:map[replicaz:1]]": strict decoding error: unknown field "spec.replicaz"';
+  assert.equal(
+    kube.shortenApiError(huge),
+    'Unknown field: spec.replicaz. The cluster rejected the whole thing.',
+  );
+
+  // Something long with no named field keeps its ending, which is where the
+  // reason always is.
+  const other = 'The request is invalid: ' + 'y'.repeat(600) + ': the server could not find the requested resource';
+  const short = kube.shortenApiError(other);
+  assert.ok(short.length < 300, `still too long: ${short.length}`);
+  assert.match(short, /the server could not find the requested resource$/);
+
+  // Anything a person could already read is left exactly as it is.
+  assert.equal(kube.shortenApiError('deployment.apps/api configured'), 'deployment.apps/api configured');
+  assert.equal(kube.shortenApiError(''), '');
+});
+
 test('a cluster that did not answer is not a cluster that said no', () => {
   // The regex that decides which. Getting this wrong paints a healthy
   // production cluster red because an auth plugin took a moment.

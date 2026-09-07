@@ -768,6 +768,9 @@ declare global {
           }) => void,
         ): () => void;
       };
+      helm: {
+        call(name: string, args?: unknown): Promise<KubeResult>;
+      };
       files: {
         list(dir: string): Promise<{ ok: boolean; entries?: DirEntry[]; error?: string }>;
         read(file: string): Promise<FileRead>;

@@ -36,6 +36,7 @@ const { listDir, readTextFile, writeTextFile, FileWatcher } = require('./files')
 const git = require('./git');
 const { layout: layoutGraph } = require('./git-graph');
 const kube = require('./kube');
+const helm = require('./helm');
 
 /**
  * What this build is. Written at package time, so the answer comes from the app
@@ -1092,6 +1093,34 @@ function registerIpc() {
         push('kube:stream-end', payload);
       },
     });
+  });
+
+  /**
+   * Helm, which is a different tool answering a different question.
+   *
+   * Its own channel rather than a corner of the Kubernetes one: a release is
+   * not a thing in a cluster, it is a record of what was installed, and the
+   * verbs are historical — what changed, what were the values, put it back.
+   */
+  const HELM = {
+    version: () => helm.version(),
+    releases: (args) => helm.releases(args),
+    history: (args) => helm.history(args),
+    values: (args) => helm.values(args),
+    manifest: (args) => helm.manifest(args),
+    notes: (args) => helm.notes(args),
+    rollback: (args) => helm.rollback(args),
+    uninstall: (args) => helm.uninstall(args),
+  };
+
+  ipcMain.handle('helm:call', async (_e, { name, args } = {}) => {
+    const handler = HELM[name];
+    if (!handler) return { ok: false, error: `No such Helm action: ${name}` };
+    try {
+      return await handler(args ?? {});
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
   });
 
   ipcMain.handle('kube:stream-stop', (_e, id) => {

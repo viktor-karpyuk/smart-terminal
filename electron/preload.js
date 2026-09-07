@@ -204,6 +204,11 @@ contextBridge.exposeInMainWorld('api', {
     },
   },
 
+  /** Helm: a different tool, a different door. */
+  helm: {
+    call: (name, args) => ipcRenderer.invoke('helm:call', { name, args }),
+  },
+
   system: {
     pickDirectory: (startIn) => ipcRenderer.invoke('system:pick-directory', startIn),
     homedir: () => ipcRenderer.invoke('system:homedir'),

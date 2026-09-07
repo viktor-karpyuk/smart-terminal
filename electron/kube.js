@@ -156,6 +156,37 @@ function cleanError(stderr, error) {
   return text.replace(/^error:\s*/i, '').trim();
 }
 
+/**
+ * An API server error, cut down to the part a person can act on.
+ *
+ * kubectl echoes the entire patch it tried to send — four kilobytes of JSON for
+ * a one-word mistake — and puts the actual reason at the very end. Nobody reads
+ * to the end of that, so the reason is lifted out and the middle is dropped.
+ *
+ * The rule is deliberately dumb: what comes after the last colon in a very long
+ * line is the reason, because that is how these are constructed. When something
+ * names an unknown field, that is said first, because it is always the answer.
+ */
+function shortenApiError(text) {
+  const raw = String(text || '').trim();
+  if (raw.length < 400) return raw;
+
+  const unknown = [...raw.matchAll(/unknown field "([^"]+)"/g)].map((match) => match[1]);
+  if (unknown.length) {
+    return `Unknown field${unknown.length > 1 ? 's' : ''}: ${unknown.join(', ')}. The cluster rejected the whole thing.`;
+  }
+
+  const lines = raw.split('\n').filter(Boolean);
+  const shortened = lines.map((line) => {
+    if (line.length < 400) return line;
+    const tail = line.slice(-260);
+    // From the last full stop or colon in the tail, so it starts on a sentence.
+    const cut = Math.max(tail.lastIndexOf(': '), tail.lastIndexOf('. '));
+    return `…${cut > 0 ? tail.slice(cut + 2) : tail}`;
+  });
+  return shortened.join('\n');
+}
+
 async function runJson(args, options) {
   const result = await run(args, options);
   if (!result.ok) return result;
@@ -1069,12 +1100,22 @@ async function restart({ kind, name, ...rest }) {
   return result.ok ? { ok: true, text: result.stdout.trim() } : result;
 }
 
-/** Apply an edited manifest, through stdin so nothing is ever written to disk. */
-async function apply({ yaml, ...rest }) {
+/**
+ * Apply an edited manifest, through stdin so nothing is ever written to disk.
+ *
+ * `dryRun` sends it to the API server to be validated and thrown away, which is
+ * the whole difference between finding out about a bad indent and finding out
+ * about an outage. The panel does that first, every time, and only applies for
+ * real once the server has said the thing is legal.
+ */
+async function apply({ yaml, dryRun = false, ...rest }) {
   const body = String(yaml ?? '');
   if (!body.trim()) return { ok: false, error: 'There is nothing to apply.' };
-  const result = await run([...scope(rest), 'apply', '-f', '-'], { stdin: body });
-  return result.ok ? { ok: true, text: result.stdout.trim() } : result;
+  const args = [...scope(rest), 'apply', '-f', '-'];
+  if (dryRun) args.push('--dry-run=server');
+  const result = await run(args, { stdin: body });
+  if (result.ok) return { ok: true, text: result.stdout.trim(), dryRun };
+  return { ...result, error: shortenApiError(result.error) };
 }
 
 /**
@@ -1266,5 +1307,6 @@ module.exports = {
   scope,
   everywhere,
   cleanError,
+  shortenApiError,
   forgetEnvironment,
 };

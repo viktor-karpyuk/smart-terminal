@@ -190,6 +190,9 @@ function Frame({
         if (channel === 'kube') {
           return reply(true, await window.api.kube.call(name.slice(5), args), undefined);
         }
+        if (channel === 'helm') {
+          return reply(true, await window.api.helm.call(name.slice(5), args), undefined);
+        }
         if (channel === 'kube-stream') {
           return reply(true, await stream(name.slice(5), args), undefined);
         }

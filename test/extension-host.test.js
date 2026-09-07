@@ -27,6 +27,23 @@ test('every call is routed by name, and an unknown name goes nowhere', () => {
   assert.equal(H.route('toString'), null, 'the table is a Map, so nothing inherited is callable');
   assert.equal(H.allowed('kube.logs'), true);
   assert.equal(H.allowed('rm'), false);
+
+  // Helm is a different tool and gets a different door.
+  assert.equal(H.route('helm.releases'), 'helm');
+  assert.equal(H.route('helm.rollback'), 'helm');
+  assert.equal(H.route('helm.install'), null, 'installing a chart is not something a panel may do');
+  assert.equal(H.route('helm.upgrade'), null);
+  assert.equal(H.route('helm.'), null);
+});
+
+test('rolling a release back says what goes with it', () => {
+  const back = H.needsConsent('helm.rollback', { name: 'jenkins', revision: 24, namespace: 'jenkins', context: 'live' });
+  assert.match(back, /Roll jenkins back to revision 24 in namespace jenkins on live/);
+  assert.match(back, /Everything changed since that revision goes with it/);
+
+  assert.match(H.needsConsent('helm.uninstall', { name: 'redis', namespace: 'dev' }), /Uninstall redis in namespace dev/);
+  assert.equal(H.needsConsent('helm.history', { name: 'jenkins' }), null);
+  assert.equal(H.needsConsent('helm.values', { name: 'jenkins' }), null);
 });
 
 test('the questions asked before changing a cluster name where, not just what', () => {
@@ -42,6 +59,21 @@ test('the questions asked before changing a cluster name where, not just what', 
   assert.equal(H.needsConsent('kube.list', { kind: 'pods' }), null);
 
   assert.match(H.needsConsent('kube.apply', { namespace: 'prod' }), /Apply this manifest in namespace prod/);
+  // A dry run is a question: the server validates it and throws it away.
+  assert.equal(H.needsConsent('kube.apply', { namespace: 'prod', dryRun: true }), null);
+
+  /*
+   * When something else owns the object, the question says so. Editing a
+   * Helm-installed resource by hand works, and then the next upgrade puts it
+   * back — which is a confusing afternoon if nobody mentioned it.
+   */
+  const owned = H.needsConsent('kube.apply', {
+    namespace: 'argocd',
+    yaml: 'metadata:\n  annotations:\n    meta.helm.sh/release-name: argocd\n',
+  });
+  assert.match(owned, /Helm installed this, as part of the release "argocd"/);
+  assert.match(owned, /next upgrade of that release will put it back/);
+  assert.ok(!/Helm installed/.test(H.needsConsent('kube.apply', { yaml: 'kind: ConfigMap' }) ?? ''));
   assert.match(H.needsConsent('kube.cordon', { name: 'node-1' }), /Stop scheduling/);
   assert.equal(H.needsConsent('kube.cordon', { name: 'node-1', on: false }), null, 'putting a node back is not destructive');
 

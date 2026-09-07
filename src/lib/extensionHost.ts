@@ -110,6 +110,21 @@ const KUBE_STREAM = ['follow', 'stopFollow', 'forward', 'stopForward'] as const;
  */
 const KUBE_APP = ['shell', 'terminal', 'ask'] as const;
 
+/**
+ * Helm, which is a different tool and gets a different door.
+ *
+ * Reading is free. Of the three that change something, two can take a running
+ * system away — a rollback replaces what is deployed with what used to be, and
+ * an uninstall removes the lot — so both stop and ask.
+ */
+const HELM_READ = ['version', 'releases', 'history', 'values', 'manifest', 'notes'] as const;
+const HELM_WRITE = ['rollback', 'uninstall'] as const;
+
+const HELM_VERBS = new Map<string, Channel>([
+  ...HELM_READ.map((name) => [name, 'helm'] as [string, Channel]),
+  ...HELM_WRITE.map((name) => [name, 'helm'] as [string, Channel]),
+]);
+
 const GIT_VERBS = new Set<string>([...READ_VERBS, ...WRITE_VERBS]);
 const KUBE_VERBS = new Map<string, Channel>([
   ...KUBE_READ.map((name) => [name, 'kube'] as [string, Channel]),
@@ -118,7 +133,7 @@ const KUBE_VERBS = new Map<string, Channel>([
   ...KUBE_APP.map((name) => [name, 'app'] as [string, Channel]),
 ]);
 
-export type Channel = 'git' | 'kube' | 'kube-stream' | 'app';
+export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm';
 
 /**
  * Which door a call goes through, or none.
@@ -131,6 +146,7 @@ export type Channel = 'git' | 'kube' | 'kube-stream' | 'app';
 export function route(name: string): Channel | null {
   if (GIT_VERBS.has(name)) return 'git';
   if (name.startsWith('kube.')) return KUBE_VERBS.get(name.slice(5)) ?? null;
+  if (name.startsWith('helm.')) return HELM_VERBS.get(name.slice(5)) ?? null;
   return null;
 }
 
@@ -167,13 +183,47 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
     const where = whereItIs(args);
     const what = `${String(args.kind ?? 'resource')} ${String(args.name ?? '')}`.trim();
     if (name === 'kube.remove') return `Delete ${what}${where}?\n\nNothing brings it back.`;
-    if (name === 'kube.apply') return `Apply this manifest${where}?`;
+    // A dry run is a question, not a change: the server validates it and throws
+    // it away. Asking about that is asking about nothing.
+    if (name === 'kube.apply' && !args.dryRun) {
+      /*
+       * Whether something else owns this object is the thing worth knowing
+       * before you change it, and the object says so itself: Helm stamps every
+       * resource it installs with the release it belongs to. Editing one by
+       * hand works, and then the next `helm upgrade` puts it back — which is a
+       * confusing afternoon if nobody said so beforehand.
+       */
+      const owner = /meta\.helm\.sh\/release-name:\s*(\S+)/.exec(String(args.yaml ?? ''));
+      const managed = owner
+        ? `\n\nHelm installed this, as part of the release "${owner[1]}". ` +
+          'The next upgrade of that release will put it back the way the chart says.'
+        : '';
+      return `Apply this manifest${where}?${managed}`;
+    }
     if (name === 'kube.scale' && Number(args.replicas) === 0) {
       return `Scale ${what} to zero${where}?\n\nEverything it runs stops.`;
     }
     if (name === 'kube.cordon' && args.on !== false) {
       return `Stop scheduling new pods onto ${String(args.name ?? 'this node')}${where}?`;
     }
+  }
+/*
+   * Helm's two. A rollback is not obviously destructive until you have watched
+   * one — it replaces what is deployed with what used to be, including the
+   * things that were deliberately changed since — so it says which revision is
+   * being left behind as well as which is coming back.
+   */
+  if (name === 'helm.rollback') {
+    return (
+      `Roll ${String(args.name ?? 'this release')} back to revision ${String(args.revision ?? '?')}` +
+      `${whereItIs(args)}?\n\nEverything changed since that revision goes with it.`
+    );
+  }
+  if (name === 'helm.uninstall') {
+    return (
+      `Uninstall ${String(args.name ?? 'this release')}${whereItIs(args)}?\n\n` +
+      'Everything the chart installed is deleted.'
+    );
   }
   return null;
 }
