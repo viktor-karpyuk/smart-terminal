@@ -61,6 +61,13 @@ function readManifest(dir) {
     summary: manifest.summary ?? '',
     description: manifest.description ?? '',
     contributes: manifest.contributes ?? {},
+    /*
+     * What it looks like. Only the names travel with the listing — the images
+     * themselves are asked for when somebody opens the extension, because a
+     * gallery that carried them would be a gallery that costs megabytes to
+     * redraw.
+     */
+    screenshots: pictures(manifest),
     dir,
   };
 }
@@ -141,6 +148,7 @@ function gallery(available, installed) {
       contributes: {},
       builtIn: false,
       enabled: record.enabled !== false,
+      screenshots: [],
       status: 'gone',
     });
   }
@@ -239,6 +247,56 @@ function readInside(dir, relative) {
   }
 }
 
+/** The image kinds an extension may show of itself, and what a browser calls each. */
+const PICTURE_TYPES = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+};
+
+/** No screenshot is worth this much of a message. Well past a real one. */
+const PICTURE_LIMIT = 4 * 1024 * 1024;
+
+/**
+ * A picture an extension shows of itself, as a data URI.
+ *
+ * Read on demand rather than sent with the listing: the gallery is broadcast
+ * whenever anything is installed or turned off, and putting four screenshots in
+ * every one of those means megabytes crossing a bridge for a panel nobody has
+ * opened. This is asked for by the one detail pane looking at them.
+ *
+ * As a data URI rather than a path because the renderer is not served from the
+ * filesystem — a `file://` image in a page loaded over http is simply not
+ * fetched, silently — and because it keeps the containment check in one place:
+ * an extension cannot name `../../../.ssh/id_rsa` and have the app hand it
+ * over.
+ */
+function readPicture(dir, relative) {
+  const target = path.resolve(dir, relative);
+  if (!target.startsWith(path.resolve(dir) + path.sep)) return null;
+  const type = PICTURE_TYPES[path.extname(target).toLowerCase()];
+  if (!type) return null;
+  try {
+    const stat = fs.statSync(target);
+    if (!stat.isFile() || stat.size > PICTURE_LIMIT) return null;
+    return `data:${type};base64,${fs.readFileSync(target).toString('base64')}`;
+  } catch {
+    return null;
+  }
+}
+
+/** What a manifest says it looks like: `screenshots`, each with a caption or not. */
+function pictures(manifest) {
+  const listed = manifest?.contributes?.screenshots ?? manifest?.screenshots ?? [];
+  return listed
+    .map((entry) => (typeof entry === 'string' ? { file: entry, caption: '' } : entry))
+    .filter((entry) => entry?.file)
+    .map((entry) => ({ file: String(entry.file), caption: String(entry.caption ?? '') }));
+}
+
 /** The panels, with the document each one is. */
 function withPanelSources(panels) {
   return panels.map((panel) => {
@@ -277,4 +335,6 @@ module.exports = {
   withPanelSources,
   PANEL_NEEDS,
   validate,
+  readPicture,
+  pictures,
 };

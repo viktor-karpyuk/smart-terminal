@@ -404,6 +404,14 @@ export interface Settings {
   /** The fleet's health, as a list beside the other two. */
   sidebarShowMonitor: boolean;
   /**
+   * The clusters, when the Kubernetes extension is on.
+   *
+   * Only then: a list of clusters on the sidebar of somebody who does not run
+   * Kubernetes is a permanent empty box. Installing the extension is what puts
+   * it there, and uninstalling takes it away.
+   */
+  sidebarShowClusters: boolean;
+  /**
    * Folded away rather than closed. Two different acts: collapsing keeps the
    * heading, so you can see the count and open it again without remembering it
    * was ever there; closing takes the whole thing off the sidebar.
@@ -411,14 +419,19 @@ export interface Settings {
   sidebarSessionsCollapsed: boolean;
   sidebarFoldersCollapsed: boolean;
   sidebarMonitorCollapsed: boolean;
+  sidebarClustersCollapsed: boolean;
   /** Which of the sidebar's lists comes first. Dragging a heading changes it. */
-  sidebarOrder: Array<'sessions' | 'folders' | 'monitor'>;
+  sidebarOrder: Array<'sessions' | 'folders' | 'monitor' | 'clusters'>;
   /**
-   * How the vertical room is split between the open lists, as shares of the
-   * whole. Proportional rather than in pixels, so resizing the window keeps the
-   * balance someone chose instead of giving every spare pixel to the last list.
+   * The height somebody has *chosen* for a list, in pixels.
+   *
+   * Only the ones they dragged. A list nobody has touched is as tall as what is
+   * in it — four clusters take four rows, not a quarter of the sidebar — and
+   * that is the difference between a sidebar and four boxes of blank space. A
+   * dragged one keeps the size it was given, and scrolls inside if it holds
+   * more than that.
    */
-  sidebarSectionSizes: Record<string, number>;
+  sidebarSectionHeights: Record<string, number>;
   /**
    * Whether a session that is behaving badly says so on its own tab.
    *

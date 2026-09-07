@@ -14,6 +14,20 @@
         "needs": "kubernetes",
         "render": "panel.html"
       }
+    ],
+    "screenshots": [
+      {
+        "file": "screenshots/overview.png",
+        "caption": "Every cluster, and what is wrong in this one"
+      },
+      {
+        "file": "screenshots/detail.png",
+        "caption": "A pod that is failing, and what to do about it"
+      },
+      {
+        "file": "screenshots/logs.png",
+        "caption": "Two logs at once, searched, with live CPU and memory"
+      }
     ]
   }
 }

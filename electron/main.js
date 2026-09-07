@@ -19,7 +19,15 @@ const { summarise, oneLine } = require('./session-analysis');
 const { Advisor } = require('./advisor');
 const { render: renderBrief } = require('./session-brief');
 const { RepoWatcher } = require('./repo-watcher');
-const { discover, gallery, previewRules, withSources, panelViews, withPanelSources } = require('./extensions');
+const {
+  discover,
+  gallery,
+  previewRules,
+  withSources,
+  panelViews,
+  withPanelSources,
+  readPicture,
+} = require('./extensions');
 const { parseReport, replyFor, wantsBrief, compactionNote } = require('./hooks');
 const { Autopilot, looksLikeADecision } = require('./autopilot');
 const { tabsInLayout, minimizedIds, sectionIds, sessionsToRestore, unaccountedTabs } = require('./restore');
@@ -620,6 +628,22 @@ function registerIpc() {
   /** Every extension and where it stands, plus what the installed ones turn on. */
   ipcMain.handle('extensions:list', () => extensionState());
 
+  /**
+   * One picture an extension shows of itself.
+   *
+   * Asked for by the detail pane, one at a time, rather than sent with every
+   * listing — see the note on `readPicture`. The folder is looked up here from
+   * the id rather than taken from the renderer, so the only paths that can be
+   * read are inside an extension the app itself found.
+   */
+  ipcMain.handle('extensions:picture', (_e, { id, file } = {}) => {
+    // `builtInExtensions` is both places already: the ones shipped, and the
+    // ones under the user's data directory.
+    const found = builtInExtensions().find((manifest) => manifest.id === id);
+    if (!found?.dir) return null;
+    return readPicture(found.dir, String(file ?? ''));
+  });
+
   ipcMain.handle('extensions:install', (_e, id) => {
     const found = builtInExtensions().find((manifest) => manifest.id === id);
     if (!found) return extensionState();
@@ -1022,6 +1046,8 @@ function registerIpc() {
     restart: (args) => kube.restart(args),
     apply: (args) => kube.apply(args),
     cordon: (args) => kube.cordon(args),
+    removeContext: (args) => kube.removeContext(args),
+    useContext: (args) => kube.useContext(args),
   };
 
   ipcMain.handle('kube:call', async (_e, { name, args } = {}) => {

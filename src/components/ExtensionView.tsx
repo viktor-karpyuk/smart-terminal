@@ -117,7 +117,15 @@ function Frame({
       if (!message || typeof message !== 'object') return;
 
       if (message.type === 'ready') {
-        tell('context', { root, panelId, title: view.title });
+        // `root` is what the panel was opened *on*, and what that is depends on
+        // what the panel needs: a repository, or a cluster. Both are named, so
+        // a panel never has to guess which one it is being handed.
+        tell('context', {
+          root: view.needs === 'kubernetes' ? null : root,
+          context: view.needs === 'kubernetes' ? root : null,
+          panelId,
+          title: view.title,
+        });
         return;
       }
 
@@ -225,21 +233,10 @@ function Frame({
                 container: args.container ? String(args.container) : undefined,
               })
             : terminalSetup(where);
-        const sessionId = await store.newSession({
-          kind: 'shell',
-          title: verb === 'shell' ? `sh ${String(args.pod ?? '')}`.slice(0, 28) : `k ${where.namespace ?? 'cluster'}`,
-          ...beside(panelId),
-        });
+        const title =
+          verb === 'shell' ? `sh ${String(args.pod ?? '')}`.slice(0, 28) : `k ${where.namespace ?? 'cluster'}`;
+        const sessionId = await store.openShellNear(panelId, title, line);
         if (!sessionId) return { ok: false, error: 'the app could not open a terminal' };
-        /*
-         * After the shell has drawn its prompt, which is the same wait a
-         * restored session's command uses and is not arbitrary: a line typed
-         * into a zsh that is still sourcing its profile comes back mangled,
-         * half of it echoed and the rest run against a shell that had not
-         * finished defining `compdef` yet. Two and a half seconds is what that
-         * costs to avoid.
-         */
-        window.setTimeout(() => useStore.getState().runCommandIn(sessionId, line), 2500);
         return { ok: true, sessionId, command: line };
       }
 
@@ -311,12 +308,15 @@ function Frame({
   // The working tree moved: the panel is told, and decides for itself what of
   // its picture is now wrong. The app does not guess on its behalf.
   useEffect(() => {
-    if (!root) return;
+    // Only for a panel whose subject is a folder. A cluster's `root` is a
+    // context name, and watching the filesystem for one would be listening for
+    // a folder that does not exist.
+    if (!root || view.needs === 'kubernetes') return;
     const stop = window.api.files.onTreeChanged((change) => {
       if (change.root === root) tell('changed', { kind: change.kind });
     });
     return stop;
-  }, [root]);
+  }, [root, view.needs]);
 
   return (
     <div className="extension-view">

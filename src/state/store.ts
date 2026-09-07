@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { FOLLOW_APP, resolveTerminalTheme } from '../terminals/themes';
 import { generateSessionName } from '../lib/names';
+import { shortContext, terminalSetup } from '../lib/extensionHost';
 import { arrangeGroup, moveGroupTo } from './groups';
 import { closePane, movePane, panePlace, restorePaneAt, splitEmpty, splitOffTabs, swapPanes } from './layout';
 import { GIT_TAB } from './types';
@@ -82,11 +83,13 @@ const DEFAULT_SETTINGS: Settings = {
   sidebarShowSessions: true,
   sidebarShowFolders: true,
   sidebarShowMonitor: true,
+  sidebarShowClusters: true,
   sidebarSessionsCollapsed: false,
   sidebarFoldersCollapsed: false,
   sidebarMonitorCollapsed: false,
-  sidebarOrder: ['sessions', 'folders', 'monitor'],
-  sidebarSectionSizes: { sessions: 1, folders: 1, monitor: 1 },
+  sidebarClustersCollapsed: false,
+  sidebarOrder: ['sessions', 'folders', 'monitor', 'clusters'],
+  sidebarSectionHeights: {},
   sessionAlerts: true,
   sessionSuggestions: true,
   advisorProfileId: null,
@@ -255,6 +258,54 @@ interface State {
   usagePanelOpen: boolean;
   /** Every extension and where it stands, with the rules the installed ones turn on. */
   extensions: ExtensionState;
+  /**
+   * The clusters in kubeconfig, and whether each answers.
+   *
+   * Kept by the app rather than by the panel, because the sidebar shows them
+   * before any panel is open — and because probing is not free: one list,
+   * probed once, is the difference between seven `kubectl` runs and fourteen.
+   */
+  clusters: {
+    list: Array<{ name: string; cluster: string; user: string; namespace: string }>;
+    /** What kubectl itself would use, which is only ever a default here. */
+    current: string | null;
+    /**
+     * `up: null` has not been asked yet; `slow` is asked and not answered,
+     * which is a different thing from answered with a no.
+     */
+    reach: Record<string, { up: boolean | null; slow?: boolean; error: string | null }>;
+    probing: boolean;
+    /** When they were last asked, so asking again is a decision rather than a redraw. */
+    probedAt: number | null;
+    error: string | null;
+  };
+  /** A new picture of what is installed, whatever brought it. */
+  takeExtensions(state: ExtensionState): void;
+  /** Read kubeconfig — a file, not a cluster, so it is cheap and always safe. */
+  loadClusters(): Promise<void>;
+  /**
+   * Ask each cluster whether it is there, one at a time. Does nothing if they
+   * have already been asked, unless told to ask again.
+   */
+  probeClusters(again?: boolean): Promise<void>;
+  /** Open the Kubernetes panel on one cluster, or bring its tab forward. */
+  openCluster(context: string): void;
+  /** Ask one cluster whether it is there, whatever it answered last time. */
+  probeCluster(context: string): Promise<void>;
+  /** A shell aimed at one cluster: `k` means kubectl on that context, and nowhere else. */
+  openClusterTerminal(context: string, namespace?: string): Promise<string | null>;
+  /** Take a cluster out of kubeconfig, and its cluster and user entries with it if nothing else wants them. */
+  removeCluster(context: string): Promise<void>;
+  /** Make a context what a plain `kubectl` uses — the one place this app runs `use-context`. */
+  makeClusterDefault(context: string): Promise<void>;
+  /**
+   * Open a shell running one line, near a tab rather than on top of it.
+   *
+   * Shared by the sidebar and by the Kubernetes panel, which both want the same
+   * thing: a real terminal, already pointed somewhere, that did not just cover
+   * up whatever you started it from.
+   */
+  openShellNear(nearPanelId: string | null, title: string, command: string): Promise<string | null>;
   /** The latest reading for each session, kept current by the monitor. */
   analysisBySession: Record<string, SessionAnalysis>;
   /** What the advisor last said about a session, and whether it is being asked. */
@@ -511,6 +562,7 @@ export const useStore = create<State>((set, get) => ({
   usageLoading: {},
   usagePanelOpen: false,
   extensions: { rows: [], previews: [], panels: [] },
+  clusters: { list: [], current: null, reach: {}, probing: false, probedAt: null, error: null },
   analysisBySession: {},
   adviceBySession: {},
   adviceAsking: {},
@@ -672,8 +724,8 @@ export const useStore = create<State>((set, get) => ({
 
     // What is installed decides what a file opens as, so it is read before the
     // first folder is drawn and followed from then on.
-    window.api.extensions.list().then((state) => set({ extensions: state }));
-    window.api.extensions.onChanged((state) => set({ extensions: state }));
+    window.api.extensions.list().then((state) => get().takeExtensions(state));
+    window.api.extensions.onChanged((state) => get().takeExtensions(state));
 
     // Groups and the session roster belong to the workspace, not to this window.
     window.api.groups.list().then((groups) => set({ groups }));
@@ -2531,6 +2583,156 @@ export const useStore = create<State>((set, get) => ({
   },
 
   /**
+   * The clusters, from the file that lists them.
+   *
+   * `kubectl config view` reads kubeconfig and contacts nothing, so this
+   * answers instantly even when every cluster in the file is unreachable —
+   * which is exactly the case where a list that waited would be useless.
+   */
+  async loadClusters() {
+    const result = await window.api.kube.call('contexts', {});
+    if (!result.ok) {
+      set((state) => ({ clusters: { ...state.clusters, error: result.error ?? 'kubectl would not answer', list: [] } }));
+      return;
+    }
+    set((state) => ({
+      clusters: {
+        ...state.clusters,
+        list: result.contexts ?? [],
+        current: result.current ?? null,
+        error: null,
+      },
+    }));
+  },
+
+  /**
+   * Ask each cluster whether it is there.
+   *
+   * One at a time, deliberately. Seven of these at once is seven kubectl
+   * processes and seven credential plugins, all started at the moment somebody
+   * opened a sidebar — and the answer is not urgent: the dots fill in over a
+   * few seconds, which is as fast as this question deserves to be answered.
+   */
+  async probeClusters(again = false) {
+    const { probing, probedAt, list } = get().clusters;
+    /*
+     * The once-ness lives here rather than in whatever draws the list. A
+     * component's own "have I done this" flag is reset by a remount and
+     * cancelled by its own cleanup — under React's development double-mount
+     * that combination schedules the work and then throws it away, and the
+     * dots never fill in. The store is the thing that knows.
+     */
+    if (probing || !list.length || (probedAt && !again)) return;
+    set((state) => ({ clusters: { ...state.clusters, probing: true } }));
+    for (const entry of get().clusters.list) {
+      const answer = await window.api.kube.call('reachable', { context: entry.name });
+      set((state) => ({
+        clusters: {
+          ...state.clusters,
+          reach: {
+            ...state.clusters.reach,
+            [entry.name]: {
+              up: answer.ok ? Boolean(answer.up) : false,
+              slow: Boolean(answer.slow),
+              error: (answer.error as string | undefined) ?? null,
+            },
+          },
+        },
+      }));
+    }
+    set((state) => ({ clusters: { ...state.clusters, probing: false, probedAt: Date.now() } }));
+  },
+
+  openCluster(context) {
+    const view = get().extensions.panels.find((panel) => panel.needs === 'kubernetes');
+    if (!view) return;
+    get().openExtensionView(view.id, context);
+  },
+
+  async probeCluster(context) {
+    const answer = await window.api.kube.call('reachable', { context });
+    set((state) => ({
+      clusters: {
+        ...state.clusters,
+        reach: {
+          ...state.clusters.reach,
+          [context]: {
+            up: answer.ok ? Boolean(answer.up) : false,
+            slow: Boolean(answer.slow),
+            error: (answer.error as string | undefined) ?? null,
+          },
+        },
+      },
+    }));
+  },
+
+  openClusterTerminal(context, namespace) {
+    return get().openShellNear(
+      null,
+      `k ${shortContext(context)}`.slice(0, 28),
+      terminalSetup({ context, namespace }),
+    );
+  },
+
+  async removeCluster(context) {
+    const result = await window.api.kube.call('removeContext', { name: context });
+    if (!result.ok) {
+      set((state) => ({ clusters: { ...state.clusters, error: result.error ?? 'it could not be removed' } }));
+      return;
+    }
+    // Any tab open on it is now looking at something that is not there.
+    for (const panel of Object.values(get().panels)) {
+      if (panel.kind === 'extension' && panel.root === context) get().closePanel(panel.id);
+    }
+    set((state) => {
+      const reach = { ...state.clusters.reach };
+      delete reach[context];
+      return {
+        clusters: {
+          ...state.clusters,
+          reach,
+          list: state.clusters.list.filter((entry) => entry.name !== context),
+          current: state.clusters.current === context ? null : state.clusters.current,
+          error: null,
+        },
+      };
+    });
+    // What kubeconfig says now, rather than what this thinks it should say.
+    void get().loadClusters();
+  },
+
+  async makeClusterDefault(context) {
+    const result = await window.api.kube.call('useContext', { name: context });
+    if (result.ok) set((state) => ({ clusters: { ...state.clusters, current: context } }));
+  },
+
+  async openShellNear(nearPanelId, title, command) {
+    /*
+     * Beside, never on top. A list you clicked from disappearing the moment you
+     * click is the oldest bad habit in this kind of tool — so the terminal goes
+     * into another pane if there is one, and splits below if there is not.
+     */
+    const { layout } = get();
+    const mine = nearPanelId ? leafOfTab(layout, nearPanelId) : null;
+    const elsewhere = mine ? allLeaves(layout).find((leaf) => leaf.id !== mine.id) : null;
+    const where = mine
+      ? elsewhere
+        ? { leafId: elsewhere.id, side: 'center' as const }
+        : { leafId: mine.id, side: 'bottom' as const }
+      : {};
+
+    const sessionId = await get().newSession({ kind: 'shell', title, ...where });
+    if (!sessionId) return null;
+    /*
+     * After the shell has drawn its prompt. A line typed into a zsh that is
+     * still sourcing its profile comes back mangled — half of it echoed, the
+     * rest run against a shell that had not finished starting.
+     */
+    window.setTimeout(() => get().runCommandIn(sessionId, command), 2500);
+    return sessionId;
+  },
+
+  /**
    * Open a view an extension contributes.
    *
    * Keyed on the view *and* the folder: two repositories are two different
@@ -2560,7 +2762,9 @@ export const useStore = create<State>((set, get) => ({
       id: panelId,
       kind: 'extension' as const,
       viewId,
-      title: view?.title ?? viewId,
+      // A tab per cluster wants the cluster's name on it. "Kubernetes" three
+      // times over says nothing about which three.
+      title: view?.needs === 'kubernetes' && root ? shortContext(root) : (view?.title ?? viewId),
       root,
     };
     set((prev) => {
@@ -2661,7 +2865,42 @@ export const useStore = create<State>((set, get) => ({
         : action === 'remove'
           ? await api.remove(id)
           : await api.enable(id, action === 'enable');
-    set({ extensions: next });
+    // Through the same door as every other way a new state arrives. Setting it
+    // directly here is what made installing the Kubernetes extension leave an
+    // empty cluster list until the next restart: the sidebar was told there was
+    // a cluster view, and nothing ever went and read the clusters.
+    get().takeExtensions(next);
+  },
+
+  /**
+   * A new picture of what is installed, whatever brought it.
+   *
+   * The first read at startup, a change made in another window, and this
+   * window's own install all end up here, because they all mean the same thing
+   * and the consequences should not depend on which one it was.
+   */
+  takeExtensions(state) {
+    set({ extensions: state });
+    /*
+     * Installing the Kubernetes extension is what puts clusters on the sidebar,
+     * so the list is read the moment it appears rather than at startup — an app
+     * nobody runs Kubernetes from never asks kubectl anything. Reading
+     * kubeconfig contacts no cluster; whether each one answers is a separate
+     * question, asked a moment later and one at a time.
+     */
+    const wanted = state.panels.some((panel) => panel.needs === 'kubernetes');
+    if (wanted && !get().clusters.list.length) {
+      void get()
+        .loadClusters()
+        .then(() => {
+          window.setTimeout(() => void get().probeClusters(), 1500);
+        });
+    }
+    // Turned off or uninstalled: the list goes with it rather than sitting
+    // there as a section nothing can act on.
+    if (!wanted && get().clusters.list.length) {
+      set({ clusters: { list: [], current: null, reach: {}, probing: false, probedAt: null, error: null } });
+    }
   },
 
   /** Point the monitor at a different session. */

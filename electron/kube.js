@@ -682,6 +682,36 @@ function apiResources(text) {
   return out;
 }
 
+/**
+ * What removing a context takes with it.
+ *
+ * A context names a cluster and a user, and both are separate entries that
+ * other contexts may also name — an EKS account with four clusters shares
+ * neither, but a cluster you have an admin and a read-only login for shares the
+ * cluster between two contexts. Deleting the entry somebody else is still
+ * pointing at leaves a context that cannot connect and says something baffling
+ * about a cluster that "does not exist"; leaving an orphan behind is untidy but
+ * harmless. So: take what nothing else refers to, and only that.
+ */
+function whatToRemove(config, name) {
+  const contexts = config?.contexts ?? [];
+  const found = contexts.find((entry) => entry.name === name);
+  if (!found) return null;
+  const cluster = found.context?.cluster ?? null;
+  const user = found.context?.user ?? null;
+  const others = contexts.filter((entry) => entry.name !== name);
+  return {
+    context: name,
+    cluster: cluster && !others.some((entry) => entry.context?.cluster === cluster) ? cluster : null,
+    user: user && !others.some((entry) => entry.context?.user === user) ? user : null,
+    // What is left pointing at the same things, so the person can be told why
+    // only part of it went.
+    keptFor: others
+      .filter((entry) => entry.context?.cluster === cluster || entry.context?.user === user)
+      .map((entry) => entry.name),
+  };
+}
+
 /** The contexts in kubeconfig, and which one kubectl would use. Reads a file; touches no cluster. */
 function contextsFrom(config) {
   const contexts = (config?.contexts ?? []).map((entry) => ({
@@ -778,11 +808,32 @@ async function contexts() {
  * a red dot would make the panel useless for the clusters that *are* up.
  */
 async function reachable({ context } = {}) {
-  const result = await run([...scope({ context }).slice(2), '--request-timeout', '6s', 'get', 'namespaces', '-o', 'name'], {
-    timeout: 9000,
+  /*
+   * Twelve seconds, not six.
+   *
+   * A managed cluster runs an auth plugin before it says anything at all —
+   * `aws eks get-token`, `gke-gcloud-auth-plugin` — and that alone is a couple
+   * of seconds on a good day and more when several are asked at once. At six
+   * this reported healthy production clusters as down, which is the worst thing
+   * a status dot can do: a wrong red is not a small error, it is a lie told
+   * confidently.
+   */
+  const result = await run([...scope({ context }).slice(2), '--request-timeout', '12s', 'get', 'namespaces', '-o', 'name'], {
+    timeout: 20000,
   });
-  if (!result.ok) return { ok: true, up: false, error: result.error };
-  return { ok: true, up: true, namespaces: result.stdout.split('\n').filter(Boolean).length };
+  if (result.ok) return { ok: true, up: true, slow: false, namespaces: result.stdout.split('\n').filter(Boolean).length };
+
+  /*
+   * And when it still does not answer, say *that* rather than "down".
+   *
+   * A cluster that refused the connection, or whose credentials are stale, has
+   * told us something. One that simply did not answer in time has told us
+   * nothing — it may be busy, or behind a VPN that drops packets rather than
+   * refusing them — and reporting a guess as a fact is how a dashboard stops
+   * being believed.
+   */
+  const slow = /deadline exceeded|Client\.Timeout|did not answer within|i\/o timeout/i.test(result.error ?? '');
+  return { ok: true, up: false, slow, error: result.error };
 }
 
 async function resources(args) {
@@ -1019,6 +1070,56 @@ async function apply({ yaml, ...rest }) {
   return result.ok ? { ok: true, text: result.stdout.trim() } : result;
 }
 
+/**
+ * Take a cluster out of kubeconfig.
+ *
+ * The one thing in this file that edits a file of the person's rather than
+ * talking to a cluster, and the only one whose damage is on their machine. It
+ * is done through `kubectl config` rather than by writing YAML, so whatever
+ * kubeconfig kubectl is actually using — including one assembled from several
+ * files by `KUBECONFIG` — is the one that changes.
+ */
+async function removeContext({ name }) {
+  const wanted = safeArg(name, 'the context');
+  const config = await runJson(['config', 'view', '-o', 'json'], { timeout: 8000 });
+  if (!config.ok) return config;
+
+  const plan = whatToRemove(config.data, wanted);
+  if (!plan) return { ok: false, error: `There is no context called ${wanted}.` };
+
+  const done = [];
+  const context = await run(['config', 'delete-context', plan.context], { timeout: 8000 });
+  if (!context.ok) return context;
+  done.push(`context ${plan.context}`);
+
+  // The cluster and the user only if nothing else is pointing at them. A
+  // failure here is worth reporting and not worth undoing the rest for: the
+  // context is already gone, which is what was asked.
+  if (plan.cluster) {
+    const result = await run(['config', 'delete-cluster', plan.cluster], { timeout: 8000 });
+    if (result.ok) done.push(`cluster ${plan.cluster}`);
+  }
+  if (plan.user) {
+    const result = await run(['config', 'delete-user', plan.user], { timeout: 8000 });
+    if (result.ok) done.push(`user ${plan.user}`);
+  }
+  return { ok: true, removed: done, kept: plan.keptFor, text: `Removed ${done.join(', ')}.` };
+}
+
+/**
+ * Make a context the one a plain `kubectl` uses.
+ *
+ * The only place this app ever runs `use-context`, and it takes an explicit
+ * menu item to get here. Everything else carries `--context`, so that looking
+ * at a cluster cannot quietly change what the person's own shell does — but
+ * *asking* for that to change is a perfectly reasonable thing to want, and
+ * refusing to do it would only mean typing it somewhere else.
+ */
+async function useContext({ name }) {
+  const result = await run(['config', 'use-context', safeArg(name, 'the context')], { timeout: 8000 });
+  return result.ok ? { ok: true, text: result.stdout.trim() } : result;
+}
+
 async function cordon({ name, on = true, ...rest }) {
   const result = await run([...scope(rest), on ? 'cordon' : 'uncordon', safeArg(name, 'the node')]);
   return result.ok ? { ok: true, text: result.stdout.trim() } : result;
@@ -1128,6 +1229,8 @@ module.exports = {
   restart,
   apply,
   cordon,
+  removeContext,
+  useContext,
   // long-running
   Streams,
   followArgs,
@@ -1143,6 +1246,7 @@ module.exports = {
   kindOf,
   isCore,
   contextsFrom,
+  whatToRemove,
   metrics,
   overview,
   safeArg,

@@ -77,6 +77,17 @@ test('the shell command is built by the app from named parts', () => {
   );
 });
 
+test('a cluster is called what people call it, not what kubeconfig calls it', () => {
+  // An EKS context is an ARN and a GKE one is four fields joined by
+  // underscores. Neither fits on a tab; the last segment is the name.
+  assert.equal(H.shortContext('arn:aws:eks:sa-east-1:532465846520:cluster/kubrik-k8s'), 'kubrik-k8s');
+  assert.equal(H.shortContext('gke_my-project_us-central1-a_staging'), 'staging');
+  assert.equal(H.shortContext('docker-desktop'), 'docker-desktop');
+  assert.equal(H.shortContext(''), '');
+  // An ARN with no slash in it is unusual, and is still better than nothing.
+  assert.equal(H.shortContext('arn:aws:eks:x'), 'arn:aws:eks:x');
+});
+
 test('a kubectl terminal is an alias, so nothing outside the tab changes', () => {
   // Two layers of quoting: single on the outside so the alias is one word,
   // double on the inside so a name with a space in it stays one argument.

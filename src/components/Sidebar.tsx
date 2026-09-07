@@ -4,9 +4,19 @@ import { asFilePanel, useStore } from '../state/store';
 import { allTabs, leafOfTab } from '../state/layout';
 import { SESSION_MIME } from '../lib/drag';
 import { sessionLabel } from '../lib/labels';
+import { shortContext } from '../lib/extensionHost';
 import { compactPath } from '../lib/labels';
 import { PathLabel } from './PathLabel';
-import { AccountsIcon, AppearanceIcon, ExtensionsIcon, HistoryIcon, MonitorIcon, UsageIcon } from './icons';
+import { Popover } from './Popover';
+import {
+  AccountsIcon,
+  AppearanceIcon,
+  ClustersIcon,
+  ExtensionsIcon,
+  HistoryIcon,
+  MonitorIcon,
+  UsageIcon,
+} from './icons';
 
 /**
  * The narrowest the sidebar will sit at. With the switches down to icons what
@@ -15,8 +25,8 @@ import { AccountsIcon, AppearanceIcon, ExtensionsIcon, HistoryIcon, MonitorIcon,
 export const SIDEBAR_MIN = 150;
 
 /** The lists the sidebar can show, in the order they arrive with. */
-type SidebarList = 'sessions' | 'folders' | 'monitor';
-const DEFAULT_ORDER: SidebarList[] = ['sessions', 'folders', 'monitor'];
+type SidebarList = 'sessions' | 'folders' | 'monitor' | 'clusters';
+const DEFAULT_ORDER: SidebarList[] = ['sessions', 'folders', 'monitor', 'clusters'];
 
 /**
  * One list: a heading that stays, and a body that scrolls on its own.
@@ -37,11 +47,20 @@ function List({
   header: React.ReactNode;
   children: React.ReactNode;
 }) {
-  const share = useStore((s) => s.settings.sidebarSectionSizes?.[id] ?? 1);
+  /*
+   * As tall as what is in it, unless somebody said otherwise.
+   *
+   * The sidebar used to give every open list an equal share of the column,
+   * which meant a list of three folders got a quarter of the screen and three
+   * quarters of that was blank. Content-sized is what a sidebar should do; a
+   * height only appears here once somebody has dragged for one, and then it is
+   * theirs and the list scrolls inside it.
+   */
+  const height = useStore((s) => s.settings.sidebarSectionHeights?.[id]);
   return (
     <div
-      className={`sidebar-list${collapsed ? ' is-collapsed' : ''}`}
-      style={collapsed ? undefined : { flexGrow: Math.max(0.08, share), flexBasis: 0 }}
+      className={`sidebar-list${collapsed ? ' is-collapsed' : ''}${height ? ' is-sized' : ''}`}
+      style={collapsed || !height ? undefined : { height }}
       data-list={id}
     >
       {header}
@@ -50,8 +69,11 @@ function List({
   );
 }
 
-/** The divider between two open lists. Drag it and they trade room. */
-function ListResizer({ above, below }: { above: string; below: string }) {
+/**
+ * The divider under an open list. Drag it and that list is the height you drag
+ * it to; everything below simply moves with it.
+ */
+function ListResizer({ above }: { above: string }) {
   const updateSettings = useStore((s) => s.updateSettings);
 
   return (
@@ -60,36 +82,41 @@ function ListResizer({ above, below }: { above: string; below: string }) {
       role="separator"
       aria-orientation="horizontal"
       aria-label="Resize the lists"
-      onDoubleClick={() =>
-        updateSettings({
-          sidebarSectionSizes: {
-            ...useStore.getState().settings.sidebarSectionSizes,
-            [above]: 1,
-            [below]: 1,
-          },
-        })
-      }
+      onDoubleClick={() => {
+        // Back to the size of what is in it, which is where every list starts.
+        const sizes = { ...(useStore.getState().settings.sidebarSectionHeights ?? {}) };
+        delete sizes[above];
+        updateSettings({ sidebarSectionHeights: sizes });
+      }}
       onPointerDown={(event) => {
         event.preventDefault();
         const container = (event.currentTarget as HTMLElement).parentElement;
-        if (!container) return;
-        const height = container.getBoundingClientRect().height || 1;
+        const list = container?.querySelector(`[data-list="${above}"]`) as HTMLElement | null;
+        if (!container || !list) return;
+
+        /*
+         * Pixels, straight through.
+         *
+         * This used to convert the pointer's movement into a share of the whole
+         * column, which made the divider travel the pair's *fraction* of the
+         * distance the cursor did — half speed with two lists open, a third
+         * with three — so the line trailed further behind the further you
+         * dragged. A height in pixels is what the pointer is speaking in, and
+         * the divider now lands under it.
+         */
         const startY = event.clientY;
-        const sizes = useStore.getState().settings.sidebarSectionSizes ?? {};
-        const startAbove = sizes[above] ?? 1;
-        const startBelow = sizes[below] ?? 1;
-        const pair = startAbove + startBelow;
+        const startHeight = list.getBoundingClientRect().height;
+        const room = container.getBoundingClientRect().height;
 
         const onMove = (move: PointerEvent) => {
-          // The pair keeps its combined share; only the split between them moves,
-          // so a third list further down is not shoved about by this drag.
-          const delta = ((move.clientY - startY) / height) * pair;
-          const next = Math.min(Math.max(startAbove + delta, pair * 0.12), pair * 0.88);
+          const wanted = startHeight + (move.clientY - startY);
+          // Never smaller than its own heading, never so tall that everything
+          // below it is pushed off the sidebar.
+          const next = Math.round(Math.min(Math.max(wanted, 46), Math.max(80, room - 90)));
           updateSettings({
-            sidebarSectionSizes: {
-              ...useStore.getState().settings.sidebarSectionSizes,
+            sidebarSectionHeights: {
+              ...(useStore.getState().settings.sidebarSectionHeights ?? {}),
               [above]: next,
-              [below]: pair - next,
             },
           });
         };
@@ -366,6 +393,10 @@ function FolderItem({ panelId, homedir }: { panelId: string; homedir: string }) 
 export function Sidebar() {
   const profiles = useStore((s) => s.profiles);
   const settings = useStore((s) => s.settings);
+  // Whether anything contributes a cluster view at all. A boolean, not the
+  // list: this component re-renders on every session change, and it has no
+  // business re-rendering because a pod somewhere restarted.
+  const hasClusters = useStore((s) => s.extensions.panels.some((panel) => panel.needs === 'kubernetes'));
   const authByProfile = useStore((s) => s.authByProfile);
   const updateSettings = useStore((s) => s.updateSettings);
 
@@ -381,7 +412,10 @@ export function Sidebar() {
   // With both switched off there is no panel at all — just the rail, which is
   // the whole point of the rail.
   const showsSomething =
-    settings.sidebarShowSessions || settings.sidebarShowFolders || settings.sidebarShowMonitor;
+    settings.sidebarShowSessions ||
+    settings.sidebarShowFolders ||
+    settings.sidebarShowMonitor ||
+    (settings.sidebarShowClusters && hasClusters);
   // Any list the order does not mention yet — the monitor, for a workspace saved
   // before it existed — goes on the end rather than disappearing.
   const ordered = [
@@ -392,8 +426,22 @@ export function Sidebar() {
     sessions: settings.sidebarShowSessions,
     folders: settings.sidebarShowFolders,
     monitor: settings.sidebarShowMonitor,
+    // Only when something contributes it. A list of clusters on the sidebar of
+    // somebody who does not run Kubernetes is a permanent empty box.
+    clusters: settings.sidebarShowClusters && hasClusters,
   };
   const open = ordered.filter((which) => shown[which]);
+  /*
+   * A folded list has no room to trade, so there is no divider above the one
+   * below it. A handle that says row-resize and then does nothing is worse than
+   * no handle: it reads as broken rather than as unavailable.
+   */
+  const folded: Record<SidebarList, boolean> = {
+    sessions: settings.sidebarSessionsCollapsed,
+    folders: settings.sidebarFoldersCollapsed,
+    monitor: settings.sidebarMonitorCollapsed,
+    clusters: settings.sidebarClustersCollapsed,
+  };
 
   const grouped = useMemo(() => {
     const pairs = membership.map((entry) => entry.split(' ') as [string, string]);
@@ -419,7 +467,7 @@ export function Sidebar() {
       <div className="sidebar-lists">
         {open.map((which, index) => (
           <Fragment key={which}>
-            {index > 0 && <ListResizer above={open[index - 1]} below={which} />}
+            {index > 0 && !folded[open[index - 1]] && <ListResizer above={open[index - 1]} />}
             {which === 'sessions' ? (
               <List
                 id="sessions"
@@ -460,6 +508,8 @@ export function Sidebar() {
               </List>
             ) : which === 'folders' ? (
               <Folders />
+            ) : which === 'clusters' ? (
+              <ClustersList />
             ) : (
               <MonitorList />
             )}
@@ -473,6 +523,225 @@ export function Sidebar() {
       </div>
       )}
     </aside>
+  );
+}
+
+/**
+ * The clusters, as a list.
+ *
+ * Every context in kubeconfig with a dot saying whether it answers, because on
+ * a laptop with seven of them two are usually behind a VPN nobody is on and one
+ * has a token that expired — and finding that out by clicking is a slow way to
+ * learn something a dot can say.
+ *
+ * Clicking one opens it. A tab per cluster, not one tab that switches: two
+ * clusters open at once is the whole reason to have a list of them, and a tab
+ * that changed what it was showing underneath you would be worse than useless
+ * while something is being followed in it.
+ */
+function ClustersList() {
+  const [menu, setMenu] = useState<{ name: string; x: number; y: number } | null>(null);
+  const collapsed = useStore((s) => s.settings.sidebarClustersCollapsed);
+  const updateSettings = useStore((s) => s.updateSettings);
+  const names = useStore(useShallow((s) => s.clusters.list.map((entry) => entry.name)));
+  const error = useStore((s) => s.clusters.error);
+  const probing = useStore((s) => s.clusters.probing);
+  const down = useStore(
+    (s) => Object.values(s.clusters.reach).filter((entry) => entry.up === false && !entry.slow).length,
+  );
+
+  return (
+    <List
+      id="clusters"
+      collapsed={collapsed}
+      header={
+        <SectionHeader
+          id="clusters"
+          label="Clusters"
+          count={down}
+          collapsed={collapsed}
+          onToggle={() => updateSettings({ sidebarClustersCollapsed: !collapsed })}
+          onClose={() => updateSettings({ sidebarShowClusters: false })}
+          extra={
+            <button
+              className="section-open"
+              title={probing ? 'Asking each cluster…' : 'Ask each cluster again'}
+              aria-label="Check the clusters again"
+              onClick={(event) => {
+                event.stopPropagation();
+                void useStore
+                  .getState()
+                  .loadClusters()
+                  .then(() => useStore.getState().probeClusters(true));
+              }}
+            >
+              {probing ? '·' : '⟳'}
+            </button>
+          }
+        />
+      }
+    >
+      {error && <p className="sidebar-empty">{error}</p>}
+      {!error && !names.length && <p className="sidebar-empty">No clusters in kubeconfig.</p>}
+      {names.map((name) => (
+        <ClusterRow key={name} name={name} onMenu={setMenu} />
+      ))}
+      {menu && <ClusterMenu name={menu.name} x={menu.x} y={menu.y} onClose={() => setMenu(null)} />}
+    </List>
+  );
+}
+
+/** One cluster: whether it answers, and what it is called by people. */
+function ClusterRow({
+  name,
+  onMenu,
+}: {
+  name: string;
+  onMenu(at: { name: string; x: number; y: number }): void;
+}) {
+  const reach = useStore((s) => s.clusters.reach[name]);
+  const openCluster = useStore((s) => s.openCluster);
+  const isDefault = useStore((s) => s.clusters.current === name);
+  const open = useStore(
+    (s) => Object.values(s.panels).some((panel) => panel.kind === 'extension' && panel.root === name),
+  );
+  const state = dotFor(reach);
+
+  return (
+    <button
+      className={`sidebar-item cluster-row${open ? ' is-open' : ''}`}
+      title={reach?.error ? `${name}\n\n${reach.error}` : name}
+      onClick={() => openCluster(name)}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onMenu({ name, x: event.clientX, y: event.clientY });
+      }}
+    >
+      <span className={`cluster-dot is-${state}`} />
+      <span className="sidebar-item-title">{shortContext(name)}</span>
+      {/* Which one a plain `kubectl` uses. Worth marking, precisely because
+          nothing this app does depends on it. */}
+      {isDefault && <span className="cluster-default" title="What a plain kubectl uses">default</span>}
+    </button>
+  );
+}
+
+/**
+ * Three answers, not two.
+ *
+ * Answered: green. Said no — refused the connection, or the credentials are
+ * stale: red. Did not answer at all: amber, because that is not the same claim.
+ * A cluster that is merely slow, or behind a VPN that drops rather than
+ * refuses, has told us nothing, and a confident red about a healthy production
+ * cluster is how a dashboard stops being believed.
+ */
+function dotFor(reach?: { up: boolean | null; slow?: boolean }): 'ok' | 'warn' | 'bad' | 'unknown' {
+  if (!reach || reach.up == null) return 'unknown';
+  if (reach.up) return 'ok';
+  return reach.slow ? 'warn' : 'bad';
+}
+
+/**
+ * What you can do to a cluster from the list.
+ *
+ * Two of these edit the person's own kubeconfig rather than talk to a cluster,
+ * and they are the two worth being careful about — so removing asks first, and
+ * making one the default says out loud what else that changes.
+ */
+function ClusterMenu({
+  name,
+  x,
+  y,
+  onClose,
+}: {
+  name: string;
+  x: number;
+  y: number;
+  onClose(): void;
+}) {
+  const reach = useStore((s) => s.clusters.reach[name]);
+  const isDefault = useStore((s) => s.clusters.current === name);
+  const [confirming, setConfirming] = useState(false);
+  const run = (fn: () => void) => () => {
+    onClose();
+    fn();
+  };
+
+  if (confirming) {
+    return (
+      <div className="modal-backdrop" onMouseDown={onClose}>
+        <div className="confirm" onMouseDown={(event) => event.stopPropagation()}>
+          <h3>Remove {shortContext(name)}?</h3>
+          <p style={{ color: 'var(--text)' }}>{name}</p>
+          <p>
+            This edits your kubeconfig. The context goes, and so do its cluster and user entries
+            unless another context is still pointing at them. Nothing in the cluster itself is
+            touched — you are removing the way in, not the thing.
+          </p>
+          <div className="confirm-actions">
+            <button className="ghost-btn" onClick={onClose} autoFocus>
+              Keep it
+            </button>
+            <button
+              className="danger-btn"
+              onClick={() => {
+                onClose();
+                void useStore.getState().removeCluster(name);
+              }}
+            >
+              Remove from kubeconfig
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <Popover anchorPoint={{ x, y }} onClose={onClose}>
+      <div className="menu-heading">
+        <span className={`cluster-dot is-${dotFor(reach)}`} />
+        <span>{shortContext(name)}</span>
+      </div>
+
+      <button className="menu-item" onClick={run(() => useStore.getState().openCluster(name))}>
+        <span>Open</span>
+        <kbd>a tab of its own</kbd>
+      </button>
+      <button
+        className="menu-item"
+        onClick={run(() => void useStore.getState().openClusterTerminal(name))}
+      >
+        <span>Terminal here</span>
+        <kbd>k aliased to it</kbd>
+      </button>
+      <button className="menu-item" onClick={run(() => void useStore.getState().probeCluster(name))}>
+        <span>Check it again</span>
+        {reach?.error && <kbd title={reach.error}>not answering</kbd>}
+      </button>
+
+      <div className="menu-separator" />
+
+      <button className="menu-item" onClick={run(() => void navigator.clipboard.writeText(name))}>
+        <span>Copy its full name</span>
+      </button>
+      {!isDefault && (
+        <button
+          className="menu-item"
+          onClick={run(() => void useStore.getState().makeClusterDefault(name))}
+          title="Changes what a plain kubectl does everywhere, including in your own shells"
+        >
+          <span>Make it kubectl's default</span>
+          <kbd>outside this app too</kbd>
+        </button>
+      )}
+
+      <div className="menu-separator" />
+
+      <button className="menu-item is-danger" onClick={() => setConfirming(true)}>
+        <span>Remove from kubeconfig…</span>
+      </button>
+    </Popover>
   );
 }
 
@@ -581,6 +850,10 @@ function MonitorRow({ sessionId }: { sessionId: string }) {
 function ActivityBar() {
   const settings = useStore((s) => s.settings);
   const updateSettings = useStore((s) => s.updateSettings);
+  const hasClusters = useStore((s) => s.extensions.panels.some((panel) => panel.needs === 'kubernetes'));
+  const down = useStore(
+    (s) => Object.values(s.clusters.reach).filter((entry) => entry.up === false && !entry.slow).length,
+  );
   const runningCount = useStore(
     (s) => allTabs(s.layout).filter((id) => s.sessions[id]?.status === 'running').length,
   );
@@ -635,6 +908,19 @@ function ActivityBar() {
         <MonitorIcon />
         {alerts > 0 && <span className="activity-count">{alerts}</span>}
       </button>
+
+      {hasClusters && (
+        <button
+          className={`activity${settings.sidebarShowClusters ? ' is-on' : ''}`}
+          data-tip={down ? `Clusters — ${down} not answering` : 'Clusters'}
+          aria-label="Clusters"
+          aria-pressed={settings.sidebarShowClusters}
+          onClick={() => updateSettings({ sidebarShowClusters: !settings.sidebarShowClusters })}
+        >
+          <ClustersIcon />
+          {down > 0 && <span className="activity-count">{down}</span>}
+        </button>
+      )}
 
       <span className="activity-spacer" />
 

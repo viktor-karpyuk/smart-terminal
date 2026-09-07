@@ -42,6 +42,22 @@ export function MonitorIcon() {
   );
 }
 
+/**
+ * The helm — the wheel Kubernetes is named after, and steers by.
+ *
+ * Drawn as the wheel rather than as the seven-sided logo, because at 18px the
+ * heptagon reads as a circle and the spokes are what make it a helm.
+ */
+export function ClustersIcon() {
+  return (
+    <svg {...base} aria-hidden>
+      <circle cx="7" cy="7" r="5.1" />
+      <circle cx="7" cy="7" r="1.7" />
+      <path d="M7 1.9v3.4M7 8.7v3.4M1.9 7h3.4M8.7 7h3.4" />
+    </svg>
+  );
+}
+
 /** Blocks that fit together — what an extension does to the app. */
 export function ExtensionsIcon() {
   return (

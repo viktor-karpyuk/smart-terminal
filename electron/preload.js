@@ -158,6 +158,8 @@ contextBridge.exposeInMainWorld('api', {
     list: () => ipcRenderer.invoke('extensions:list'),
     install: (id) => ipcRenderer.invoke('extensions:install', id),
     remove: (id) => ipcRenderer.invoke('extensions:remove', id),
+    /** One picture, as a data URI, or null. Asked for when somebody looks. */
+    picture: (id, file) => ipcRenderer.invoke('extensions:picture', { id, file }),
     enable: (id, on) => ipcRenderer.invoke('extensions:enable', { id, on }),
     onChanged: (fn) => {
       const handler = (_e, payload) => fn(payload);

@@ -424,6 +424,8 @@ export interface ExtensionRow {
     previews?: Array<{ kind: string; extensions?: string[]; files?: string[]; prefixes?: string[] }>;
     panels?: Array<{ id: string; title?: string; summary?: string; needs?: string | null }>;
   };
+  /** What it looks like: the file names only, read one at a time when shown. */
+  screenshots?: Array<{ file: string; caption: string }>;
   builtIn: boolean;
   enabled: boolean;
   installedVersion: string | null;
@@ -737,6 +739,8 @@ declare global {
         list(): Promise<ExtensionState>;
         install(id: string): Promise<ExtensionState>;
         remove(id: string): Promise<ExtensionState>;
+        /** One of an extension's screenshots, as a data URI, or null. */
+        picture(id: string, file: string): Promise<string | null>;
         enable(id: string, on: boolean): Promise<ExtensionState>;
         onChanged(fn: (state: ExtensionState) => void): () => void;
       };

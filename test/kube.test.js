@@ -243,6 +243,35 @@ test('the overview counts what is wrong, not what exists', () => {
   assert.deepEqual(out.trouble.map((row) => row.name), ['b', 'p2']);
 });
 
+test('removing a cluster takes only what nothing else is pointing at', () => {
+  // Two contexts into one cluster with two different logins: removing the
+  // admin one must not take the cluster entry the read-only one still needs.
+  const config = {
+    contexts: [
+      { name: 'prod-admin', context: { cluster: 'prod', user: 'admin' } },
+      { name: 'prod-ro', context: { cluster: 'prod', user: 'readonly' } },
+      { name: 'scratch', context: { cluster: 'kind', user: 'kind-user' } },
+    ],
+  };
+
+  assert.deepEqual(kube.whatToRemove(config, 'prod-admin'), {
+    context: 'prod-admin',
+    cluster: null,
+    user: 'admin',
+    keptFor: ['prod-ro'],
+  });
+
+  // Nothing else refers to either, so both go with it.
+  assert.deepEqual(kube.whatToRemove(config, 'scratch'), {
+    context: 'scratch',
+    cluster: 'kind',
+    user: 'kind-user',
+    keptFor: [],
+  });
+
+  assert.equal(kube.whatToRemove(config, 'not-there'), null);
+});
+
 /*
  * Argument building. Nothing here spawns anything — which is the point: the two
  * ways this can be wrong are a name that turns into a flag and a flag in the
@@ -311,6 +340,24 @@ test('the client library’s retry logging is not the error message', () => {
     kube.cleanError('E0907 12:14:29.532977   37753 memcache.go:265] the API server is unreachable', {}),
     'the API server is unreachable',
   );
+});
+
+test('a cluster that did not answer is not a cluster that said no', () => {
+  // The regex that decides which. Getting this wrong paints a healthy
+  // production cluster red because an auth plugin took a moment.
+  const timedOut = [
+    'Unable to connect to the server: context deadline exceeded',
+    'Unable to connect to the server: net/http: request canceled (Client.Timeout exceeded while awaiting headers)',
+    'dial tcp 10.0.0.1:443: i/o timeout',
+  ];
+  const said = [
+    'The connection to the server 127.0.0.1:6443 was refused - did you specify the right host or port?',
+    'You must be logged in to the server (Unauthorized)',
+    'Failed to fetch credentials for cluster "abc"',
+  ];
+  const slow = (text) => /deadline exceeded|Client\.Timeout|did not answer within|i\/o timeout/i.test(text);
+  for (const text of timedOut) assert.ok(slow(text), `should read as slow: ${text}`);
+  for (const text of said) assert.ok(!slow(text), `should read as a refusal: ${text}`);
 });
 
 test('a stream is stoppable, and stopping one that is gone is not an error', () => {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useStore } from '../state/store';
 import type { ExtensionRow } from '../global';
 
@@ -80,6 +80,69 @@ export function ExtensionsPanel() {
   );
 }
 
+/**
+ * What it looks like, before you decide whether to install it.
+ *
+ * A paragraph describing a panel is a paragraph; a picture of it is the thing.
+ * They are fetched one at a time as this renders rather than travelling with
+ * the gallery, because the gallery is re-broadcast every time anything is
+ * installed or turned off and screenshots would make that cost megabytes.
+ */
+function Screenshots({ row }: { row: ExtensionRow }) {
+  const shots = row.screenshots ?? [];
+  const [loaded, setLoaded] = useState<Array<{ src: string; caption: string }>>([]);
+  const [open, setOpen] = useState<{ src: string; caption: string } | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setLoaded([]);
+    if (!shots.length) return;
+    void Promise.all(
+      shots.map((shot) =>
+        window.api.extensions
+          .picture(row.id, shot.file)
+          .then((src) => (src ? { src, caption: shot.caption } : null))
+          .catch(() => null),
+      ),
+    ).then((all) => {
+      // The panel may have moved on to another extension while these were read.
+      if (alive) setLoaded(all.filter((one): one is { src: string; caption: string } => Boolean(one)));
+    });
+    return () => {
+      alive = false;
+    };
+    // The id is the extension; the files are its manifest's and change with it.
+  }, [row.id, shots.map((shot) => shot.file).join('|')]);
+
+  if (!loaded.length) return null;
+
+  return (
+    <>
+      <div className="extension-shots">
+        {loaded.map((shot) => (
+          <button
+            key={shot.src.slice(-40)}
+            className="extension-shot"
+            onClick={() => setOpen(shot)}
+            title={shot.caption || 'See it bigger'}
+          >
+            <img src={shot.src} alt={shot.caption} loading="lazy" />
+            {shot.caption && <span>{shot.caption}</span>}
+          </button>
+        ))}
+      </div>
+      {open && (
+        <div className="modal-backdrop" onMouseDown={() => setOpen(null)}>
+          <figure className="extension-shot-full" onMouseDown={(event) => event.stopPropagation()}>
+            <img src={open.src} alt={open.caption} />
+            {open.caption && <figcaption>{open.caption}</figcaption>}
+          </figure>
+        </div>
+      )}
+    </>
+  );
+}
+
 function Badge({ row }: { row: ExtensionRow }) {
   if (row.status === 'update') return <span className="extension-badge is-update">update</span>;
   if (row.status === 'gone') return <span className="extension-badge is-gone">missing</span>;
@@ -108,6 +171,8 @@ function Detail({ row }: { row: ExtensionRow }) {
         </div>
         <Badge row={row} />
       </header>
+
+      <Screenshots row={row} />
 
       <p className="extension-text">{row.description || row.summary}</p>
 

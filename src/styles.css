@@ -393,9 +393,19 @@ input:focus, textarea:focus { border-color: var(--accent); }
 /* The lists stack and share the room; each scrolls inside its own share. */
 .sidebar-lists { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
-.sidebar-list { display: flex; flex-direction: column; min-height: 0; }
+/*
+ * A list is as tall as what is in it.
+ *
+ * `flex: 0 1 auto` is the whole of that: it does not grow into space it has no
+ * content for — so three folders take three rows and the rest of the sidebar
+ * stays empty — and it shrinks, proportionally to what it holds, when the lists
+ * together want more room than there is. Its body scrolls when that happens.
+ * A list somebody has dragged a height for opts out and keeps that height.
+ */
+.sidebar-list { display: flex; flex-direction: column; min-height: 0; flex: 0 1 auto; }
 .sidebar-list.is-collapsed { flex: 0 0 auto; }
-.sidebar-list-body { flex: 1; overflow-y: auto; min-height: 0; padding: 2px 6px 6px; }
+.sidebar-list.is-sized { flex: 0 0 auto; }
+.sidebar-list-body { flex: 1 1 auto; overflow-y: auto; min-height: 0; padding: 2px 6px 6px; }
 
 /* Wide enough to grab, quiet enough to forget until you want it. */
 .list-resizer {
@@ -2884,6 +2894,51 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .extension-file { display: grid; grid-template-columns: 88px 1fr; gap: 9px; font-size: 11px; color: var(--text-dim); }
 .extension-kind { color: var(--accent); }
 .extension-file span:last-child { font-family: "JetBrains Mono", "SF Mono", Menlo, ui-monospace, monospace; font-size: 10.5px; }
+
+/* A cluster in the sidebar: is it there, and what do people call it. */
+.cluster-row { width: 100%; text-align: left; font: inherit; color: var(--text); background: none; border: 0; }
+.cluster-row.is-open { color: var(--accent); }
+.cluster-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
+  /* Aligned to the text rather than the box: `.sidebar-item` starts its
+     children at the top, which is right for a two-line session and wrong for
+     a one-line cluster. */
+  margin-top: 5px;
+  background: var(--text-faint);
+}
+.cluster-dot.is-ok { background: var(--ok); }
+.cluster-dot.is-bad { background: var(--danger); }
+/* Asked, and did not answer. Not the same claim as "it said no". */
+.cluster-dot.is-warn { background: var(--git-new); }
+/* Not yet asked. An outline, because an empty answer is not a bad one. */
+.cluster-dot.is-unknown { background: transparent; box-shadow: inset 0 0 0 1px var(--border-strong); }
+.cluster-default {
+  font-size: 9.5px; color: var(--text-faint); border: 1px solid var(--border);
+  border-radius: 99px; padding: 0 5px; margin-top: 2px; flex: 0 0 auto;
+}
+
+/* What an extension looks like. A strip that scrolls sideways, so one wide
+   screenshot does not decide how tall the description sits. */
+.extension-shots {
+  display: flex; gap: 8px; overflow-x: auto; padding: 2px 0 8px; margin-bottom: 4px;
+}
+.extension-shot {
+  flex: 0 0 auto; display: grid; gap: 4px; padding: 0; border: 0; background: none; cursor: zoom-in;
+}
+.extension-shot img {
+  display: block; height: 132px; width: auto; max-width: 320px; object-fit: cover; object-position: top left;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel);
+}
+.extension-shot:hover img { border-color: var(--accent); }
+.extension-shot span { font-size: 10.5px; color: var(--text-faint); text-align: left; }
+
+.extension-shot-full {
+  margin: 0; padding: 10px; max-width: 92vw; max-height: 92vh; display: grid; gap: 8px;
+  background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 10px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+}
+.extension-shot-full img { max-width: 100%; max-height: 82vh; object-fit: contain; border-radius: 6px; }
+.extension-shot-full figcaption { font-size: 11.5px; color: var(--text-dim); text-align: center; }
 
 .extension-panels { display: flex; flex-direction: column; gap: 6px; margin-bottom: 4px; }
 .extension-panel-row {

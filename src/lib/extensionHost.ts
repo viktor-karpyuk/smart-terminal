@@ -204,6 +204,26 @@ export function shellQuote(value: string, what: string): string {
 
 export type Where = { context?: string; namespace?: string };
 
+/**
+ * What people call a cluster, out of what kubeconfig calls it.
+ *
+ * An EKS context is an ARN and a GKE one is four fields joined by underscores.
+ * Neither fits on a tab, and neither is what anybody says out loud: the last
+ * segment is the cluster's name, and the whole thing stays in the tooltip.
+ */
+export function shortContext(name: string): string {
+  const text = String(name ?? '');
+  if (text.startsWith('arn:')) {
+    const cut = text.lastIndexOf('/');
+    return cut >= 0 ? text.slice(cut + 1) : text;
+  }
+  if (text.startsWith('gke_')) {
+    const parts = text.split('_');
+    return parts[parts.length - 1] || text;
+  }
+  return text;
+}
+
 /** `--context X --namespace Y`, quoted, for a command line a person will see and edit. */
 function whereFlags({ context, namespace }: Where): string {
   const parts: string[] = [];

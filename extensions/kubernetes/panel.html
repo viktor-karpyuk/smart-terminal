@@ -121,12 +121,18 @@
   .note code { font-family: "JetBrains Mono", Menlo, ui-monospace, monospace; font-size: 11px; color: var(--text); }
   .error { color: var(--danger); }
 
-  .clusters { padding: 4px 0 2px; border-bottom: 1px solid var(--border); }
-  .clusters button { font-size: 11.5px; }
-  .clusters .dot { flex: none; }
-  .clusters .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cluster-name {
+    font-weight: 550; color: var(--text); padding: 3px 0 3px 2px;
+    max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
 
-  .dock { display: grid; grid-template-rows: auto minmax(0, 1fr); border-top: 1px solid var(--border); background: var(--bg-panel); }
+  /* Three rows, because there are three children: the grip you drag it by, the
+     tabs, and the log. Two rows put the log in an implicit row that sized
+     itself to a thousand lines and painted over the tabs. */
+  .dock {
+    display: grid; grid-template-rows: auto auto minmax(0, 1fr);
+    border-top: 1px solid var(--border); background: var(--bg-panel);
+  }
   .dock-grip { height: 5px; margin-top: -5px; cursor: ns-resize; background: transparent; }
   .dock-grip:hover { background: var(--accent-soft); }
   .dock-tabs { display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
@@ -170,6 +176,7 @@
 
 <div id="app">
   <header class="top">
+    <span id="cluster" class="cluster-name"></span>
     <select id="namespace" title="Which namespace"></select>
     <input id="search" placeholder="Filter by name, namespace or status" />
     <button class="btn" id="terminal" title="Open a terminal aimed at this cluster and namespace">Terminal</button>
@@ -195,7 +202,7 @@
    * no second copy of the truth anywhere in this file.
    * ---------------------------------------------------------------------- */
   var state = {
-    contexts: [], context: null,
+    context: null,
     namespaces: [], namespace: '',
     resources: [], resourcesFor: null,
     view: { type: 'overview' },
@@ -210,7 +217,6 @@
      * forth from memory.
      */
     logs: [], logAt: 0, dock: 240, dockOpen: true,
-    clusters: {},
     forwards: [],
   };
 
@@ -292,23 +298,7 @@
   }
 
   function drawNav() {
-    /*
-     * Every cluster in kubeconfig, with whether it answers. Lens's best idea,
-     * and the reason is practical rather than decorative: on a laptop with
-     * seven contexts, two of them are usually behind a VPN nobody is on and one
-     * has an expired token, and finding that out by clicking is a slow way to
-     * learn something a dot can say.
-     */
-    var clusters = state.contexts.map(function (entry) {
-      var known = state.clusters[entry.name] || {};
-      var dot = known.up === true ? 'ok' : known.up === false ? 'bad' : 'idle';
-      return '<button class="' + (entry.name === state.context ? 'on' : '') + '" data-context="' + esc(entry.name) + '" ' +
-        'title="' + esc(known.error || entry.name) + '">' +
-        '<span class="dot ' + dot + '"></span><span class="name">' + esc(shortContext(entry.name)) + '</span></button>';
-    }).join('');
-
-    var html = '<h4>Clusters</h4><div class="clusters">' + clusters + '</div>' +
-      '<button class="' + (state.view.type === 'overview' ? 'on' : '') + '" data-view="overview">Overview</button>';
+    var html = '<button class="' + (state.view.type === 'overview' ? 'on' : '') + '" data-view="overview">Overview</button>';
 
     for (var g = 0; g < GROUPS.length; g += 1) {
       var group = GROUPS[g];
@@ -350,46 +340,9 @@
   $('nav').addEventListener('click', function (event) {
     var button = event.target.closest('button');
     if (!button) return;
-    if (button.dataset.context) switchTo(button.dataset.context);
-    else if (button.dataset.view === 'overview') show({ type: 'overview' });
+    if (button.dataset.view === 'overview') show({ type: 'overview' });
     else if (button.dataset.kind) show({ type: 'kind', name: button.dataset.kind });
   });
-
-  function switchTo(name) {
-    if (name === state.context) return;
-    state.context = name;
-    state.namespace = '';
-    state.selected = null;
-    loadForContext();
-  }
-
-  /**
-   * Ask each cluster, one at a time, whether it is there.
-   *
-   * One at a time on purpose: seven of these at once is seven kubectl processes
-   * and seven credential plugins, all started while the panel is still drawing
-   * the cluster somebody actually asked for. The dots fill in over a few
-   * seconds, which is exactly as urgent as the question is.
-   */
-  function probeClusters() {
-    var queue = state.contexts.map(function (entry) { return entry.name; });
-    var next = function () {
-      var name = queue.shift();
-      if (!name) return;
-      if (name === state.context) {
-        // The one on screen has already answered, or it would not be on screen.
-        state.clusters[name] = { up: !state.error };
-        drawNav();
-        next();
-        return;
-      }
-      call('kube.reachable', { context: name })
-        .then(function (result) { state.clusters[name] = { up: result.up, error: result.error || null }; })
-        .catch(function (error) { state.clusters[name] = { up: false, error: String(error.message || error) }; })
-        .then(function () { drawNav(); next(); });
-    };
-    next();
-  }
 
   /* ---------------------------------------------------------------------- *
    * Loading.
@@ -476,18 +429,23 @@
     return where();
   }
 
-  function loadCluster() {
+  /**
+   * Which cluster this tab is for.
+   *
+   * Normally the app said so when it opened the tab. Opened from Extensions
+   * instead, nobody has said — and then kubeconfig's own current context is the
+   * only sensible answer, the same one a bare `kubectl` would use.
+   */
+  function start() {
+    if (state.context) return loadForContext();
     return call('kube.contexts').then(function (result) {
-      state.contexts = result.contexts || [];
-      if (!state.context) {
-        state.context = result.current || (state.contexts[0] && state.contexts[0].name) || null;
-      }
-      drawTop();
+      var first = (result.contexts || [])[0];
+      state.context = result.current || (first && first.name) || null;
+      if (!state.context) throw new Error('There are no clusters in kubeconfig.');
       return loadForContext();
     });
   }
 
-  var probed = false;
   function loadForContext() {
     state.resources = [];
     state.namespaces = [];
@@ -506,7 +464,6 @@
       drawNav();
       drawTop();
       load();
-      if (!probed) { probed = true; setTimeout(probeClusters, 1500); }
     });
   }
 
@@ -514,6 +471,10 @@
    * The header.
    * ---------------------------------------------------------------------- */
   function drawTop() {
+    var head = $('cluster');
+    head.textContent = shortContext(state.context || '');
+    head.title = state.context || '';
+
     var namespaces = ['<option value="">All namespaces</option>'].concat(
       state.namespaces.map(function (name) {
         return '<option value="' + esc(name) + '"' + (name === state.namespace ? ' selected' : '') + '>' + esc(name) + '</option>';
@@ -1374,8 +1335,12 @@
 
   host.on('theme', function () { /* the app rebuilds the frame; nothing to do here */ });
 
-  host.on('context', function () {
-    loadCluster().catch(function (error) {
+  host.on('context', function (payload) {
+    // The app says which cluster this tab is for. Without one — opened from
+    // Extensions rather than from the sidebar — kubeconfig's own current
+    // context is the only sensible default.
+    if (payload && payload.context) state.context = payload.context;
+    start().catch(function (error) {
       state.error = String(error.message || error);
       state.loading = false;
       draw();
