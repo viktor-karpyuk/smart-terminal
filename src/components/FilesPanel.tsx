@@ -714,6 +714,10 @@ function ExtensionButtons({ panelId }: { panelId: string }) {
         // A panel that needs a repository is not offered on a folder that is
         // not one: a button whose only possible outcome is an apology.
         if (needs === 'repository' && !gitRoot) return null;
+        // This toolbar is the folder's. A view about something else entirely —
+        // a cluster — is opened from Extensions, where it is not pretending to
+        // have anything to do with what is on screen.
+        if (needs && needs !== 'repository') return null;
         return (
           <button
             key={id}

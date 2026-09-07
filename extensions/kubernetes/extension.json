@@ -1,0 +1,19 @@
+{
+  "id": "kubernetes",
+  "name": "Kubernetes",
+  "version": "1.0.0",
+  "author": "Smart Terminal",
+  "summary": "Your clusters, and a terminal and a Claude session already pointed at what you are looking at.",
+  "description": "Every cluster in your kubeconfig, browsable: nodes, workloads, config, network, storage and access, plus whatever custom resources the operators in that cluster installed — the navigation is built from what the cluster says it has, so nothing on it is a dead link. A table per kind with the columns that kind actually needs, a live status on every row, and a detail pane with the object's YAML, its events and its log. The log can be followed, a port can be forwarded, and a workload can be scaled, rolled or deleted — the three that take something away stop and ask you first, naming the namespace and the cluster, because the same click is nothing in a scratch namespace and an outage in production. It never runs `use-context`: every call carries its own, so looking at a cluster here cannot change what your own shell does anywhere else. Two buttons make it more than a viewer. Shell opens a real terminal tab — a real pty in the app, not a toy inside a panel — running kubectl exec into the container you were looking at. And Ask Claude opens a session that has already been handed the description, the warning events and the log of the thing that is broken, including the log of the container that died.",
+  "contributes": {
+    "panels": [
+      {
+        "id": "kubernetes",
+        "title": "Kubernetes",
+        "summary": "Clusters, workloads, logs — and a terminal and a Claude session aimed at them.",
+        "needs": "kubernetes",
+        "render": "panel.html"
+      }
+    ]
+  }
+}

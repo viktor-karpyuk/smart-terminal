@@ -13,6 +13,7 @@ const {
   panelViews,
   withPanelSources,
   validate,
+  PANEL_NEEDS,
 } = require('../electron/extensions.js');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-test-'));
@@ -65,7 +66,9 @@ test('a panel says what it is and what file draws it', () => {
       assert.ok(panel.render, `${manifest.id}/${panel.id} names no document to draw it`);
       // A panel that needs something must say something the app understands,
       // or it will be offered where it cannot possibly work.
-      if (panel.needs) assert.equal(panel.needs, 'repository', `${manifest.id}/${panel.id} needs something unknown`);
+      if (panel.needs) {
+        assert.ok(PANEL_NEEDS.includes(panel.needs), `${manifest.id}/${panel.id} needs something unknown: ${panel.needs}`);
+      }
     }
   }
 });

@@ -77,6 +77,51 @@ export interface PersistedWorkspace {
   sections?: MinimizedSection[];
 }
 
+/**
+ * Everything `kube:call` can hand back.
+ *
+ * One shape for every verb, the way the git one is: a caller checks `ok` and
+ * then reads the field its verb fills in. A row is deliberately loose — the
+ * columns differ per kind, and a custom resource has whatever its operator
+ * decided to put in its status.
+ */
+export interface KubeResult {
+  ok: boolean;
+  error?: string;
+  /** Reading a table. */
+  kind?: string;
+  columns?: string[];
+  rows?: KubeRow[];
+  /** Reading one object. */
+  yaml?: string;
+  text?: string;
+  /** Reading the cluster itself. */
+  contexts?: Array<{ name: string; cluster: string; user: string; namespace: string }>;
+  current?: string | null;
+  resources?: Array<{
+    name: string;
+    kind: string;
+    apiVersion: string;
+    namespaced: boolean;
+    short: string[];
+    group: string;
+    builtIn: boolean;
+  }>;
+  metrics?: Record<string, { cpu: string; memory: string }>;
+  missing?: string | null;
+  [key: string]: unknown;
+}
+
+export interface KubeRow {
+  uid: string;
+  name: string;
+  namespace: string;
+  age: string;
+  status?: string;
+  health?: 'ok' | 'warn' | 'bad' | 'idle';
+  [key: string]: unknown;
+}
+
 /** Everything `git:call` can hand back, in one shape. */
 export interface GitResult {
   ok: boolean;
@@ -375,7 +420,10 @@ export interface ExtensionRow {
   author: string | null;
   summary: string;
   description: string;
-  contributes: { previews?: Array<{ kind: string; extensions?: string[]; files?: string[]; prefixes?: string[] }> };
+  contributes: {
+    previews?: Array<{ kind: string; extensions?: string[]; files?: string[]; prefixes?: string[] }>;
+    panels?: Array<{ id: string; title?: string; summary?: string; needs?: string | null }>;
+  };
   builtIn: boolean;
   enabled: boolean;
   installedVersion: string | null;
@@ -697,6 +745,24 @@ declare global {
         unwatch(root: string): void;
         onChanged(fn: (payload: { root: string; kind: 'tree' | 'git' | 'noise' }) => void): () => void;
         call(name: string, root: string, args?: unknown): Promise<GitResult>;
+      };
+      kube: {
+        call(name: string, args?: unknown): Promise<KubeResult>;
+        stream(
+          id: string,
+          op: 'logs' | 'portForward',
+          args?: unknown,
+        ): Promise<{ ok: boolean; id?: string; error?: string }>;
+        stopStream(id: string): Promise<{ ok: boolean }>;
+        onStream(
+          handler: (payload: {
+            id: string;
+            text: string;
+            stream?: 'out' | 'err';
+            done: boolean;
+            code?: number | null;
+          }) => void,
+        ): () => void;
       };
       files: {
         list(dir: string): Promise<{ ok: boolean; entries?: DirEntry[]; error?: string }>;

@@ -179,6 +179,29 @@ contextBridge.exposeInMainWorld('api', {
     call: (name, root, args) => ipcRenderer.invoke('git:call', { name, root, args }),
   },
 
+  /**
+   * Kubernetes. One named call, and two long-running things.
+   *
+   * A followed log and a forwarded port both keep talking, so both arrive as
+   * events rather than as an answer. `stop` is not optional politeness: a
+   * forward nobody stops is a port left open on the machine.
+   */
+  kube: {
+    call: (name, args) => ipcRenderer.invoke('kube:call', { name, args }),
+    stream: (id, op, args) => ipcRenderer.invoke('kube:stream', { id, op, args }),
+    stopStream: (id) => ipcRenderer.invoke('kube:stream-stop', id),
+    onStream: (fn) => {
+      const data = (_e, payload) => fn({ ...payload, done: false });
+      const end = (_e, payload) => fn({ ...payload, done: true, text: '' });
+      ipcRenderer.on('kube:stream-data', data);
+      ipcRenderer.on('kube:stream-end', end);
+      return () => {
+        ipcRenderer.removeListener('kube:stream-data', data);
+        ipcRenderer.removeListener('kube:stream-end', end);
+      };
+    },
+  },
+
   system: {
     pickDirectory: (startIn) => ipcRenderer.invoke('system:pick-directory', startIn),
     homedir: () => ipcRenderer.invoke('system:homedir'),

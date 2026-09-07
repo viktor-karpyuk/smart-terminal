@@ -187,9 +187,19 @@ function previewRules(rows) {
  * sandboxed frame that runs its scripts in an origin of its own, and talks to
  * the app through messages rather than by reaching into it.
  *
- * `needs: "repository"` is the panel saying what it cannot work without, so the
- * app can say why it is empty instead of drawing an empty thing.
+ * `needs` is the panel saying what it cannot work without, so the app can say
+ * why it is empty instead of drawing an empty thing. It is a fixed vocabulary
+ * rather than free text: the renderer has to know how to satisfy each one, and
+ * a panel asking for something nobody implements would be offered in places it
+ * cannot possibly work.
  */
+const PANEL_NEEDS = [
+  /** A git repository, which the panel is opened from and told the root of. */
+  'repository',
+  /** A cluster in kubeconfig. Nothing about the folder, so it opens from anywhere. */
+  'kubernetes',
+];
+
 function panelViews(rows) {
   const panels = [];
   for (const row of rows) {
@@ -265,5 +275,6 @@ module.exports = {
   withSources,
   panelViews,
   withPanelSources,
+  PANEL_NEEDS,
   validate,
 };

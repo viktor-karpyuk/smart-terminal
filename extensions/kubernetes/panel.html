@@ -1,0 +1,1388 @@
+<style>
+  /*
+   * A dashboard for a cluster, drawn in a frame that has no idea what a cluster
+   * is. Everything it knows arrives through `host.call`, and everything it looks
+   * like comes from the app's own tokens — so it is the app's light or dark, its
+   * accent and its radius, without knowing which of them it is in.
+   */
+  #app { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; height: 100%; min-height: 0; }
+
+  .top {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px; border-bottom: 1px solid var(--border);
+    background: var(--bg-panel); flex-wrap: wrap;
+  }
+  .top select, .top input {
+    font: inherit; color: var(--text); background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 4px 7px; max-width: 260px;
+  }
+  .top select:focus, .top input:focus { outline: none; border-color: var(--accent); }
+  #search { flex: 1; min-width: 120px; max-width: none; }
+  .spacer { flex: 1; }
+
+  .btn {
+    padding: 4px 9px; border: 1px solid var(--border); border-radius: var(--radius);
+    color: var(--text-dim); white-space: nowrap;
+  }
+  .btn:hover { color: var(--text); border-color: var(--border-strong); background: var(--bg-elevated); }
+  .btn.on { color: var(--accent); border-color: var(--accent); }
+  .btn.go { color: var(--accent); border-color: var(--accent); }
+  .btn.bad:hover { color: var(--danger); border-color: var(--danger); }
+  .btn[disabled] { opacity: 0.4; pointer-events: none; }
+
+  .body { display: grid; grid-template-columns: 178px minmax(0, 1fr); min-height: 0; }
+  .body.with-detail { grid-template-columns: 178px minmax(0, 1fr) minmax(300px, 34%); }
+
+  nav {
+    overflow-y: auto; border-right: 1px solid var(--border);
+    padding: 6px 0 20px; background: var(--bg-panel);
+  }
+  nav h4 {
+    margin: 12px 10px 3px; font-size: 9.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint);
+  }
+  nav button {
+    display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
+    padding: 4px 10px; color: var(--text-dim); font-size: 12px;
+  }
+  nav button:hover { background: var(--bg-elevated); color: var(--text); }
+  nav button.on { background: var(--accent-soft); color: var(--accent); }
+  nav .count { margin-left: auto; font-size: 10px; color: var(--text-faint); }
+  nav button.on .count { color: var(--accent); }
+
+  main { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; }
+  .crumb {
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+    border-bottom: 1px solid var(--border); font-size: 11px; color: var(--text-dim);
+  }
+  .crumb strong { color: var(--text); font-weight: 550; font-size: 12px; }
+  .scroll { overflow: auto; min-height: 0; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 11.5px; }
+  th {
+    position: sticky; top: 0; z-index: 1; text-align: left; font-weight: 550;
+    padding: 5px 9px; background: var(--bg-panel); color: var(--text-faint);
+    border-bottom: 1px solid var(--border); cursor: pointer; white-space: nowrap;
+  }
+  th:hover { color: var(--text); }
+  th .arrow { opacity: 0.55; margin-left: 3px; }
+  td { padding: 4px 9px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td.grow { white-space: normal; word-break: break-word; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--bg-elevated); }
+  tbody tr.on { background: var(--accent-soft); }
+  .name { color: var(--text); }
+  .dim { color: var(--text-dim); }
+  .mono { font-family: "JetBrains Mono", "SF Mono", Menlo, ui-monospace, monospace; font-size: 10.5px; }
+
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: baseline; }
+  .dot.ok { background: var(--ok); }
+  .dot.warn { background: var(--git-new); }
+  .dot.bad { background: var(--danger); }
+  .dot.idle { background: var(--text-faint); }
+  .bad-text { color: var(--danger); }
+  .warn-text { color: var(--git-new); }
+
+  aside {
+    border-left: 1px solid var(--border); background: var(--bg-panel);
+    display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-height: 0;
+  }
+  .detail-head { padding: 8px 10px 6px; border-bottom: 1px solid var(--border); }
+  .detail-head h3 { margin: 0 0 2px; font-size: 12.5px; font-weight: 550; word-break: break-all; }
+  .detail-head small { color: var(--text-dim); font-size: 10.5px; }
+  .detail-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+  .tabs { display: flex; gap: 2px; padding: 5px 8px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .tabs button { padding: 3px 8px; border-radius: var(--radius); color: var(--text-dim); font-size: 11px; }
+  .tabs button:hover { background: var(--bg-elevated); color: var(--text); }
+  .tabs button.on { background: var(--accent-soft); color: var(--accent); }
+  .detail-body { overflow: auto; padding: 9px 10px 16px; min-height: 0; }
+
+  pre {
+    margin: 0; white-space: pre-wrap; word-break: break-word;
+    font-family: "JetBrains Mono", "SF Mono", Menlo, ui-monospace, monospace;
+    font-size: 10.5px; line-height: 1.55; color: var(--text-dim);
+  }
+  pre.wrapless { white-space: pre; word-break: normal; }
+  .log-line.err { color: var(--danger); }
+
+  .facts { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 11px; }
+  .facts dt { color: var(--text-faint); }
+  .facts dd { margin: 0; color: var(--text); word-break: break-word; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; padding: 12px; }
+  .card { border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 11px; background: var(--bg-panel); }
+  .card b { display: block; font-size: 21px; font-weight: 500; line-height: 1.2; }
+  .card span { font-size: 10.5px; color: var(--text-faint); }
+  .card.bad b { color: var(--danger); }
+  .card.warn b { color: var(--git-new); }
+
+  .note { padding: 22px 16px; color: var(--text-dim); font-size: 12px; line-height: 1.6; max-width: 60ch; }
+  .note code { font-family: "JetBrains Mono", Menlo, ui-monospace, monospace; font-size: 11px; color: var(--text); }
+  .error { color: var(--danger); }
+
+  .clusters { padding: 4px 0 2px; border-bottom: 1px solid var(--border); }
+  .clusters button { font-size: 11.5px; }
+  .clusters .dot { flex: none; }
+  .clusters .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .dock { display: grid; grid-template-rows: auto minmax(0, 1fr); border-top: 1px solid var(--border); background: var(--bg-panel); }
+  .dock-grip { height: 5px; margin-top: -5px; cursor: ns-resize; background: transparent; }
+  .dock-grip:hover { background: var(--accent-soft); }
+  .dock-tabs { display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .dock-tab {
+    display: inline-flex; align-items: center; gap: 6px; padding: 2px 6px 2px 8px;
+    border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-dim); font-size: 11px;
+    max-width: 230px;
+  }
+  .dock-tab.on { border-color: var(--accent); color: var(--accent); }
+  .dock-tab .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dock-tab .x { opacity: 0.6; padding: 0 2px; }
+  .dock-tab .x:hover { opacity: 1; color: var(--danger); }
+  .dock-tools { display: flex; align-items: center; gap: 5px; margin-left: auto; }
+  .dock-tools input, .dock-tools select {
+    font: inherit; font-size: 11px; color: var(--text); background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 2px 6px; max-width: 170px;
+  }
+  .dock-tools input:focus, .dock-tools select:focus { outline: none; border-color: var(--accent); }
+  .dock-body { overflow: auto; padding: 7px 10px 10px; min-height: 0; }
+  .hit { background: var(--accent-soft); color: var(--accent); }
+
+  .bar {
+    display: flex; align-items: center; gap: 7px; padding: 5px 10px;
+    border-top: 1px solid var(--border); background: var(--bg-panel);
+    font-size: 11px; color: var(--text-dim); flex-wrap: wrap;
+  }
+  .bar:empty { display: none; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px;
+    border: 1px solid var(--border); border-radius: 99px; font-size: 10.5px;
+  }
+  .ask {
+    display: flex; gap: 6px; align-items: center; margin-top: 7px;
+  }
+  .ask input { flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 7px; }
+  .ask input:focus { outline: none; border-color: var(--accent); }
+  .spin { display: inline-block; animation: turn 0.9s linear infinite; }
+  @keyframes turn { to { transform: rotate(360deg); } }
+</style>
+
+<div id="app">
+  <header class="top">
+    <select id="namespace" title="Which namespace"></select>
+    <input id="search" placeholder="Filter by name, namespace or status" />
+    <button class="btn" id="terminal" title="Open a terminal aimed at this cluster and namespace">Terminal</button>
+    <button class="btn" id="live" title="Refresh on a timer">Live</button>
+    <button class="btn" id="reload" title="Refresh now">Refresh</button>
+  </header>
+
+  <div class="body" id="body">
+    <nav id="nav"></nav>
+    <main>
+      <div class="crumb" id="crumb"></div>
+      <div class="scroll" id="table"></div>
+    </main>
+  </div>
+
+  <div id="dock-slot"></div>
+  <div class="bar" id="bar"></div>
+</div>
+
+<script>
+  /* ---------------------------------------------------------------------- *
+   * The state. One object, because every draw is a function of it — there is
+   * no second copy of the truth anywhere in this file.
+   * ---------------------------------------------------------------------- */
+  var state = {
+    contexts: [], context: null,
+    namespaces: [], namespace: '',
+    resources: [], resourcesFor: null,
+    view: { type: 'overview' },
+    table: null, loading: false, error: null, counts: {},
+    search: '', sort: { column: null, dir: 1 },
+    selected: null, detail: { tab: 'overview' }, detailData: {},
+    live: true, everyMs: 10000,
+    /*
+     * The logs open at the bottom. A list, not a field, because the question
+     * "why did this one restart when that one did?" is asked by looking at both
+     * — and a viewer that can only hold one turns that into clicking back and
+     * forth from memory.
+     */
+    logs: [], logAt: 0, dock: 240, dockOpen: true,
+    clusters: {},
+    forwards: [],
+  };
+
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  /**
+   * One call to the app, with its two kinds of failure flattened into one.
+   *
+   * A rejected promise means the app refused; an `ok: false` means kubectl did.
+   * Both are the same thing to draw, and telling them apart at every call site
+   * would be twelve copies of the same three lines.
+   */
+  function call(name, args) {
+    return host.call(name, args).then(function (result) {
+      if (result && result.ok === false) throw new Error(result.error || 'it did not say why');
+      return result || {};
+    });
+  }
+
+  function say(text, bad) { host.emit('notify', { text: text, kind: bad ? 'bad' : 'ok' }); }
+
+  /** Where we are, as every call below needs it. */
+  function where() {
+    var at = { context: state.context };
+    if (state.namespace) at.namespace = state.namespace;
+    else at.allNamespaces = true;
+    return at;
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * The navigation, built from what the cluster says it has.
+   *
+   * Not a fixed list: half of a real cluster is CRDs somebody's operator
+   * installed, and a menu that cannot show them is a menu that is wrong about
+   * the cluster it is pointed at. Equally, a cluster without Ingresses does not
+   * get an Ingresses entry that answers "the server doesn't have a resource
+   * type".
+   * ---------------------------------------------------------------------- */
+  var GROUPS = [
+    { title: 'Cluster', items: ['nodes', 'namespaces', 'events'] },
+    { title: 'Workloads', items: ['pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets', 'jobs', 'cronjobs'] },
+    { title: 'Config', items: ['configmaps', 'secrets', 'horizontalpodautoscalers', 'resourcequotas'] },
+    { title: 'Network', items: ['services', 'ingresses', 'endpoints', 'networkpolicies'] },
+    { title: 'Storage', items: ['persistentvolumeclaims', 'persistentvolumes', 'storageclasses'] },
+    { title: 'Access', items: ['serviceaccounts', 'roles', 'rolebindings', 'clusterroles', 'clusterrolebindings'] },
+  ];
+  var LABELS = {
+    nodes: 'Nodes', namespaces: 'Namespaces', events: 'Events',
+    pods: 'Pods', deployments: 'Deployments', statefulsets: 'Stateful Sets',
+    daemonsets: 'Daemon Sets', replicasets: 'Replica Sets', jobs: 'Jobs', cronjobs: 'Cron Jobs',
+    configmaps: 'Config Maps', secrets: 'Secrets',
+    horizontalpodautoscalers: 'Autoscalers', resourcequotas: 'Quotas',
+    services: 'Services', ingresses: 'Ingresses', endpoints: 'Endpoints', networkpolicies: 'Network Policies',
+    persistentvolumeclaims: 'Volume Claims', persistentvolumes: 'Volumes', storageclasses: 'Storage Classes',
+    serviceaccounts: 'Service Accounts', roles: 'Roles', rolebindings: 'Role Bindings',
+    clusterroles: 'Cluster Roles', clusterrolebindings: 'Cluster Role Bindings',
+  };
+
+  function known(name) {
+    for (var i = 0; i < state.resources.length; i += 1) {
+      if (state.resources[i].name === name) return state.resources[i];
+    }
+    return null;
+  }
+
+  function customResources() {
+    var out = [];
+    for (var i = 0; i < state.resources.length; i += 1) {
+      var resource = state.resources[i];
+      if (resource.builtIn) continue;
+      out.push(resource);
+    }
+    out.sort(function (a, b) { return (a.group + a.kind).localeCompare(b.group + b.kind); });
+    return out;
+  }
+
+  function drawNav() {
+    /*
+     * Every cluster in kubeconfig, with whether it answers. Lens's best idea,
+     * and the reason is practical rather than decorative: on a laptop with
+     * seven contexts, two of them are usually behind a VPN nobody is on and one
+     * has an expired token, and finding that out by clicking is a slow way to
+     * learn something a dot can say.
+     */
+    var clusters = state.contexts.map(function (entry) {
+      var known = state.clusters[entry.name] || {};
+      var dot = known.up === true ? 'ok' : known.up === false ? 'bad' : 'idle';
+      return '<button class="' + (entry.name === state.context ? 'on' : '') + '" data-context="' + esc(entry.name) + '" ' +
+        'title="' + esc(known.error || entry.name) + '">' +
+        '<span class="dot ' + dot + '"></span><span class="name">' + esc(shortContext(entry.name)) + '</span></button>';
+    }).join('');
+
+    var html = '<h4>Clusters</h4><div class="clusters">' + clusters + '</div>' +
+      '<button class="' + (state.view.type === 'overview' ? 'on' : '') + '" data-view="overview">Overview</button>';
+
+    for (var g = 0; g < GROUPS.length; g += 1) {
+      var group = GROUPS[g];
+      var rows = '';
+      for (var i = 0; i < group.items.length; i += 1) {
+        var name = group.items[i];
+        var resource = known(name);
+        // Nothing this cluster does not have. An entry that can only answer
+        // "the server doesn't have that resource type" is worse than no entry.
+        if (!resource && state.resources.length) continue;
+        var on = state.view.type === 'kind' && state.view.name === name;
+        var count = state.counts[name];
+        rows += '<button class="' + (on ? 'on' : '') + '" data-kind="' + esc(name) + '">' +
+          esc(LABELS[name] || name) +
+          (count == null ? '' : '<span class="count">' + count + '</span>') +
+          '</button>';
+      }
+      if (rows) html += '<h4>' + esc(group.title) + '</h4>' + rows;
+    }
+
+    var custom = customResources();
+    if (custom.length) {
+      html += '<h4>Custom Resources</h4>';
+      var lastGroup = null;
+      for (var c = 0; c < custom.length; c += 1) {
+        var item = custom[c];
+        if (item.group !== lastGroup) {
+          html += '<h4 style="margin-top:7px;opacity:0.75">' + esc(item.group) + '</h4>';
+          lastGroup = item.group;
+        }
+        var chosen = state.view.type === 'kind' && state.view.name === item.name;
+        html += '<button class="' + (chosen ? 'on' : '') + '" data-kind="' + esc(item.name) +
+          '" title="' + esc(item.apiVersion) + '">' + esc(item.kind) + '</button>';
+      }
+    }
+    $('nav').innerHTML = html;
+  }
+
+  $('nav').addEventListener('click', function (event) {
+    var button = event.target.closest('button');
+    if (!button) return;
+    if (button.dataset.context) switchTo(button.dataset.context);
+    else if (button.dataset.view === 'overview') show({ type: 'overview' });
+    else if (button.dataset.kind) show({ type: 'kind', name: button.dataset.kind });
+  });
+
+  function switchTo(name) {
+    if (name === state.context) return;
+    state.context = name;
+    state.namespace = '';
+    state.selected = null;
+    loadForContext();
+  }
+
+  /**
+   * Ask each cluster, one at a time, whether it is there.
+   *
+   * One at a time on purpose: seven of these at once is seven kubectl processes
+   * and seven credential plugins, all started while the panel is still drawing
+   * the cluster somebody actually asked for. The dots fill in over a few
+   * seconds, which is exactly as urgent as the question is.
+   */
+  function probeClusters() {
+    var queue = state.contexts.map(function (entry) { return entry.name; });
+    var next = function () {
+      var name = queue.shift();
+      if (!name) return;
+      if (name === state.context) {
+        // The one on screen has already answered, or it would not be on screen.
+        state.clusters[name] = { up: !state.error };
+        drawNav();
+        next();
+        return;
+      }
+      call('kube.reachable', { context: name })
+        .then(function (result) { state.clusters[name] = { up: result.up, error: result.error || null }; })
+        .catch(function (error) { state.clusters[name] = { up: false, error: String(error.message || error) }; })
+        .then(function () { drawNav(); next(); });
+    };
+    next();
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * Loading.
+   * ---------------------------------------------------------------------- */
+  function show(view) {
+    state.view = view;
+    state.selected = null;
+    state.search = '';
+    $('search').value = '';
+    state.sort = { column: null, dir: 1 };
+    drawNav();
+    load();
+  }
+
+  var loadToken = 0;
+  function load(quiet) {
+    var mine = (loadToken += 1);
+    if (!quiet) { state.loading = true; state.error = null; draw(); }
+
+    var request = state.view.type === 'overview'
+      ? call('kube.summary', { context: state.context })
+      : state.view.name === 'events'
+        ? call('kube.events', where())
+        : call('kube.list', assign({ kind: state.view.name }, scopeFor(state.view.name)));
+
+    request.then(function (result) {
+      // An answer to a question nobody is asking any more. Dropping it is the
+      // whole of what keeps a fast click from being overtaken by a slow one.
+      if (mine !== loadToken) return;
+      state.loading = false;
+      state.error = null;
+      if (state.view.type === 'overview') state.overview = result;
+      else {
+        state.table = result;
+        if (state.view.name) state.counts[state.view.name] = (result.rows || []).length;
+      }
+      draw();
+      if (state.view.name === 'pods' || state.view.name === 'nodes') withMetrics(mine, state.view.name);
+    }).catch(function (error) {
+      if (mine !== loadToken) return;
+      state.loading = false;
+      state.error = String(error.message || error);
+      draw();
+    });
+  }
+
+  /**
+   * What each row is actually using, folded in afterwards.
+   *
+   * Afterwards, and never as a condition of drawing: `kubectl top` needs
+   * metrics-server, plenty of clusters do not have it, and a table that waits
+   * for it would be a table that never appears on those. So the rows arrive,
+   * and two columns turn up a moment later if the cluster can answer.
+   */
+  function withMetrics(token, what) {
+    call('kube.top', assign({ what: what }, scopeFor(what))).then(function (result) {
+      if (token !== loadToken || !state.table) return;
+      var found = result.metrics || {};
+      var any = false;
+      state.table.rows.forEach(function (row) {
+        var hit = found[row.namespace + '/' + row.name] || found['/' + row.name];
+        if (!hit) return;
+        any = true;
+        row.cpu = hit.cpu;
+        row.memory = hit.memory;
+      });
+      if (!any) return;
+      // Before Age, which is the column people scan last.
+      var at = state.table.columns.indexOf('age');
+      state.table.columns.splice(at < 0 ? state.table.columns.length : at, 0, 'cpu', 'memory');
+      drawTable();
+    }).catch(function () { /* no metrics-server; the table is the table */ });
+  }
+
+  function assign(target, extra) {
+    for (var key in extra) if (Object.prototype.hasOwnProperty.call(extra, key)) target[key] = extra[key];
+    return target;
+  }
+
+  /** A cluster-scoped kind ignores the namespace picker; asking for one is an error. */
+  function scopeFor(name) {
+    var resource = known(name);
+    if (resource && !resource.namespaced) return { context: state.context };
+    return where();
+  }
+
+  function loadCluster() {
+    return call('kube.contexts').then(function (result) {
+      state.contexts = result.contexts || [];
+      if (!state.context) {
+        state.context = result.current || (state.contexts[0] && state.contexts[0].name) || null;
+      }
+      drawTop();
+      return loadForContext();
+    });
+  }
+
+  var probed = false;
+  function loadForContext() {
+    state.resources = [];
+    state.namespaces = [];
+    state.counts = {};
+    drawNav();
+    drawTop();
+
+    var forThis = state.context;
+    return Promise.all([
+      call('kube.resources', { context: state.context }).catch(function () { return { resources: [] }; }),
+      call('kube.list', { kind: 'namespaces', context: state.context }).catch(function () { return { rows: [] }; }),
+    ]).then(function (answers) {
+      if (forThis !== state.context) return;
+      state.resources = answers[0].resources || [];
+      state.namespaces = (answers[1].rows || []).map(function (row) { return row.name; });
+      drawNav();
+      drawTop();
+      load();
+      if (!probed) { probed = true; setTimeout(probeClusters, 1500); }
+    });
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * The header.
+   * ---------------------------------------------------------------------- */
+  function drawTop() {
+    var namespaces = ['<option value="">All namespaces</option>'].concat(
+      state.namespaces.map(function (name) {
+        return '<option value="' + esc(name) + '"' + (name === state.namespace ? ' selected' : '') + '>' + esc(name) + '</option>';
+      }),
+    ).join('');
+    $('namespace').innerHTML = namespaces;
+    $('live').className = 'btn' + (state.live ? ' on' : '');
+  }
+
+  /**
+   * An EKS context is an ARN and a GKE one is four fields joined by underscores;
+   * neither fits in a picker. The last meaningful part is what people call the
+   * cluster, and the whole thing stays in the tooltip.
+   */
+  function shortContext(name) {
+    var text = String(name || '');
+    if (text.indexOf('arn:') === 0) {
+      var cut = text.lastIndexOf('/');
+      return cut >= 0 ? text.slice(cut + 1) : text;
+    }
+    return text;
+  }
+
+  $('namespace').addEventListener('change', function (event) {
+    state.namespace = event.target.value;
+    state.selected = null;
+    load();
+  });
+  $('search').addEventListener('input', function (event) {
+    state.search = event.target.value.trim().toLowerCase();
+    draw();
+  });
+  $('reload').addEventListener('click', function () { load(); });
+  $('live').addEventListener('click', function () {
+    state.live = !state.live;
+    drawTop();
+  });
+  $('terminal').addEventListener('click', function () {
+    call('kube.terminal', { context: state.context, namespace: state.namespace })
+      .then(function () { say('A terminal opened, with k aliased to this cluster.'); })
+      .catch(function (error) { say(String(error.message || error), true); });
+  });
+
+  /* ---------------------------------------------------------------------- *
+   * Drawing.
+   * ---------------------------------------------------------------------- */
+  function draw() {
+    drawCrumb();
+    if (state.view.type === 'overview') drawOverview();
+    else drawTable();
+    drawDetail();
+    drawDock();
+    drawBar();
+  }
+
+  function drawCrumb() {
+    var bits = [];
+    if (state.view.type === 'overview') bits.push('<strong>Overview</strong>');
+    else bits.push('<strong>' + esc(LABELS[state.view.name] || titleOf(state.view.name)) + '</strong>');
+    bits.push(esc(state.namespace || 'all namespaces'));
+    if (state.table && state.view.type === 'kind') {
+      var total = (state.table.rows || []).length;
+      var shown = visible().length;
+      bits.push(shown === total ? total + ' items' : shown + ' of ' + total);
+    }
+    if (state.loading) bits.push('<span class="spin">◐</span>');
+    $('crumb').innerHTML = bits.join('<span class="dim"> · </span>');
+  }
+
+  function titleOf(name) {
+    var resource = known(name);
+    return resource ? resource.kind : name;
+  }
+
+  function visible() {
+    var rows = (state.table && state.table.rows) || [];
+    if (state.search) {
+      var term = state.search;
+      rows = rows.filter(function (row) {
+        return (row.name + ' ' + row.namespace + ' ' + (row.status || '') + ' ' + (row.message || '')).toLowerCase().indexOf(term) >= 0;
+      });
+    }
+    if (state.sort.column) {
+      var column = state.sort.column;
+      var dir = state.sort.dir;
+      rows = rows.slice().sort(function (a, b) {
+        var left = a[column];
+        var right = b[column];
+        if (typeof left === 'number' && typeof right === 'number') return (left - right) * dir;
+        return String(left == null ? '' : left).localeCompare(String(right == null ? '' : right)) * dir;
+      });
+    }
+    return rows;
+  }
+
+  var HEADINGS = {
+    name: 'Name', namespace: 'Namespace', ready: 'Ready', status: 'Status', restarts: 'Restarts',
+    node: 'Node', age: 'Age', upToDate: 'Up to date', available: 'Available', type: 'Type',
+    clusterIP: 'Cluster IP', external: 'External', ports: 'Ports', class: 'Class', hosts: 'Hosts',
+    address: 'Address', roles: 'Roles', version: 'Version', instance: 'Instance', zone: 'Zone',
+    capacity: 'Capacity', keys: 'Keys', schedule: 'Schedule', active: 'Active', lastRun: 'Last run',
+    duration: 'Duration', message: 'Message', count: 'Count', object: 'Object',
+    cpu: 'CPU', memory: 'Memory',
+  };
+
+  /** How many rows are drawn at once. Past this, scrolling costs more than it is worth. */
+  var CAP = 700;
+
+  function drawTable() {
+    if (state.error) {
+      $('table').innerHTML = '<div class="note error">' + esc(state.error) + '</div>' + advice(state.error);
+      return;
+    }
+    if (!state.table) { $('table').innerHTML = state.loading ? '' : '<div class="note">Nothing loaded.</div>'; return; }
+
+    var rows = visible();
+    if (!rows.length) {
+      $('table').innerHTML = '<div class="note">' +
+        (state.search ? 'Nothing matches “' + esc(state.search) + '”.' : 'There is nothing here.') + '</div>';
+      return;
+    }
+
+    var columns = (state.table.columns || []).filter(function (column) {
+      // The namespace column says nothing when every row is in the same one.
+      return !(column === 'namespace' && state.namespace);
+    });
+
+    var head = '<tr>' + columns.map(function (column) {
+      var arrow = state.sort.column === column ? '<span class="arrow">' + (state.sort.dir > 0 ? '↑' : '↓') + '</span>' : '';
+      return '<th data-column="' + esc(column) + '">' + esc(HEADINGS[column] || column) + arrow + '</th>';
+    }).join('') + '</tr>';
+
+    var body = '';
+    var drawn = Math.min(rows.length, CAP);
+    for (var i = 0; i < drawn; i += 1) {
+      var row = rows[i];
+      var on = state.selected && state.selected.uid === row.uid;
+      body += '<tr data-uid="' + esc(row.uid) + '" class="' + (on ? 'on' : '') + '">';
+      for (var c = 0; c < columns.length; c += 1) body += cell(row, columns[c]);
+      body += '</tr>';
+    }
+
+    $('table').innerHTML = '<table><thead>' + head + '</thead><tbody>' + body + '</tbody></table>' +
+      (rows.length > drawn ? '<div class="note">Showing the first ' + drawn + ' of ' + rows.length + '. Filter to narrow it.</div>' : '');
+  }
+
+  function cell(row, column) {
+    var value = row[column];
+    if (column === 'name') {
+      return '<td class="name"><span class="dot ' + esc(row.health || 'idle') + '"></span>' + esc(value) + '</td>';
+    }
+    if (column === 'status') {
+      var klass = row.health === 'bad' ? 'bad-text' : row.health === 'warn' ? 'warn-text' : 'dim';
+      return '<td class="' + klass + '">' + esc(value) + '</td>';
+    }
+    if (column === 'restarts') {
+      var text = esc(value) + (row.restartNote ? ' <span class="dim">(' + esc(row.restartNote) + ')</span>' : '');
+      return '<td class="' + (value > 0 ? 'warn-text' : 'dim') + '">' + text + '</td>';
+    }
+    if (column === 'message') return '<td class="grow dim">' + esc(value) + '</td>';
+    if (column === 'ports' || column === 'clusterIP' || column === 'address') {
+      return '<td class="dim mono">' + esc(value) + '</td>';
+    }
+    return '<td class="dim">' + esc(value == null ? '' : value) + '</td>';
+  }
+
+  $('table').addEventListener('click', function (event) {
+    var heading = event.target.closest('th');
+    if (heading) {
+      var column = heading.dataset.column;
+      state.sort = state.sort.column === column
+        ? { column: column, dir: -state.sort.dir }
+        : { column: column, dir: 1 };
+      drawTable();
+      return;
+    }
+    var row = event.target.closest('tr[data-uid]');
+    if (!row) return;
+    select(row.dataset.uid);
+  });
+
+  function select(uid) {
+    var rows = (state.table && state.table.rows) || [];
+    var found = null;
+    for (var i = 0; i < rows.length; i += 1) if (rows[i].uid === uid) found = rows[i];
+    if (!found) return;
+    // Events are not objects you open; the thing they are about is.
+    if (found.kind === 'Event') {
+      say(found.message || found.status || 'nothing more to say');
+      return;
+    }
+    state.selected = found;
+    state.detail = { tab: 'overview' };
+    state.detailData = {};
+    draw();
+    loadDetail();
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * The overview: what is on fire, if anything.
+   * ---------------------------------------------------------------------- */
+  function drawOverview() {
+    if (state.error) {
+      $('table').innerHTML = '<div class="note error">' + esc(state.error) + '</div>' + advice(state.error);
+      return;
+    }
+    var data = state.overview;
+    if (!data) { $('table').innerHTML = state.loading ? '' : '<div class="note">Nothing loaded.</div>'; return; }
+
+    var cards = [
+      { value: data.nodes, label: 'nodes', bad: data.nodesUnhealthy > 0 },
+      { value: data.podsRunning + ' / ' + data.pods, label: 'pods running' },
+      { value: data.podsFailing, label: 'pods failing', bad: data.podsFailing > 0 },
+      { value: data.restarts, label: 'restarts', warn: data.restarts > 0 },
+      { value: data.warnings, label: 'warning events', warn: data.warnings > 0 },
+    ].map(function (card) {
+      return '<div class="card ' + (card.bad ? 'bad' : card.warn ? 'warn' : '') + '"><b>' +
+        esc(card.value) + '</b><span>' + esc(card.label) + '</span></div>';
+    }).join('');
+
+    var trouble = '';
+    if ((data.trouble || []).length) {
+      trouble = '<div class="crumb"><strong>Not well</strong></div><table><tbody>' +
+        data.trouble.map(function (row) {
+          return '<tr><td class="name"><span class="dot bad"></span>' + esc(row.name) + '</td>' +
+            '<td class="dim">' + esc(row.kind) + '</td>' +
+            '<td class="dim">' + esc(row.namespace) + '</td>' +
+            '<td class="bad-text">' + esc(row.status) + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    } else {
+      trouble = '<div class="note">Nothing is failing, and nothing has raised a warning recently.</div>';
+    }
+
+    var recent = '';
+    if ((data.recent || []).length) {
+      recent = '<div class="crumb"><strong>Recent warnings</strong></div><table><tbody>' +
+        data.recent.slice(0, 20).map(function (row) {
+          return '<tr><td class="dim">' + esc(row.age) + '</td>' +
+            '<td class="warn-text">' + esc(row.status) + '</td>' +
+            '<td class="dim">' + esc(row.object) + '</td>' +
+            '<td class="grow dim">' + esc(row.message) + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    }
+
+    $('table').innerHTML = '<div class="cards">' + cards + '</div>' + trouble + recent;
+  }
+
+  /**
+   * What to do about the failures that are not really failures.
+   *
+   * The three that everybody hits are an expired token, a cluster that is not
+   * reachable from here, and kubectl not being installed at all — and none of
+   * them are worth a red box on their own, because each has an obvious next
+   * step that the message itself does not mention.
+   */
+  function advice(message) {
+    var text = String(message || '');
+    if (/Unauthorized|credentials|expired|no such host|refused|timeout|timed out|exec plugin|getting credentials/i.test(text)) {
+      return '<div class="note">This looks like the cluster not letting us in rather than something being wrong with it. ' +
+        'A token may have expired, or this context may need a VPN. Open the terminal button above and run ' +
+        '<code>kubectl get ns</code> there — whatever it asks you for, ask it once and this panel works again.</div>';
+    }
+    if (/not installed|ENOENT/i.test(text)) {
+      return '<div class="note">kubectl is not on the PATH this app can see. Install it, or add it to your shell profile ' +
+        'and restart Smart Terminal.</div>';
+    }
+    return '';
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * The detail pane.
+   * ---------------------------------------------------------------------- */
+  function drawDetail() {
+    var chosen = state.selected;
+    $('body').className = 'body' + (chosen ? ' with-detail' : '');
+    var existing = document.querySelector('aside');
+    if (!chosen) { if (existing) existing.remove(); return; }
+
+    var aside = existing || document.createElement('aside');
+    if (!existing) $('body').appendChild(aside);
+
+    var tabs = ['overview', 'yaml', 'events'];
+
+    aside.innerHTML =
+      '<div class="detail-head">' +
+        '<h3>' + esc(chosen.name) + '</h3>' +
+        '<small>' + esc(chosen.kind) + (chosen.namespace ? ' · ' + esc(chosen.namespace) : '') + ' · ' + esc(chosen.age) + ' old</small>' +
+        '<div class="detail-actions">' + actionsFor(chosen) + '</div>' +
+        '<div class="ask">' +
+          '<input id="question" placeholder="Ask Claude something about this" />' +
+          '<button class="btn go" data-do="ask">Ask</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="tabs">' + tabs.map(function (tab) {
+        return '<button data-tab="' + tab + '" class="' + (state.detail.tab === tab ? 'on' : '') + '">' +
+          (tab === 'yaml' ? 'YAML' : tab[0].toUpperCase() + tab.slice(1)) + '</button>';
+      }).join('') + '</div>' +
+      '<div class="detail-body" id="detail-body">' + detailBody(chosen) + '</div>';
+  }
+
+  function actionsFor(row) {
+    var buttons = [];
+    if (row.kind === 'Pod') {
+      buttons.push('<button class="btn" data-do="logs">Logs</button>');
+      buttons.push('<button class="btn" data-do="shell">Shell</button>');
+    }
+    if (row.scalable) buttons.push('<button class="btn" data-do="scale">Scale…</button>');
+    if (row.restartable) buttons.push('<button class="btn" data-do="restart">Restart</button>');
+    if ((row.forwardable || []).length) buttons.push('<button class="btn" data-do="forward">Forward…</button>');
+    if (row.kind === 'Node') {
+      buttons.push('<button class="btn" data-do="cordon">' + (row.schedulable ? 'Cordon' : 'Uncordon') + '</button>');
+    }
+    buttons.push('<button class="btn bad" data-do="delete">Delete</button>');
+    return buttons.join('');
+  }
+
+  function detailBody(row) {
+    var tab = state.detail.tab;
+    if (tab === 'overview') {
+      var loaded = state.detailData.describe;
+      var facts = '<dl class="facts">' + Object.keys(row).filter(function (key) {
+        return ['uid', 'labels', 'containers', 'forwardable', 'health', 'scalable', 'restartable', 'createdAt', 'kind'].indexOf(key) < 0 &&
+          row[key] !== '' && row[key] != null && typeof row[key] !== 'object';
+      }).map(function (key) {
+        return '<dt>' + esc(HEADINGS[key] || key) + '</dt><dd>' + esc(row[key]) + '</dd>';
+      }).join('') + '</dl>';
+      var labels = Object.keys(row.labels || {}).length
+        ? '<h4 class="dim" style="margin:12px 0 4px;font-size:10.5px">Labels</h4><pre>' +
+          esc(Object.keys(row.labels).map(function (key) { return key + '=' + row.labels[key]; }).join('\n')) + '</pre>'
+        : '';
+      return facts + labels +
+        '<h4 class="dim" style="margin:12px 0 4px;font-size:10.5px">describe</h4>' +
+        '<pre>' + esc(loaded == null ? 'reading…' : loaded) + '</pre>';
+    }
+    if (tab === 'yaml') {
+      return '<pre class="wrapless">' + esc(state.detailData.yaml == null ? 'reading…' : state.detailData.yaml) + '</pre>';
+    }
+    if (tab === 'events') {
+      var events = state.detailData.events;
+      if (!events) return '<pre>reading…</pre>';
+      if (!events.length) return '<div class="dim">Nothing has been said about this one.</div>';
+      return '<table><tbody>' + events.map(function (event) {
+        return '<tr><td class="dim">' + esc(event.age) + '</td>' +
+          '<td class="' + (event.type === 'Warning' ? 'warn-text' : 'dim') + '">' + esc(event.status) + '</td>' +
+          '<td class="grow dim">' + esc(event.message) + '</td></tr>';
+      }).join('') + '</tbody></table>';
+    }
+    return '';
+  }
+
+  document.addEventListener('click', function (event) {
+    var tab = event.target.closest('[data-tab]');
+    if (tab) {
+      state.detail.tab = tab.dataset.tab;
+      drawDetail();
+      loadDetail();
+      return;
+    }
+    var action = event.target.closest('[data-do]');
+    if (action) act(action.dataset.do);
+  });
+
+
+  function loadDetail() {
+    var row = state.selected;
+    if (!row) return;
+    var at = { context: state.context, kind: row.kind, name: row.name };
+    if (row.namespace) at.namespace = row.namespace;
+
+    if (state.detail.tab === 'overview' && state.detailData.describe == null) {
+      call('kube.describe', at).then(function (result) {
+        if (state.selected === row) { state.detailData.describe = result.text || ''; drawDetail(); }
+      }).catch(function (error) {
+        if (state.selected === row) { state.detailData.describe = String(error.message || error); drawDetail(); }
+      });
+    }
+    if (state.detail.tab === 'yaml' && state.detailData.yaml == null) {
+      call('kube.manifest', at).then(function (result) {
+        if (state.selected === row) { state.detailData.yaml = result.yaml || ''; drawDetail(); }
+      }).catch(function (error) {
+        if (state.selected === row) { state.detailData.yaml = String(error.message || error); drawDetail(); }
+      });
+    }
+    if (state.detail.tab === 'events' && !state.detailData.events) {
+      call('kube.events', at).then(function (result) {
+        if (state.selected === row) { state.detailData.events = result.rows || []; drawDetail(); }
+      }).catch(function () {
+        if (state.selected === row) { state.detailData.events = []; drawDetail(); }
+      });
+    }
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * Logs, at the bottom, as many as you like.
+   *
+   * A tab per log rather than one viewer, because the question that actually
+   * gets asked is comparative — this pod restarted and that one did not, and
+   * both logs have to be on screen to see why. Each tab owns its own stream, so
+   * two can be followed at once and closing one does not touch the other.
+   * ---------------------------------------------------------------------- */
+  /** Enough to find the thing that broke, bounded so an hour of chatter cannot grow without end. */
+  var LOG_CAP = 5000;
+
+  function openLog(row) {
+    for (var i = 0; i < state.logs.length; i += 1) {
+      var open = state.logs[i];
+      if (open.name === row.name && open.namespace === row.namespace && open.context === state.context) {
+        state.logAt = i;
+        state.dockOpen = true;
+        drawDock();
+        return;
+      }
+    }
+    var containers = (row.containers || []).filter(function (c) { return !c.init; });
+    state.logs.push({
+      id: null, name: row.name, namespace: row.namespace, context: state.context,
+      containers: row.containers || [], container: (containers[0] || row.containers[0] || {}).name || null,
+      lines: [], following: false, wrap: true, search: '', loading: false,
+    });
+    state.logAt = state.logs.length - 1;
+    state.dockOpen = true;
+    drawDock();
+    readLog(state.logs[state.logAt], false);
+  }
+
+  function currentLog() { return state.logs[state.logAt] || null; }
+
+  function closeLog(at) {
+    var log = state.logs[at];
+    if (!log) return;
+    if (log.id) call('kube.stopFollow', { id: log.id }).catch(function () {});
+    state.logs.splice(at, 1);
+    state.logAt = Math.max(0, Math.min(state.logAt, state.logs.length - 1));
+    drawDock();
+  }
+
+  function readLog(log, previous) {
+    log.loading = true;
+    log.following = false;
+    if (log.id) { call('kube.stopFollow', { id: log.id }).catch(function () {}); log.id = null; }
+    drawDock();
+    call('kube.logs', {
+      context: log.context, namespace: log.namespace, pod: log.name,
+      container: log.container || undefined, tail: 1000, previous: previous || false,
+    }).then(function (result) {
+      log.loading = false;
+      var text = String(result.text || '');
+      log.lines = text ? text.split('\n').map(function (line) { return { text: line }; }) : [];
+      if (previous && !text.trim()) say('That container has no previous run to show.');
+      drawDock(true);
+    }).catch(function (error) {
+      log.loading = false;
+      log.lines = [{ text: String(error.message || error), err: true }];
+      drawDock();
+    });
+  }
+
+  function followLog(log) {
+    if (log.following) {
+      if (log.id) call('kube.stopFollow', { id: log.id }).catch(function () {});
+      log.id = null;
+      log.following = false;
+      drawDock();
+      return;
+    }
+    log.following = true;
+    log.lines = [];
+    drawDock();
+    call('kube.follow', {
+      context: log.context, namespace: log.namespace, pod: log.name,
+      container: log.container || undefined, tail: 200,
+    }).then(function (result) { log.id = result.id; })
+      .catch(function (error) {
+        log.following = false;
+        say(String(error.message || error), true);
+        drawDock();
+      });
+  }
+
+  function shownLines(log) {
+    if (!log.search) return log.lines;
+    var term = log.search.toLowerCase();
+    return log.lines.filter(function (line) { return line.text.toLowerCase().indexOf(term) >= 0; });
+  }
+
+  /** The search term, marked where it was found. Everything else is escaped first. */
+  function markUp(text, term) {
+    var safe = esc(text);
+    if (!term) return safe;
+    var needle = esc(term);
+    var out = '';
+    var rest = safe;
+    var at = rest.toLowerCase().indexOf(needle.toLowerCase());
+    while (at >= 0) {
+      out += rest.slice(0, at) + '<span class="hit">' + rest.slice(at, at + needle.length) + '</span>';
+      rest = rest.slice(at + needle.length);
+      at = rest.toLowerCase().indexOf(needle.toLowerCase());
+    }
+    return out + rest;
+  }
+
+  function drawDock(toBottom) {
+    var slot = document.getElementById('dock-slot');
+    if (!state.logs.length) { slot.innerHTML = ''; return; }
+
+    var log = currentLog();
+    var tabs = state.logs.map(function (entry, at) {
+      return '<span class="dock-tab' + (at === state.logAt ? ' on' : '') + '" data-log="' + at + '">' +
+        '<span class="dot ' + (entry.following ? 'ok' : 'idle') + '"></span>' +
+        '<span class="what" title="' + esc(entry.namespace + '/' + entry.name) + '">' + esc(entry.name) + '</span>' +
+        '<button class="x" data-close="' + at + '">✕</button></span>';
+    }).join('');
+
+    var containers = (log.containers || []).length > 1
+      ? '<select id="log-container">' + log.containers.map(function (container) {
+          return '<option value="' + esc(container.name) + '"' + (container.name === log.container ? ' selected' : '') +
+            '>' + esc(container.name) + (container.init ? ' (init)' : '') + '</option>';
+        }).join('') + '</select>'
+      : '';
+
+    var shown = shownLines(log);
+    var count = log.search ? shown.length + ' of ' + log.lines.length : '';
+
+    var tools = containers +
+      '<input id="log-search" placeholder="Search this log" value="' + esc(log.search) + '" />' +
+      (count ? '<span class="dim">' + esc(count) + '</span>' : '') +
+      '<button class="btn' + (log.following ? ' on' : '') + '" data-do="follow">' + (log.following ? 'Following' : 'Follow') + '</button>' +
+      '<button class="btn" data-do="previous" title="The log of the run that stopped">Previous</button>' +
+      '<button class="btn' + (log.wrap ? ' on' : '') + '" data-do="wrap">Wrap</button>' +
+      '<button class="btn" data-do="copy-log">Copy</button>' +
+      '<button class="btn" data-do="ask-log" title="Open a Claude session about this pod">Ask Claude</button>' +
+      '<button class="btn" data-do="dock">' + (state.dockOpen ? '▾' : '▴') + '</button>';
+
+    var body = log.loading
+      ? '<div class="dim">reading…</div>'
+      : !shown.length
+        ? '<div class="dim">' + (log.search ? 'Nothing in this log matches.' : 'Nothing in the log.') + '</div>'
+        : '<pre class="' + (log.wrap ? '' : 'wrapless') + '">' + shown.map(function (line) {
+            return '<span class="log-line' + (line.err ? ' err' : '') + '">' + markUp(line.text, log.search) + '</span>';
+          }).join('\n') + '</pre>';
+
+    slot.innerHTML = '<div class="dock" style="height:' + (state.dockOpen ? state.dock + 'px' : 'auto') + '">' +
+      '<div class="dock-grip" id="dock-grip"></div>' +
+      '<div class="dock-tabs">' + tabs + '<span class="dock-tools">' + tools + '</span></div>' +
+      (state.dockOpen ? '<div class="dock-body" id="dock-body">' + body + '</div>' : '') +
+      '</div>';
+
+    if (state.dockOpen && (toBottom || log.following)) {
+      var pane = document.getElementById('dock-body');
+      if (pane) pane.scrollTop = pane.scrollHeight;
+    }
+  }
+
+  document.addEventListener('click', function (event) {
+    var close = event.target.closest('[data-close]');
+    if (close) { closeLog(Number(close.dataset.close)); return; }
+    var tab = event.target.closest('[data-log]');
+    if (tab) { state.logAt = Number(tab.dataset.log); drawDock(true); }
+  });
+
+  document.addEventListener('input', function (event) {
+    if (event.target.id !== 'log-search') return;
+    var log = currentLog();
+    if (!log) return;
+    log.search = event.target.value;
+    var at = event.target.selectionStart;
+    drawDock();
+    var field = document.getElementById('log-search');
+    if (field) { field.focus(); field.setSelectionRange(at, at); }
+  });
+
+  document.addEventListener('change', function (event) {
+    if (event.target.id !== 'log-container') return;
+    var log = currentLog();
+    if (!log) return;
+    log.container = event.target.value;
+    if (log.following) { followLog(log); followLog(log); }
+    else readLog(log, false);
+  });
+
+  /* Dragging the dock taller. Bounded, so it can neither vanish nor take the whole panel. */
+  document.addEventListener('mousedown', function (event) {
+    if (!event.target.closest('#dock-grip')) return;
+    event.preventDefault();
+    var startY = event.clientY;
+    var startHeight = state.dock;
+    var move = function (moved) {
+      state.dock = Math.max(90, Math.min(window.innerHeight - 190, startHeight + (startY - moved.clientY)));
+      var dock = document.querySelector('.dock');
+      if (dock) dock.style.height = state.dock + 'px';
+    };
+    var up = function () {
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+
+  host.on('stream', function (payload) {
+    for (var i = 0; i < state.logs.length; i += 1) {
+      var log = state.logs[i];
+      if (log.id !== payload.id) continue;
+      if (payload.done) {
+        log.following = false;
+        log.id = null;
+        log.lines.push({ text: '— the log ended —' });
+        drawDock();
+        return;
+      }
+      var incoming = String(payload.text || '').split('\n');
+      // A chunk rarely ends on a line break, so the first piece belongs to the
+      // last line already there. Without this every read splits a line in two.
+      if (log.lines.length && incoming.length) {
+        var last = log.lines[log.lines.length - 1];
+        if (!last.complete) { last.text += incoming.shift(); last.complete = true; }
+      }
+      for (var n = 0; n < incoming.length; n += 1) {
+        log.lines.push({ text: incoming[n], err: payload.stream === 'err', complete: n < incoming.length - 1 });
+      }
+      if (log.lines.length > LOG_CAP) log.lines.splice(0, log.lines.length - LOG_CAP);
+      if (i === state.logAt) drawDock();
+      return;
+    }
+
+    // A port-forward talking. The line that matters is the first one.
+    for (var f = 0; f < state.forwards.length; f += 1) {
+      var forward = state.forwards[f];
+      if (forward.id !== payload.id) continue;
+      if (payload.done) { state.forwards.splice(f, 1); drawBar(); return; }
+      var match = /Forwarding from (?:127\.0\.0\.1|\[::1\]):(\d+)/.exec(String(payload.text || ''));
+      if (match) { forward.local = Number(match[1]); forward.up = true; drawBar(); }
+      else if (payload.stream === 'err' && String(payload.text).trim()) {
+        forward.error = String(payload.text).trim().split('\n')[0];
+        drawBar();
+      }
+      return;
+    }
+  });
+
+  /* ---------------------------------------------------------------------- *
+   * Doing things.
+   * ---------------------------------------------------------------------- */
+  function act(what) {
+    var log = currentLog();
+    if (log) {
+      if (what === 'follow') { followLog(log); return; }
+      if (what === 'previous') { readLog(log, true); return; }
+      if (what === 'wrap') { log.wrap = !log.wrap; drawDock(); return; }
+      if (what === 'dock') { state.dockOpen = !state.dockOpen; drawDock(true); return; }
+      if (what === 'copy-log') {
+        var text = shownLines(log).map(function (line) { return line.text; }).join('\n');
+        // A frame with no same-origin has no clipboard of its own, so the app
+        // is asked to do it — the same door everything else goes through.
+        host.emit('copy', { text: text });
+        say('Copied ' + shownLines(log).length + ' lines.');
+        return;
+      }
+      if (what === 'ask-log') {
+        askAbout({ kind: 'Pod', name: log.name, namespace: log.namespace, container: log.container }, '');
+        return;
+      }
+    }
+
+    var row = state.selected;
+    if (!row) return;
+    var at = { context: state.context, namespace: row.namespace, kind: row.kind, name: row.name };
+
+    if (what === 'logs') { openLog(row); return; }
+
+    if (what === 'shell') {
+      call('kube.shell', {
+        context: state.context, namespace: row.namespace, pod: row.name,
+        container: row.containers && row.containers.length === 1 ? row.containers[0].name : undefined,
+      }).then(function () { say('A terminal opened inside ' + row.name + '.'); })
+        .catch(function (error) { say(String(error.message || error), true); });
+      return;
+    }
+
+    if (what === 'ask') {
+      var input = document.getElementById('question');
+      askAbout(assign({ kind: row.kind, name: row.name, namespace: row.namespace }, {}), input ? input.value.trim() : '');
+      return;
+    }
+
+    if (what === 'scale') {
+      askFor('Scale ' + row.name + ' to how many?', String(row.replicas == null ? 1 : row.replicas))
+        .then(function (wanted) {
+          if (wanted == null) return;
+          run(call('kube.scale', assign({ replicas: Number(wanted) }, at)), 'Scaled ' + row.name + ' to ' + wanted + '.');
+        });
+      return;
+    }
+    if (what === 'restart') {
+      run(call('kube.restart', at), 'Rolling ' + row.name + '.');
+      return;
+    }
+    if (what === 'cordon') {
+      run(call('kube.cordon', { context: state.context, name: row.name, on: row.schedulable !== false }),
+        row.schedulable !== false ? 'Cordoned ' + row.name + '.' : 'Uncordoned ' + row.name + '.');
+      return;
+    }
+    if (what === 'delete') {
+      run(call('kube.remove', at), 'Deleting ' + row.name + '.');
+      state.selected = null;
+      return;
+    }
+    if (what === 'forward') {
+      var ports = row.forwardable || [];
+      askFor('Which port of ' + row.name + '? It declares ' + ports.join(', '), String(ports[0]))
+        .then(function (remote) {
+          if (remote == null) return null;
+          return askFor('On which local port? 0 lets the machine choose one.', String(remote))
+            .then(function (local) {
+              if (local == null) return null;
+              forward(row, Number(remote), Number(local));
+              return null;
+            });
+        });
+    }
+  }
+
+  /**
+   * Hand the whole story of one object to Claude.
+   *
+   * The panel says which object and what was asked about it; the app gathers
+   * the description, the warnings and the log — including the log of the
+   * container that died — and opens a session with all of it already there.
+   */
+  function askAbout(what, question) {
+    say('Gathering everything about ' + what.name + '…');
+    call('kube.ask', assign({ context: state.context, question: question || undefined }, what))
+      .then(function () { say('A Claude session opened with everything about ' + what.name + '.'); })
+      .catch(function (error) { say(String(error.message || error), true); });
+  }
+
+  function run(promise, done) {
+    promise.then(function () {
+      say(done);
+      // A change is not visible until the cluster agrees it happened.
+      setTimeout(function () { load(true); }, 900);
+    }).catch(function (error) { say(String(error.message || error), true); });
+  }
+
+  function forward(row, remote, local) {
+    call('kube.forward', {
+      context: state.context, namespace: row.namespace,
+      kind: row.kind === 'Service' ? 'service' : 'pod', name: row.name,
+      remote: remote, local: local,
+    }).then(function (result) {
+      state.forwards.push({ id: result.id, name: row.name, remote: remote, local: local, up: false });
+      drawBar();
+    }).catch(function (error) { say(String(error.message || error), true); });
+  }
+
+  function drawBar() {
+    if (!state.forwards.length) { $('bar').innerHTML = ''; return; }
+    $('bar').innerHTML = '<span class="dim">Forwarding</span>' + state.forwards.map(function (forward) {
+      var label = forward.error
+        ? '<span class="bad-text">' + esc(forward.error) + '</span>'
+        : forward.up
+          ? 'localhost:' + forward.local + ' → ' + esc(forward.name) + ':' + forward.remote
+          : 'starting ' + esc(forward.name) + ':' + forward.remote + '…';
+      return '<span class="pill">' + label +
+        '<button class="btn" data-stop="' + esc(forward.id) + '" style="padding:0 4px">✕</button></span>';
+    }).join('');
+  }
+
+  $('bar').addEventListener('click', function (event) {
+    var button = event.target.closest('[data-stop]');
+    if (!button) return;
+    var id = button.dataset.stop;
+    call('kube.stopForward', { id: id }).catch(function () {});
+    state.forwards = state.forwards.filter(function (forward) { return forward.id !== id; });
+    drawBar();
+  });
+
+  /**
+   * Asking for one value, without `prompt`.
+   *
+   * A sandboxed frame is not allowed to open a modal, and should not be: a
+   * panel that can stop the app dead is a panel that can hold it hostage. So
+   * the question is drawn, and answered by resolving — the caller waits on a
+   * promise instead of on the browser, and cancelling resolves with null rather
+   * than leaving anybody hanging.
+   */
+  function askFor(question, initial) {
+    return new Promise(function (resolve) {
+      var existing = document.getElementById('prompt');
+      if (existing) existing.remove();
+
+      var box = document.createElement('div');
+      box.id = 'prompt';
+      box.style.cssText = 'position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,0.45);z-index:9';
+      box.innerHTML = '<form style="background:var(--bg-panel);border:1px solid var(--border-strong);' +
+        'border-radius:var(--radius);padding:14px 16px;min-width:280px;max-width:82vw">' +
+        '<div style="margin-bottom:9px">' + esc(question) + '</div>' +
+        '<input id="prompt-value" value="' + esc(initial) + '" style="width:100%;font:inherit;color:var(--text);' +
+        'background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);padding:5px 8px" />' +
+        '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:11px">' +
+        '<button type="button" class="btn" id="prompt-no">Cancel</button>' +
+        '<button type="submit" class="btn go">OK</button></div></form>';
+      document.body.appendChild(box);
+
+      var field = document.getElementById('prompt-value');
+      field.focus();
+      field.select();
+
+      var close = function (value) {
+        if (!box.parentNode) return;
+        box.remove();
+        resolve(value);
+      };
+      box.querySelector('#prompt-no').addEventListener('click', function () { close(null); });
+      box.addEventListener('keydown', function (event) { if (event.key === 'Escape') close(null); });
+      box.querySelector('form').addEventListener('submit', function (event) {
+        event.preventDefault();
+        close(field.value);
+      });
+    });
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * Keys, the timer, and starting up.
+   * ---------------------------------------------------------------------- */
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') {
+      // The question closes itself; this is only for what is behind it.
+      if (document.getElementById('prompt')) return;
+      if (state.selected) { state.selected = null; draw(); }
+      return;
+    }
+    if (event.key === '/' && document.activeElement !== $('search')) {
+      event.preventDefault();
+      $('search').focus();
+      return;
+    }
+    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && state.table) {
+      if (document.activeElement === $('search') || document.activeElement.id === 'question') return;
+      var rows = visible();
+      if (!rows.length) return;
+      var at = -1;
+      for (var i = 0; i < rows.length; i += 1) if (state.selected && rows[i].uid === state.selected.uid) at = i;
+      var next = event.key === 'ArrowDown' ? Math.min(rows.length - 1, at + 1) : Math.max(0, at - 1);
+      event.preventDefault();
+      select(rows[next].uid);
+    }
+  });
+
+  setInterval(function () {
+    if (!state.live || state.loading || document.hidden) return;
+    // Never while a question is open, and never while a log is streaming: both
+    // would redraw the thing somebody is in the middle of using.
+    if (document.getElementById('prompt')) return;
+    if (state.logs.some(function (log) { return log.following; })) return;
+    load(true);
+  }, state.everyMs);
+
+  host.on('theme', function () { /* the app rebuilds the frame; nothing to do here */ });
+
+  host.on('context', function () {
+    loadCluster().catch(function (error) {
+      state.error = String(error.message || error);
+      state.loading = false;
+      draw();
+    });
+  });
+
+  state.loading = true;
+  draw();
+  host.ready();
+</script>

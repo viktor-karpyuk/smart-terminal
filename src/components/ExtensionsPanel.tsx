@@ -90,7 +90,10 @@ function Badge({ row }: { row: ExtensionRow }) {
 
 function Detail({ row }: { row: ExtensionRow }) {
   const act = useStore((s) => s.setExtension);
+  const openExtensionView = useStore((s) => s.openExtensionView);
   const previews = row.contributes?.previews ?? [];
+  const panels = row.contributes?.panels ?? [];
+  const running = row.status === 'installed' || row.status === 'update';
 
   return (
     <>
@@ -122,6 +125,42 @@ function Detail({ row }: { row: ExtensionRow }) {
                     ...(preview.extensions ?? []).map((value) => `.${value}`),
                   ].join('  ')}
                 </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {panels.length > 0 && (
+        <>
+          <h4 className="monitor-heading">Views it brings</h4>
+          <div className="extension-panels">
+            {panels.map((panel) => (
+              <div className="extension-panel-row" key={panel.id}>
+                <div>
+                  <strong>{panel.title ?? panel.id}</strong>
+                  <small>
+                    {panel.summary ||
+                      (panel.needs === 'repository'
+                        ? 'Works on a repository.'
+                        : panel.needs === 'kubernetes'
+                          ? 'Works on a Kubernetes cluster.'
+                          : '')}
+                  </small>
+                </div>
+                {/* A view that is about a folder is opened from that folder, so
+                    it knows which one. Anything else opens from here. */}
+                {panel.needs === 'repository' ? (
+                  <span className="extension-panel-note">from a folder</span>
+                ) : (
+                  <button
+                    className="ghost-btn"
+                    disabled={!running || !row.enabled}
+                    onClick={() => openExtensionView(panel.id, null)}
+                  >
+                    Open
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -162,8 +201,10 @@ function Detail({ row }: { row: ExtensionRow }) {
       </div>
 
       <p className="usage-footnote">
-        An extension decides which files the app offers to render and under what names. It does not
-        run code of its own — turning one on changes what is offered, not what is executed.
+        An extension decides which files the app offers to render and under what names. One that
+        brings a view brings code with it, and that code runs where it can be wrong without taking
+        anything with it: in a frame with an origin of its own, reaching the app only through a
+        fixed list of operations, some of which stop to ask you first.
       </p>
     </>
   );

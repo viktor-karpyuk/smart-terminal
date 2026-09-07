@@ -60,19 +60,92 @@ const WRITE_VERBS = [
   'stashPop',
 ] as const;
 
-const ALLOWED = new Set<string>([...READ_VERBS, ...WRITE_VERBS]);
+/**
+ * Reading a cluster. Free, in the same sense: none of it changes anything.
+ *
+ * Namespaced, unlike the git verbs, because there are now two things an
+ * extension can be talking to and a bare `list` would not say which. The git
+ * names stay bare so the graph extension keeps working; anything new is
+ * prefixed.
+ */
+const KUBE_READ = [
+  'contexts',
+  'reachable',
+  'resources',
+  'list',
+  'manifest',
+  'describe',
+  'logs',
+  'events',
+  'top',
+  'summary',
+  'brief',
+] as const;
+
+/**
+ * Changing a cluster.
+ *
+ * A shorter list than git's, and deliberately so. There is no `drain`, no
+ * `cordon` of a whole pool, no `edit`, no `exec` that runs a command of the
+ * extension's choosing. What is here is what a dashboard is for: take one thing
+ * away, make more or fewer of it, roll it, put an edited manifest back.
+ */
+const KUBE_WRITE = ['remove', 'scale', 'restart', 'apply', 'cordon'] as const;
+
+/** The two long-running ones: following a log, holding a port open. */
+const KUBE_STREAM = ['follow', 'stopFollow', 'forward', 'stopForward'] as const;
+
+/**
+ * The two that reach into the app rather than into a cluster.
+ *
+ * `shell` opens a real terminal tab running `kubectl exec` — a real pty, with a
+ * real TTY, because a shell drawn inside a panel is a toy and everybody who has
+ * used one knows it. `ask` opens a Claude session that has already been handed
+ * everything about the object.
+ *
+ * Neither takes a command or a prompt from the extension. It names an object;
+ * the app writes the command line and the app writes the words. That is the
+ * whole reason these can exist at all: an extension that could compose the text
+ * going into a Claude session could ask it to do anything.
+ */
+const KUBE_APP = ['shell', 'terminal', 'ask'] as const;
+
+const GIT_VERBS = new Set<string>([...READ_VERBS, ...WRITE_VERBS]);
+const KUBE_VERBS = new Map<string, Channel>([
+  ...KUBE_READ.map((name) => [name, 'kube'] as [string, Channel]),
+  ...KUBE_WRITE.map((name) => [name, 'kube'] as [string, Channel]),
+  ...KUBE_STREAM.map((name) => [name, 'kube-stream'] as [string, Channel]),
+  ...KUBE_APP.map((name) => [name, 'app'] as [string, Channel]),
+]);
+
+export type Channel = 'git' | 'kube' | 'kube-stream' | 'app';
+
+/**
+ * Which door a call goes through, or none.
+ *
+ * One function rather than a set of names, because the answer is no longer only
+ * yes or no: a panel now talks to two different subsystems and to the app
+ * itself, and the routing is the security boundary. Anything not named here
+ * does not run — there is no default channel.
+ */
+export function route(name: string): Channel | null {
+  if (GIT_VERBS.has(name)) return 'git';
+  if (name.startsWith('kube.')) return KUBE_VERBS.get(name.slice(5)) ?? null;
+  return null;
+}
 
 export function allowed(name: string): boolean {
-  return ALLOWED.has(name);
+  return route(name) !== null;
 }
 
 /**
  * The calls the app stops to ask about first.
  *
  * Not because the extension is suspect — it is the same list a person should be
- * asked about anyway. These are the two that can destroy work that exists
- * nowhere else: a force push over somebody's commits, and deleting a branch git
- * itself would have refused to delete.
+ * asked about anyway. In a repository that is the pair that can destroy work
+ * existing nowhere else: a force push over somebody's commits, and deleting a
+ * branch git itself would have refused to delete. In a cluster it is anything
+ * that takes a running thing away.
  */
 export function needsConsent(name: string, args: Record<string, unknown>): string | null {
   if (name === 'push' && args?.force) {
@@ -81,7 +154,118 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
   if (name === 'deleteBranch' && args?.force) {
     return `Delete the branch "${String(args.name ?? '')}" even though it is not merged?`;
   }
+
+  /*
+   * A cluster is not a working tree. There is no undo, no reflog and no copy on
+   * disk of what was there a second ago, and the same click is harmless in a
+   * scratch namespace and an outage in production. So the question always says
+   * *where* as well as *what*: the namespace and the context are the whole
+   * difference between the two, and a dialog that omits them is a dialog people
+   * learn to click through.
+   */
+  if (name.startsWith('kube.')) {
+    const where = whereItIs(args);
+    const what = `${String(args.kind ?? 'resource')} ${String(args.name ?? '')}`.trim();
+    if (name === 'kube.remove') return `Delete ${what}${where}?\n\nNothing brings it back.`;
+    if (name === 'kube.apply') return `Apply this manifest${where}?`;
+    if (name === 'kube.scale' && Number(args.replicas) === 0) {
+      return `Scale ${what} to zero${where}?\n\nEverything it runs stops.`;
+    }
+    if (name === 'kube.cordon' && args.on !== false) {
+      return `Stop scheduling new pods onto ${String(args.name ?? 'this node')}${where}?`;
+    }
+  }
   return null;
+}
+
+/** " in namespace prod on cluster X" — the half of the question that is usually the answer. */
+function whereItIs(args: Record<string, unknown>): string {
+  const namespace = args?.namespace ? ` in namespace ${String(args.namespace)}` : '';
+  const context = args?.context ? ` on ${String(args.context)}` : '';
+  return `${namespace}${context}`;
+}
+
+/**
+ * A value that will be one word to a shell, whatever is in it.
+ *
+ * Names come out of a cluster, which is to say out of whatever anybody put
+ * there — and unlike everything else here, these two end up on a real command
+ * line in a real terminal rather than in an `execFile` array. Single quotes
+ * make a shell take the whole thing literally; the one thing they cannot
+ * contain is a single quote, so a value carrying one is refused rather than
+ * escaped into something clever that a different shell might read differently.
+ */
+export function shellQuote(value: string, what: string): string {
+  const text = String(value ?? '');
+  if (!text) throw new Error(`${what} is missing`);
+  if (text.includes("'")) throw new Error(`${what} contains a quote, which this cannot pass to a shell safely`);
+  return `'${text}'`;
+}
+
+export type Where = { context?: string; namespace?: string };
+
+/** `--context X --namespace Y`, quoted, for a command line a person will see and edit. */
+function whereFlags({ context, namespace }: Where): string {
+  const parts: string[] = [];
+  if (context) parts.push(`--context ${shellQuote(context, 'The context')}`);
+  if (namespace) parts.push(`--namespace ${shellQuote(namespace, 'The namespace')}`);
+  return parts.join(' ');
+}
+
+/**
+ * The command that gets a person a shell inside a container.
+ *
+ * `sh -c` with a fallback, because the two-thirds of images that have bash and
+ * the third that have only ash are not distinguishable from out here, and
+ * "OCI runtime exec failed: exec: bash: not found" is a bad first impression of
+ * a button called Shell.
+ *
+ * It is built from named parts and never from anything the extension wrote:
+ * the panel says which pod, the app says what runs.
+ */
+export function execCommand(args: { pod: string; container?: string; shell?: string } & Where): string {
+  const flags = whereFlags(args);
+  const container = args.container ? ` -c ${shellQuote(args.container, 'The container')}` : '';
+  const shell = args.shell
+    ? shellQuote(args.shell, 'The shell')
+    : `sh -c 'command -v bash >/dev/null && exec bash || exec sh'`;
+  return `kubectl ${flags} exec -it ${shellQuote(args.pod, 'The pod')}${container} -- ${shell}`.replace(/\s+/g, ' ');
+}
+
+/**
+ * A value safe inside a *double*-quoted string, which is a stricter question.
+ *
+ * Single quotes stop a shell reading anything at all; double quotes still let
+ * it read `$`, a backtick and a backslash. The alias below has to nest one kind
+ * of quoting inside the other, so this is the inner half — and rather than
+ * escape those four characters into something a different shell might read
+ * differently, a value carrying one is refused. No cluster or namespace anybody
+ * has is named with a dollar sign in it.
+ */
+function innerQuote(value: string, what: string): string {
+  const text = String(value ?? '');
+  if (!text) throw new Error(`${what} is missing`);
+  if (/["'$`\\]/.test(text)) throw new Error(`${what} contains a character this cannot pass to a shell safely`);
+  return `"${text}"`;
+}
+
+/**
+ * A terminal that is already pointed at what the panel is looking at.
+ *
+ * An alias rather than `use-context`, and that is the whole idea: the tab is
+ * aimed at this cluster and this namespace, and nothing outside the tab has
+ * changed. `k get pods` in it means what the panel means by it, and the same
+ * command in any other window still means what it always did.
+ *
+ * Two layers of quoting, both needed: the outer single quotes are what make the
+ * alias one word to the shell defining it, and the inner double quotes are what
+ * keep a context name in one piece if it ever contains a space.
+ */
+export function terminalSetup({ context, namespace }: Where): string {
+  const parts = ['kubectl'];
+  if (context) parts.push(`--context ${innerQuote(context, 'The context')}`);
+  if (namespace) parts.push(`--namespace ${innerQuote(namespace, 'The namespace')}`);
+  return `alias k='${parts.join(' ')}'`;
 }
 
 /**

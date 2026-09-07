@@ -27,6 +27,7 @@ const { MessageBridge } = require('./message-bridge');
 const { listDir, readTextFile, writeTextFile, FileWatcher } = require('./files');
 const git = require('./git');
 const { layout: layoutGraph } = require('./git-graph');
+const kube = require('./kube');
 
 /**
  * What this build is. Written at package time, so the answer comes from the app
@@ -138,6 +139,16 @@ let monitor = null;
 // same folder, and a file appearing is news to each of them. Ref-counted inside,
 // so either can hold the same root without blinding the other.
 const repos = new RepoWatcher({ emit: (root, kind) => send('tree:changed', { root, kind }) });
+/**
+ * The kubectl processes that keep talking — a followed log, a forwarded port.
+ *
+ * Owned by the window that asked for one, so closing that window closes them.
+ * A port-forward that outlives its panel is a hole in a cluster that nothing on
+ * screen accounts for, which is a worse bug than the panel not having one.
+ */
+const kubeStreams = new kube.Streams();
+const kubeStreamOwners = new Map();
+
 /** App session ids whose processes this launch started, so quitting can close their rows. */
 const liveSessions = new Set();
 const usageCache = new Map();
@@ -254,6 +265,11 @@ function createWindow(windowId = randomUUID(), bounds = null) {
 
   win.on('closed', () => {
     windows.delete(windowId);
+    for (const [streamId, owner] of [...kubeStreamOwners]) {
+      if (owner !== windowId) continue;
+      kubeStreams.stop(streamId);
+      kubeStreamOwners.delete(streamId);
+    }
     // A window the app took down on its way out is meant to come back next launch.
     if (isQuitting) return;
     // Closing a window ends its sessions; they are not coming back with it.
@@ -976,6 +992,85 @@ function registerIpc() {
     } catch (error) {
       return { ok: false, error: String(error?.message ?? error) };
     }
+  });
+
+  /**
+   * Kubernetes, through kubectl.
+   *
+   * The same shape as `git:call` and for the same reason: one door, and a table
+   * of names on this side of it rather than anything assembled from what was
+   * asked. A panel names a verb; if the name is not here, nothing runs.
+   *
+   * Every one of these carries its own context. The app never runs
+   * `use-context`, so looking at a cluster in a panel cannot change what the
+   * person's own shell does anywhere else.
+   */
+  const KUBE = {
+    contexts: () => kube.contexts(),
+    reachable: (args) => kube.reachable(args),
+    resources: (args) => kube.resources(args),
+    list: (args) => kube.list(args),
+    manifest: (args) => kube.manifest(args),
+    describe: (args) => kube.describe(args),
+    logs: (args) => kube.logs(args),
+    events: (args) => kube.events(args),
+    top: (args) => kube.top(args),
+    summary: (args) => kube.summary(args),
+    brief: (args) => kube.brief(args),
+    remove: (args) => kube.remove(args),
+    scale: (args) => kube.scale(args),
+    restart: (args) => kube.restart(args),
+    apply: (args) => kube.apply(args),
+    cordon: (args) => kube.cordon(args),
+  };
+
+  ipcMain.handle('kube:call', async (_e, { name, args } = {}) => {
+    const handler = KUBE[name];
+    if (!handler) return { ok: false, error: `No such Kubernetes action: ${name}` };
+    try {
+      return await handler(args ?? {});
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  });
+
+  /**
+   * Start something that keeps talking: a followed log, or a forwarded port.
+   *
+   * Its output is pushed to the window that asked, in the chunks it arrives in.
+   * Nothing is buffered here — a log that has been running for an hour is the
+   * panel's problem to bound, and it is the only one that knows how much of it
+   * is worth keeping.
+   */
+  ipcMain.handle('kube:stream', async (event, { id, op, args } = {}) => {
+    const windowId = windowIdOf(event);
+    const streamId = String(id ?? '');
+    if (!streamId) return { ok: false, error: 'A stream needs an id.' };
+
+    let argv;
+    try {
+      argv = op === 'portForward' ? kube.forwardArgs(args ?? {}) : kube.followArgs(args ?? {});
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+
+    const sender = event.sender;
+    const push = (channel, payload) => {
+      if (!sender.isDestroyed()) sender.send(channel, payload);
+    };
+    kubeStreamOwners.set(streamId, windowId);
+    return kubeStreams.start(streamId, argv, {
+      onData: (payload) => push('kube:stream-data', payload),
+      onEnd: (payload) => {
+        kubeStreamOwners.delete(streamId);
+        push('kube:stream-end', payload);
+      },
+    });
+  });
+
+  ipcMain.handle('kube:stream-stop', (_e, id) => {
+    kubeStreamOwners.delete(String(id ?? ''));
+    return { ok: kubeStreams.stop(String(id ?? '')) };
   });
 
   ipcMain.handle('db:sessions', (_e, options) => db.listSessions(options || {}));
