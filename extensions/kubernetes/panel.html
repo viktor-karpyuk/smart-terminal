@@ -38,14 +38,24 @@
     overflow-y: auto; border-right: 1px solid var(--border);
     padding: 6px 0 20px; background: var(--bg-panel);
   }
-  nav h4 {
-    margin: 12px 10px 3px; font-size: 9.5px; font-weight: 600;
+  nav h4, .nav-group {
+    margin: 10px 0 2px; font-size: 10.5px; font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint);
   }
+  nav h4 { margin-left: 10px; }
+  .nav-sub { margin: 7px 0 2px 22px !important; opacity: 0.75; }
   nav button {
     display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
     padding: 4px 10px; color: var(--text-dim); font-size: 12px;
   }
+  .nav-group { padding: 4px 10px; }
+  .nav-group:hover { color: var(--text); }
+  .nav-group.is-open { color: var(--text-dim); }
+  /* Big enough to read as a state rather than as punctuation: this is the one
+     mark that says whether a group is open, so it is the size of the text it
+     sits beside, not the size of a bullet. */
+  .twist { display: inline-block; width: 12px; font-size: 12px; line-height: 1; opacity: 0.85; }
+  .nav-item { padding-left: 25px; }
   nav button:hover { background: var(--bg-elevated); color: var(--text); }
   nav button.on { background: var(--accent-soft); color: var(--accent); }
   nav .count { margin-left: auto; font-size: 10px; color: var(--text-faint); }
@@ -218,6 +228,8 @@
      */
     logs: [], logAt: 0, dock: 240, dockOpen: true,
     forwards: [],
+    /** Whether a request is in the air, and how long the last one took. */
+    busy: false, tookMs: 0, showing: true, started: false,
   };
 
   var $ = function (id) { return document.getElementById(id); };
@@ -297,41 +309,74 @@
     return out;
   }
 
+  /**
+   * Which groups are open.
+   *
+   * Folded by default except the one holding what is on screen, which is what
+   * makes a navigation with a hundred custom resources in it usable: a cluster
+   * with Elastic, Argo, Karpenter and Kong installed has more kinds than fit on
+   * a screen, and scrolling past six headings to reach Pods is worse than
+   * clicking one.
+   */
+  function openGroups() {
+    if (!state.groups) state.groups = { Workloads: true };
+    return state.groups;
+  }
+
+  function groupHolding(name) {
+    for (var g = 0; g < GROUPS.length; g += 1) {
+      if (GROUPS[g].items.indexOf(name) >= 0) return GROUPS[g].title;
+    }
+    return known(name) && !known(name).builtIn ? 'Custom Resources' : null;
+  }
+
   function drawNav() {
     var html = '<button class="' + (state.view.type === 'overview' ? 'on' : '') + '" data-view="overview">Overview</button>';
+
+    var open = openGroups();
+    var heading = function (title, count) {
+      return '<button class="nav-group' + (open[title] ? ' is-open' : '') + '" data-group="' + esc(title) + '">' +
+        '<span class="twist">' + (open[title] ? '▾' : '▸') + '</span>' + esc(title) +
+        (count ? '<span class="count">' + count + '</span>' : '') + '</button>';
+    };
 
     for (var g = 0; g < GROUPS.length; g += 1) {
       var group = GROUPS[g];
       var rows = '';
+      var held = 0;
       for (var i = 0; i < group.items.length; i += 1) {
         var name = group.items[i];
         var resource = known(name);
         // Nothing this cluster does not have. An entry that can only answer
         // "the server doesn't have that resource type" is worse than no entry.
         if (!resource && state.resources.length) continue;
+        held += 1;
+        if (!open[group.title]) continue;
         var on = state.view.type === 'kind' && state.view.name === name;
         var count = state.counts[name];
-        rows += '<button class="' + (on ? 'on' : '') + '" data-kind="' + esc(name) + '">' +
+        rows += '<button class="nav-item' + (on ? ' on' : '') + '" data-kind="' + esc(name) + '">' +
           esc(LABELS[name] || name) +
           (count == null ? '' : '<span class="count">' + count + '</span>') +
           '</button>';
       }
-      if (rows) html += '<h4>' + esc(group.title) + '</h4>' + rows;
+      if (held) html += heading(group.title, held) + rows;
     }
 
     var custom = customResources();
     if (custom.length) {
-      html += '<h4>Custom Resources</h4>';
-      var lastGroup = null;
-      for (var c = 0; c < custom.length; c += 1) {
-        var item = custom[c];
-        if (item.group !== lastGroup) {
-          html += '<h4 style="margin-top:7px;opacity:0.75">' + esc(item.group) + '</h4>';
-          lastGroup = item.group;
+      html += heading('Custom Resources', custom.length);
+      if (open['Custom Resources']) {
+        var lastGroup = null;
+        for (var c = 0; c < custom.length; c += 1) {
+          var item = custom[c];
+          if (item.group !== lastGroup) {
+            html += '<h4 class="nav-sub">' + esc(item.group) + '</h4>';
+            lastGroup = item.group;
+          }
+          var chosen = state.view.type === 'kind' && state.view.name === item.name;
+          html += '<button class="nav-item' + (chosen ? ' on' : '') + '" data-kind="' + esc(item.name) +
+            '" title="' + esc(item.apiVersion) + '">' + esc(item.kind) + '</button>';
         }
-        var chosen = state.view.type === 'kind' && state.view.name === item.name;
-        html += '<button class="' + (chosen ? 'on' : '') + '" data-kind="' + esc(item.name) +
-          '" title="' + esc(item.apiVersion) + '">' + esc(item.kind) + '</button>';
       }
     }
     $('nav').innerHTML = html;
@@ -340,8 +385,15 @@
   $('nav').addEventListener('click', function (event) {
     var button = event.target.closest('button');
     if (!button) return;
-    if (button.dataset.view === 'overview') show({ type: 'overview' });
-    else if (button.dataset.kind) show({ type: 'kind', name: button.dataset.kind });
+    if (button.dataset.group) {
+      var open = openGroups();
+      open[button.dataset.group] = !open[button.dataset.group];
+      drawNav();
+    } else if (button.dataset.view === 'overview') {
+      show({ type: 'overview' });
+    } else if (button.dataset.kind) {
+      show({ type: 'kind', name: button.dataset.kind });
+    }
   });
 
   /* ---------------------------------------------------------------------- *
@@ -349,6 +401,11 @@
    * ---------------------------------------------------------------------- */
   function show(view) {
     state.view = view;
+    // You cannot be looking at something inside a folded group.
+    if (view.type === 'kind') {
+      var group = groupHolding(view.name);
+      if (group) openGroups()[group] = true;
+    }
     state.selected = null;
     state.search = '';
     $('search').value = '';
@@ -360,6 +417,8 @@
   var loadToken = 0;
   function load(quiet) {
     var mine = (loadToken += 1);
+    state.busy = true;
+    var started = Date.now();
     if (!quiet) { state.loading = true; state.error = null; draw(); }
 
     var request = state.view.type === 'overview'
@@ -369,6 +428,8 @@
         : call('kube.list', assign({ kind: state.view.name }, scopeFor(state.view.name)));
 
     request.then(function (result) {
+      state.busy = false;
+      state.tookMs = Date.now() - started;
       // An answer to a question nobody is asking any more. Dropping it is the
       // whole of what keeps a fast click from being overtaken by a slow one.
       if (mine !== loadToken) return;
@@ -382,6 +443,8 @@
       draw();
       if (state.view.name === 'pods' || state.view.name === 'nodes') withMetrics(mine, state.view.name);
     }).catch(function (error) {
+      state.busy = false;
+      state.tookMs = Date.now() - started;
       if (mine !== loadToken) return;
       state.loading = false;
       state.error = String(error.message || error);
@@ -588,7 +651,12 @@
       $('table').innerHTML = '<div class="note error">' + esc(state.error) + '</div>' + advice(state.error);
       return;
     }
-    if (!state.table) { $('table').innerHTML = state.loading ? '' : '<div class="note">Nothing loaded.</div>'; return; }
+    if (!state.table) {
+      $('table').innerHTML = state.loading
+        ? ''
+        : '<div class="note">' + (state.started ? 'Nothing loaded.' : 'Waiting to be looked at.') + '</div>';
+      return;
+    }
 
     var rows = visible();
     if (!rows.length) {
@@ -875,8 +943,18 @@
    * both logs have to be on screen to see why. Each tab owns its own stream, so
    * two can be followed at once and closing one does not touch the other.
    * ---------------------------------------------------------------------- */
-  /** Enough to find the thing that broke, bounded so an hour of chatter cannot grow without end. */
-  var LOG_CAP = 5000;
+  /**
+   * How many lines a log keeps.
+   *
+   * Two thousand rather than five, and the reason is measured: appending one
+   * line to a `<pre>` costs what laying out the whole `<pre>` costs, which is
+   * 1.8ms at a thousand lines, 3.5ms at two thousand and 13ms at five. A pod
+   * that talks ten times a second turns that last one into an eighth of a core
+   * spent re-laying out text nobody is reading. Two thousand lines is far more
+   * scrollback than a log viewer beside a table is for, and Copy takes what is
+   * there whatever the number.
+   */
+  var LOG_CAP = 2000;
 
   function openLog(row) {
     for (var i = 0; i < state.logs.length; i += 1) {
@@ -892,7 +970,7 @@
     state.logs.push({
       id: null, name: row.name, namespace: row.namespace, context: state.context,
       containers: row.containers || [], container: (containers[0] || row.containers[0] || {}).name || null,
-      lines: [], following: false, wrap: true, search: '', loading: false,
+      lines: [], pending: '', drawn: 0, following: false, wrap: true, search: '', loading: false,
     });
     state.logAt = state.logs.length - 1;
     state.dockOpen = true;
@@ -923,6 +1001,7 @@
       log.loading = false;
       var text = String(result.text || '');
       log.lines = text ? text.split('\n').map(function (line) { return { text: line }; }) : [];
+      log.pending = '';
       if (previous && !text.trim()) say('That container has no previous run to show.');
       drawDock(true);
     }).catch(function (error) {
@@ -942,6 +1021,7 @@
     }
     log.following = true;
     log.lines = [];
+    log.pending = '';
     drawDock();
     call('kube.follow', {
       context: log.context, namespace: log.namespace, pod: log.name,
@@ -958,6 +1038,11 @@
     if (!log.search) return log.lines;
     var term = log.search.toLowerCase();
     return log.lines.filter(function (line) { return line.text.toLowerCase().indexOf(term) >= 0; });
+  }
+
+  /** One line of a log, as it appears. */
+  function lineHtml(line, term) {
+    return '<span class="log-line' + (line.err ? ' err' : '') + '">' + markUp(line.text, term) + '</span>';
   }
 
   /** The search term, marked where it was found. Everything else is escaped first. */
@@ -1000,7 +1085,7 @@
 
     var tools = containers +
       '<input id="log-search" placeholder="Search this log" value="' + esc(log.search) + '" />' +
-      (count ? '<span class="dim">' + esc(count) + '</span>' : '') +
+      (count ? '<span class="dim" id="log-count">' + esc(count) + '</span>' : '') +
       '<button class="btn' + (log.following ? ' on' : '') + '" data-do="follow">' + (log.following ? 'Following' : 'Follow') + '</button>' +
       '<button class="btn" data-do="previous" title="The log of the run that stopped">Previous</button>' +
       '<button class="btn' + (log.wrap ? ' on' : '') + '" data-do="wrap">Wrap</button>' +
@@ -1012,9 +1097,11 @@
       ? '<div class="dim">reading…</div>'
       : !shown.length
         ? '<div class="dim">' + (log.search ? 'Nothing in this log matches.' : 'Nothing in the log.') + '</div>'
-        : '<pre class="' + (log.wrap ? '' : 'wrapless') + '">' + shown.map(function (line) {
-            return '<span class="log-line' + (line.err ? ' err' : '') + '">' + markUp(line.text, log.search) + '</span>';
-          }).join('\n') + '</pre>';
+        : '<pre id="log-lines" class="' + (log.wrap ? '' : 'wrapless') + '">' +
+          shown.map(function (line) { return lineHtml(line, log.search); }).join('\n') + '</pre>';
+
+    // Whatever else happens below, this is what the DOM will hold.
+    log.drawn = log.loading ? 0 : log.lines.length;
 
     slot.innerHTML = '<div class="dock" style="height:' + (state.dockOpen ? state.dock + 'px' : 'auto') + '">' +
       '<div class="dock-grip" id="dock-grip"></div>' +
@@ -1026,6 +1113,52 @@
       var pane = document.getElementById('dock-body');
       if (pane) pane.scrollTop = pane.scrollHeight;
     }
+  }
+
+  /**
+   * A log that is being followed, added to rather than drawn again.
+   *
+   * Redrawing is what a viewer does when the thing being viewed changed; a line
+   * arriving has not changed anything, it has been added. The difference is not
+   * academic: rebuilding five thousand lines takes about seventy milliseconds,
+   * and a chatty pod sends ten chunks a second — which is more time than there
+   * is. Appending costs what the one line deserves.
+   *
+   * `drawn` is how many of the log's lines are in the DOM already. Returns
+   * false when there is nothing to append to, and the caller draws properly.
+   */
+  var pendingDraw = 0;
+
+  function appendLines(log) {
+    var pre = document.getElementById('log-lines');
+    if (!pre || !state.dockOpen || state.logs[state.logAt] !== log) return false;
+    if ((log.drawn || 0) >= log.lines.length) return true;
+
+    var added = log.lines.slice(log.drawn || 0);
+    log.drawn = log.lines.length;
+    if (log.search) {
+      var term = log.search.toLowerCase();
+      added = added.filter(function (line) { return line.text.toLowerCase().indexOf(term) >= 0; });
+    }
+
+    var pane = document.getElementById('dock-body');
+    // Whether to follow the tail is decided *before* adding to it.
+    var atBottom = pane ? pane.scrollHeight - pane.scrollTop - pane.clientHeight < 40 : true;
+
+    if (added.length) {
+      var html = added.map(function (line) { return lineHtml(line, log.search); }).join('\n');
+      pre.insertAdjacentHTML('beforeend', (pre.childNodes.length ? '\n' : '') + html);
+      // The cap, kept in the DOM as well as in the array.
+      var over = pre.childElementCount - LOG_CAP;
+      for (var i = 0; i < over; i += 1) if (pre.firstChild) pre.removeChild(pre.firstChild);
+    }
+
+    if (log.search) {
+      var count = document.getElementById('log-count');
+      if (count) count.textContent = shownLines(log).length + ' of ' + log.lines.length;
+    }
+    if (atBottom && pane) pane.scrollTop = pane.scrollHeight;
+    return true;
   }
 
   document.addEventListener('click', function (event) {
@@ -1081,22 +1214,43 @@
       if (payload.done) {
         log.following = false;
         log.id = null;
+        if (log.pending) { log.lines.push({ text: log.pending }); log.pending = ''; }
         log.lines.push({ text: '— the log ended —' });
         drawDock();
         return;
       }
-      var incoming = String(payload.text || '').split('\n');
-      // A chunk rarely ends on a line break, so the first piece belongs to the
-      // last line already there. Without this every read splits a line in two.
-      if (log.lines.length && incoming.length) {
-        var last = log.lines[log.lines.length - 1];
-        if (!last.complete) { last.text += incoming.shift(); last.complete = true; }
+      /*
+       * A chunk rarely ends on a line break, so its tail is half a line. That
+       * half is held here rather than pushed, so what is in `lines` is always
+       * whole lines — which is what makes appending sound: nothing already
+       * drawn is ever revised, so nothing already drawn has to be found again.
+       */
+      var text = (log.pending || '') + String(payload.text || '');
+      var parts = text.split('\n');
+      log.pending = parts.pop();
+      for (var n = 0; n < parts.length; n += 1) {
+        log.lines.push({ text: parts[n], err: payload.stream === 'err' });
       }
-      for (var n = 0; n < incoming.length; n += 1) {
-        log.lines.push({ text: incoming[n], err: payload.stream === 'err', complete: n < incoming.length - 1 });
+      if (log.lines.length > LOG_CAP) {
+        var cut = log.lines.length - LOG_CAP;
+        log.lines.splice(0, cut);
+        log.drawn = Math.max(0, (log.drawn || 0) - cut);
       }
-      if (log.lines.length > LOG_CAP) log.lines.splice(0, log.lines.length - LOG_CAP);
-      if (i === state.logAt) drawDock();
+      if (i !== state.logAt) return;
+      /*
+       * Once per frame at most. Chunks arrive in bursts — a pod that logs a
+       * request logs four lines about it — and drawing each one separately is
+       * three quarters of the work thrown away. It also means a frame nobody
+       * is looking at does nothing at all: an animation frame in a hidden
+       * document is never called.
+       */
+      if (!pendingDraw) {
+        pendingDraw = requestAnimationFrame(function () {
+          pendingDraw = 0;
+          var current = currentLog();
+          if (current && !appendLines(current)) drawDock();
+        });
+      }
       return;
     }
 
@@ -1324,14 +1478,57 @@
     }
   });
 
-  setInterval(function () {
-    if (!state.live || state.loading || document.hidden) return;
-    // Never while a question is open, and never while a log is streaming: both
-    // would redraw the thing somebody is in the middle of using.
-    if (document.getElementById('prompt')) return;
-    if (state.logs.some(function (log) { return log.following; })) return;
-    load(true);
-  }, state.everyMs);
+  /**
+   * Refreshing, paced by how long refreshing actually takes.
+   *
+   * This used to be an interval: every ten seconds, ask again. On a cluster on
+   * another continent a `pods --all-namespaces` takes four to seven seconds and
+   * returns four megabytes, so ten seconds meant asking again before the last
+   * answer had arrived — and because a quiet refresh never set the flag the
+   * interval checked, they stacked up rather than skipping. A slow cluster got
+   * two or three of them in flight at once, which is the sort of thing an API
+   * server rate-limits you for.
+   *
+   * So: wait after the answer, not after the question, and wait longer when the
+   * cluster is slow. A cluster that answers in half a second is polled every
+   * ten; one that takes six is polled every eighteen, which is the same
+   * *fraction* of its time rather than the same clock.
+   */
+  function scheduleRefresh() {
+    var took = state.tookMs || 0;
+    var wait = Math.max(state.everyMs, Math.min(60000, took * 3));
+    setTimeout(function () {
+      scheduleRefresh();
+      // `showing` is the app saying whether this tab is in front; `hidden` is
+      // the browser saying whether the window is. Either one means nobody is
+      // looking, and a cluster nobody is looking at is not worth asking.
+      if (!state.live || state.busy || state.loading || document.hidden || state.showing === false) return;
+      // Never while a question is open, and never while a log is streaming:
+      // both would redraw the thing somebody is in the middle of using.
+      if (document.getElementById('prompt')) return;
+      if (state.logs.some(function (log) { return log.following; })) return;
+      load(true);
+    }, wait);
+  }
+  scheduleRefresh();
+
+  /**
+   * Whether this tab is in front.
+   *
+   * Coming back to a panel that has been sitting behind another tab, the first
+   * thing worth doing is finding out what changed while it was away — so it
+   * refreshes on the way in rather than waiting out the rest of its timer.
+   */
+  host.on('showing', function (payload) {
+    var was = state.showing;
+    state.showing = !payload || payload.showing !== false;
+    if (!state.showing) return;
+    // Its first look: everything it needs, now that somebody wants it.
+    if (!state.started) { begin(); return; }
+    // Coming back: find out what changed while it was away, rather than
+    // waiting out the rest of a timer.
+    if (was === false && state.live && !state.busy) load(true);
+  });
 
   host.on('theme', function () { /* the app rebuilds the frame; nothing to do here */ });
 
@@ -1340,14 +1537,29 @@
     // Extensions rather than from the sidebar — kubeconfig's own current
     // context is the only sensible default.
     if (payload && payload.context) state.context = payload.context;
+    if (payload && payload.showing === false) state.showing = false;
+    /*
+     * A tab that is not in front does not go and read a cluster.
+     *
+     * These stay mounted so a followed log survives a tab switch, which means
+     * five restored cluster tabs would otherwise all start at once — fifteen
+     * kubectl processes and fifteen credential plugins racing at launch, some
+     * of them against clusters that will take twenty seconds to time out.
+     * Nothing happens here until somebody looks.
+     */
+    if (state.showing) begin();
+  });
+
+  /** Everything this tab needs, the first time it is looked at. */
+  function begin() {
+    state.started = true;
     start().catch(function (error) {
       state.error = String(error.message || error);
       state.loading = false;
       draw();
     });
-  });
+  }
 
-  state.loading = true;
   draw();
   host.ready();
 </script>

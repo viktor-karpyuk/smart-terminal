@@ -297,15 +297,24 @@ test('--all-namespaces goes after the subcommand, and --context before it', () =
   assert.deepEqual(scoped, ['--request-timeout', '20s', '--context', 'prod', '--namespace', 'web']);
 });
 
-test('following a log and forwarding a port are built, not typed', () => {
-  assert.deepEqual(
-    kube.followArgs({ context: 'prod', namespace: 'web', pod: 'api-1', container: 'api', tail: 50 }),
-    ['--request-timeout', '20s', '--context', 'prod', '--namespace', 'web', 'logs', 'api-1', '--follow', '--tail=50', '-c', 'api'],
-  );
-  assert.deepEqual(
-    kube.forwardArgs({ context: 'prod', namespace: 'web', kind: 'service', name: 'api', local: 8080, remote: 80 }),
-    ['--request-timeout', '20s', '--context', 'prod', '--namespace', 'web', 'port-forward', 'service/api', '8080:80'],
-  );
+test('the two commands that are meant to go on carry no request timeout', () => {
+  /*
+   * A request timeout on a streaming command is a countdown, not a safety net:
+   * kubectl closes the connection when it expires, so a followed log stopped
+   * after twenty seconds and a forwarded port went dead at the same moment —
+   * both silently, and both looking like the cluster had done it.
+   */
+  const follow = kube.followArgs({ context: 'prod', namespace: 'web', pod: 'api-1', container: 'api', tail: 50 });
+  assert.deepEqual(follow, ['--context', 'prod', '--namespace', 'web', 'logs', 'api-1', '--follow', '--tail=50', '-c', 'api']);
+  assert.ok(!follow.includes('--request-timeout'));
+
+  const forward = kube.forwardArgs({ context: 'prod', namespace: 'web', kind: 'service', name: 'api', local: 8080, remote: 80 });
+  assert.deepEqual(forward, ['--context', 'prod', '--namespace', 'web', 'port-forward', 'service/api', '8080:80']);
+  assert.ok(!forward.includes('--request-timeout'));
+
+  // Everything that is a question rather than a stream still has one.
+  assert.ok(kube.scope({ context: 'prod' }).includes('--request-timeout'));
+
   assert.throws(() => kube.forwardArgs({ name: 'api', remote: 0 }), /port to forward to/);
   assert.throws(() => kube.forwardArgs({ name: '-rf', local: 1, remote: 2 }), /cannot start with/);
 });

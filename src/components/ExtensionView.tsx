@@ -24,7 +24,7 @@ import {
  * them, including any other page that manages to post at us — so identity of
  * the window object is the only check worth making, and it is exact.
  */
-export function ExtensionView({ panelId }: { panelId: string }) {
+export function ExtensionView({ panelId, showing = true }: { panelId: string; showing?: boolean }) {
   const panel = useStore((s) => {
     const found = s.panels[panelId];
     return found?.kind === 'extension' ? found : null;
@@ -73,17 +73,21 @@ export function ExtensionView({ panelId }: { panelId: string }) {
   // Keyed on the theme so a light/dark switch rebuilds the document rather than
   // trying to repaint a frame from the outside, which is not something the app
   // is allowed to reach into and do.
-  return <Frame key={`${view.from}:${view.id}:${theme}`} panelId={panelId} view={view} root={root} />;
+  return (
+    <Frame key={`${view.from}:${view.id}:${theme}`} panelId={panelId} view={view} root={root} showing={showing} />
+  );
 }
 
 function Frame({
   panelId,
   view,
   root,
+  showing,
 }: {
   panelId: string;
   view: ExtensionPanelView;
   root: string | null;
+  showing: boolean;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const revealFile = useStore((s) => s.revealFile);
@@ -125,6 +129,14 @@ function Frame({
           context: view.needs === 'kubernetes' ? root : null,
           panelId,
           title: view.title,
+          /*
+           * Whether it is in front, in the answer to `ready` rather than only
+           * as its own message. A panel mounted behind another tab is told it
+           * is hidden before it has a listener to hear that with, and a panel
+           * that missed the message would go on believing it was being looked
+           * at — and go on asking a cluster about it.
+           */
+          showing: showingRef.current,
         });
         return;
       }
@@ -318,8 +330,19 @@ function Frame({
     return stop;
   }, [root, view.needs]);
 
+  /*
+   * Told, rather than left to work it out. A frame cannot see that the tab in
+   * front of it changed — `document.hidden` is about the window — so a panel
+   * that was not told would keep polling a cluster nobody is looking at.
+   */
+  const showingRef = useRef(showing);
+  useEffect(() => {
+    showingRef.current = showing;
+    tell('showing', { showing });
+  }, [showing]);
+
   return (
-    <div className="extension-view">
+    <div className="extension-view" hidden={!showing}>
       {asking && (
         <div className="modal-backdrop" onMouseDown={() => asking.answer(false)}>
           <div className="confirm" onMouseDown={(event) => event.stopPropagation()}>

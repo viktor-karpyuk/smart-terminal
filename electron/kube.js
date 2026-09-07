@@ -57,8 +57,15 @@ function safeArg(value, what) {
  * kubectl reads an unknown leading flag as an attempt to run a plugin. The
  * split is not tidiness; it is the difference between working and not.
  */
-function scope({ context, namespace, allNamespaces } = {}) {
-  const args = ['--request-timeout', REQUEST_TIMEOUT];
+function scope({ context, namespace, allNamespaces, forever } = {}) {
+  /*
+   * `forever` is for the two commands that are *meant* to go on: a followed log
+   * and a held-open port. A request timeout on those is not a safety net, it is
+   * a countdown — kubectl closes the connection when it expires, so a log
+   * stopped after twenty seconds and a forwarded port went dead at the same
+   * moment, both silently and both looking like the cluster's doing.
+   */
+  const args = forever ? [] : ['--request-timeout', REQUEST_TIMEOUT];
   if (context) args.push('--context', safeArg(context, 'the context'));
   if (!allNamespaces && namespace) args.push('--namespace', safeArg(namespace, 'the namespace'));
   return args;
@@ -1184,7 +1191,13 @@ class Streams {
 
 /** The arguments for following a log. Built here so they can be checked without spawning anything. */
 function followArgs({ pod, container, tail = 200, timestamps = false, ...rest }) {
-  const args = [...scope(rest), 'logs', safeArg(pod, 'the pod'), '--follow', `--tail=${Number(tail) || 200}`];
+  const args = [
+    ...scope({ ...rest, forever: true }),
+    'logs',
+    safeArg(pod, 'the pod'),
+    '--follow',
+    `--tail=${Number(tail) || 200}`,
+  ];
   if (container) args.push('-c', safeArg(container, 'the container'));
   if (timestamps) args.push('--timestamps');
   return args;
@@ -1197,7 +1210,7 @@ function forwardArgs({ kind = 'pod', name, local, remote, ...rest }) {
   if (!Number.isInteger(remotePort) || remotePort <= 0) throw new Error('A port to forward to is required.');
   if (!Number.isInteger(localPort) || localPort < 0) throw new Error('A local port is required, or 0 to be given one.');
   return [
-    ...scope(rest),
+    ...scope({ ...rest, forever: true }),
     'port-forward',
     `${safeArg(kind, 'the kind')}/${safeArg(name, 'the name')}`,
     `${localPort}:${remotePort}`,

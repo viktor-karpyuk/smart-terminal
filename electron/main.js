@@ -1921,6 +1921,18 @@ function retireLegacyWorkspace() {
   }
 }
 
+/**
+ * Nothing this app spawned outlives it.
+ *
+ * The window's own handler already stops the streams it owns, and that covers
+ * every ordinary way a window goes away. This is the other ways — quit while a
+ * window is mid-close, a reload, anything that skips it — because a `kubectl
+ * port-forward` nobody stopped is a port still open on the machine, and a
+ * followed log is a process still talking to a cluster on behalf of an app that
+ * is gone.
+ */
+app.on('will-quit', () => kubeStreams.stopAll());
+
 app.on('before-quit', (event) => {
   if (!quitConfirmed) {
     const running = runningIn();

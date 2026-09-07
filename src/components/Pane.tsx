@@ -44,6 +44,15 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
   const panelIds = useStore(
     useShallow((s) => leaf.tabs.filter((id) => Boolean(s.panels[id]))),
   );
+  /**
+   * The views an extension brought that live in this pane.
+   *
+   * They stay mounted whether or not they are in front, so the list is of all
+   * of them rather than of the active one — see the note where they are drawn.
+   */
+  const extensionTabs = useStore(
+    useShallow((s) => leaf.tabs.filter((id) => s.panels[id]?.kind === 'extension')),
+  );
   /** Which sort of panel is in front, when one is. A string, so it is stable. */
   const activePanelKind = useStore((s) => (leaf.active ? (s.panels[leaf.active]?.kind ?? null) : null));
   const tabGroups = useStore(
@@ -359,17 +368,30 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
       </header>
 
       <div className="pane-body" ref={bodyRef}>
-        {leaf.active && panelIds.includes(leaf.active) ? (
+        {/*
+          A view an extension brought stays mounted when its tab is not in
+          front, hidden rather than thrown away.
+          
+          Every other tab in this app can be rebuilt from what the app knows.
+          One of these cannot: it holds a followed log, a held-open port and
+          whatever was on screen, all of it inside a frame the app cannot see
+          into — so unmounting it means the log stops, the port closes and
+          coming back costs a full reload of a cluster's worth of JSON. It is
+          told when it is not being looked at, and stops asking the cluster
+          anything until it is.
+        */}
+        {extensionTabs.map((id) => (
+          <ExtensionView key={id} panelId={id} showing={id === leaf.active} />
+        ))}
+        {leaf.active && panelIds.includes(leaf.active) && activePanelKind !== 'extension' ? (
           activePanelKind === 'monitor' ? (
             <MonitorPanel key={leaf.active} panelId={leaf.active} />
           ) : activePanelKind === 'extensions' ? (
             <ExtensionsPanel key={leaf.active} />
-          ) : activePanelKind === 'extension' ? (
-            <ExtensionView key={leaf.active} panelId={leaf.active} />
           ) : (
             <FilesPanel key={leaf.active} panelId={leaf.active} />
           )
-        ) : leaf.active && activeSession ? (
+        ) : leaf.active && panelIds.includes(leaf.active) ? null : leaf.active && activeSession ? (
           <>
             <TerminalSlot key={leaf.active} sessionId={leaf.active} />
             {activeSession.offerCommand && <CommandOffer sessionId={leaf.active} />}
