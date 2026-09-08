@@ -92,6 +92,22 @@ function Frame({
   const frame = useRef<HTMLIFrameElement>(null);
   const revealFile = useStore((s) => s.revealFile);
   const [notice, setNotice] = useState<{ text: string; bad: boolean } | null>(null);
+
+  /*
+   * A notice floats over the panel and does not push it.
+   *
+   * It used to be a row above the frame, so "Copied labels." moved every row of
+   * a table thirty pixels down and left it there until somebody dismissed it —
+   * a confirmation that costs a click and loses your place is worse than no
+   * confirmation. Good news goes on its own after a few seconds; bad news stays,
+   * because an error you did not read is an error that did not happen as far as
+   * you know.
+   */
+  useEffect(() => {
+    if (!notice || notice.bad) return;
+    const going = setTimeout(() => setNotice(null), 3200);
+    return () => clearTimeout(going);
+  }, [notice]);
   /*
    * The question asked before something is taken away, and the answer that is
    * waiting on it. Drawn by the app rather than by `window.confirm`, and not
@@ -433,7 +449,7 @@ function Frame({
         </div>
       )}
       {notice && (
-        <div className={`git-notice ${notice.bad ? 'is-bad' : 'is-ok'}`}>
+        <div className={`git-notice is-floating ${notice.bad ? 'is-bad' : 'is-ok'}`}>
           <span className="file-bar-dot" />
           <span className="file-bar-text">{notice.text}</span>
           <button className="link-btn" onClick={() => setNotice(null)}>

@@ -28,8 +28,16 @@
   .btn:hover { color: var(--text); border-color: var(--border-strong); background: var(--bg-elevated); }
   .btn.on { color: var(--accent); border-color: var(--accent); }
   .btn.go { color: var(--accent); border-color: var(--accent); }
-  .btn.bad:hover { color: var(--danger); border-color: var(--danger); }
+  /*
+   * A button that takes something away looks like one before the pointer is on
+   * it. It only turned red on hover, which is exactly too late: Delete, Drain
+   * and Uninstall sat in a row looking like Logs, and the difference between
+   * them showed up at the moment somebody was already committing to a click.
+   */
+  .btn.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+  .btn.bad:hover { color: var(--danger); border-color: var(--danger); background: rgba(247, 118, 142, 0.10); }
   .btn[disabled] { opacity: 0.4; pointer-events: none; }
+  .gap { flex: 1; min-width: 8px; }
 
   /* The columns are set from script, so they can be dragged. The values here
      are only what they start at. */
@@ -2082,7 +2090,7 @@
     var buttons = [];
     if (row.kind === 'Release') {
       return '<button class="btn" data-do="helm-diff" title="What this revision put in the cluster">Manifest</button>' +
-        '<button class="btn bad" data-do="helm-uninstall">Uninstall…</button>';
+        '<span class="gap"></span><button class="btn bad" data-do="helm-uninstall">Uninstall…</button>';
     }
     if (row.kind === 'Pod') {
       buttons.push('<button class="btn" data-do="logs">Logs</button>');
@@ -2108,9 +2116,11 @@
     if ((row.forwardable || []).length) buttons.push('<button class="btn" data-do="forward">Forward…</button>');
     if (row.kind === 'Node') {
       buttons.push('<button class="btn" data-do="cordon">' + (row.schedulable ? 'Cordon' : 'Uncordon') + '</button>');
-      buttons.push('<button class="btn bad" data-do="drain">Drain…</button>');
+      buttons.push('<span class="gap"></span><button class="btn bad" data-do="drain">Drain…</button>');
     }
-    buttons.push('<button class="btn bad" data-do="delete">Delete</button>');
+    // A gap between what reads and what removes, so the last button is not the
+    // next one along from Restart.
+    buttons.push('<span class="gap"></span><button class="btn bad" data-do="delete">Delete</button>');
     return buttons.join('');
   }
 
