@@ -78,6 +78,23 @@ export function ExtensionView({ panelId, showing = true }: { panelId: string; sh
   );
 }
 
+/**
+ * Where each panel was, kept outside the component that keeps being rebuilt.
+ *
+ * The frame is destroyed and made again whenever the pane it lives in changes
+ * shape: a terminal opening underneath it, that terminal closing, the theme
+ * changing. React is right to do that — it is a different position in a
+ * different tree — but a new frame is a new document, and a new document starts
+ * wherever the panel starts. So asking Claude about a pod threw away the table
+ * the pod was found in, and closing the session threw it away again.
+ *
+ * A panel says where it is; this holds it for the next frame with the same id.
+ * Module scope on purpose: it has to outlive the component, and it is a handful
+ * of small objects that go when the window does. The app never reads what is in
+ * one — it hands it straight back to the panel that wrote it.
+ */
+const whereEachPanelWas = new Map<string, unknown>();
+
 function Frame({
   panelId,
   view,
@@ -167,6 +184,8 @@ function Frame({
           context: view.needs === 'kubernetes' ? root : null,
           panelId,
           title: view.title,
+          // Where it was before the last time this frame was thrown away.
+          resume: whereEachPanelWas.get(panelId) ?? null,
           /*
            * Whether it is in front, in the answer to `ready` rather than only
            * as its own message. A panel mounted behind another tab is told it
@@ -195,6 +214,10 @@ function Frame({
               if (done.ok) setNotice({ text: `Saved to ${done.path}`, bad: false });
               else if (done.error) setNotice({ text: done.error, bad: true });
             });
+        } else if (message.name === 'remember') {
+          // Opaque: whatever the panel says it needs to come back, handed back
+          // to that same panel and read by nothing else.
+          whereEachPanelWas.set(panelId, message.payload ?? null);
         } else if (message.name === 'copy' && typeof message.payload?.text === 'string') {
           // A frame in an origin of its own has no clipboard to write to, so it
           // asks. Text only: what goes on the clipboard is a string the person

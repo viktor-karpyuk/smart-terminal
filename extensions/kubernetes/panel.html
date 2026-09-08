@@ -582,6 +582,52 @@
 
   function say(text, bad) { host.emit('notify', { text: text, kind: bad ? 'bad' : 'ok' }); }
 
+  /**
+   * Where this panel is, told to the app so it can be put back.
+   *
+   * The frame is rebuilt whenever the pane it lives in changes shape — a
+   * terminal opening underneath it, that terminal being closed again, the theme
+   * changing — and a rebuilt frame is a new document that starts at the
+   * overview. Which meant that asking Claude about a pod threw away the table
+   * you found the pod in, and closing the session threw it away a second time.
+   *
+   * So the navigation rides along with the app, which outlives the frame. Only
+   * the navigation: what was on screen, not what was read from the cluster,
+   * because the cluster is asked again anyway and a remembered answer would be
+   * a stale one.
+   */
+  function remember() {
+    host.emit('remember', {
+      view: state.view,
+      only: state.only,
+      sort: state.sort,
+      namespace: state.namespace,
+      search: state.search,
+      // By name rather than by uid: a pod that was replaced while the frame was
+      // being rebuilt has a new uid and the same name, and the name is the one
+      // the person was reading.
+      selected: state.selected ? { name: state.selected.name, tab: state.detail.tab } : null,
+    });
+  }
+
+  /** Put it back, before anything is asked of the cluster. */
+  function resume(saved) {
+    if (!saved || !saved.view) return;
+    state.view = saved.view;
+    state.only = saved.only || null;
+    state.sort = saved.sort || { column: null, dir: 1 };
+    state.namespace = saved.namespace || '';
+    state.search = saved.search || '';
+    if (saved.selected && saved.selected.name) {
+      state.wanted = saved.selected.name;
+      if (saved.selected.tab) state.detail = { tab: saved.selected.tab };
+    }
+    // The filter box is part of the document rather than of the state, so it has
+    // to be put back too — a filter that is applied and not shown is a table
+    // that is missing rows for no reason anybody can see.
+    if (state.search) $('search').value = state.search;
+  }
+
   /** Where we are, as every call below needs it. */
   function where() {
     var at = { context: state.context };
@@ -758,6 +804,7 @@
     $('search').value = '';
     state.sort = extras.sort || { column: null, dir: 1 };
     state.wanted = extras.wanted || null;
+    remember();
     drawNav();
     load();
   }
@@ -1324,10 +1371,12 @@
   $('namespace').addEventListener('change', function (event) {
     state.namespace = event.target.value;
     state.selected = null;
+    remember();
     load();
   });
   $('search').addEventListener('input', function (event) {
     state.search = event.target.value.trim().toLowerCase();
+    remember();
     draw();
   });
   $('reload').addEventListener('click', function () { load(); });
@@ -1613,6 +1662,7 @@
     state.editingYaml = false;
     state.detail = { tab: 'overview' };
     state.detailData = {};
+    remember();
     draw();
     loadDetail();
   }
@@ -3189,6 +3239,7 @@
       // still here on the way back.
       state.editing = false;
       state.detail.tab = tab.dataset.tab;
+      remember();
       drawDetail();
       loadDetail();
       return;
@@ -4531,6 +4582,8 @@
     // context is the only sensible default.
     if (payload && payload.context) state.context = payload.context;
     if (payload && payload.showing === false) state.showing = false;
+    // Where this panel was before the frame was rebuilt, if it was anywhere.
+    if (payload) resume(payload.resume);
     /*
      * A tab that is not in front does not go and read a cluster.
      *
