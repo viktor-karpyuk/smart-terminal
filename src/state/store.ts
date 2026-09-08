@@ -65,7 +65,20 @@ const DEFAULT_SETTINGS: Settings = {
   sidebarVisible: true,
   sidebarWidth: 260,
   cursorBlink: true,
-  scrollback: 20000,
+  /*
+   * Five thousand lines, not twenty.
+   *
+   * Measured, not guessed: a terminal filled to twenty thousand lines at a
+   * normal width holds fifty-two megabytes — clearing one gave exactly that
+   * back — so half a dozen busy tabs was three hundred megabytes of scrollback
+   * before anything else. Five thousand is thirteen, and is still far more
+   * history than a terminal beside an editor is scrolled through.
+   *
+   * It is also not where a conversation is kept. A Claude session's transcript
+   * is in the database, whole and searchable, whatever the terminal holds — so
+   * this number is a convenience, not an archive.
+   */
+  scrollback: 5000,
   autoHandoff: true,
   defaultProfileId: null,
   recordConversations: true,

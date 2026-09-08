@@ -307,7 +307,9 @@ export function AppearancePanel() {
                 onChange={(event) => updateSettings({ scrollback: Number(event.target.value) })}
               />
               <small className="form-hint">
-                Applies to new sessions. More scrollback costs memory in every open session.
+                Applies to new sessions, and costs about {(settings.scrollback * 0.0026).toFixed(0)} MB of
+                memory in each one that fills it. A Claude session's transcript is kept in full
+                regardless — this is what the terminal itself remembers.
               </small>
             </label>
           </section>
