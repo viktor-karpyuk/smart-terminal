@@ -349,6 +349,15 @@ function base(item, now) {
     age: age(item.metadata?.creationTimestamp, now),
     createdAt: item.metadata?.creationTimestamp ?? null,
     labels: item.metadata?.labels ?? {},
+    /*
+     * Who made this, by uid. Names are not enough to go on: a CronJob's jobs are
+     * named after it with a timestamp glued on, and so is a job somebody made by
+     * hand from the same cron job, and so — in a namespace that has both `backup`
+     * and `backup-nightly` — is a job belonging to neither. The uid is the only
+     * answer that is never nearly right.
+     */
+    owner: (item.metadata?.ownerReferences ?? []).find((ref) => ref.controller)?.uid ??
+      item.metadata?.ownerReferences?.[0]?.uid ?? '',
   };
 }
 
@@ -385,6 +394,29 @@ function podRow(item, now) {
   };
 }
 
+/**
+ * The label selector a workload picks its own pods with.
+ *
+ * "Which pods is this Deployment actually running" is the first question anybody
+ * asks of a workload and the one thing a table of workloads cannot answer, so
+ * the selector travels on the row and the panel lists pods with it — the same
+ * `get pods --selector` a person would type.
+ *
+ * `matchExpressions` is deliberately not translated. A selector that is only
+ * half of the real one would quietly list pods this workload does not own, and
+ * a missing tab is better than a wrong list.
+ */
+function selectorOf(item) {
+  const selector = item.spec?.selector;
+  if (!selector) return '';
+  if (Array.isArray(selector.matchExpressions) && selector.matchExpressions.length) return '';
+  const labels = selector.matchLabels ?? selector;
+  const parts = Object.keys(labels ?? {})
+    .filter((key) => typeof labels[key] === 'string')
+    .map((key) => `${key}=${labels[key]}`);
+  return parts.join(',');
+}
+
 function deploymentRow(item, now) {
   const status = item.status ?? {};
   const wanted = item.spec?.replicas ?? 0;
@@ -400,6 +432,11 @@ function deploymentRow(item, now) {
     replicas: wanted,
     scalable: true,
     restartable: true,
+    /** Deployments alone can be held mid-rollout, and told to go back. */
+    pausable: true,
+    revisioned: true,
+    selector: selectorOf(item),
+    paused: item.spec?.paused === true,
   };
 }
 
@@ -416,6 +453,8 @@ function statefulSetRow(item, now) {
     replicas: wanted,
     scalable: true,
     restartable: true,
+    revisioned: true,
+    selector: selectorOf(item),
   };
 }
 
@@ -433,6 +472,9 @@ function daemonSetRow(item, now) {
     available: status.numberAvailable ?? 0,
     replicas: wanted,
     restartable: true,
+    revisioned: true,
+    selector: selectorOf(item),
+    misscheduled: status.numberMisscheduled ?? 0,
   };
 }
 
@@ -453,6 +495,15 @@ function jobRow(item, now) {
         : status.startTime
           ? age(status.startTime, now)
           : '',
+    /*
+     * A Job's pods carry `job-name`, put there by the controller, so they can be
+     * listed even though a Job's own selector is a generated `controller-uid`
+     * that says nothing to a reader.
+     */
+    selector: `job-name=${item.metadata?.name ?? ''}`,
+    failedCount: failed,
+    suspendable: true,
+    suspended: item.spec?.suspend === true,
   };
 }
 
@@ -465,6 +516,11 @@ function cronJobRow(item, now) {
     schedule: item.spec?.schedule ?? '',
     active: (item.status?.active ?? []).length,
     lastRun: item.status?.lastScheduleTime ? age(item.status.lastScheduleTime, now) : '',
+    /** The jobs it has made carry it as their owner, which is how they are found. */
+    ownsJobs: true,
+    triggerable: true,
+    suspendable: true,
+    suspended,
   };
 }
 
@@ -1817,6 +1873,124 @@ function forwardedPort(text) {
   return match ? Number(match[1]) : null;
 }
 
+
+/**
+ * What a workload has been, revision by revision.
+ *
+ * `kubectl rollout history` prints a table with a CHANGE-CAUSE column that is
+ * almost always `<none>` — it is only filled in when somebody remembered to
+ * annotate the apply — so it answers "how many revisions" and nothing else. The
+ * objects behind those revisions say much more, and they are ordinary objects:
+ * a Deployment's revisions are its ReplicaSets, and a StatefulSet's or
+ * DaemonSet's are ControllerRevisions. Both carry the revision number in an
+ * annotation and the pod template the revision ran, so each row can say what
+ * changed — which images that revision ran — rather than just that it existed.
+ *
+ * Ownership is checked by uid, not by name: two Deployments in a namespace can
+ * own ReplicaSets whose names differ only in a hash suffix, and a history that
+ * mixes them in is worse than no history.
+ */
+async function history({ kind, name, ...rest }) {
+  const of = String(kind || '').toLowerCase();
+  const owner = await runJson([...scope(rest), 'get', safeArg(kind, 'the resource kind'), safeArg(name, 'the name'), '-o', 'json']);
+  if (!owner.ok) return owner;
+  const uid = owner.data?.metadata?.uid;
+  const current = Number(owner.data?.metadata?.annotations?.['deployment.kubernetes.io/revision'] ?? 0);
+
+  const childKind = of === 'deployment' || of === 'deployments' ? 'replicasets' : 'controllerrevisions';
+  const children = await runJson([...scope(rest), 'get', childKind, '-o', 'json']);
+  if (!children.ok) return children;
+
+  const rows = (children.data?.items ?? [])
+    .filter((item) => (item.metadata?.ownerReferences ?? []).some((ref) => ref.uid === uid))
+    .map((item) => {
+      const annotations = item.metadata?.annotations ?? {};
+      const revision = Number(
+        annotations['deployment.kubernetes.io/revision'] ?? item.revision ?? 0,
+      );
+      const template = item.spec?.template ?? item.data?.spec?.template ?? {};
+      const containers = [...(template.spec?.containers ?? []), ...(template.spec?.initContainers ?? [])];
+      return {
+        revision,
+        name: item.metadata?.name ?? '',
+        age: age(item.metadata?.creationTimestamp, Date.now()),
+        images: containers.map((container) => container.image).filter(Boolean),
+        replicas: item.spec?.replicas ?? null,
+        cause: annotations['kubernetes.io/change-cause'] ?? '',
+      };
+    })
+    .sort((a, b) => b.revision - a.revision);
+
+  /*
+   * A ControllerRevision has no revision annotation to compare against, so the
+   * newest one is the current one. A Deployment says which explicitly.
+   */
+  const now = current || (rows[0]?.revision ?? 0);
+  return { ok: true, current: now, rows: rows.map((row) => ({ ...row, current: row.revision === now })) };
+}
+
+/** Put a workload back to a revision it used to be. */
+async function rollback({ kind, name, revision, ...rest }) {
+  const args = [...scope(rest), 'rollout', 'undo', safeArg(kind, 'the resource kind'), safeArg(name, 'the name')];
+  if (revision != null && revision !== '') {
+    const to = Number(revision);
+    if (!Number.isInteger(to) || to < 1) return { ok: false, error: 'A revision is a whole number.' };
+    args.push(`--to-revision=${to}`);
+  }
+  const result = await run(args);
+  return result.ok ? { ok: true, text: result.stdout.trim() } : result;
+}
+
+/**
+ * Hold a rollout, or let it carry on.
+ *
+ * Worth having as a button rather than as advice: a Deployment that is halfway
+ * through replacing its pods with a bad image is stopped by this and by nothing
+ * else, and the alternative — scaling to zero — takes down the half that still
+ * works.
+ */
+async function pause({ name, on = true, ...rest }) {
+  const result = await run([
+    ...scope(rest),
+    'rollout',
+    on ? 'pause' : 'resume',
+    'deployment',
+    safeArg(name, 'the name'),
+  ]);
+  return result.ok ? { ok: true, text: result.stdout.trim() } : result;
+}
+
+/** Stop a CronJob firing, or a Job running, without deleting it. */
+async function suspend({ kind, name, on = true, ...rest }) {
+  const result = await run([
+    ...scope(rest),
+    'patch',
+    safeArg(kind, 'the resource kind'),
+    safeArg(name, 'the name'),
+    '--type=merge',
+    '-p',
+    JSON.stringify({ spec: { suspend: on !== false } }),
+  ]);
+  return result.ok ? { ok: true, text: result.stdout.trim() } : result;
+}
+
+/**
+ * Run a CronJob now, without waiting for its schedule.
+ *
+ * The job it creates is named after the cron job and the minute it was asked
+ * for, which is both unique enough and readable afterwards — an operator
+ * looking at a list of jobs a week later can tell which one somebody started by
+ * hand. A Kubernetes name is 63 characters, so the stem is trimmed to leave
+ * room for the suffix rather than letting the API server refuse it.
+ */
+async function trigger({ name, ...rest }) {
+  const from = safeArg(name, 'the name');
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(2, 13).toLowerCase();
+  const created = `${from.slice(0, 44)}-${stamp}`;
+  const result = await run([...scope(rest), 'create', 'job', created, `--from=cronjob/${from}`]);
+  return result.ok ? { ok: true, text: result.stdout.trim(), name: created } : result;
+}
+
 module.exports = {
   // reading
   contexts,
@@ -1839,6 +2013,11 @@ module.exports = {
   restart,
   apply,
   cordon,
+  history,
+  rollback,
+  pause,
+  suspend,
+  trigger,
   removeContext,
   useContext,
   // long-running
@@ -1861,6 +2040,7 @@ module.exports = {
   isCore,
   contextsFrom,
   whatToRemove,
+  selectorOf,
   metrics,
   overview,
   quantity,

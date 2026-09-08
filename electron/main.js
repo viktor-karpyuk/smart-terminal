@@ -1110,6 +1110,11 @@ function registerIpc() {
     restart: (args) => kube.restart(args),
     apply: (args) => kube.apply(args),
     cordon: (args) => kube.cordon(args),
+    history: (args) => kube.history(args),
+    rollback: (args) => kube.rollback(args),
+    pause: (args) => kube.pause(args),
+    suspend: (args) => kube.suspend(args),
+    trigger: (args) => kube.trigger(args),
     removeContext: (args) => kube.removeContext(args),
     useContext: (args) => kube.useContext(args),
   };

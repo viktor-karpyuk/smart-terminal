@@ -81,6 +81,7 @@ const KUBE_READ = [
   'summary',
   'brief',
   'prometheus',
+  'history',
   'promQuery',
   'promNow',
 ] as const;
@@ -93,7 +94,17 @@ const KUBE_READ = [
  * extension's choosing. What is here is what a dashboard is for: take one thing
  * away, make more or fewer of it, roll it, put an edited manifest back.
  */
-const KUBE_WRITE = ['remove', 'scale', 'restart', 'apply', 'cordon'] as const;
+const KUBE_WRITE = [
+  'remove',
+  'scale',
+  'restart',
+  'apply',
+  'cordon',
+  'rollback',
+  'pause',
+  'suspend',
+  'trigger',
+] as const;
 
 /**
  * The long-running ones: following a log, holding a port open, and watching a
@@ -214,6 +225,26 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
     }
     if (name === 'kube.scale' && Number(args.replicas) === 0) {
       return `Scale ${what} to zero${where}?\n\nEverything it runs stops.`;
+    }
+    /*
+     * A rollback is the one that reads as safe and is not. It does not undo the
+     * last change; it replaces the workload's template with an older one, and
+     * everything changed since — a bumped limit, a new environment variable, a
+     * different image somebody pushed on Friday — goes back with it.
+     */
+    if (name === 'kube.rollback') {
+      return (
+        `Roll ${what} back to ${args.revision ? `revision ${String(args.revision)}` : 'its previous revision'}` +
+        `${where}?\n\nEverything changed since that revision goes with it, not only the last change.`
+      );
+    }
+    // Suspending is reversible and takes nothing away, but it does stop work
+    // from happening, which somebody will otherwise wait for in silence.
+    if (name === 'kube.suspend' && args.on !== false) {
+      return `Stop ${what} running${where}?\n\nIt stays, and fires nothing until it is resumed.`;
+    }
+    if (name === 'kube.trigger') {
+      return `Run ${String(args.name ?? 'this cron job')} now${where}?\n\nIt makes a real job, off schedule.`;
     }
     if (name === 'kube.cordon' && args.on !== false) {
       return `Stop scheduling new pods onto ${String(args.name ?? 'this node')}${where}?`;

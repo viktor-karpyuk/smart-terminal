@@ -511,3 +511,51 @@ test('a stream is stoppable, and stopping one that is gone is not an error', () 
   assert.equal(streams.size, 0);
   streams.stopAll();
 });
+
+test('a workload carries the selector it picks its own pods with', () => {
+  const deployment = {
+    metadata: { name: 'api', namespace: 'prod', creationTimestamp: new Date().toISOString() },
+    spec: { replicas: 3, selector: { matchLabels: { app: 'api', tier: 'web' } } },
+    status: { availableReplicas: 3, readyReplicas: 3 },
+  };
+  const [row] = kube.table('Deployment', { items: [deployment] }, Date.now()).rows;
+  assert.equal(row.selector, 'app=api,tier=web');
+  assert.equal(row.revisioned, true);
+  assert.equal(row.pausable, true);
+});
+
+test('a selector this cannot express in full is not offered at all', () => {
+  /*
+   * Half a selector lists pods the workload does not own, which is worse than
+   * no tab: the reader has no way to tell the strangers from the family.
+   */
+  const selector = {
+    matchLabels: { app: 'api' },
+    matchExpressions: [{ key: 'tier', operator: 'In', values: ['web'] }],
+  };
+  assert.equal(kube.selectorOf({ spec: { selector } }), '');
+  assert.equal(kube.selectorOf({ spec: {} }), '');
+});
+
+test("a job's pods are found by the label the controller puts on them", () => {
+  const job = {
+    metadata: { name: 'nightly', namespace: 'prod', creationTimestamp: new Date().toISOString() },
+    spec: { completions: 1, selector: { matchLabels: { 'controller-uid': 'a-uuid-nobody-can-read' } } },
+    status: { succeeded: 1 },
+  };
+  const [row] = kube.table('Job', { items: [job] }, Date.now()).rows;
+  assert.equal(row.selector, 'job-name=nightly');
+  assert.equal(row.suspendable, true);
+});
+
+test('a cron job offers the two things you do to one without deleting it', () => {
+  const cron = {
+    metadata: { name: 'backup', namespace: 'prod', creationTimestamp: new Date().toISOString() },
+    spec: { schedule: '0 3 * * *', suspend: true },
+    status: {},
+  };
+  const [row] = kube.table('CronJob', { items: [cron] }, Date.now()).rows;
+  assert.equal(row.suspended, true);
+  assert.equal(row.triggerable, true);
+  assert.equal(row.status, 'Suspended');
+});

@@ -246,6 +246,9 @@
   }
   .pressure b { color: var(--danger); font-weight: 600; }
 
+  tr.is-link { cursor: pointer; }
+  tr.is-link:hover { background: var(--bg-elevated); }
+
   /* Anything that goes somewhere says so before it is clicked. */
   .card.is-link, .gauge.is-link { cursor: pointer; }
   .card.is-link:hover, .gauge.is-link:hover { border-color: var(--accent); }
@@ -1963,10 +1966,19 @@
      */
     var release = chosen.kind === 'Release';
     var tabs = release ? ['revisions', 'values', 'manifest', 'notes'] : ['overview', 'yaml', 'events'];
+    /*
+     * A workload is two questions a plain object is not: which pods is it
+     * actually running, and what was it before this. Both have to be asked of
+     * other objects — the pods it selects, the revisions it owns — which is why
+     * a table of workloads cannot answer either, and why they are here.
+     */
+    if (!release && chosen.selector) tabs.splice(1, 0, 'pods');
+    if (!release && chosen.ownsJobs) tabs.splice(1, 0, 'jobs');
+    if (!release && chosen.revisioned) tabs.splice(chosen.selector ? 2 : 1, 0, 'rollout');
     if (release && ['revisions', 'values', 'manifest', 'notes'].indexOf(state.detail.tab) < 0) {
       state.detail.tab = 'revisions';
     }
-    if (!release && ['overview', 'yaml', 'events'].indexOf(state.detail.tab) < 0) {
+    if (!release && tabs.indexOf(state.detail.tab) < 0) {
       state.detail.tab = 'overview';
     }
 
@@ -2010,6 +2022,21 @@
     }
     if (row.scalable) buttons.push('<button class="btn" data-do="scale">Scale…</button>');
     if (row.restartable) buttons.push('<button class="btn" data-do="restart">Restart</button>');
+    /*
+     * The button that has no substitute. A Deployment halfway through replacing
+     * its pods with an image that does not start is stopped by this and by
+     * nothing else — scaling to zero would take down the half still serving.
+     */
+    if (row.pausable) {
+      buttons.push('<button class="btn' + (row.paused ? ' on' : '') + '" data-do="pause" ' +
+        'title="' + (row.paused ? 'Let the rollout carry on' : 'Hold the rollout where it is') + '">' +
+        (row.paused ? 'Resume' : 'Pause') + '</button>');
+    }
+    if (row.triggerable) buttons.push('<button class="btn" data-do="trigger" title="Make a job from it now, off schedule">Run now</button>');
+    if (row.suspendable) {
+      buttons.push('<button class="btn' + (row.suspended ? ' on' : '') + '" data-do="suspend">' +
+        (row.suspended ? 'Resume' : 'Suspend') + '</button>');
+    }
     if ((row.forwardable || []).length) buttons.push('<button class="btn" data-do="forward">Forward…</button>');
     if (row.kind === 'Node') {
       buttons.push('<button class="btn" data-do="cordon">' + (row.schedulable ? 'Cordon' : 'Uncordon') + '</button>');
@@ -2019,13 +2046,101 @@
     return buttons.join('');
   }
 
+  /**
+   * The pods a workload is actually running.
+   *
+   * Not a count — the pods themselves, with what is wrong with each. "3/5 ready"
+   * tells you to go and look; this is the looking, and each row opens that pod
+   * where its log and its shell are, which is where the answer was always going
+   * to be.
+   */
+  function podsBody(row) {
+    var pods = state.detailData.pods;
+    if (!pods) return '<pre>reading…</pre>';
+    if (!pods.length) return '<div class="dim">It is running no pods at all.</div>';
+    var restarts = pods.reduce(function (sum, pod) { return sum + (Number(pod.restarts) || 0); }, 0);
+    var unwell = pods.filter(function (pod) { return pod.health === 'bad'; }).length;
+    return '<p class="all-well">' + pods.length + (pods.length === 1 ? ' pod' : ' pods') +
+        (unwell ? ' · <span class="bad-text">' + unwell + ' unhealthy</span>' : ' · all healthy') +
+        (restarts ? ' · ' + restarts + ' restarts between them' : '') + '</p>' +
+      '<table><tbody>' + pods.map(function (pod) {
+        return '<tr class="is-link" data-open="' + esc(pod.name) + '" data-open-kind="pods"' +
+            ' data-open-namespace="' + esc(pod.namespace || '') + '">' +
+          '<td><span class="dot ' + esc(pod.health) + '"></span></td>' +
+          '<td class="grow">' + esc(pod.name) + '</td>' +
+          '<td class="dim">' + esc(pod.status) + '</td>' +
+          '<td class="dim">' + esc(pod.ready || '') + '</td>' +
+          '<td class="' + (Number(pod.restarts) ? 'warn-text' : 'dim') + '">' +
+            (Number(pod.restarts) ? esc(pod.restarts) + '×' : '') + '</td>' +
+          '<td class="dim">' + esc(pod.node || '') + '</td>' +
+          '<td class="dim">' + esc(pod.age) + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+
+  /**
+   * The runs a cron job has actually had.
+   *
+   * A schedule and a "last run 4h ago" say it fired; they do not say whether the
+   * thing it fired worked, which is the only reason anybody opens a cron job.
+   * Matched by owner uid rather than by the name the controller builds, because
+   * two cron jobs in a namespace can produce names that only a uid tells apart.
+   */
+  function jobsBody(row) {
+    var jobs = state.detailData.jobs;
+    if (!jobs) return '<pre>reading…</pre>';
+    if (!jobs.length) return '<div class="dim">It has not run yet — nothing it made is still around.</div>';
+    var failed = jobs.filter(function (job) { return job.health === 'bad'; }).length;
+    return '<p class="all-well">' + jobs.length + (jobs.length === 1 ? ' run kept' : ' runs kept') +
+        (failed ? ' · <span class="bad-text">' + failed + ' failed</span>' : ' · none failed') + '</p>' +
+      '<table><tbody>' + jobs.map(function (job) {
+        return '<tr class="is-link" data-open="' + esc(job.name) + '" data-open-kind="jobs"' +
+            ' data-open-namespace="' + esc(job.namespace || '') + '">' +
+          '<td><span class="dot ' + esc(job.health) + '"></span></td>' +
+          '<td class="grow">' + esc(job.name) + '</td>' +
+          '<td class="dim">' + esc(job.status) + '</td>' +
+          '<td class="dim">' + esc(job.duration || '') + '</td>' +
+          '<td class="dim">' + esc(job.age) + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+
+  /**
+   * What this workload used to be, and the way back.
+   *
+   * `rollout history` prints a table whose one interesting column is almost
+   * always empty, so this shows the revisions themselves: which is running, what
+   * images each one ran, and how long ago it was made. The images are the part
+   * that makes a rollback a decision rather than a guess — going back one
+   * revision means going back to the tag named on that row.
+   */
+  function rolloutBody(row) {
+    var got = state.detailData.rollout;
+    if (!got) return '<pre>reading…</pre>';
+    if (typeof got === 'string') return '<div class="dim">' + esc(got) + '</div>';
+    if (!got.rows.length) return '<div class="dim">No revisions are kept for this one.</div>';
+    return (row.paused ? '<p class="all-well warn-text">Its rollout is paused — nothing is replacing anything.</p>' : '') +
+      '<table><tbody>' + got.rows.map(function (rev) {
+        return '<tr>' +
+          '<td class="dim">' + (rev.current ? '<b>' + rev.revision + '</b>' : rev.revision) + '</td>' +
+          '<td class="grow"><div>' + esc(rev.images.join(', ') || rev.name) + '</div>' +
+            (rev.cause ? '<div class="dim">' + esc(rev.cause) + '</div>' : '') + '</td>' +
+          '<td class="dim">' + esc(rev.age) + '</td>' +
+          '<td>' + (rev.current
+            ? '<span class="dim">running</span>'
+            : '<button class="btn" data-undo="' + rev.revision + '">Roll back</button>') + '</td>' +
+          '</tr>';
+      }).join('') + '</tbody></table>';
+  }
+
   function detailBody(row) {
     var tab = state.detail.tab;
     if (row.kind === 'Release') return releaseBody(row, tab);
     if (tab === 'overview') {
       var loaded = state.detailData.describe;
       var facts = '<dl class="facts">' + Object.keys(row).filter(function (key) {
-        return ['uid', 'labels', 'containers', 'forwardable', 'health', 'scalable', 'restartable', 'createdAt', 'kind'].indexOf(key) < 0 &&
+        // The flags that say what the buttons above may do are not facts about
+        // the object; they are already on screen, as buttons.
+        return ['uid', 'labels', 'containers', 'forwardable', 'health', 'scalable', 'restartable', 'createdAt', 'kind',
+          'selector', 'revisioned', 'pausable', 'suspendable', 'triggerable', 'ownsJobs', 'owner'].indexOf(key) < 0 &&
           row[key] !== '' && row[key] != null && typeof row[key] !== 'object';
       }).map(function (key) {
         return '<dt>' + esc(HEADINGS[key] || key) + '</dt><dd>' + esc(row[key]) + '</dd>';
@@ -2055,6 +2170,9 @@
         '</div>' +
         '<textarea id="yaml-edit" spellcheck="false">' + esc(draft == null ? state.detailData.yaml : draft) + '</textarea>';
     }
+    if (tab === 'pods') return podsBody(row);
+    if (tab === 'jobs') return jobsBody(row);
+    if (tab === 'rollout') return rolloutBody(row);
     if (tab === 'events') {
       var events = state.detailData.events;
       if (!events) return '<pre>reading…</pre>';
@@ -2104,7 +2222,42 @@
     return '<pre>' + esc(state.detailData.notes == null ? 'reading…' : (state.detailData.notes.trim() || 'This chart left no notes.')) + '</pre>';
   }
 
+  /**
+   * A workload's own rollback, and a click on one of its pods.
+   *
+   * Separate from Helm's `data-rollback` on purpose: rolling a Deployment back
+   * is `rollout undo`, which is a different tool doing a different thing to a
+   * different object, and one handler pretending they are the same is how the
+   * wrong one gets called on the wrong row.
+   */
   document.addEventListener('click', function (event) {
+    var undo = event.target.closest('[data-undo]');
+    if (undo && state.selected) {
+      var subject = state.selected;
+      var to = Number(undo.dataset.undo);
+      call('kube.rollback', {
+        context: state.context, kind: subject.kind, namespace: subject.namespace, name: subject.name, revision: to,
+      }).then(function (result) {
+        say(result.text || ('Rolled ' + subject.name + ' back to revision ' + to + '.'));
+        state.detailData.rollout = null;
+        drawDetail();
+        loadDetail();
+        setTimeout(function () { load(true); }, 1200);
+      }).catch(function (error) { say(String(error.message || error), true); });
+      return;
+    }
+
+    var open = event.target.closest('[data-open]');
+    if (open) {
+      // Open it where its own log, shell and events are, which is the whole
+      // reason for having clicked it.
+      state.namespace = open.dataset.openNamespace || state.namespace;
+      var pick = document.getElementById('namespace');
+      if (pick) pick.value = state.namespace;
+      show({ type: 'kind', name: open.dataset.openKind }, { wanted: open.dataset.open });
+      return;
+    }
+
     var back = event.target.closest('[data-rollback]');
     if (back && state.selected) {
       var to = Number(back.dataset.rollback);
@@ -2155,6 +2308,33 @@
         if (state.selected === row) { state.detailData.yaml = result.yaml || ''; drawDetail(); }
       }).catch(function (error) {
         if (state.selected === row) { state.detailData.yaml = String(error.message || error); drawDetail(); }
+      });
+    }
+    if (state.detail.tab === 'pods' && !state.detailData.pods) {
+      // The same `get pods --selector` a person would type, with the selector
+      // the workload itself names.
+      call('kube.list', {
+        context: state.context, kind: 'pods', namespace: row.namespace, selector: row.selector,
+      }).then(function (result) {
+        if (state.selected === row) { state.detailData.pods = result.rows || []; drawDetail(); }
+      }).catch(function () {
+        if (state.selected === row) { state.detailData.pods = []; drawDetail(); }
+      });
+    }
+    if (state.detail.tab === 'jobs' && !state.detailData.jobs) {
+      call('kube.list', { context: state.context, kind: 'jobs', namespace: row.namespace })
+        .then(function (result) {
+          if (state.selected !== row) return;
+          state.detailData.jobs = (result.rows || []).filter(function (job) { return job.owner === row.uid; });
+          drawDetail();
+        })
+        .catch(function () { if (state.selected === row) { state.detailData.jobs = []; drawDetail(); } });
+    }
+    if (state.detail.tab === 'rollout' && !state.detailData.rollout) {
+      call('kube.history', at).then(function (result) {
+        if (state.selected === row) { state.detailData.rollout = { rows: result.rows || [], current: result.current }; drawDetail(); }
+      }).catch(function (error) {
+        if (state.selected === row) { state.detailData.rollout = String(error.message || error); drawDetail(); }
       });
     }
     if (state.detail.tab === 'events' && !state.detailData.events) {
@@ -2928,6 +3108,27 @@
     }
     if (what === 'restart') {
       run(call('kube.restart', at), 'Rolling ' + row.name + '.');
+      return;
+    }
+    if (what === 'pause') {
+      var holding = row.paused !== true;
+      run(call('kube.pause', { context: state.context, namespace: row.namespace, name: row.name, on: holding }),
+        holding ? 'Held the rollout of ' + row.name + '.' : 'Let ' + row.name + ' carry on.');
+      return;
+    }
+    if (what === 'suspend') {
+      var stopping = row.suspended !== true;
+      run(call('kube.suspend', { context: state.context, kind: row.kind, namespace: row.namespace, name: row.name, on: stopping }),
+        stopping ? 'Suspended ' + row.name + '.' : 'Resumed ' + row.name + '.');
+      return;
+    }
+    if (what === 'trigger') {
+      call('kube.trigger', { context: state.context, namespace: row.namespace, name: row.name })
+        .then(function (result) {
+          say('Started ' + (result.name || 'a job') + '.');
+          setTimeout(function () { load(true); }, 1200);
+        })
+        .catch(function (error) { say(String(error.message || error), true); });
       return;
     }
     if (what === 'cordon') {
