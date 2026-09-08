@@ -125,7 +125,21 @@ class CwdWatcher {
         if (changes.length) {
           this.lastChange = Date.now();
           if (this.everyMs !== INTERVAL) this.#schedule(INTERVAL);
-          this.onChange(changes);
+          /*
+           * Whatever the consumer does with a change is the consumer's problem,
+           * and it must not be reported as this tick having failed. The catch
+           * below is for the sampling — a `ps` that timed out is a tick that
+           * says nothing and is retried a second later. A consumer that throws
+           * is a different animal: the changes have already been recorded as
+           * reported, so they will never be offered again, and swallowing that
+           * is how the app spent five days with a stale idea of what every
+           * session was running.
+           */
+          try {
+            this.onChange(changes);
+          } catch (error) {
+            console.error('[cwd-watcher] the consumer threw on a change:', error);
+          }
         } else if (this.everyMs === INTERVAL && Date.now() - this.lastChange > QUIET_BEFORE_IDLE) {
           this.#schedule(IDLE_INTERVAL);
         }
@@ -182,4 +196,30 @@ function parseLsof(output) {
   return byPid;
 }
 
-module.exports = { CwdWatcher };
+/**
+ * Whether what a session is running is worth offering back after a restart.
+ *
+ * This was called and never defined. Every tick of the watcher threw a
+ * ReferenceError that was swallowed whole — and with it went every change after
+ * the first one in that tick, permanently, because the watcher had already
+ * recorded them as reported. The app's idea of what each session is running
+ * stopped being updated, which is not cosmetic: `claudeIsUp` reads it, so
+ * messages between sessions were not delivered, a briefing handed to a session
+ * never arrived, and autopilot saw sessions that were not running Claude. All
+ * of it silent, because a `catch` in the watcher treats any failure as "this
+ * tick reported nothing".
+ *
+ * What it decides is small. A shell is not a command anybody wants restarted —
+ * it is what a terminal *is*. Claude comes back by its own machinery and would
+ * otherwise be started twice. Everything else — a dev server, a test run, a
+ * tail — is worth offering back.
+ */
+const NOT_WORTH_REMEMBERING = new Set(['claude', 'zsh', 'bash', 'sh', 'fish', 'login', '-zsh', '-bash']);
+
+function worthRemembering(foreground, command) {
+  const name = String(foreground ?? '').trim();
+  if (!name || !String(command ?? '').trim()) return false;
+  return !NOT_WORTH_REMEMBERING.has(name);
+}
+
+module.exports = { CwdWatcher, worthRemembering };

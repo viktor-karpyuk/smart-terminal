@@ -135,7 +135,12 @@
     border-left: 1px solid var(--border); background: var(--bg-panel);
     display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-height: 0;
   }
-  .detail-head { padding: 8px 10px 6px; border-bottom: 1px solid var(--border); }
+  .detail-head { position: relative; padding: 8px 26px 6px 10px; border-bottom: 1px solid var(--border); }
+  .detail-close {
+    position: absolute; top: 5px; right: 6px; width: 18px; height: 18px; line-height: 1;
+    border-radius: var(--radius); color: var(--text-faint); font-size: 14px; opacity: 0.7;
+  }
+  .detail-close:hover { opacity: 1; color: var(--danger); background: var(--bg-elevated); }
   .detail-head h3 { margin: 0 0 2px; font-size: 12.5px; font-weight: 550; word-break: break-all; }
   .detail-head small { color: var(--text-dim); font-size: 10.5px; }
   .detail-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
@@ -1606,6 +1611,25 @@
   }
 
   /**
+   * Shut the detail pane, and stop reading what it was showing.
+   *
+   * Not only `state.selected = null`: a detail pane that is closed but still
+   * charted, still watched and still remembered as open is a pane that costs
+   * what it cost while it was open and comes back on the next redraw.
+   */
+  function closeDetail() {
+    if (!state.selected) return;
+    state.selected = null;
+    state.editing = false;
+    state.editingYaml = false;
+    state.detail = { tab: 'overview' };
+    state.detailData = {};
+    state.config = null;
+    remember();
+    draw();
+  }
+
+  /**
    * The same things the detail pane offers, without opening it.
    *
    * It selects the row on the way, because every one of these acts on "the
@@ -2249,6 +2273,8 @@
 
     aside.innerHTML =
       '<div class="detail-head">' +
+        // A pane that opens on a click has to close on one. Escape closes it too.
+        '<button class="detail-close" data-do="close-detail" title="Close (Esc)" aria-label="Close">×</button>' +
         '<h3>' + esc(chosen.name) + '</h3>' +
         '<small>' +
           (release
@@ -4212,6 +4238,10 @@
       return;
     }
 
+    if (what === 'close-detail') {
+      closeDetail();
+      return;
+    }
     if (what === 'config-revert') {
       if (!state.config) return;
       state.config.draft = copyOf(state.config.live);
@@ -4340,10 +4370,18 @@
    * the description, the warnings and the log — including the log of the
    * container that died — and opens a session with all of it already there.
    */
+  /**
+   * Hand one object to the session this tab already has.
+   *
+   * It is the same session every time on purpose. Debugging a cluster is not one
+   * question about one object — it is a pod, then the service in front of it,
+   * then the deployment behind it — and four sessions that each know one of
+   * those cannot be asked what they have in common.
+   */
   function askAbout(what, question) {
     say('Gathering everything about ' + what.name + '…');
     call('kube.ask', assign({ context: state.context, question: question || undefined }, what))
-      .then(function () { say('A Claude session opened with everything about ' + what.name + '.'); })
+      .then(function () { say('Everything about ' + what.name + ' went to the Claude session below.'); })
       .catch(function (error) { say(String(error.message || error), true); });
   }
 
@@ -4483,7 +4521,8 @@
     if (event.key === 'Escape') {
       // The question closes itself; this is only for what is behind it.
       if (document.getElementById('prompt') || state.editing) return;
-      if (state.selected) { state.selected = null; draw(); }
+      // The same close the × does, so both leave the panel in one state.
+      closeDetail();
       return;
     }
     if (event.key === '/' && document.activeElement !== $('search')) {

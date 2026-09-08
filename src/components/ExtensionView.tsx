@@ -8,6 +8,7 @@ import {
   panelDocument,
   readTheme,
   route,
+  shortContext,
   terminalSetup,
 } from '../lib/extensionHost';
 
@@ -94,6 +95,25 @@ export function ExtensionView({ panelId, showing = true }: { panelId: string; sh
  * one — it hands it straight back to the panel that wrote it.
  */
 const whereEachPanelWas = new Map<string, unknown>();
+
+/**
+ * The Claude session a cluster panel talks to, one per panel.
+ *
+ * Ask Claude used to open a tab per question, which is the wrong shape for the
+ * way anybody actually debugs a cluster: you look at a pod, then at the service
+ * in front of it, then at the deployment behind it, and by the fourth question
+ * you have four sessions that each know one thing and a conversation you cannot
+ * have. One session per cluster tab knows all four, and can be asked what they
+ * have in common.
+ *
+ * Kept here, beside the panel's place, and for the same reason: it has to
+ * survive the frame being rebuilt. Whether it is still alive is asked of the
+ * store rather than assumed — the person may have closed it, and a session id
+ * that no longer exists is not a session to hand a briefing to.
+ */
+const claudeForPanel = new Map<string, string>();
+/** Panels that have already been given one, so a rebuilt frame does not open a second. */
+const alreadyOffered = new Set<string>();
 
 function Frame({
   panelId,
@@ -339,21 +359,14 @@ function Frame({
         previous: Boolean(args.previous),
       });
       if (!brief.ok) return brief;
-      const sessionId = await store.newSession({
-        kind: 'claude',
-        title: `why ${String(args.name ?? '')}`.slice(0, 28),
-        /*
-         * An account that is actually signed in.
-         *
-         * The default one usually is, and when it is not, a session opens onto
-         * a sign-in prompt and the brief sits in a queue behind it — which
-         * looks like the button not working. Any signed-in account can answer a
-         * question about a cluster.
-         */
-        profileId: signedInProfile(),
-        ...below(panelId),
-      });
+      /*
+       * The session this panel already has, if it still has one. A briefing goes
+       * into the conversation that already holds the other three objects rather
+       * than starting a fourth that knows one thing.
+       */
+      const sessionId = await claudeFor(panelId);
       if (!sessionId) return { ok: false, error: 'the app could not open a session' };
+      store.focusSession(sessionId);
       // It rides the same queue as a handover, so it lands the moment Claude is
       // up and waiting rather than into a terminal that is still starting.
       const handed = await window.api.analysis.handOver(sessionId, String(brief.text ?? ''));
@@ -363,6 +376,39 @@ function Frame({
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
   }, [panelId, root, view.title, revealFile]);
+
+  /**
+   * The Claude session for this panel: the one it has, or a new one.
+   *
+   * Asked of the store every time rather than trusted, because the person can
+   * close it — and then the next question opens another, which is the right
+   * answer to having closed one.
+   */
+  async function claudeFor(id: string): Promise<string | null> {
+    const store = useStore.getState();
+    const held = claudeForPanel.get(id);
+    if (held && store.sessions[held]) return held;
+
+    const sessionId = await store.newSession({
+      kind: 'claude',
+      // Named after the cluster, not after the panel: "ask Kubernetes" says
+      // nothing on a machine with four clusters in kubeconfig.
+      title: `ask ${shortContext(String(root ?? '')) || 'cluster'}`.slice(0, 28),
+      /*
+       * An account that is actually signed in.
+       *
+       * The default one usually is, and when it is not, a session opens onto a
+       * sign-in prompt and the brief sits in a queue behind it — which looks
+       * like the button not working. Any signed-in account can answer a
+       * question about a cluster.
+       */
+      profileId: signedInProfile(),
+      ...below(id),
+    });
+    if (!sessionId) return null;
+    claudeForPanel.set(id, sessionId);
+    return sessionId;
+  }
 
   /**
    * An account that can actually answer: the usual one if it is signed in,
@@ -445,6 +491,29 @@ function Frame({
    * front of it changed — `document.hidden` is about the window — so a panel
    * that was not told would keep polling a cluster nobody is looking at.
    */
+  /*
+   * A cluster tab arrives with a Claude session already open under it.
+   *
+   * Not because a session is needed to look at a cluster — it is not — but
+   * because of when you find out you want one. You want it at the moment
+   * something is wrong, and at that moment the last thing worth doing is
+   * waiting for a CLI to start and an account to be checked. So it is there,
+   * pointed at nothing, costing a process and no tokens: this hands it no
+   * briefing and asks it nothing. It learns about an object when you ask about
+   * one, and not before.
+   *
+   * Once per panel per window. Closing it is an answer, and the next question
+   * is what opens another.
+   */
+  useEffect(() => {
+    if (view.needs !== 'kubernetes' || !showing) return;
+    if (alreadyOffered.has(panelId)) return;
+    alreadyOffered.add(panelId);
+    void claudeFor(panelId);
+    // `claudeFor` reads the store when it runs; it is not a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelId, view.needs, showing]);
+
   const showingRef = useRef(showing);
   useEffect(() => {
     showingRef.current = showing;

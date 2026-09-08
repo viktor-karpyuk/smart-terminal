@@ -12,7 +12,7 @@ const { accountsRoot, authStatus, ensureConfigDir, invalidateAuthCache, suggestC
 const { JsonStore } = require('./store');
 const { Database } = require('./database');
 const { buildMenu } = require('./menu');
-const { CwdWatcher } = require('./cwd-watcher');
+const { CwdWatcher, worthRemembering } = require('./cwd-watcher');
 const { ContextStore, transcriptPath, locateTranscript, readTurnState } = require('./context-store');
 const { SessionMonitor } = require('./session-monitor');
 const { summarise, oneLine } = require('./session-analysis');
@@ -1528,10 +1528,18 @@ if (isPrimaryInstance) app.whenReady().then(() => {
          * Remember what a session is running, so it can be offered back after a
          * restart. Only something worth restarting: the shell itself is not a
          * command, and Claude is already brought back by its own machinery.
+         *
+         * In a try of its own, because everything after it in this loop depends
+         * on it not throwing — and what is above it is the app's only idea of
+         * what each session is running.
          */
-        const owner = sessionByPty.get(change.id);
-        if (owner && change.command && worthRemembering(change.foreground, change.command)) {
-          db.updateSession(owner, { lastCommand: change.command });
+        try {
+          const owner = sessionByPty.get(change.id);
+          if (owner && change.command && worthRemembering(change.foreground, change.command)) {
+            db.updateSession(owner, { lastCommand: change.command });
+          }
+        } catch (error) {
+          console.error('[pty] could not remember what a session is running:', error);
         }
       }
       send('pty:cwd', changes);
@@ -1929,7 +1937,24 @@ function sessionIsFree(sessionId) {
   // Still printing: the input box is not where the keystrokes would land.
   if (Date.now() - (lastOutputBySession.get(sessionId) ?? 0) < 2500) return false;
   if (looksLikeADecision(screenBySession.get(sessionId))) return false;
-  return turnStateOf(sessionId)?.state === 'turn-finished';
+  /*
+   * A session that has never said anything is waiting to be asked.
+   *
+   * The turn state is read out of Claude's transcript, and a Claude that has
+   * just started has a transcript with no turns in it — so this returned false
+   * for the one case it most needed to say yes to, and anything queued for a
+   * brand-new session sat in the queue for ever. Which is what "Ask Claude"
+   * does every time it opens one: the briefing was gathered, queued, and never
+   * arrived, and the session sat there empty looking like it had been given
+   * nothing. It had.
+   *
+   * Nothing is being risked by saying yes. Claude is the foreground process,
+   * it has printed nothing for two and a half seconds, and there is no dialog
+   * on the screen — that is a prompt waiting for input by every measure this
+   * has.
+   */
+  const turn = turnStateOf(sessionId);
+  return turn ? turn.state === 'turn-finished' : true;
 }
 
 /** One-time move of the old JSON workspace into the database. */
