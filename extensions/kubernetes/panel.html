@@ -246,6 +246,21 @@
   }
   .pressure b { color: var(--danger); font-weight: 600; }
 
+  /* Anything that goes somewhere says so before it is clicked. */
+  .card.is-link, .gauge.is-link { cursor: pointer; }
+  .card.is-link:hover, .gauge.is-link:hover { border-color: var(--accent); }
+  .meter[data-node], .meter[data-namespace] { cursor: pointer; border-radius: var(--radius); }
+  .meter[data-node]:hover, .meter[data-namespace]:hover { background: var(--bg-elevated); }
+  .link { color: var(--accent); padding: 0; font: inherit; }
+  .link:hover { text-decoration: underline; }
+
+  .stat-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px 0; }
+  .stat-tabs { display: flex; gap: 4px; }
+  .stat-tabs .btn.on { color: var(--accent); border-color: var(--accent); }
+  .charts.one { padding: 0 12px; }
+  .charts.one .chart { flex: 1 1 100%; }
+  .chart.is-big svg { height: 150px; }
+
   .note { padding: 22px 16px; color: var(--text-dim); font-size: 12px; line-height: 1.6; max-width: 60ch; }
   .note code { font-family: "JetBrains Mono", Menlo, ui-monospace, monospace; font-size: 11px; color: var(--text); }
   .error { color: var(--danger); }
@@ -356,12 +371,18 @@
     helm: { checked: false, releases: 0 },
     /** Which rows are ticked, by uid. Ticking is not the same act as opening. */
     picked: [],
+    /** A subset a card asked for, and a row a click on the overview wants opened. */
+    only: null, wanted: null,
     /** How wide the two columns that can be dragged are. */
     navWidth: 178, detailWidth: 380,
     /** The open watch, if any: what it is watching and whether a redraw is due. */
     watch: { id: null, kind: null, of: null, token: 0, draw: 0 },
-    /** How full the nodes' own disks are, when anything is measuring them. */
-    disk: null,
+    /**
+     * How full the nodes' own disks are, when anything is measuring them, and
+     * the same per node address — kept across refreshes so a slow answer reads
+     * as late rather than as the metric having gone away.
+     */
+    disk: null, diskByHost: null,
     /** Where this cluster's Prometheus is, and what it has said so far. */
     prom: { checked: false, found: null, series: {}, minutes: 60 },
   };
@@ -548,9 +569,11 @@
   /* ---------------------------------------------------------------------- *
    * Loading.
    * ---------------------------------------------------------------------- */
-  function show(view) {
+  function show(view, extras) {
+    extras = extras || {};
     stopWatch();
     state.picked = [];
+    state.only = extras.only || null;
     state.view = view;
     // You cannot be looking at something inside a folded group.
     if (view.type === 'kind') {
@@ -560,7 +583,8 @@
     state.selected = null;
     state.search = '';
     $('search').value = '';
-    state.sort = { column: null, dir: 1 };
+    state.sort = extras.sort || { column: null, dir: 1 };
+    state.wanted = extras.wanted || null;
     drawNav();
     load();
   }
@@ -588,12 +612,28 @@
       if (mine !== loadToken) return;
       state.loading = false;
       state.error = null;
-      if (state.view.type === 'overview') { state.overview = result; loadCharts(null); loadDisk(); }
+      if (state.view.type === 'overview') {
+        state.overview = result;
+        // The disk numbers are Prometheus', and arrive after this. Until they
+        // do, the last ones stand — see applyDisk.
+        applyDisk();
+        loadCharts(null);
+        loadDisk();
+      }
       else {
         state.table = result;
         if (state.view.name) state.counts[state.view.name] = (result.rows || []).length;
       }
       draw();
+      /*
+       * Somebody clicked a node on the overview and this is the table it was
+       * on. Opening it is what they were asking for.
+       */
+      if (state.wanted && state.table) {
+        var found = state.table.rows.filter(function (row) { return row.name === state.wanted; })[0];
+        state.wanted = null;
+        if (found) select(found.uid);
+      }
       if (state.view.name === 'pods' || state.view.name === 'nodes') withMetrics(mine, state.view.name);
       if (state.view.type === 'kind') startWatch(state.view.name);
     }).catch(function (error) {
@@ -714,6 +754,7 @@
     state.helm = { checked: false, releases: 0 };
     state.prom = { checked: false, found: null, series: {}, minutes: state.prom.minutes };
     state.disk = null;
+    state.diskByHost = null;
     drawNav();
     drawTop();
 
@@ -793,6 +834,28 @@
    * is left; only the node exporter measures that. Matched back to nodes by
    * their internal address, which is what the exporter labels its series with.
    */
+  /**
+   * Put the last disk reading back on the nodes.
+   *
+   * Every refresh replaces `state.overview` wholesale, and the payload it
+   * replaces it with has no disk on it: disk comes from Prometheus, separately
+   * and a moment later. So without this the bars vanish on every cycle and come
+   * back when the query answers — a flicker that reads as the metric being
+   * broken rather than as it being late. Matching is by the node's own address,
+   * which is what node-exporter labels its series with, so a node that has gone
+   * away simply finds nothing and shows nothing.
+   */
+  function applyDisk() {
+    var byHost = state.diskByHost;
+    if (!byHost || !state.overview) return;
+    (state.overview.nodeUsage || []).forEach(function (node) {
+      var found = byHost[node.ip];
+      if (!found || !found.size) return;
+      node.disk = found.size - found.avail;
+      node.diskTotal = found.size;
+    });
+  }
+
   function loadDisk() {
     var prom = state.prom.found;
     if (!prom || !state.overview) return;
@@ -819,16 +882,17 @@
         if (byHost[host]) byHost[host].avail = one.value;
         free += one.value;
       });
+      /*
+       * Nothing came back — Prometheus was slow, or the query failed, or the
+       * exporter is restarting. That is not the same as "the disks are empty",
+       * so the previous reading is left alone rather than replaced with none.
+       */
       if (!total) return;
 
-      state.disk = { total: total, used: total - free };
-      (state.overview.nodeUsage || []).forEach(function (node) {
-        var found = byHost[node.ip];
-        if (!found) return;
-        node.disk = found.size - found.avail;
-        node.diskTotal = found.size;
-      });
-      if (state.view.type === 'overview') draw();
+      state.disk = { total: total, used: total - free, at: Date.now() };
+      state.diskByHost = byHost;
+      applyDisk();
+      if (state.view.type === 'overview' || state.view.type === 'stats') draw();
     });
   }
 
@@ -899,7 +963,7 @@
    * scale starts at zero so the height of the line means something — a chart
    * that crops its own baseline turns a two-percent wobble into a cliff.
    */
-  function chart(series, format, title) {
+  function chart(series, format, title, big) {
     if (!series || !series.points.length) return '';
     var points = series.points;
     var top = 0;
@@ -907,7 +971,7 @@
     if (top <= 0) top = 1;
 
     var W = 240;
-    var H = 46;
+    var H = big ? 150 : 46;
     var first = points[0][0];
     var span = Math.max(1, points[points.length - 1][0] - first);
     var path = points.map(function (point, at) {
@@ -924,7 +988,7 @@
      * at that moment" without asking anything again. A chart you cannot
      * interrogate is a picture.
      */
-    return '<div class="chart" data-points="' + esc(JSON.stringify(points)) + '" data-unit="' + esc(title) + '">' +
+    return '<div class="chart' + (big ? ' is-big' : '') + '" data-points="' + esc(JSON.stringify(points)) + '" data-unit="' + esc(title) + '">' +
       '<div class="chart-head"><span>' + esc(title) + '</span><b class="chart-value">' + esc(format(last)) + '</b></div>' +
       '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' +
       '<path d="' + path + ' L' + W + ' ' + H + ' L0 ' + H + ' Z" class="chart-fill" />' +
@@ -1110,6 +1174,7 @@
   function draw() {
     drawCrumb();
     if (state.view.type === 'overview') drawOverview();
+    else if (state.view.type === 'stats') drawStats();
     else drawTable();
     drawDetail();
     drawDock();
@@ -1120,11 +1185,15 @@
 
   function drawCrumb() {
     var bits = [];
-    if (state.view.type === 'overview') bits.push('<strong>Overview</strong>');
+    if (state.view.type === 'stats') {
+      bits.push('<button class="link" data-view="overview">Overview</button>');
+      bits.push('<strong>' + esc(STAT_TITLES[state.view.focus] || state.view.focus) + '</strong>');
+    } else if (state.view.type === 'overview') bits.push('<strong>Overview</strong>');
     else if (state.view.type === 'helm') bits.push('<strong>Helm releases</strong>');
     else bits.push('<strong>' + esc(LABELS[state.view.name] || titleOf(state.view.name)) + '</strong>');
-    bits.push(esc(state.namespace || 'all namespaces'));
-    if (state.table && state.view.type !== 'overview') {
+    var listing = state.view.type !== 'overview' && state.view.type !== 'stats';
+    if (state.view.type !== 'stats') bits.push(esc(state.namespace || 'all namespaces'));
+    if (state.table && listing) {
       var total = (state.table.rows || []).length;
       var shown = visible().length;
       bits.push(shown === total ? total + ' items' : shown + ' of ' + total);
@@ -1132,7 +1201,7 @@
     if (state.loading) bits.push('<span class="spin">◐</span>');
     $('crumb').innerHTML =
       bits.join('<span class="dim"> · </span>') +
-      (state.table && state.view.type !== 'overview'
+      (state.table && listing
         ? '<span class="spacer"></span><button class="btn" data-do="copy-table" ' +
           'title="Copy this table, as text">Copy table</button>'
         : '');
@@ -1145,6 +1214,8 @@
 
   function visible() {
     var rows = (state.table && state.table.rows) || [];
+    // A card asked for a subset — the failing ones — and said so.
+    if (state.only === 'bad') rows = rows.filter(function (row) { return row.health === 'bad'; });
     if (state.search) {
       var term = state.search;
       rows = rows.filter(function (row) {
@@ -1375,15 +1446,23 @@
     var data = state.overview;
     if (!data) { $('table').innerHTML = state.loading ? '' : '<div class="note">Nothing loaded.</div>'; return; }
 
+    /*
+     * Every one of these is a question with an answer somewhere else, so every
+     * one of them goes there. A number you cannot click is a number you have to
+     * go and look up by hand, which is what a dashboard is supposed to save.
+     */
     var cards = [
-      { value: data.nodes, label: 'nodes', bad: data.nodesUnhealthy > 0 },
-      { value: data.podsRunning + ' / ' + data.pods, label: 'pods running' },
-      { value: data.podsFailing, label: 'pods failing', bad: data.podsFailing > 0 },
-      { value: data.restarts, label: 'restarts', warn: data.restarts > 0 },
-      { value: data.warnings, label: 'warning events', warn: data.warnings > 0 },
+      { value: data.nodes, label: 'nodes', bad: data.nodesUnhealthy > 0, go: 'nodes' },
+      { value: data.podsRunning + ' / ' + data.pods, label: 'pods running', go: 'pods' },
+      { value: data.podsFailing, label: 'pods failing', bad: data.podsFailing > 0, go: 'pods', only: 'bad' },
+      { value: data.restarts, label: 'restarts', warn: data.restarts > 0, go: 'pods', sort: 'restarts' },
+      { value: data.warnings, label: 'warning events', warn: data.warnings > 0, go: 'events' },
     ].map(function (card) {
-      return '<div class="card ' + (card.bad ? 'bad' : card.warn ? 'warn' : '') + '"><b>' +
-        esc(card.value) + '</b><span>' + esc(card.label) + '</span></div>';
+      return '<div class="card is-link ' + (card.bad ? 'bad' : card.warn ? 'warn' : '') + '"' +
+        ' data-go="' + esc(card.go) + '"' +
+        (card.only ? ' data-only="' + esc(card.only) + '"' : '') +
+        (card.sort ? ' data-sort="' + esc(card.sort) + '"' : '') +
+        '><b>' + esc(card.value) + '</b><span>' + esc(card.label) + '</span></div>';
     }).join('');
 
     var trouble = '';
@@ -1452,7 +1531,7 @@
     var bar = function (title, of, format) {
       var pct = function (n) { return Math.max(0, Math.min(100, (n / of.allocatable) * 100)); };
       var over = of.used > of.requested;
-      return '<div class="gauge">' +
+      return '<div class="gauge is-link" data-stat="' + title.toLowerCase() + '">' +
         '<div class="gauge-head"><span>' + title + '</span>' +
           '<b>' + format(of.used) + '</b><span class="dim"> used of ' + format(of.allocatable) + '</span></div>' +
         '<div class="gauge-bar">' +
@@ -1479,7 +1558,7 @@
       var used = state.disk.used;
       var pct = (used / state.disk.total) * 100;
       var vols = data.volumes;
-      gauges += '<div class="gauge">' +
+      gauges += '<div class="gauge is-link" data-stat="disk">' +
         '<div class="gauge-head"><span>Disk</span><b>' + gigs(used) + '</b>' +
           '<span class="dim"> used of ' + gigs(state.disk.total) + '</span></div>' +
         '<div class="gauge-bar"><span class="gauge-use ' + (pct >= 85 ? 'is-over' : '') + '" style="width:' +
@@ -1507,7 +1586,7 @@
         var cpu = node.cpuAllocatable ? (node.cpu / node.cpuAllocatable) * 100 : 0;
         var mem = node.memoryAllocatable ? (node.memory / node.memoryAllocatable) * 100 : 0;
         var short = node.name.replace(/\.(compute\.internal|ec2\.internal).*$/, '');
-        return '<div class="meter" title="' + esc(node.name) + '">' +
+        return '<div class="meter" data-node="' + esc(node.name) + '" title="' + esc(node.name) + '">' +
           '<span class="meter-name' + (node.ready ? '' : ' bad-text') + '">' + esc(short) +
             (node.schedulable ? '' : ' <span class="dim">cordoned</span>') + '</span>' +
           '<span class="meter-track"><i style="width:' + cpu.toFixed(1) + '%" class="' + heat(cpu) + '"></i></span>' +
@@ -1638,6 +1717,133 @@
           '<td class="dim">' + esc(row.newest) + '</td>' +
           '<td class="grow dim">' + esc(String(row.example || '').slice(0, 120)) + '</td></tr>';
       }).join('') + '</tbody></table></div>';
+  }
+
+  var STAT_TITLES = { cpu: 'CPU', memory: 'Memory', disk: 'Disk' };
+
+  /**
+   * One resource, expanded.
+   *
+   * The overview answers "is anything wrong"; this answers "wrong where". The
+   * same three facts as the gauge, the shape over time at whatever range is
+   * chosen, every node ranked by it, and the workloads actually consuming it —
+   * which between them is the whole of what somebody does after noticing a bar
+   * is longer than they expected.
+   */
+  function drawStats() {
+    var data = state.overview;
+    var focus = state.view.focus;
+    if (!data) { $('table').innerHTML = state.loading ? '' : '<div class="note">Nothing loaded.</div>'; return; }
+
+    var tabs = ['cpu', 'memory', 'disk'].map(function (which) {
+      return '<button class="btn' + (focus === which ? ' on' : '') + '" data-stat="' + which + '">' +
+        STAT_TITLES[which] + '</button>';
+    }).join('');
+
+    var key = 'cluster@' + state.prom.minutes;
+    var got = state.prom.series[key] || {};
+    var series = focus === 'memory' ? got.memory : focus === 'cpu' ? got.cpu : null;
+    var format = focus === 'cpu' ? fromCores : bytes;
+
+    var ranges = [60, 360, 1440].map(function (minutes) {
+      return '<button class="btn' + (state.prom.minutes === minutes ? ' on' : '') + '" data-range="' + minutes + '">' +
+        (minutes < 1440 ? minutes / 60 + 'h' : minutes / 1440 + 'd') + '</button>';
+    }).join('');
+
+    var head = '<div class="stat-head"><div class="stat-tabs">' + tabs + '</div>' +
+      (focus === 'disk' ? '' : '<div class="chart-range">' + ranges + '</div>') + '</div>';
+
+    var over = series
+      ? '<div class="charts one">' + chart(series, format, STAT_TITLES[focus], true) + '</div>'
+      : focus === 'disk'
+        ? '<p class="note">Disk is measured now rather than over time — the node exporter reports what is there, not a history of it.</p>'
+        : '<p class="note">No Prometheus in this cluster, so there is no history to draw.</p>';
+
+    $('table').innerHTML = head + statNumbers(data, focus) + over +
+      '<div class="split">' + statNodes(data, focus) + statConsumers(data, focus) + '</div>';
+  }
+
+  /** The three facts, said as numbers rather than as a bar. */
+  function statNumbers(data, focus) {
+    var cap = (data.capacity || {})[focus];
+    if (focus === 'disk') {
+      if (!state.disk) return '';
+      var vols = data.volumes || {};
+      return '<div class="cards">' +
+        card(gigs(state.disk.total), 'on the nodes') +
+        card(gigs(state.disk.used), Math.round((state.disk.used / state.disk.total) * 100) + '% used',
+          state.disk.used / state.disk.total > 0.85 ? 'bad' : '') +
+        card(vols.count || 0, 'volumes') +
+        card(gigs(vols.claimed || 0), 'claimed by them') +
+        card(vols.pending || 0, 'pending', vols.pending ? 'bad' : '') +
+        '</div>';
+    }
+    if (!cap) return '';
+    var format = focus === 'cpu' ? fromMillicores : gigs;
+    return '<div class="cards">' +
+      card(format(cap.allocatable), 'the nodes can give') +
+      card(format(cap.requested), Math.round((cap.requested / cap.allocatable) * 100) + '% promised to pods') +
+      card(format(cap.used), Math.round((cap.used / cap.allocatable) * 100) + '% actually used',
+        cap.used > cap.requested ? 'warn' : '') +
+      card(format(cap.limit), 'the ceiling, if every pod took it') +
+      '</div>';
+  }
+
+  function card(value, label, tone) {
+    return '<div class="card ' + (tone || '') + '"><b>' + esc(value) + '</b><span>' + esc(label) + '</span></div>';
+  }
+
+  /** Every node ranked by the one resource being looked at. */
+  function statNodes(data, focus) {
+    var nodes = (data.nodeUsage || []).slice();
+    var of = function (node) {
+      if (focus === 'cpu') return node.cpuAllocatable ? node.cpu / node.cpuAllocatable : 0;
+      if (focus === 'memory') return node.memoryAllocatable ? node.memory / node.memoryAllocatable : 0;
+      return node.diskTotal ? node.disk / node.diskTotal : 0;
+    };
+    var amount = function (node) {
+      if (focus === 'cpu') return fromMillicores(node.cpu) + ' of ' + fromMillicores(node.cpuAllocatable);
+      if (focus === 'memory') return gigs(node.memory) + ' of ' + gigs(node.memoryAllocatable);
+      return node.diskTotal ? gigs(node.disk) + ' of ' + gigs(node.diskTotal) : 'not measured';
+    };
+    nodes.sort(function (a, b) { return of(b) - of(a); });
+    if (!nodes.length) return '';
+
+    return '<div class="panel-block"><h4>Every node<span class="dim"> · by ' + STAT_TITLES[focus].toLowerCase() + '</span></h4>' +
+      nodes.map(function (node) {
+        var pct = of(node) * 100;
+        return '<div class="meter" data-node="' + esc(node.name) + '" title="' + esc(node.name) + '">' +
+          '<span class="meter-name' + (node.ready ? '' : ' bad-text') + '">' +
+            esc(node.name.replace(/\.(compute|ec2)\.internal.*$/, '')) + '</span>' +
+          '<span class="meter-track wide"><i style="width:' + pct.toFixed(1) + '%" class="' + heat(pct) + '"></i></span>' +
+          '<span class="meter-num">' + Math.round(pct) + '%</span>' +
+          '<span class="meter-num dim">' + esc(amount(node)) + '</span>' +
+          '</div>';
+      }).join('') + '</div>';
+  }
+
+  /** And what is consuming it, measured. */
+  function statConsumers(data, focus) {
+    if (focus === 'disk') {
+      var vols = data.volumes;
+      return '<div class="panel-block"><h4>Volumes</h4>' +
+        '<p class="all-well">' + (vols ? vols.count + ' claims, ' + gigs(vols.claimed) + ' claimed' +
+          (vols.pending ? ', ' + vols.pending + ' still waiting for a volume' : ', all bound') : 'none') + '</p>' +
+        '<button class="btn" data-kind="persistentvolumeclaims">See them all</button></div>';
+    }
+    var busy = (data.busiest || {})[focus] || [];
+    if (!busy.length) return '';
+    var most = busy[0][focus] || 1;
+    var format = focus === 'cpu' ? fromMillicores : gigs;
+    return '<div class="panel-block"><h4>Using the most<span class="dim"> · right now</span></h4>' +
+      busy.map(function (row) {
+        return '<div class="meter" title="' + esc(row.namespace + '/' + row.name) + '">' +
+          '<span class="meter-name">' + esc(row.name) + '</span>' +
+          '<span class="meter-track wide"><i style="width:' + ((row[focus] / most) * 100).toFixed(1) + '%"></i></span>' +
+          '<span class="meter-num">' + format(row[focus]) + '</span>' +
+          '<span class="meter-num dim">' + esc(row.namespace) + '</span>' +
+          '</div>';
+      }).join('') + '</div>';
   }
 
   /**
@@ -2381,7 +2587,43 @@
     cursor.setAttribute('x2', x);
   });
 
+  /**
+   * Following a statistic to what it is about.
+   *
+   * Every number on the overview is a question — how many nodes, what is
+   * failing, where is the CPU — and the answer is a view this panel already
+   * draws. Clicking goes there rather than leaving somebody to find it, which
+   * is the difference between a dashboard and a poster.
+   */
   document.addEventListener('click', function (event) {
+    var stat = event.target.closest('[data-stat]');
+    if (stat) { show({ type: 'stats', focus: stat.dataset.stat }); return; }
+
+    var back = event.target.closest('[data-view=overview]');
+    if (back) { show({ type: 'overview' }); return; }
+
+    var card = event.target.closest('[data-go]');
+    if (card) {
+      // What the number was about, carried into the table it opens.
+      show({ type: 'kind', name: card.dataset.go }, {
+        only: card.dataset.only,
+        sort: card.dataset.sort ? { column: card.dataset.sort, dir: -1 } : null,
+      });
+      return;
+    }
+
+    var namespace = event.target.closest('[data-namespace]');
+    if (namespace) {
+      var pick = document.getElementById('namespace');
+      state.namespace = namespace.dataset.namespace;
+      if (pick) pick.value = state.namespace;
+      show({ type: 'kind', name: 'pods' });
+      return;
+    }
+
+    var node = event.target.closest('[data-node]');
+    if (node) { show({ type: 'kind', name: 'nodes' }, { wanted: node.dataset.node }); return; }
+
     var range = event.target.closest('[data-range]');
     if (!range) return;
     state.prom.minutes = Number(range.dataset.range);
