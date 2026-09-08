@@ -185,9 +185,25 @@
    * what a row of three flexing items gave: the reader compares their shapes,
    * and two different widths make the same shape look like two.
    */
-  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 0 0 12px; }
+  /*
+     Every grid on the overview is written the same way, for the same two
+     reasons.
+
+     `min(N, 100%)` because `minmax(N, 1fr)` is a promise the track keeps even
+     when the container is narrower than N — the column stays N wide and the
+     content hangs out of the panel. With the min it gives up and takes the
+     width there is.
+
+     And `min-width: 0` on the children because a grid item's minimum is its
+     *content's* minimum by default, so one long node name or a two-column block
+     inside pushes the whole row wider than the panel and everything after it
+     shifts. Neither has anything to do with how wide the window is until the
+     window gets narrow, which is exactly when both show up at once.
+  */
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); gap: 10px; margin: 0 0 12px; }
+  .charts > * { min-width: 0; }
   .chart {
-    flex: 1 1 220px; min-width: 190px;
+    min-width: 0;
     border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 9px 5px;
     background: var(--bg-panel);
   }
@@ -207,7 +223,8 @@
   /* On the overview the charts sit under the cards, so they take that padding. */
   #table > .charts { padding: 0 12px; }
 
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; padding: 12px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(118px, 100%), 1fr)); gap: 8px; padding: 12px; }
+  .cards > * { min-width: 0; }
   .card { border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 11px; background: var(--bg-panel); }
   .card b { display: block; font-size: 21px; font-weight: 500; line-height: 1.2; }
   .card span { font-size: 10.5px; color: var(--text-faint); }
@@ -215,7 +232,8 @@
   .card.warn b { color: var(--git-new); }
 
   /* Capacity: one bar carrying two facts, promised behind and used in front. */
-  .gauges { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; padding: 0 12px 12px; }
+  .gauges { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 10px; padding: 0 12px 12px; }
+  .gauges > * { min-width: 0; }
   .gauge { border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 11px; background: var(--bg-panel); }
   .gauge-head { display: flex; align-items: baseline; gap: 5px; font-size: 10.5px; color: var(--text-faint); }
   .gauge-head span:first-child { flex: 1; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 600; }
@@ -235,15 +253,23 @@
   .key-use.is-over { background: var(--git-new); }
 
   /* Two blocks side by side where there is room, stacked where there is not. */
-  .split { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; padding: 0 12px 12px; }
-  .panel-block { border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 11px 7px; background: var(--bg-panel); }
+  .split { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 10px; padding: 0 12px 12px; }
+  .split > * { min-width: 0; }
+  /* A block scrolls its own contents rather than pushing the row wider. A table
+     of node names has a minimum width — `ip-10-0-33-84.sa-east-1.compute.internal`
+     is what it is — and without this the block simply drew past the edge of the
+     panel and over whatever was beside it. */
+  .panel-block {
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 11px 7px;
+    background: var(--bg-panel); overflow-x: auto;
+  }
   .panel-block h4 {
     margin: 0 0 7px; font-size: 9.5px; font-weight: 600; color: var(--text-faint);
     text-transform: uppercase; letter-spacing: 0.07em;
   }
   .panel-block h4 .dim { text-transform: none; letter-spacing: 0; font-weight: 400; }
-  .panel-block table { font-size: 11px; }
-  .panel-block td { border-bottom: 0; padding: 2px 8px 2px 0; }
+  .panel-block table { font-size: 11px; width: 100%; }
+  .panel-block td { border-bottom: 0; padding: 2px 8px 2px 0; overflow-wrap: anywhere; }
 
   .meter { display: flex; align-items: center; gap: 7px; font-size: 11px; padding: 2px 0; }
   .meter-name { flex: 0 0 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
@@ -257,10 +283,17 @@
   .meter-legend span:nth-child(1) { flex: 0 0 34%; }
   .meter-legend span:nth-child(2), .meter-legend span:nth-child(4), .meter-legend span:nth-child(6) { flex: 1; }
   /* Inside a half-width block the names must give way to the numbers. */
-  .half .meter-name { flex: 0 0 44%; }
-  .half .meter-num { min-width: 44px; }
+  /* Shrinkable, not fixed: at the widths where the two columns have already
+     folded into one, a name that refuses to give up 44% is the last four pixels
+     of overflow. */
+  .half .meter-name { flex: 0 1 44%; min-width: 0; }
+  .half .meter-num { min-width: 0; }
 
-  .halves { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  /* Two columns while two fit, and one when they do not — a pair of columns
+     that will not fold is the whole of why "Busiest right now" hung out of the
+     panel on a narrow window. */
+  .halves { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); gap: 12px; }
+  .halves > * { min-width: 0; }
   .half h5 { margin: 0 0 4px; font-size: 9.5px; font-weight: 600; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.07em; }
   .all-well { margin: 2px 0 4px; font-size: 11.5px; color: var(--text-dim); }
   tbody tr.clickable { cursor: default; }
@@ -361,7 +394,7 @@
      the panel's inputs — nothing here is trying to look like a form from
      somewhere else. */
   .config-grid { display: grid; gap: 6px 10px; padding: 0 2px 2px; }
-  .config-grid.config-four { grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); }
+  .config-grid.config-four { grid-template-columns: repeat(auto-fit, minmax(min(128px, 100%), 1fr)); }
   .config-grid.config-narrow { grid-template-columns: 120px; }
   .config-field { display: grid; gap: 2px; font-size: 11px; min-width: 0; }
   .config-field > span { color: var(--text-faint); }
@@ -2081,11 +2114,40 @@
     document.addEventListener('mouseup', up);
   });
 
+  /**
+   * The three columns, and what happens when there is not room for them.
+   *
+   * The widths are in pixels because they were dragged in pixels, and a dragged
+   * width that shifted when the window did would be a width nobody could set.
+   * But two fixed columns in a window narrower than their sum leave the table —
+   * the thing the panel is *for* — with nothing, and what a person sees is a
+   * navigation, a detail pane, and no list between them.
+   *
+   * So the sides give way before the middle does: each is capped at what is
+   * there, and the table keeps a floor as long as there is one to keep.
+   */
+  var TABLE_FLOOR = 180;
+
   function applyColumns() {
     var body = $('body');
-    body.style.gridTemplateColumns = body.classList.contains('with-detail')
-      ? state.navWidth + 'px 1fr ' + state.detailWidth + 'px'
-      : state.navWidth + 'px 1fr';
+    var room = body.clientWidth || window.innerWidth || 0;
+    var detail = body.classList.contains('with-detail');
+
+    var nav = Math.max(0, Math.min(state.navWidth, room - TABLE_FLOOR));
+    var aside = 0;
+    if (detail) {
+      aside = Math.max(0, Math.min(state.detailWidth, room - nav - TABLE_FLOOR));
+      // Narrower than the two of them plus a floor: the navigation goes first,
+      // because the detail pane is what was asked for and the nav is a menu.
+      if (aside < 160) {
+        nav = Math.max(0, Math.min(nav, room - TABLE_FLOOR - 160));
+        aside = Math.max(0, Math.min(state.detailWidth, room - nav - TABLE_FLOOR));
+      }
+    }
+
+    body.style.gridTemplateColumns = detail
+      ? nav + 'px minmax(0, 1fr) ' + aside + 'px'
+      : nav + 'px minmax(0, 1fr)';
   }
 
   function drawDetail(force) {
@@ -4455,8 +4517,9 @@
   });
 
   window.addEventListener('resize', function () {
-    // The edges move with the window, so the handles have to be told where
-    // they are now.
+    // The edges move with the window, so the columns are recalculated against
+    // the room there is now, and the handles are told where they ended up.
+    applyColumns();
     drawGrips();
   });
 
