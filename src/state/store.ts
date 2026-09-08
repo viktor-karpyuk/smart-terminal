@@ -277,6 +277,15 @@ interface State {
     probing: boolean;
     /** When they were last asked, so asking again is a decision rather than a redraw. */
     probedAt: number | null;
+    /**
+     * Whether kubeconfig has actually been read yet.
+     *
+     * Not the same question as "is the list empty", and the difference is the
+     * whole of a bug this had: an empty list was drawn as "no clusters in
+     * kubeconfig", which is a claim, and it was being made before anything had
+     * looked.
+     */
+    loaded: boolean;
     error: string | null;
   };
   /** A new picture of what is installed, whatever brought it. */
@@ -562,7 +571,7 @@ export const useStore = create<State>((set, get) => ({
   usageLoading: {},
   usagePanelOpen: false,
   extensions: { rows: [], previews: [], panels: [] },
-  clusters: { list: [], current: null, reach: {}, probing: false, probedAt: null, error: null },
+  clusters: { list: [], current: null, reach: {}, probing: false, probedAt: null, loaded: false, error: null },
   analysisBySession: {},
   adviceBySession: {},
   adviceAsking: {},
@@ -2590,9 +2599,27 @@ export const useStore = create<State>((set, get) => ({
    * which is exactly the case where a list that waited would be useless.
    */
   async loadClusters() {
-    const result = await window.api.kube.call('contexts', {});
+    /*
+     * Every way out of this sets `loaded`, including the ways that fail.
+     *
+     * The list being empty and the list not having been read are different
+     * things, and only the first of them is worth telling somebody about: an
+     * empty list is drawn as "no clusters in kubeconfig", which is a claim, and
+     * it must only be made by something that actually looked.
+     */
+    let result;
+    try {
+      result = await window.api.kube.call('contexts', {});
+    } catch (error) {
+      set((state) => ({
+        clusters: { ...state.clusters, loaded: true, error: String((error as Error)?.message ?? error) },
+      }));
+      return;
+    }
     if (!result.ok) {
-      set((state) => ({ clusters: { ...state.clusters, error: result.error ?? 'kubectl would not answer', list: [] } }));
+      set((state) => ({
+        clusters: { ...state.clusters, loaded: true, list: [], error: result.error ?? 'kubectl would not answer' },
+      }));
       return;
     }
     set((state) => ({
@@ -2600,6 +2627,7 @@ export const useStore = create<State>((set, get) => ({
         ...state.clusters,
         list: result.contexts ?? [],
         current: result.current ?? null,
+        loaded: true,
         error: null,
       },
     }));
@@ -2899,7 +2927,7 @@ export const useStore = create<State>((set, get) => ({
     // Turned off or uninstalled: the list goes with it rather than sitting
     // there as a section nothing can act on.
     if (!wanted && get().clusters.list.length) {
-      set({ clusters: { list: [], current: null, reach: {}, probing: false, probedAt: null, error: null } });
+      set({ clusters: { list: [], current: null, reach: {}, probing: false, probedAt: null, loaded: false, error: null } });
     }
   },
 
@@ -3210,9 +3238,24 @@ export const useStore = create<State>((set, get) => ({
   async refreshSessionSizes() {
     const open = Object.keys(get().sessions);
     if (!open.length) return;
-    const rows = await window.api.history.sessions({ limit: 400 });
-    const sizes: Record<string, number> = {};
-    for (const row of rows) if (row.transcriptBytes) sizes[row.id] = row.transcriptBytes;
+    /*
+     * The sessions that are open, and only their size.
+     *
+     * This runs every twenty seconds for as long as the app is open. It used to
+     * ask for every column of the four hundred most recent sessions — a hundred
+     * kilobytes across the bridge and a fresh object into the store — to read
+     * one number for each of the dozen tabs actually on screen.
+     */
+    const sizes = await window.api.history.sessionSizes(open);
+
+    // And only tell anybody when something changed: replacing the object on a
+    // timer re-renders every tab that reads it, twenty seconds at a time,
+    // whether or not a single conversation grew.
+    const before = get().sessionSizes;
+    const keys = Object.keys(sizes);
+    const same =
+      keys.length === Object.keys(before).length && keys.every((id) => before[id] === sizes[id]);
+    if (same) return;
     set({ sessionSizes: sizes });
   },
 

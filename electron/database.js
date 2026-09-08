@@ -642,6 +642,28 @@ class Database {
     return rows.map((row) => ({ ...decorate(row), matchedTranscript: matched.has(row.id) }));
   }
 
+  /**
+   * How big each open session's conversation is, and nothing else.
+   *
+   * Its own query because the tab strip asks for this every twenty seconds for
+   * as long as the app is open, and it used to be answered with `listSessions`
+   * — every column of every one of a hundred and seventy-seven rows, a hundred
+   * kilobytes across the bridge, to read one number per session that is
+   * actually on screen. This asks for the number.
+   */
+  sessionSizes(ids = []) {
+    if (!ids.length) return {};
+    const rows = this.db
+      .prepare(
+        `SELECT id, transcript_bytes FROM sessions
+         WHERE id IN (${ids.map(() => '?').join(',')}) AND transcript_bytes IS NOT NULL`,
+      )
+      .all(...ids);
+    const out = {};
+    for (const row of rows) out[row.id] = row.transcript_bytes;
+    return out;
+  }
+
   #searchTranscriptIds(query) {
     try {
       return this.db

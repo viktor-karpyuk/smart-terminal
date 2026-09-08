@@ -104,7 +104,10 @@ let cachedEnv = null;
  * problem and is not one.
  */
 async function environment() {
-  if (!cachedEnv) cachedEnv = { ...process.env, PATH: await resolvedPath() };
+  // One lookup, however many callers arrive while it is happening — the same
+  // reason `resolvedPath` dedupes: a burst of calls must not become a burst of
+  // login shells.
+  if (!cachedEnv) cachedEnv = resolvedPath().then((PATH) => ({ ...process.env, PATH }));
   return cachedEnv;
 }
 

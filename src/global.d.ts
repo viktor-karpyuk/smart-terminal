@@ -692,6 +692,7 @@ declare global {
         focusWindow(windowId: string): void;
       };
       history: {
+        sessionSizes(ids: string[]): Promise<Record<string, number>>;
         sessions(options?: {
           query?: string;
           profileId?: string | null;

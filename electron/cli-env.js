@@ -31,6 +31,18 @@ const TIMEOUT = 8000;
 const TTL = 10 * 60 * 1000;
 
 const cache = new Map();
+/**
+ * The lookups already in the air, one per shell.
+ *
+ * Without this the cache only helps callers that arrive *after* an answer:
+ * everyone who asks before the first one comes back spawns an interactive login
+ * shell of their own. A workspace restoring thirty sessions, each wanting a
+ * PATH, plus a panel wanting one — measured at a hundred and forty `zsh -ilc`
+ * at once on a machine whose profile takes a second to run, which is slow
+ * enough that they arrive faster than they finish and the thing that asked
+ * first is still waiting minutes later.
+ */
+const asking = new Map();
 
 /** Where these CLIs install themselves, for when asking the shell fails. */
 const FALLBACK_DIRS = [
@@ -80,14 +92,48 @@ function existingFallbacks() {
   }).join(':');
 }
 
-function askShellForPath(shell) {
+/**
+ * Ask an interactive shell what its PATH is, and never wait on it for ever.
+ *
+ * Two things here are not decoration.
+ *
+ * `killSignal: 'SIGKILL'`, because an *interactive* shell ignores SIGTERM — that
+ * is what interactive means — so `execFile`'s own timeout would send a signal
+ * the child is entitled to disregard, and then wait. Measured: shells still
+ * running after seventy seconds against an eight-second timeout.
+ *
+ * And a timer of our own, because the callback is the only thing that settles
+ * this promise and a child that never dies never fires it. Everything in the
+ * app that runs a CLI waits on this — the account check, the usage gauge,
+ * kubectl, helm — so a lookup that hangs is an app that hangs, silently and
+ * with no error anywhere. Past the deadline the answer is "the shell did not
+ * say", which is what the fallback directories are for.
+ */
+function askShellForPath(shell, deadline = TIMEOUT) {
   return new Promise((resolve) => {
-    execFile(
+    let settled = false;
+    const answer = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const child = execFile(
       shell,
       ['-ilc', 'printf %s "$PATH"'],
-      { timeout: TIMEOUT, maxBuffer: 1024 * 1024 },
-      (error, stdout) => resolve(error && !stdout ? null : parseShellPath(stdout)),
+      { timeout: deadline, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 },
+      (error, stdout) => answer(error && !stdout ? null : parseShellPath(stdout)),
     );
+
+    const giveUp = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* already gone */
+      }
+      answer(null);
+    }, deadline + 500);
+    giveUp.unref?.();
   });
 }
 
@@ -95,19 +141,34 @@ function askShellForPath(shell) {
  * A PATH to run the CLI with: what the app already has, plus what an interactive
  * login shell would add, plus the usual install directories if that shell could
  * not be asked.
+ *
+ * `ask` is a seam for the tests, and only that: the thing worth testing here is
+ * that sixty callers cost one shell, and proving it by spawning sixty real ones
+ * would be a test that takes a minute and measures the machine.
  */
-async function resolvedPath(shell = process.env.SHELL || '/bin/zsh') {
+function resolvedPath(shell = process.env.SHELL || '/bin/zsh', { ask = askShellForPath } = {}) {
   const hit = cache.get(shell);
-  if (hit && Date.now() - hit.at < TTL) return hit.value;
+  if (hit && Date.now() - hit.at < TTL) return Promise.resolve(hit.value);
 
-  const fromShell = await askShellForPath(shell);
-  const value = mergePaths(mergePaths(process.env.PATH, fromShell), existingFallbacks());
-  cache.set(shell, { at: Date.now(), value });
-  return value;
+  // Everyone who wants it while it is being fetched waits on the same fetch.
+  const already = asking.get(shell);
+  if (already) return already;
+
+  const wait = ask(shell)
+    .then((fromShell) => {
+      const value = mergePaths(mergePaths(process.env.PATH, fromShell), existingFallbacks());
+      cache.set(shell, { at: Date.now(), value });
+      return value;
+    })
+    .finally(() => asking.delete(shell));
+
+  asking.set(shell, wait);
+  return wait;
 }
 
 function forgetResolvedPath() {
   cache.clear();
+  asking.clear();
 }
 
-module.exports = { resolvedPath, forgetResolvedPath, mergePaths, parseShellPath };
+module.exports = { resolvedPath, forgetResolvedPath, mergePaths, parseShellPath, askShellForPath };

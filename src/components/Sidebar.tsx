@@ -545,7 +545,21 @@ function ClustersList() {
   const updateSettings = useStore((s) => s.updateSettings);
   const names = useStore(useShallow((s) => s.clusters.list.map((entry) => entry.name)));
   const error = useStore((s) => s.clusters.error);
+  const loaded = useStore((s) => s.clusters.loaded);
   const probing = useStore((s) => s.clusters.probing);
+
+  /*
+   * The list asks for itself.
+   *
+   * It used to be loaded once, on the transition where the extension appeared,
+   * and never again — so anything that emptied it left the sidebar saying "no
+   * clusters in kubeconfig" for the life of the window, which was not true and
+   * had no way back. The thing that draws the data is the right thing to ask
+   * for it, and `loaded` keeps that from being a loop.
+   */
+  useEffect(() => {
+    if (!loaded) void useStore.getState().loadClusters().then(() => useStore.getState().probeClusters());
+  }, [loaded]);
   const down = useStore(
     (s) => Object.values(s.clusters.reach).filter((entry) => entry.up === false && !entry.slow).length,
   );
@@ -582,7 +596,10 @@ function ClustersList() {
       }
     >
       {error && <p className="sidebar-empty">{error}</p>}
-      {!error && !names.length && <p className="sidebar-empty">No clusters in kubeconfig.</p>}
+      {/* Only once something has actually looked. Before that it is not a fact. */}
+      {!error && !names.length && (
+        <p className="sidebar-empty">{loaded ? 'No clusters in kubeconfig.' : 'Reading kubeconfig…'}</p>
+      )}
       {names.map((name) => (
         <ClusterRow key={name} name={name} onMenu={setMenu} />
       ))}

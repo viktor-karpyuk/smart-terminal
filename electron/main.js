@@ -1157,6 +1157,7 @@ function registerIpc() {
   });
 
   ipcMain.handle('db:sessions', (_e, options) => db.listSessions(options || {}));
+  ipcMain.handle('db:session-sizes', (_e, ids) => db.sessionSizes(Array.isArray(ids) ? ids : []));
   ipcMain.handle('db:session', (_e, id) => db.getSession(id));
   ipcMain.handle('db:handoffs', (_e, limit) => db.listHandoffs(limit || 100));
 

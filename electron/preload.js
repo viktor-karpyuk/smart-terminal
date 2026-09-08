@@ -108,6 +108,8 @@ contextBridge.exposeInMainWorld('api', {
 
   history: {
     sessions: (options) => ipcRenderer.invoke('db:sessions', options),
+    /** Just the transcript size of the sessions named. Asked for on a timer. */
+    sessionSizes: (ids) => ipcRenderer.invoke('db:session-sizes', ids),
     session: (id) => ipcRenderer.invoke('db:session', id),
     handoffs: (limit) => ipcRenderer.invoke('db:handoffs', limit),
     carryOver: (sessionId, profileId) =>
