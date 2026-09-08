@@ -287,6 +287,24 @@ export interface HistorySession {
   transcriptBytes: number | null;
   open: boolean;
   durationMs: number;
+  /**
+   * What was measured while it ran, when anything was.
+   *
+   * Null for a session that did no work — a shell tab has no requests and no
+   * tokens, and a row of zeros says less than no row at all.
+   */
+  stats: {
+    requests: number;
+    /** How long it was actually working, as opposed to how long it was open. */
+    spanMs: number;
+    inputTokens: number;
+    outputTokens: number;
+    cacheRead: number;
+    cacheWrite: number;
+    contextPeak: number;
+    contextWindow: number;
+    compactions: number;
+  } | null;
   matchedTranscript?: boolean;
 }
 

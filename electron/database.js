@@ -630,11 +630,36 @@ class Database {
       where.push(`(${clause.join(' OR ')})`);
     }
 
+    /*
+     * Newest first means newest *finished* first.
+     *
+     * History is looked at to find the thing you were just doing, and the thing
+     * you were just doing is the one that stopped most recently — not the one
+     * that started most recently, which on a long-running session can be days
+     * ago. Anything still open sorts above all of it, because it has not
+     * finished at all.
+     *
+     * The stats ride along rather than being fetched per row: they were
+     * measured while the session ran, and a list that shows how long something
+     * took should not need a second query per line to say so.
+     */
     const rows = this.db
       .prepare(
-        `SELECT s.* FROM sessions s
+        `SELECT s.*,
+                t.requests      AS stat_requests,
+                t.span_ms       AS stat_span_ms,
+                t.input_tokens  AS stat_input,
+                t.output_tokens AS stat_output,
+                t.cache_read    AS stat_cache_read,
+                t.cache_write   AS stat_cache_write,
+                t.context_peak  AS stat_context_peak,
+                t.context_window AS stat_context_window,
+                t.compactions   AS stat_compactions,
+                t.auto_compactions AS stat_auto_compactions
+           FROM sessions s
+           LEFT JOIN session_stats t ON t.session_id = s.id
          ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-         ORDER BY s.started_at DESC LIMIT ?`,
+         ORDER BY s.ended_at IS NULL DESC, s.ended_at DESC, s.started_at DESC LIMIT ?`,
       )
       .all(...values, limit);
 
@@ -1735,6 +1760,27 @@ function decorate(row) {
     transcriptBytes: row.transcript_bytes,
     open: endedAt === null,
     durationMs: (endedAt ?? Date.now()) - row.started_at,
+    /*
+     * What was measured while it ran, when anything was.
+     *
+     * Only for a session that did some work: a shell tab has no requests and no
+     * tokens, and a row of zeros says less than no row at all. `null` is the
+     * honest answer for "nothing was measured here".
+     */
+    stats:
+      row.stat_requests == null
+        ? null
+        : {
+            requests: row.stat_requests,
+            spanMs: row.stat_span_ms ?? 0,
+            inputTokens: row.stat_input ?? 0,
+            outputTokens: row.stat_output ?? 0,
+            cacheRead: row.stat_cache_read ?? 0,
+            cacheWrite: row.stat_cache_write ?? 0,
+            contextPeak: row.stat_context_peak ?? 0,
+            contextWindow: row.stat_context_window ?? 0,
+            compactions: (row.stat_compactions ?? 0) + (row.stat_auto_compactions ?? 0),
+          },
   };
 }
 

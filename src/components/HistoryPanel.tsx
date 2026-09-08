@@ -54,8 +54,9 @@ export function HistoryPanel() {
 
     const grouped = [...byGroup.entries()]
       .map(([id, members]) => ({ key: id, group: known.get(id)!, rows: members }))
-      // Newest activity first, the same order the flat list uses.
-      .sort((a, b) => b.rows[0].startedAt - a.rows[0].startedAt);
+      // Newest activity first, the same order the flat list uses — which is by
+      // when a session *finished*, with anything still open above all of it.
+      .sort((a, b) => lastActive(b.rows[0]) - lastActive(a.rows[0]));
 
     return loose.length ? [...grouped, { key: 'loose', group: null, rows: loose }] : grouped;
   }, [rows, allGroups]);
@@ -214,8 +215,23 @@ export function HistoryPanel() {
                     ))}
                   </button>
                   <div className="history-when">
-                    <span>{when(row.startedAt)}</span>
-                    <small>{duration(row.durationMs)}</small>
+                    {/* When it closed, because that is what the list is ordered
+                        by and what people are looking for. */}
+                    <span title={row.endedAt ? `closed ${new Date(row.endedAt).toLocaleString()}` : 'still running'}>
+                      {row.endedAt ? closedAt(row.endedAt) : 'open'}
+                    </span>
+                    <small title={`opened ${new Date(row.startedAt).toLocaleString()}`}>
+                      {duration(row.durationMs)}
+                    </small>
+                    {row.stats && (
+                      // The conversation, not the tab: a resumed session can
+                      // have been open five minutes and carry a thousand
+                      // requests, because the requests are the whole
+                      // conversation's and the five minutes are this sitting's.
+                      <small title={`the whole conversation${row.stats.spanMs ? `, over ${duration(row.stats.spanMs)} of it` : ''}`}>
+                        {work(row.stats)}
+                      </small>
+                    )}
                   </div>
                   <RowAction
                     row={row}
@@ -544,6 +560,55 @@ function when(at: number) {
   return today
     ? date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
     : date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+/**
+ * When a session closed, with the time of day.
+ *
+ * `when` drops the time for anything before today, which is right for "when did
+ * this start" and wrong for the column the list is now ordered by: two sessions
+ * that closed four hours apart on the same afternoon should not read as the
+ * same moment.
+ */
+function closedAt(at: number) {
+  const date = new Date(at);
+  const today = new Date().toDateString() === date.toDateString();
+  const clock = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return today ? clock : `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${clock}`;
+}
+
+/**
+ * The key the list is sorted by: when a session stopped being current.
+ *
+ * A session still running has not stopped, so it sorts above everything —
+ * `Infinity` rather than "now", so two open sessions keep their own order
+ * instead of shuffling with the clock.
+ */
+function lastActive(row: { endedAt: number | null; startedAt: number }) {
+  return row.endedAt ?? Number.MAX_SAFE_INTEGER;
+}
+
+/**
+ * What a session did, in one line.
+ *
+ * Requests and tokens, because those are the two numbers that say whether a
+ * session was a quick question or a day's work — and the compactions, because a
+ * session that compacted three times had more to say than its context could
+ * hold, which is worth seeing next to the rest.
+ */
+function work(stats: NonNullable<HistorySession['stats']>) {
+  const tokens = stats.inputTokens + stats.outputTokens;
+  const parts = [`${stats.requests} request${stats.requests === 1 ? '' : 's'}`];
+  if (tokens) parts.push(`${round(tokens)} tokens`);
+  if (stats.compactions) parts.push(`${stats.compactions}× compacted`);
+  return parts.join(' · ');
+}
+
+/** 1.3M rather than 1316065: the magnitude is the information. */
+function round(n: number) {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `${Math.round(n / 1e3)}k`;
+  return String(n);
 }
 
 function duration(ms: number) {
