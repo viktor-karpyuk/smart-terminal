@@ -19,6 +19,13 @@
  *   npm run dist
  *
  * With none of those set the result is exactly the unsigned DMG as before.
+ *
+ * Linux is packaged from the same configuration, but not from the same machine:
+ * `node-pty` is native, and a Mac cannot compile a Linux binary. So `npm run
+ * dist:linux` runs this very file inside a Linux container — see
+ * `scripts/dist-linux.sh` — and `npm run dist` does both, from one stamp, so the
+ * DMG and the AppImage that come out of a release are the same build number and
+ * not two builds that happen to share a version.
  */
 
 const teamId = process.env.APPLE_TEAM_ID;
@@ -77,6 +84,35 @@ module.exports = {
         }
       : {}),
     ...(notarising ? { notarize: { teamId } } : {}),
+  },
+  linux: {
+    // AppImage runs on anything without being installed, which is the closest
+    // thing Linux has to the DMG; the .deb is for the machines that would rather
+    // the package manager knew about it.
+    target: [
+      { target: 'AppImage', arch: ['x64'] },
+      { target: 'deb', arch: ['x64'] },
+    ],
+    category: 'Development',
+    icon: 'resources/icon.png',
+    // A desktop environment links a window to its launcher entry by matching the
+    // window's class against the .desktop file's name. Left to default, the
+    // entry is named after the product — "Smart Terminal", with a space — and
+    // never matches, so the running app shows up as a nameless generic icon
+    // beside the one it was started from.
+    executableName: 'smart-terminal',
+    syncDesktopName: true,
+    // A .deb without one is refused outright, and `author` carries no address.
+    maintainer: 'Viktor Karpyuk <viktor@kubriksoftware.com>',
+    synopsis: 'Many Claude Code sessions at once, in one window.',
+    desktop: {
+      entry: {
+        // Without this the launcher hands the app a name of its own choosing.
+        Name: 'Smart Terminal',
+        Comment: 'A workbench for running many Claude Code sessions at once.',
+        Keywords: 'claude;terminal;development;',
+      },
+    },
   },
   dmg: {
     title: 'Smart Terminal',
