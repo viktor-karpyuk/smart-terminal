@@ -159,12 +159,19 @@
   .facts dt { color: var(--text-faint); }
   .facts dd { margin: 0; color: var(--text); word-break: break-word; }
 
-  .charts { display: flex; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
+  /*
+   * Two charts of the same size, always. Side by side while there is room for
+   * both, stacked when there is not — never one wide and one narrow, which is
+   * what a row of three flexing items gave: the reader compares their shapes,
+   * and two different widths make the same shape look like two.
+   */
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 0 0 12px; }
   .chart {
     flex: 1 1 220px; min-width: 190px;
     border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 9px 5px;
     background: var(--bg-panel);
   }
+  .chart-range { display: flex; gap: 4px; justify-content: flex-end; margin: 0 0 6px; }
   .chart-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 10.5px; color: var(--text-faint); }
   .chart-head b { font-size: 13px; font-weight: 550; color: var(--text); }
   .chart svg { display: block; width: 100%; height: 46px; margin: 3px 0 2px; }
@@ -246,6 +253,61 @@
   }
   .pressure b { color: var(--danger); font-weight: 600; }
 
+  /*
+   * The same ink as the app's editor, so the same manifest is the same colours
+   * wherever it is read. Copied rather than shared because this frame has an
+   * origin of its own and cannot reach the app's stylesheet; a test compares the
+   * rules that produce the spans, which is the half that can be wrong quietly.
+   */
+  .y-key { color: #7aa2f7; }
+  .y-str { color: #9ece6a; }
+  .y-num { color: #ff9e64; }
+  .y-const, .y-anchor { color: #bb9af7; }
+  .y-tag, .y-block { color: #e0af68; }
+  .y-punct, .y-colon, .y-dash { color: #7b849c; }
+  .y-comment { color: #565f89; font-style: italic; }
+  .y-doc { color: #565f89; }
+
+  /* A manifest is read far more often than it is edited: give it room. */
+  pre.yaml, #yaml-edit {
+    font-size: 11.5px; line-height: 1.55; tab-size: 2;
+  }
+  pre.yaml { margin: 0; padding: 10px 12px; white-space: pre; overflow: auto; }
+
+  .containers { width: 100%; font-size: 11px; }
+  .containers td { padding: 2px 0; }
+  .containers td.dim { padding-left: 10px; word-break: break-all; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip {
+    font-size: 10.5px; padding: 1px 6px; border-radius: var(--radius);
+    background: var(--bg-input); color: var(--text); white-space: nowrap;
+  }
+  .chip b { font-weight: 500; color: var(--text-faint); }
+  /* Not decoration: it is what makes a copied chip a label selector. */
+  .chip i { font-style: normal; color: var(--text-faint); opacity: .6; margin: 0 2px; }
+
+  pre.describe { margin: 0; font-size: 11px; line-height: 1.5; white-space: pre-wrap; }
+
+  /* A block of text with a heading and a way to take a copy of just that. */
+  .block { margin: 12px 0 0; }
+  .block-head {
+    display: flex; align-items: center; gap: 8px;
+    margin: 0 0 4px; font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .block-head .spacer { flex: 1; }
+  /*
+   * Visible without hovering. A copy button that only appears under the pointer
+   * is a copy button nobody knows is there, which is the opposite of what one is
+   * for; it is quiet until wanted rather than hidden until found.
+   */
+  .block-head .btn {
+    text-transform: none; letter-spacing: 0; padding: 1px 6px; font-size: 10.5px;
+    opacity: .55; transition: opacity .12s;
+  }
+  .block:hover .block-head .btn, .block-head .btn:hover, .block-head .btn:focus { opacity: 1; }
+
   tr.is-link { cursor: pointer; }
   tr.is-link:hover { background: var(--bg-elevated); }
 
@@ -260,8 +322,7 @@
   .stat-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px 0; }
   .stat-tabs { display: flex; gap: 4px; }
   .stat-tabs .btn.on { color: var(--accent); border-color: var(--accent); }
-  .charts.one { padding: 0 12px; }
-  .charts.one .chart { flex: 1 1 100%; }
+  .charts.one { padding: 0 12px; grid-template-columns: 1fr; }
   .chart.is-big svg { height: 150px; }
 
   .note { padding: 22px 16px; color: var(--text-dim); font-size: 12px; line-height: 1.6; max-width: 60ch; }
@@ -1015,7 +1076,7 @@
       return '<button class="btn' + (state.prom.minutes === minutes ? ' on' : '') + '" data-range="' + minutes + '">' +
         (minutes < 1440 ? minutes / 60 + 'h' : minutes / 1440 + 'd') + '</button>';
     }).join('');
-    return '<div class="charts">' + html + '<div class="chart-range">' + ranges + '</div></div>';
+    return '<div class="chart-range">' + ranges + '</div><div class="charts">' + html + '</div>';
   }
 
   /* ---------------------------------------------------------------------- *
@@ -1383,6 +1444,7 @@
   function stopEditing() {
     state.draft = null;
     state.editing = false;
+    state.editingYaml = false;
   }
 
   /**
@@ -1942,13 +2004,19 @@
       : state.navWidth + 'px 1fr';
   }
 
-  function drawDetail() {
+  function drawDetail(force) {
     /*
      * Never over somebody's typing. The detail pane is rebuilt wholesale, and a
      * refresh landing mid-edit would take the text out from under them — which
      * is the sort of thing that makes people stop trusting an editor.
+     *
+     * `force` is for the one redraw that is *asked for* while editing: pressing
+     * Edit itself, which swaps the painted manifest for the textarea before
+     * anything has been typed into it. Without the distinction the button would
+     * be blocked by the guard that exists to protect what it has not written
+     * yet.
      */
-    if (state.editing) return;
+    if (state.editing && !force) return;
     var chosen = state.selected;
     $('body').className = 'body' + (chosen ? ' with-detail' : '');
     applyColumns();
@@ -2131,28 +2199,324 @@
       }).join('') + '</tbody></table>';
   }
 
+
+  /* ------------------------------------------------------------------ *
+   * YAML, coloured.
+   *
+   * This is the app's own highlighter, transliterated. Not a second one: a
+   * hand-rolled highlighter that is wrong about a block scalar is worse than
+   * none, because it lies about the one thing YAML is genuinely hard to read
+   * for, and this panel cannot reach the app's editor to borrow it — it is a
+   * sandboxed frame in an origin of its own.
+   *
+   * So the rules are copied rather than reinvented, and a test compares the two
+   * on real kubectl output line by line. If they ever drift, that test fails
+   * rather than somebody noticing a wrong colour six months later.
+   * ------------------------------------------------------------------ */
+
+  var BLOCK_OPENER = /:\s*[|>][-+]?\d*\s*(#.*)?$/;
+
+  /** Where the colon that separates a key from a value is, or -1. */
+  function keyColon(text) {
+    var quote = null;
+    for (var i = 0; i < text.length; i += 1) {
+      var ch = text[i];
+      if (quote) {
+        if (ch === '\\') { i += 1; continue; }
+        if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'") { quote = ch; continue; }
+      // A comment before any colon means the line was never a pair.
+      if (ch === '#' && (i === 0 || /\s/.test(text[i - 1]))) return -1;
+      if (ch === ':' && (i + 1 === text.length || /\s/.test(text[i + 1]))) return i;
+    }
+    return -1;
+  }
+
+  function splitTrailingComment(value) {
+    var quote = null;
+    for (var i = 0; i < value.length; i += 1) {
+      var ch = value[i];
+      if (quote) { if (ch === quote) quote = null; continue; }
+      if (ch === '"' || ch === "'") quote = ch;
+      else if (ch === '#' && (i === 0 || /\s/.test(value[i - 1]))) return [value.slice(0, i), value.slice(i + 1)];
+    }
+    return [value];
+  }
+
+  /** What a plain value plainly is — by its shape, not by what it means. */
+  function scalarClass(body) {
+    if (/^(true|false|yes|no|on|off|null|~)$/i.test(body)) return 'y-const';
+    if (/^-?\d[\d_]*(\.\d+)?([eE][-+]?\d+)?$/.test(body)) return 'y-num';
+    if (/^[&*]/.test(body)) return 'y-anchor';
+    if (/^[|>]/.test(body)) return 'y-block';
+    return 'y-str';
+  }
+
+  /** `[a, b]` and `{k: v}` — the one place a line holds more than one value. */
+  function flowTokens(body) {
+    var spans = [];
+    var start = 0;
+    var token = '';
+    var quote = null;
+
+    var flush = function (end) {
+      var trimmed = token.trim();
+      if (trimmed) {
+        var from = start + token.indexOf(trimmed);
+        var at = keyColon(trimmed);
+        if (at > 0) {
+          spans.push({ from: from, to: from + trimmed.slice(0, at).replace(/\s+$/, '').length, cls: 'y-key' });
+          spans.push({ from: from + at, to: from + at + 1, cls: 'y-punct' });
+          var value = trimmed.slice(at + 1);
+          var lead = value.length - value.replace(/^\s+/, '').length;
+          var rest = value.trim();
+          if (rest) spans.push({ from: from + at + 1 + lead, to: from + trimmed.length, cls: scalarClass(rest) });
+        } else {
+          spans.push({ from: from, to: from + trimmed.length, cls: scalarClass(trimmed) });
+        }
+      }
+      token = '';
+      start = end;
+    };
+
+    for (var i = 0; i < body.length; i += 1) {
+      var ch = body[i];
+      if (quote) {
+        token += ch;
+        if (ch === '\\') { token += body[i + 1] || ''; i += 1; }
+        else if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'") { quote = ch; token += ch; continue; }
+      if ('[]{},'.indexOf(ch) >= 0) {
+        flush(i);
+        spans.push({ from: i, to: i + 1, cls: 'y-punct' });
+        start = i + 1;
+        continue;
+      }
+      if (!token) start = i;
+      token += ch;
+    }
+    flush(body.length);
+    return spans;
+  }
+
+  function valueSpans(body, offset) {
+    if (!body) return [];
+    if (body.indexOf('#') === 0) return [{ from: offset, to: offset + body.length, cls: 'y-comment' }];
+
+    var split = splitTrailingComment(body);
+    var head = split[0];
+    var spans = split.length === 1 ? [] : [{ from: offset + head.length, to: offset + body.length, cls: 'y-comment' }];
+
+    var lead = head.length - head.replace(/^\s+/, '').length;
+    var value = head.trim();
+    var from = offset + lead;
+    if (!value) return spans;
+
+    // A tag says what the value *is* — `!Ref`, `!!str` — and is not part of it.
+    var tagged = /^(!!?[^\s]*)\s*(.*)$/.exec(value);
+    if (tagged) {
+      spans.unshift({ from: from, to: from + tagged[1].length, cls: 'y-tag' });
+      if (tagged[2]) {
+        var after = value.indexOf(tagged[2], tagged[1].length);
+        spans.push({ from: from + after, to: from + after + tagged[2].length, cls: scalarClass(tagged[2]) });
+      }
+      return spans;
+    }
+
+    if (/^[[{]/.test(value)) {
+      return flowTokens(value).map(function (span) {
+        return { from: from + span.from, to: from + span.to, cls: span.cls };
+      }).concat(spans);
+    }
+    return [{ from: from, to: from + value.length, cls: scalarClass(value) }].concat(spans);
+  }
+
+  /** The coloured stretches of one line, given whether a block scalar is open. */
+  function yamlSpans(text, inBlock) {
+    if (inBlock || !text.trim()) return [];
+    var trimmed = text.trim();
+    var indent = text.length - text.replace(/^\s+/, '').length;
+    var end = text.replace(/\s+$/, '').length;
+
+    if (trimmed.indexOf('#') === 0) return [{ from: indent, to: end, cls: 'y-comment' }];
+    if (trimmed === '---' || trimmed === '...' || trimmed.indexOf('--- ') === 0 || trimmed.indexOf('%') === 0) {
+      return [{ from: indent, to: end, cls: 'y-doc' }];
+    }
+
+    var isItem = trimmed.indexOf('- ') === 0 || trimmed === '-';
+    var inner = isItem ? trimmed.slice(1).trim() : trimmed;
+    // A line that is neither an item nor a pair is raw, and is left alone.
+    if (!isItem && keyColon(inner) <= 0) return [];
+
+    var spans = [];
+    var at = indent;
+    if (isItem) {
+      spans.push({ from: at, to: at + 1, cls: 'y-dash' });
+      at += 1;
+      while (at < text.length && /\s/.test(text[at])) at += 1;
+    }
+
+    var rest = text.slice(at, end);
+    var colon = keyColon(rest);
+    if (colon > 0) {
+      spans.push({ from: at, to: at + rest.slice(0, colon).replace(/\s+$/, '').length, cls: 'y-key' });
+      spans.push({ from: at + colon, to: at + colon + 1, cls: 'y-colon' });
+      at += colon + 1;
+      while (at < end && /\s/.test(text[at])) at += 1;
+    }
+    return spans.concat(valueSpans(text.slice(at, end), at));
+  }
+
+  /** Whether this line opens a block scalar, so the next lines are left plain. */
+  function opensYamlBlock(text) {
+    var trimmed = text.trim();
+    var inner = trimmed.indexOf('- ') === 0 || trimmed === '-' ? trimmed.slice(1).trim() : trimmed;
+    return keyColon(inner) > 0 && BLOCK_OPENER.test(inner);
+  }
+
+  /**
+   * A whole YAML document as coloured HTML.
+   *
+   * Block scalars are the reason this is not a per-line map: everything inside
+   * one is text, however much it looks like YAML, and a highlighter that colours
+   * an embedded config file as if it were the manifest is exactly the lie worth
+   * avoiding. A block ends at the first line indented no further than the key
+   * that opened it.
+   */
+  function yamlHtml(text) {
+    var lines = String(text == null ? '' : text).split('\n');
+    var blockAt = -1;
+    return lines.map(function (line) {
+      var indent = line.length - line.replace(/^\s+/, '').length;
+      if (blockAt >= 0 && (!line.trim() || indent > blockAt)) return colour(line, yamlSpans(line, true));
+      blockAt = -1;
+      var spans = yamlSpans(line, false);
+      if (opensYamlBlock(line)) blockAt = indent;
+      return colour(line, spans);
+    }).join('\n');
+  }
+
+  /** One line, with its spans painted and everything between them left plain. */
+  function colour(line, spans) {
+    if (!spans.length) return esc(line);
+    var ordered = spans.slice().sort(function (a, b) { return a.from - b.from; });
+    var out = '';
+    var at = 0;
+    for (var i = 0; i < ordered.length; i += 1) {
+      var span = ordered[i];
+      if (span.from < at || span.to <= span.from) continue;
+      out += esc(line.slice(at, span.from));
+      out += '<span class="' + span.cls + '">' + esc(line.slice(span.from, span.to)) + '</span>';
+      at = span.to;
+    }
+    return out + esc(line.slice(at));
+  }
+
+
+  /**
+   * What this object is, said in the order somebody wants it.
+   *
+   * The old one put a definition list, then labels, then the whole of `describe`
+   * in one undifferentiated block of grey text — which is everything the object
+   * knows, in the order kubectl happens to print it, and finding the one line
+   * that matters in it is the work. This is the same material in named blocks,
+   * each of which can be taken on its own: what it is, what is running in it,
+   * what it is labelled, and then the long text underneath for when the answer
+   * is not in the short version.
+   */
+  function overviewBody(row) {
+    return chartsFor(row) + factsBlock(row) + containersBlock(row) + labelsBlock(row) + describeBlock();
+  }
+
+  /** A named section with its own Copy — nobody wants the whole drawer. */
+  function block(title, inner, extra) {
+    return '<section class="block"><h4 class="block-head">' + esc(title) +
+      '<span class="spacer"></span>' + (extra || '') +
+      '<button class="btn" data-copy-block="' + esc(title) + '">Copy</button></h4>' + inner + '</section>';
+  }
+
+  function factsBlock(row) {
+    var skip = ['uid', 'labels', 'containers', 'forwardable', 'health', 'scalable', 'restartable', 'createdAt',
+      'kind', 'selector', 'revisioned', 'pausable', 'suspendable', 'triggerable', 'ownsJobs', 'owner'];
+    var facts = Object.keys(row).filter(function (key) {
+      // The flags that say what the buttons above may do are not facts about the
+      // object; they are already on screen, as buttons.
+      return skip.indexOf(key) < 0 && row[key] !== '' && row[key] != null && typeof row[key] !== 'object';
+    });
+    if (!facts.length) return '';
+    return block('Summary', '<dl class="facts">' + facts.map(function (key) {
+      var value = String(row[key]);
+      var tone = key === 'status' ? ' class="' + esc(row.health || '') + '-text"' : '';
+      return '<dt>' + esc(HEADINGS[key] || key) + '</dt><dd' + tone + '>' + esc(value) + '</dd>';
+    }).join('') + '</dl>');
+  }
+
+  /**
+   * The containers, which is what a pod actually is.
+   *
+   * A pod's own row says "2/3 ready" and stops there; which of the three, and
+   * what it is running, was only ever in the describe text further down. Each
+   * one names its image and offers its log directly — the log of the container
+   * that is failing is the answer nine times in ten.
+   */
+  function containersBlock(row) {
+    var containers = row.containers || [];
+    if (!containers.length) return '';
+    var isPod = row.kind === 'Pod';
+    return block('Containers', '<table class="containers"><tbody>' + containers.map(function (container) {
+      var name = container.name || String(container);
+      return '<tr>' +
+        '<td class="grow">' + esc(name) +
+          (container.init ? '<span class="dim"> · init</span>' : '') + '</td>' +
+        '<td class="dim">' + esc(container.image || '') + '</td>' +
+        (isPod ? '<td><button class="btn" data-container-log="' + esc(name) + '">Log</button></td>' : '') +
+        '</tr>';
+    }).join('') + '</tbody></table>');
+  }
+
+  function labelsBlock(row) {
+    var keys = Object.keys(row.labels || {});
+    if (!keys.length) return '';
+    return block('Labels', '<div class="chips">' + keys.map(function (key) {
+      return '<span class="chip"><b>' + esc(key) + '</b><i>=</i>' + esc(row.labels[key]) + '</span>';
+    }).join('') + '</div>');
+  }
+
+  function describeBlock() {
+    var loaded = state.detailData.describe;
+    return block('Described by the cluster',
+      '<pre class="describe">' + (loaded == null ? 'reading…' : describeHtml(loaded)) + '</pre>');
+  }
+
+  /**
+   * `kubectl describe`, with its structure showing.
+   *
+   * It is not YAML and colouring it as YAML would be a lie — it is a report with
+   * `Key:  value` lines, indented sections, and an events table at the bottom.
+   * Only three things are marked: the field names, so the eye can run down the
+   * left; the section headings; and the word Warning, because that is the line
+   * somebody opened this to find.
+   */
+  function describeHtml(text) {
+    return String(text || '').split('\n').map(function (line) {
+      if (/^\s*Warning\b/.test(line)) return '<span class="warn-text">' + esc(line) + '</span>';
+      if (/^[A-Z][^:]*:\s*$/.test(line)) return '<span class="y-doc">' + esc(line) + '</span>';
+      var pair = /^(\s*)([A-Za-z][\w .\/-]*?):(\s+)(.*)$/.exec(line);
+      if (!pair) return esc(line);
+      return esc(pair[1]) + '<span class="y-key">' + esc(pair[2]) + '</span>' +
+        '<span class="y-colon">:</span>' + esc(pair[3]) + esc(pair[4]);
+    }).join('\n');
+  }
+
+
   function detailBody(row) {
     var tab = state.detail.tab;
     if (row.kind === 'Release') return releaseBody(row, tab);
-    if (tab === 'overview') {
-      var loaded = state.detailData.describe;
-      var facts = '<dl class="facts">' + Object.keys(row).filter(function (key) {
-        // The flags that say what the buttons above may do are not facts about
-        // the object; they are already on screen, as buttons.
-        return ['uid', 'labels', 'containers', 'forwardable', 'health', 'scalable', 'restartable', 'createdAt', 'kind',
-          'selector', 'revisioned', 'pausable', 'suspendable', 'triggerable', 'ownsJobs', 'owner'].indexOf(key) < 0 &&
-          row[key] !== '' && row[key] != null && typeof row[key] !== 'object';
-      }).map(function (key) {
-        return '<dt>' + esc(HEADINGS[key] || key) + '</dt><dd>' + esc(row[key]) + '</dd>';
-      }).join('') + '</dl>';
-      var labels = Object.keys(row.labels || {}).length
-        ? '<h4 class="dim" style="margin:12px 0 4px;font-size:10.5px">Labels</h4><pre>' +
-          esc(Object.keys(row.labels).map(function (key) { return key + '=' + row.labels[key]; }).join('\n')) + '</pre>'
-        : '';
-      return chartsFor(row) + facts + labels +
-        '<h4 class="dim" style="margin:12px 0 4px;font-size:10.5px">describe</h4>' +
-        '<pre>' + esc(loaded == null ? 'reading…' : loaded) + '</pre>';
-    }
+    if (tab === 'overview') return overviewBody(row);
     if (tab === 'yaml') {
       if (state.detailData.yaml == null) return '<pre>reading…</pre>';
       var draft = draftFor(row);
@@ -2162,13 +2526,32 @@
        * block scalar is worse than none — it would be lying about the one thing
        * YAML is hard to read for.
        */
+      var body = draft == null ? state.detailData.yaml : draft;
+      // Typing that survived a trip to Events comes back with the editor open;
+      // painting it read-only would look like the edit had been thrown away.
+      if (draft != null) state.editingYaml = true;
+      /*
+       * Read coloured, edited plain, and the button says which you are in.
+       *
+       * A textarea cannot hold coloured text, and the alternatives — a
+       * contenteditable pretending to be one, or a whole editor — are how a
+       * panel that shows a manifest turns into a project that maintains an
+       * editor. So the manifest is painted until somebody says they want to
+       * change it, which is the state it is in almost all of the time.
+       */
       return '<div class="yaml-tools">' +
-        '<button class="btn" data-do="yaml-apply">Apply</button>' +
-        '<button class="btn" data-do="yaml-check" title="Ask the server whether this is legal, and change nothing">Dry run</button>' +
-        '<button class="btn" data-do="yaml-revert">Revert</button>' +
+        (state.editingYaml
+          ? '<button class="btn" data-do="yaml-apply">Apply</button>' +
+            '<button class="btn" data-do="yaml-check" title="Ask the server whether this is legal, and change nothing">Dry run</button>' +
+            '<button class="btn" data-do="yaml-revert">Revert</button>'
+          : '<button class="btn" data-do="yaml-edit">Edit</button>') +
         '<span class="dim" id="yaml-state">' + (draft == null ? 'as it is in the cluster' : 'edited') + '</span>' +
+        '<span class="spacer"></span>' +
+        '<button class="btn" data-do="copy-detail" title="Copy the whole manifest">Copy</button>' +
         '</div>' +
-        '<textarea id="yaml-edit" spellcheck="false">' + esc(draft == null ? state.detailData.yaml : draft) + '</textarea>';
+        (state.editingYaml
+          ? '<textarea id="yaml-edit" spellcheck="false">' + esc(body) + '</textarea>'
+          : '<pre class="yaml">' + yamlHtml(body) + '</pre>');
     }
     if (tab === 'pods') return podsBody(row);
     if (tab === 'jobs') return jobsBody(row);
@@ -2246,6 +2629,28 @@
       }).catch(function (error) { say(String(error.message || error), true); });
       return;
     }
+
+    /*
+     * Copy one block rather than the drawer.
+     *
+     * The drawer's Copy takes everything, which is right when you want the lot
+     * and useless when you want the six labels. Each block offers its own, and
+     * takes the text as it reads on screen rather than a second rendering of the
+     * same data that could disagree with the first.
+     */
+    var copy = event.target.closest('[data-copy-block]');
+    if (copy) {
+      var section = copy.closest('.block');
+      var content = section && section.querySelector(':scope > *:not(.block-head)');
+      if (!content) return;
+      var text = readable(content);
+      host.emit('copy', { text: text });
+      say('Copied ' + copy.dataset.copyBlock.toLowerCase() + '.');
+      return;
+    }
+
+    var log = event.target.closest('[data-container-log]');
+    if (log && state.selected) { openLog(state.selected, log.dataset.containerLog); return; }
 
     var open = event.target.closest('[data-open]');
     if (open) {
@@ -2398,12 +2803,21 @@
    */
   var LOG_CAP = 2000;
 
-  function openLog(row) {
+  function openLog(row, container) {
     for (var i = 0; i < state.logs.length; i += 1) {
       var open = state.logs[i];
       if (open.name === row.name && open.namespace === row.namespace && open.context === state.context) {
         state.logAt = i;
         state.dockOpen = true;
+        // Already open, but on another container — this asked for a particular one.
+        if (container && open.container !== container) {
+          open.container = container;
+          open.lines = [];
+          open.drawn = 0;
+          drawDock();
+          readLog(open, false);
+          return;
+        }
         drawDock();
         return;
       }
@@ -2411,7 +2825,7 @@
     var containers = (row.containers || []).filter(function (c) { return !c.init; });
     state.logs.push({
       id: null, name: row.name, namespace: row.namespace, context: state.context,
-      containers: row.containers || [], container: (containers[0] || row.containers[0] || {}).name || null,
+      containers: row.containers || [], container: container || (containers[0] || row.containers[0] || {}).name || null,
       lines: [], pending: '', drawn: 0, following: false, wrap: true, search: '', loading: false,
     });
     state.logAt = state.logs.length - 1;
@@ -2918,20 +3332,60 @@
    * pairs are joined; everything else is taken as it reads.
    */
   function readable(root) {
+    /*
+     * The root may be the thing itself rather than a box of things — the drawer
+     * hands over a whole tab, a block's Copy hands over its one table or its one
+     * list. Both have to read the same, so the shape is decided per node and the
+     * root is just another node.
+     */
+    var mine = pieceText(root);
+    if (mine != null) return mine.trim();
     var out = [];
     for (var i = 0; i < root.children.length; i += 1) {
       var node = root.children[i];
-      if (node.tagName === 'DL') {
-        var terms = node.querySelectorAll('dt');
-        for (var n = 0; n < terms.length; n += 1) {
-          var value = terms[n].nextElementSibling;
-          out.push(terms[n].textContent + ': ' + (value ? value.textContent : ''));
-        }
-      } else {
-        out.push(node.innerText);
-      }
+      var text = pieceText(node);
+      out.push(text == null ? node.innerText : text);
     }
     return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  /** One element as text, when its shape says how to read it. */
+  function pieceText(node) {
+    if (node.tagName === 'DL') {
+      var out = [];
+      var terms = node.querySelectorAll('dt');
+      for (var n = 0; n < terms.length; n += 1) {
+        var value = terms[n].nextElementSibling;
+        out.push(terms[n].textContent + ': ' + (value ? value.textContent : ''));
+      }
+      return out.join('\n');
+    }
+    if (node.tagName === 'TABLE') {
+      /*
+       * A table read as a table: columns separated, one row per line, and no
+       * buttons. Copying the containers block used to hand back the word "Log"
+       * after every image, because that is what is on the row — and a copy is of
+       * the thing said, not of the things offered.
+       */
+      var lines = [];
+      var rows = node.querySelectorAll('tr');
+      for (var r = 0; r < rows.length; r += 1) lines.push(cellsOf(rows[r]).join('\t'));
+      return lines.join('\n');
+    }
+    return null;
+  }
+
+  /** One row's cells as text, leaving out the ones that are only controls. */
+  function cellsOf(row) {
+    var cells = row.children;
+    var text = [];
+    for (var i = 0; i < cells.length; i += 1) {
+      var cell = cells[i];
+      if (cell.querySelector('button, input')) continue;
+      var value = cell.textContent.trim();
+      if (value) text.push(value);
+    }
+    return text;
   }
 
   function act(what) {
@@ -3034,6 +3488,19 @@
     var at = { context: state.context, namespace: row.namespace, kind: row.kind, name: row.name };
 
     if (what === 'logs') { openLog(row); return; }
+    if (what === 'yaml-edit') {
+      /*
+       * Turning on the editor, not editing. The manifest is painted until this
+       * is pressed, which is what it is doing almost all of the time — and the
+       * textarea it swaps in is plain, because a coloured one would mean
+       * maintaining an editor inside a panel.
+       */
+      state.editingYaml = true;
+      drawDetail(true);
+      var box = document.getElementById('yaml-edit');
+      if (box) box.focus();
+      return;
+    }
 
     if (what === 'drain') {
       call('kube.drain', { context: state.context, name: row.name })

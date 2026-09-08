@@ -380,9 +380,18 @@ function podRow(item, now) {
     restartNote: restarts > 0 && lastRestart ? `${age(lastRestart, now)} ago` : '',
     node: item.spec?.nodeName ?? '',
     ip: item.status?.podIP ?? '',
+    /*
+     * The image travels with the name because "which of these three containers
+     * is running the tag I just pushed" is a question the drawer should not have
+     * to ask the cluster a second time to answer.
+     */
     containers: [
-      ...(item.spec?.initContainers ?? []).map((container) => ({ name: container.name, init: true })),
-      ...(item.spec?.containers ?? []).map((container) => ({ name: container.name, init: false })),
+      ...(item.spec?.initContainers ?? []).map((container) => ({
+        name: container.name, init: true, image: container.image ?? '',
+      })),
+      ...(item.spec?.containers ?? []).map((container) => ({
+        name: container.name, init: false, image: container.image ?? '',
+      })),
     ],
     // What could be forwarded to. Declared ports only: a container listening on
     // something it never declared is invisible from out here, and guessing
