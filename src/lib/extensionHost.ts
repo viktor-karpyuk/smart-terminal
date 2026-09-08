@@ -487,6 +487,10 @@ export function panelDocument(body: string, theme: PanelTheme): string {
   ::-webkit-scrollbar-thumb { background: var(--border-strong); border: 3px solid transparent; background-clip: content-box; border-radius: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
   button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+  /* Everything a panel shows can be selected and copied. A button cannot, so a
+     click on one does not start a selection instead of doing what it says. */
+  body { user-select: text; -webkit-user-select: text; }
+  button, .btn, select { user-select: none; -webkit-user-select: none; }
 </style>
 <script>${SHIM}</script>
 </head>

@@ -973,7 +973,12 @@
       bits.push(shown === total ? total + ' items' : shown + ' of ' + total);
     }
     if (state.loading) bits.push('<span class="spin">◐</span>');
-    $('crumb').innerHTML = bits.join('<span class="dim"> · </span>');
+    $('crumb').innerHTML =
+      bits.join('<span class="dim"> · </span>') +
+      (state.table && state.view.type !== 'overview'
+        ? '<span class="spacer"></span><button class="btn" data-do="copy-table" ' +
+          'title="Copy this table, as text">Copy table</button>'
+        : '');
   }
 
   function titleOf(name) {
@@ -1324,6 +1329,8 @@
         return '<button data-tab="' + tab + '" class="' + (state.detail.tab === tab ? 'on' : '') + '">' +
           (tab === 'yaml' ? 'YAML' : tab[0].toUpperCase() + tab.slice(1)) + '</button>';
       }).join('') +
+        '<span class="spacer"></span>' +
+        '<button class="btn" data-do="copy-detail" title="Copy what this tab is showing">Copy</button>' +
         (release && state.detail.tab === 'values'
           ? '<span class="spacer"></span><button class="btn' + (state.helmAll ? ' on' : '') +
             '" data-do="values-all" title="Every value the chart used, defaults included">All</button>'
@@ -1919,7 +1926,63 @@
   /* ---------------------------------------------------------------------- *
    * Doing things.
    * ---------------------------------------------------------------------- */
+  /**
+   * What is on screen, as text somebody would want to paste.
+   *
+   * `innerText` alone is nearly right, and wrong in the one place it matters: a
+   * description list puts every label on its own line and every value on the
+   * next, so a copied overview comes out as a column of alternating words. The
+   * pairs are joined; everything else is taken as it reads.
+   */
+  function readable(root) {
+    var out = [];
+    for (var i = 0; i < root.children.length; i += 1) {
+      var node = root.children[i];
+      if (node.tagName === 'DL') {
+        var terms = node.querySelectorAll('dt');
+        for (var n = 0; n < terms.length; n += 1) {
+          var value = terms[n].nextElementSibling;
+          out.push(terms[n].textContent + ': ' + (value ? value.textContent : ''));
+        }
+      } else {
+        out.push(node.innerText);
+      }
+    }
+    return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
   function act(what) {
+    /*
+     * Copying, which every part of this has to allow.
+     *
+     * A panel is a sandboxed frame in an origin of its own, so it cannot write
+     * to the clipboard itself — it asks the app, which is the same door
+     * everything else goes through. What is copied is what is on screen: the
+     * text of the tab, or the table as its columns, rather than a second
+     * rendering of the same data that could disagree with the first.
+     */
+    if (what === 'copy-detail') {
+      var body = document.querySelector('.detail-body');
+      var head = document.querySelector('.detail-head h3');
+      if (!body) return;
+      var text = (head ? head.textContent + '\n\n' : '') + readable(body);
+      host.emit('copy', { text: text });
+      say('Copied ' + text.split('\n').length + ' lines.');
+      return;
+    }
+    if (what === 'copy-table') {
+      var rows = visible();
+      if (!rows.length) return;
+      var columns = (state.table.columns || []).filter(function (c) { return !(c === 'namespace' && state.namespace); });
+      var lines = [columns.map(function (c) { return HEADINGS[c] || c; }).join('\t')];
+      for (var i = 0; i < rows.length; i += 1) {
+        lines.push(columns.map(function (c) { return rows[i][c] == null ? '' : String(rows[i][c]); }).join('\t'));
+      }
+      host.emit('copy', { text: lines.join('\n') });
+      say('Copied ' + rows.length + ' rows.');
+      return;
+    }
+
     if (what === 'pick-none') { state.picked = []; drawTable(); drawPicked(); return; }
     if (what === 'pick-delete' || what === 'pick-restart') {
       var chosen = pickedRows();
@@ -2245,6 +2308,23 @@
    * Keys, the timer, and starting up.
    * ---------------------------------------------------------------------- */
   document.addEventListener('keydown', function (event) {
+    /*
+     * Copy whatever is selected, wherever it is.
+     *
+     * The buttons cover the things worth copying whole; this covers everything
+     * else — half a log line, one field of a description, a pod's name out of a
+     * table. A frame in an origin of its own cannot reach the clipboard, so the
+     * app is asked, and the selection is read before anything can clear it.
+     */
+    if ((event.metaKey || event.ctrlKey) && event.key === 'c') {
+      var selected = String(window.getSelection() || '');
+      if (selected) {
+        event.preventDefault();
+        host.emit('copy', { text: selected });
+        say('Copied ' + selected.split('\n').length + ' line' + (selected.indexOf('\n') >= 0 ? 's' : '') + '.');
+      }
+      return;
+    }
     if (event.key === 'Escape') {
       // The question closes itself; this is only for what is behind it.
       if (document.getElementById('prompt') || state.editing) return;

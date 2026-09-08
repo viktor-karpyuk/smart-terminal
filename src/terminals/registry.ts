@@ -169,6 +169,31 @@ export function ensureTerminal(id: string, options: CreateOptions): TerminalHand
   parkingLot().appendChild(host);
   term.open(host);
 
+  /**
+   * The right-click menu, raised as an event rather than drawn here.
+   *
+   * This file knows about terminals and nothing about React, so it says what
+   * happened and where, and lets the app decide what a menu looks like. Every
+   * terminal gets one by being a terminal — the session tabs and the terminal
+   * inside a folder are the same object here, which is exactly why this belongs
+   * at this level and not in either of the two components that show one.
+   *
+   * The selection is read *now*, before anything else can clear it.
+   */
+  host.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+    window.dispatchEvent(
+      new CustomEvent('terminal-menu', {
+        detail: {
+          id,
+          x: event.clientX,
+          y: event.clientY,
+          selection: term.hasSelection() ? term.getSelection() : '',
+        },
+      }),
+    );
+  });
+
   term.onData(options.onData);
   term.onBinary((data) => options.onData(data));
   term.onTitleChange(options.onTitle);
@@ -288,6 +313,23 @@ export function readAll(id: string): string {
   return lines.join('\n');
 }
 
+/**
+ * Put text into a terminal as though it had been typed.
+ *
+ * `paste` rather than writing to the pty directly: it is the terminal that
+ * knows whether the program on the other end asked for bracketed paste, and a
+ * shell that gets a multi-line paste without those markers runs every line of
+ * it. It also means this works the same for a session and for the terminal in a
+ * folder, which have quite different things wired to their output.
+ */
+export function pasteInto(id: string | null, text: string) {
+  if (!id || !text) return false;
+  const handle = handles.get(id);
+  if (!handle) return false;
+  handle.term.paste(text);
+  return true;
+}
+
 export function copySelection(id: string | null): boolean {
   const term = id ? handles.get(id)?.term : null;
   if (term?.hasSelection()) {
@@ -299,6 +341,19 @@ export function copySelection(id: string | null): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Clear the screen without touching what is running.
+ *
+ * `clear` rather than `reset`: reset throws away the scrollback and the modes
+ * the program on the other end set up, which for a full-screen program like
+ * Claude's own interface means it is left drawing into a terminal that no
+ * longer agrees with it.
+ */
+export function clearTerminal(id: string | null) {
+  if (!id) return;
+  handles.get(id)?.term.clear();
 }
 
 export function selectAllIn(id: string | null) {
