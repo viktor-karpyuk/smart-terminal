@@ -1154,7 +1154,64 @@ function overview({ nodes = [], pods = [], events = [] } = {}) {
  * The verbs. Reading first, then the ones that change something.
  * ------------------------------------------------------------------------ */
 
+/**
+ * Answers worth not asking for twice.
+ *
+ * Every call here is a whole `kubectl` process: spawn, TLS handshake, and — on a
+ * managed cluster — an exec credential plugin before a single byte of the answer
+ * comes back. Measured on a fifteen-node EKS cluster, `api-resources` takes 1.2
+ * seconds, and takes exactly 1.2 seconds again immediately afterwards, for a
+ * list of kinds that changes when somebody installs a CRD.
+ *
+ * Two separate savings, and the second is the one that is always safe:
+ *
+ * A short *time to live* for answers that do not really change. Only reads, only
+ * ones where being a few seconds behind cannot mislead — never a list of pods,
+ * whose whole job is to be current.
+ *
+ * And *sharing what is already in the air*, which is not caching at all: two
+ * cluster tabs opening at once, or a panel asking for the same thing twice while
+ * the first ask is still running, wait on one process instead of starting a
+ * second. That is correct for any read, whatever its age, because both callers
+ * would have been given the same answer anyway.
+ *
+ * Anything that changes the cluster empties the lot. A nav built from a stale
+ * kind list after a CRD was applied is exactly the sort of wrong that takes an
+ * afternoon to notice.
+ */
+const answers = new Map();
+const inFlight = new Map();
+
+function memo(key, ttl, work) {
+  const held = answers.get(key);
+  if (held && Date.now() - held.at < ttl) return Promise.resolve(held.value);
+
+  const already = inFlight.get(key);
+  if (already) return already;
+
+  const wait = work()
+    .then((value) => {
+      // A failure is not an answer. Caching one turns a blip into a minute of
+      // an empty panel that no amount of clicking refresh will fix.
+      if (value && value.ok && ttl > 0) answers.set(key, { at: Date.now(), value });
+      return value;
+    })
+    .finally(() => inFlight.delete(key));
+
+  inFlight.set(key, wait);
+  return wait;
+}
+
+/** Forget everything remembered — after anything that changes a cluster. */
+function forgetAnswers() {
+  answers.clear();
+}
+
 async function contexts() {
+  return memo('contexts', 15000, wholeContexts);
+}
+
+async function wholeContexts() {
   // `config view` reads kubeconfig only — no cluster is contacted, so this
   // answers instantly even when every cluster in the file is unreachable.
   const result = await runJson(['config', 'view', '-o', 'json'], { timeout: 8000 });
@@ -1200,10 +1257,17 @@ async function reachable({ context } = {}) {
   return { ok: true, up: false, slow, error: result.error };
 }
 
+/** Five minutes. A kind appears when a CRD is installed, and not otherwise. */
+const RESOURCES_TTL = 5 * 60 * 1000;
+
 async function resources(args) {
-  const result = await run([...scope(args), 'api-resources', '--verbs=list', '-o', 'wide'], { timeout: 20000 });
-  if (!result.ok) return result;
-  return { ok: true, resources: apiResources(result.stdout) };
+  const { fresh, ...rest } = args ?? {};
+  if (fresh) forgetAnswers();
+  return memo(`resources:${rest.context ?? ''}`, RESOURCES_TTL, async () => {
+    const result = await run([...scope(rest), 'api-resources', '--verbs=list', '-o', 'wide'], { timeout: 20000 });
+    if (!result.ok) return result;
+    return { ok: true, resources: apiResources(result.stdout) };
+  });
 }
 
 /**
@@ -1306,6 +1370,12 @@ async function top({ what = 'pods', ...rest }) {
  * is still only the totals.
  */
 async function summary({ context } = {}) {
+  // Shared while it is running, never kept: an overview that is even ten
+  // seconds old is an overview that is lying about what is broken.
+  return memo(`summary:${context ?? ''}`, 0, () => wholeSummary({ context }));
+}
+
+async function wholeSummary({ context } = {}) {
   const [nodes, pods, warnings, usage, podUsage, workloads, claims] = await Promise.all([
     listRaw({ kind: 'nodes', context }),
     listRaw({ kind: 'pods', context, allNamespaces: true }),
@@ -1592,6 +1662,8 @@ async function remove({ kind, name, ...rest }) {
     safeArg(name, 'the name'),
     '--wait=false',
   ]);
+  // Deleting a CRD takes its kinds with it, so the kept list is no longer true.
+  if (result.ok) forgetAnswers();
   return result.ok ? { ok: true, text: result.stdout.trim() } : result;
 }
 
@@ -1633,6 +1705,13 @@ async function apply({ yaml, dryRun = false, ...rest }) {
   const args = [...scope(rest), 'apply', '-f', '-'];
   if (dryRun) args.push('--dry-run=server');
   const result = await run(args, { stdin: body });
+  /*
+   * An apply can install a CRD, which adds kinds — and the kind list is the one
+   * thing here that is kept. A nav built from a stale list after a CRD landed is
+   * exactly the sort of wrong that costs an afternoon. A dry run changed
+   * nothing, so it forgets nothing.
+   */
+  if (result.ok && !dryRun) forgetAnswers();
   if (result.ok) return { ok: true, text: result.stdout.trim(), dryRun };
   return { ...result, error: shortenApiError(result.error) };
 }
@@ -1657,6 +1736,8 @@ async function removeContext({ name }) {
   const done = [];
   const context = await run(['config', 'delete-context', plan.context], { timeout: 8000 });
   if (!context.ok) return context;
+  // kubeconfig has changed under the kept list of contexts.
+  forgetAnswers();
   done.push(`context ${plan.context}`);
 
   // The cluster and the user only if nothing else is pointing at them. A
@@ -1684,6 +1765,8 @@ async function removeContext({ name }) {
  */
 async function useContext({ name }) {
   const result = await run(['config', 'use-context', safeArg(name, 'the context')], { timeout: 8000 });
+  // Which context is the default is part of what was read and kept.
+  if (result.ok) forgetAnswers();
   return result.ok ? { ok: true, text: result.stdout.trim() } : result;
 }
 
@@ -2062,4 +2145,6 @@ module.exports = {
   cleanError,
   shortenApiError,
   forgetEnvironment,
+  forgetAnswers,
+  memo,
 };

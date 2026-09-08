@@ -559,3 +559,36 @@ test('a cron job offers the two things you do to one without deleting it', () =>
   assert.equal(row.triggerable, true);
   assert.equal(row.status, 'Suspended');
 });
+
+test('an answer asked for twice inside its lifetime is only worked out once', async () => {
+  let ran = 0;
+  const work = async () => { ran += 1; return { ok: true, n: ran }; };
+  const first = await kube.memo('k', 60000, work);
+  const second = await kube.memo('k', 60000, work);
+  assert.equal(ran, 1);
+  assert.deepEqual(second, first);
+  kube.forgetAnswers();
+  await kube.memo('k', 60000, work);
+  assert.equal(ran, 2, 'forgetting means asking again');
+});
+
+test('two callers arriving together wait on one piece of work', async () => {
+  let ran = 0;
+  let release;
+  const held = new Promise((r) => { release = r; });
+  const work = async () => { ran += 1; await held; return { ok: true }; };
+  // No lifetime at all: sharing what is in the air is right even for answers
+  // that must never be kept.
+  const both = Promise.all([kube.memo('flight', 0, work), kube.memo('flight', 0, work)]);
+  release();
+  await both;
+  assert.equal(ran, 1);
+});
+
+test('a failure is not remembered, so a blip is not a minute of nothing', async () => {
+  let ran = 0;
+  const work = async () => { ran += 1; return ran === 1 ? { ok: false, error: 'no' } : { ok: true }; };
+  assert.equal((await kube.memo('flaky', 60000, work)).ok, false);
+  assert.equal((await kube.memo('flaky', 60000, work)).ok, true, 'it tried again');
+  assert.equal(ran, 2);
+});
