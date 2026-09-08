@@ -837,6 +837,16 @@
       if (mine !== loadToken) return;
       state.loading = false;
       state.error = null;
+      /*
+       * Where it is, said again on every load and not only when somebody
+       * navigates.
+       *
+       * A panel rebuilt before its first navigation has nothing to be put back
+       * to, and starts at the overview — which is right, and is also
+       * indistinguishable from the restore having failed. Saying it here means
+       * there is no window at all in which this panel has not said where it is.
+       */
+      remember();
       if (state.view.type === 'overview') {
         state.overview = result;
         // The disk numbers are Prometheus', and arrive after this. Until they
@@ -3119,12 +3129,12 @@
        * editor. So the manifest is painted until somebody says they want to
        * change it, which is the state it is in almost all of the time.
        */
-      return '<div class="yaml-tools">' +
+      return '<div class="yaml-tools is-stuck">' +
         (state.editingYaml
-          ? '<button class="btn" data-do="yaml-apply">Apply</button>' +
+          ? '<button class="btn go" data-do="yaml-apply" title="Save this manifest to the cluster">Apply</button>' +
             '<button class="btn" data-do="yaml-check" title="Ask the server whether this is legal, and change nothing">Dry run</button>' +
             '<button class="btn" data-do="yaml-revert">Revert</button>'
-          : '<button class="btn" data-do="yaml-edit">Edit</button>') +
+          : '<button class="btn" data-do="yaml-edit" title="Change this manifest and apply it to the cluster">Edit</button>') +
         '<span class="dim" id="yaml-state">' + (draft == null ? 'as it is in the cluster' : 'edited') + '</span>' +
         '<span class="spacer"></span>' +
         '<button class="btn" data-do="copy-detail" title="Copy the whole manifest">Copy</button>' +
