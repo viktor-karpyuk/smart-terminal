@@ -160,6 +160,8 @@ contextBridge.exposeInMainWorld('api', {
     list: () => ipcRenderer.invoke('extensions:list'),
     install: (id) => ipcRenderer.invoke('extensions:install', id),
     remove: (id) => ipcRenderer.invoke('extensions:remove', id),
+    /** Put a panel's document where its own frame can fetch it. Null html removes it. */
+    stagePanel: (id, html) => ipcRenderer.invoke('extensions:stage-panel', { id, html }),
     /** One picture, as a data URI, or null. Asked for when somebody looks. */
     picture: (id, file) => ipcRenderer.invoke('extensions:picture', { id, file }),
     enable: (id, on) => ipcRenderer.invoke('extensions:enable', { id, on }),

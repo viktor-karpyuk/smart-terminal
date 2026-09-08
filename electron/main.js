@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, shell, net } = require('electron');
 const { createHash, randomUUID } = require('node:crypto');
 
 const { PtyManager, claudeLaunchLine } = require('./pty-manager');
@@ -56,6 +56,28 @@ const buildInfo = (() => {
     };
   }
 })();
+
+/**
+ * A scheme of its own for the views extensions bring.
+ *
+ * They used to be `srcdoc`, and a `srcdoc` document inherits its parent's
+ * Content-Security-Policy. The packaged app has a strict one — `script-src
+ * 'self'` — so every panel's script was blocked and every panel rendered as its
+ * static HTML and nothing else. It worked in development for the one reason
+ * that made it hard to see: there is no CSP there.
+ *
+ * Served over a scheme, a panel is its own document with its own policy rather
+ * than an heir to the app's. It is still sandboxed, still in an opaque origin,
+ * and still reaches the app only by message — and it can now be told, in that
+ * policy, that it may not reach the network at all, which was the one hole this
+ * design had left open.
+ *
+ * `standard` so it has an origin at all; `secure` so it is not treated as
+ * mixed content inside the app.
+ */
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'panel', privileges: { standard: true, secure: true, supportFetchAPI: false, corsEnabled: false } },
+]);
 
 const isDev = process.env.SMART_TERMINAL_DEV === '1';
 
@@ -637,6 +659,21 @@ function registerIpc() {
    * the id rather than taken from the renderer, so the only paths that can be
    * read are inside an extension the app itself found.
    */
+  /**
+   * Put a panel's document where its frame can fetch it, and take it away again.
+   *
+   * The renderer stages before it creates the frame, so the document is there
+   * by the time the navigation happens — and drops it when the panel closes, so
+   * this does not become a pile of every panel ever opened.
+   */
+  ipcMain.handle('extensions:stage-panel', (_e, { id, html } = {}) => {
+    const key = String(id ?? '');
+    if (!key) return { ok: false };
+    if (html == null) stagedPanels.delete(key);
+    else stagedPanels.set(key, String(html));
+    return { ok: true, url: `panel://${key}/` };
+  });
+
   ipcMain.handle('extensions:picture', (_e, { id, file } = {}) => {
     // `builtInExtensions` is both places already: the ones shipped, and the
     // ones under the user's data directory.
@@ -1363,7 +1400,40 @@ app.setAboutPanelOptions({
   credits: `Electron ${buildInfo.electron} · Node ${buildInfo.node}`,
 });
 
+/**
+ * The documents the panel scheme serves, by the panel showing them.
+ *
+ * Staged by the renderer just before its frame is created, and dropped when the
+ * frame goes. Nothing is read from disk here: the document was assembled in the
+ * renderer, out of an extension's own file and the app's theme, and this only
+ * hands it back to the frame that asked for it.
+ */
+const stagedPanels = new Map();
+
 if (isPrimaryInstance) app.whenReady().then(() => {
+  protocol.handle('panel', (request) => {
+    const id = new URL(request.url).hostname;
+    const html = stagedPanels.get(id);
+    if (!html) return new Response('no such panel', { status: 404, headers: { 'content-type': 'text/plain' } });
+    return new Response(html, {
+      headers: {
+        'content-type': 'text/html; charset=utf-8',
+        /*
+         * The panel's own policy, and a tighter one than the app's.
+         *
+         * Inline scripts and styles are exactly what a panel *is* — an
+         * extension brings one document and it runs — so those are allowed.
+         * Everything else is not: `default-src 'none'` covers `connect-src`,
+         * which means a panel can no longer reach the network. That was the one
+         * thing the sandbox never closed, and it closes here for free.
+         */
+        'content-security-policy':
+          "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
+          "img-src data:; font-src data:; connect-src 'none'",
+      },
+    });
+  });
+
   profiles = new ProfileStore();
   db = new Database();
   // Anything still marked running belongs to a previous launch that did not get

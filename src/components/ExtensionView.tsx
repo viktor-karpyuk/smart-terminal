@@ -102,6 +102,28 @@ function Frame({
   const [asking, setAsking] = useState<{ question: string; answer: (yes: boolean) => void } | null>(null);
   const doc = useMemo(() => panelDocument(view.source ?? '', readTheme()), [view.source]);
   /*
+   * The document is staged before the frame exists, and the frame is given a
+   * URL rather than the document itself.
+   *
+   * `srcDoc` inherits the app's Content-Security-Policy, and the packaged app
+   * has a strict one — so every panel's script was blocked and every panel drew
+   * its static HTML and nothing else. Development has no CSP, which is exactly
+   * why this survived so long unnoticed. Served over its own scheme a panel is
+   * its own document with its own policy, and the sandbox that isolates it is
+   * unchanged.
+   */
+  const [source, setSource] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void window.api.extensions.stagePanel(panelId, doc).then((staged) => {
+      if (alive) setSource(staged.url ?? null);
+    });
+    return () => {
+      alive = false;
+      void window.api.extensions.stagePanel(panelId, null);
+    };
+  }, [panelId, doc]);
+  /*
    * The long-running things this panel started — a followed log, a held-open
    * port. Kept per frame rather than globally, which is what stops one panel
    * from stopping another's: an id it never received is an id it cannot name.
@@ -375,16 +397,18 @@ function Frame({
           </button>
         </div>
       )}
-      <iframe
-        ref={frame}
-        className="extension-frame"
-        title={view.title}
-        // Scripts, and nothing else. Without `allow-same-origin` the document
-        // is in an origin of its own, which is what makes everything above the
-        // only way it can reach the app.
-        sandbox="allow-scripts"
-        srcDoc={doc}
-      />
+      {source && (
+        <iframe
+          ref={frame}
+          className="extension-frame"
+          title={view.title}
+          // Scripts, and nothing else. Without `allow-same-origin` the document
+          // is in an origin of its own, which is what makes everything above the
+          // only way it can reach the app.
+          sandbox="allow-scripts"
+          src={source}
+        />
+      )}
     </div>
   );
 }

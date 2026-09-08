@@ -758,6 +758,8 @@ declare global {
         list(): Promise<ExtensionState>;
         install(id: string): Promise<ExtensionState>;
         remove(id: string): Promise<ExtensionState>;
+        /** Put a panel's document where its own frame can fetch it. Null html removes it. */
+        stagePanel(id: string, html: string | null): Promise<{ ok: boolean; url?: string }>;
         /** One of an extension's screenshots, as a data URI, or null. */
         picture(id: string, file: string): Promise<string | null>;
         enable(id: string, on: boolean): Promise<ExtensionState>;
