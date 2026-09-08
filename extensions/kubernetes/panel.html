@@ -128,6 +128,9 @@
     font-size: 10.5px; line-height: 1.55; color: var(--text-dim);
   }
   pre.wrapless { white-space: pre; word-break: normal; }
+  /* Full strength, not the dimmed grey the rest of the prose uses: a log is
+     read line by line, often at speed, and dim text is the wrong trade there. */
+  .dock-body pre { color: var(--text); }
   .log-line.err { color: var(--danger); }
 
   .yaml-tools { display: flex; align-items: center; gap: 5px; margin-bottom: 7px; flex-wrap: wrap; }
@@ -1611,6 +1614,7 @@
   }
 
   function readLog(log, previous) {
+    log.showingPrevious = Boolean(previous);
     log.loading = true;
     log.following = false;
     if (log.id) { call('kube.stopFollow', { id: log.id }).catch(function () {}); log.id = null; }
@@ -1641,6 +1645,7 @@
       return;
     }
     log.following = true;
+    log.showingPrevious = false;
     log.lines = [];
     log.pending = '';
     drawDock();
@@ -1718,6 +1723,7 @@
         : '') +
       '<button class="btn' + (log.wrap ? ' on' : '') + '" data-do="wrap">Wrap</button>' +
       '<button class="btn" data-do="copy-log">Copy</button>' +
+      '<button class="btn" data-do="save-log" title="Save this log to a file">Download</button>' +
       (isLog ? '<button class="btn" data-do="ask-log" title="Open a Claude session about this pod">Ask Claude</button>' : '') +
       '<button class="btn" data-do="dock">' + (state.dockOpen ? '▾' : '▴') + '</button>';
 
@@ -1828,6 +1834,58 @@
   });
 
   /* Dragging the dock taller. Bounded, so it can neither vanish nor take the whole panel. */
+  /**
+   * The right-click menu inside a log.
+   *
+   * The same gesture a terminal answers, for the same reason: this reads like
+   * one, so it should behave like one. The selection is read as the menu opens,
+   * before the click that opens it can clear it — and Copy only appears when
+   * there is something to copy, because a Copy that copies nothing teaches
+   * people not to trust the menu.
+   */
+  document.addEventListener('contextmenu', function (event) {
+    var body = event.target.closest('.dock-body');
+    if (!body) return;
+    event.preventDefault();
+    var log = currentLog();
+    if (!log) return;
+    var selected = String(window.getSelection() || '');
+    var shown = shownLines(log);
+
+    closeRowMenu();
+    var menu = document.createElement('div');
+    menu.className = 'row-menu';
+    menu.innerHTML =
+      (selected
+        ? '<button class="btn" data-log-menu="selection">Copy selection<span class="dim"> · ' +
+          selected.split('\n').length + ' line' + (selected.indexOf('\n') >= 0 ? 's' : '') + '</span></button>'
+        : '<button class="btn" disabled>Copy selection<span class="dim"> · nothing selected</span></button>') +
+      '<button class="btn" data-log-menu="all">Copy the whole log<span class="dim"> · ' + shown.length + ' lines</span></button>' +
+      '<button class="btn" data-log-menu="save">Save to a file…</button>';
+    document.body.appendChild(menu);
+
+    var below = window.innerHeight - event.clientY > menu.offsetHeight + 8;
+    menu.style.left = Math.max(6, Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 6)) + 'px';
+    menu.style.top = (below ? event.clientY + 2 : event.clientY - menu.offsetHeight - 2) + 'px';
+
+    menu.addEventListener('click', function (click) {
+      var button = click.target.closest('[data-log-menu]');
+      if (!button) return;
+      var whole = shown.map(function (line) { return line.text; }).join('\n');
+      if (button.dataset.logMenu === 'selection') {
+        host.emit('copy', { text: selected });
+        say('Copied ' + selected.split('\n').length + ' lines.');
+      } else if (button.dataset.logMenu === 'all') {
+        host.emit('copy', { text: whole });
+        say('Copied ' + shown.length + ' lines.');
+      } else {
+        host.emit('save', { name: log.name + '.log', text: whole });
+      }
+      closeRowMenu();
+    });
+    setTimeout(function () { document.addEventListener('click', closeRowMenu, { once: true }); }, 0);
+  });
+
   document.addEventListener('mousedown', function (event) {
     if (!event.target.closest('#dock-grip')) return;
     event.preventDefault();
@@ -2022,6 +2080,11 @@
       if (what === 'previous') { readLog(log, true); return; }
       if (what === 'wrap') { log.wrap = !log.wrap; drawDock(); return; }
       if (what === 'dock') { state.dockOpen = !state.dockOpen; drawDock(true); return; }
+      if (what === 'save-log') {
+        var whole = shownLines(log).map(function (line) { return line.text; }).join('\n');
+        host.emit('save', { name: log.name + '.log', text: whole });
+        return;
+      }
       if (what === 'copy-log') {
         var text = shownLines(log).map(function (line) { return line.text; }).join('\n');
         // A frame with no same-origin has no clipboard of its own, so the app
@@ -2031,7 +2094,12 @@
         return;
       }
       if (what === 'ask-log') {
-        askAbout({ kind: 'Pod', name: log.name, namespace: log.namespace, container: log.container }, '');
+        // Including *which* log is on screen: the previous container's is the
+        // one that says why something died, and it is usually why you asked.
+        askAbout(
+          { kind: 'Pod', name: log.name, namespace: log.namespace, container: log.container, previous: Boolean(log.showingPrevious) },
+          '',
+        );
         return;
       }
     }

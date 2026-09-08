@@ -327,7 +327,12 @@ interface State {
    * thing: a real terminal, already pointed somewhere, that did not just cover
    * up whatever you started it from.
    */
-  openShellNear(nearPanelId: string | null, title: string, command: string): Promise<string | null>;
+  openShellNear(
+    nearPanelId: string | null,
+    title: string,
+    command: string,
+    where?: { leafId?: string; side?: DropSide },
+  ): Promise<string | null>;
   /** The latest reading for each session, kept current by the monitor. */
   analysisBySession: Record<string, SessionAnalysis>;
   /** What the advisor last said about a session, and whether it is being asked. */
@@ -2747,22 +2752,20 @@ export const useStore = create<State>((set, get) => ({
     if (result.ok) set((state) => ({ clusters: { ...state.clusters, current: context } }));
   },
 
-  async openShellNear(nearPanelId, title, command) {
+  async openShellNear(nearPanelId, title, command, where = undefined) {
     /*
-     * Beside, never on top. A list you clicked from disappearing the moment you
-     * click is the oldest bad habit in this kind of tool — so the terminal goes
-     * into another pane if there is one, and splits below if there is not.
+     * Below, never on top.
+     *
+     * A panel you clicked from disappearing the moment you click is the oldest
+     * bad habit in this kind of tool. The caller usually says where — a strip
+     * under the panel it belongs to, reused so terminals gather there — and
+     * when nobody says, it splits below whatever asked.
      */
     const { layout } = get();
     const mine = nearPanelId ? leafOfTab(layout, nearPanelId) : null;
-    const elsewhere = mine ? allLeaves(layout).find((leaf) => leaf.id !== mine.id) : null;
-    const where = mine
-      ? elsewhere
-        ? { leafId: elsewhere.id, side: 'center' as const }
-        : { leafId: mine.id, side: 'bottom' as const }
-      : {};
+    const place = where ?? (mine ? { leafId: mine.id, side: 'bottom' as const } : {});
 
-    const sessionId = await get().newSession({ kind: 'shell', title, ...where });
+    const sessionId = await get().newSession({ kind: 'shell', title, ...place });
     if (!sessionId) return null;
     /*
      * After the shell has drawn its prompt. A line typed into a zsh that is

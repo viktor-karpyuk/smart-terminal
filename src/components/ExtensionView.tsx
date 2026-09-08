@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../state/store';
-import { allLeaves, leafOfTab } from '../state/layout';
+import { leafOfTab, parentOf } from '../state/layout';
 import type { ExtensionPanelView } from '../global';
 import {
   execCommand,
@@ -170,6 +170,15 @@ function Frame({
           revealFile(root, message.payload.path);
         } else if (message.name === 'notify' && typeof message.payload?.text === 'string') {
           setNotice({ text: message.payload.text, bad: message.payload.kind === 'bad' });
+        } else if (message.name === 'save' && typeof message.payload?.text === 'string') {
+          // The dialog is the consent: a panel says what and suggests a name,
+          // and a person says where — or does not.
+          void window.api.system
+            .saveText(String(message.payload.name ?? 'output.txt'), message.payload.text)
+            .then((done) => {
+              if (done.ok) setNotice({ text: `Saved to ${done.path}`, bad: false });
+              else if (done.error) setNotice({ text: done.error, bad: true });
+            });
         } else if (message.name === 'copy' && typeof message.payload?.text === 'string') {
           // A frame in an origin of its own has no clipboard to write to, so it
           // asks. Text only: what goes on the clipboard is a string the person
@@ -274,7 +283,7 @@ function Frame({
             : terminalSetup(where);
         const title =
           verb === 'shell' ? `sh ${String(args.pod ?? '')}`.slice(0, 28) : `k ${where.namespace ?? 'cluster'}`;
-        const sessionId = await store.openShellNear(panelId, title, line);
+        const sessionId = await store.openShellNear(panelId, title, line, below(panelId));
         if (!sessionId) return { ok: false, error: 'the app could not open a terminal' };
         return { ok: true, sessionId, command: line };
       }
@@ -286,12 +295,24 @@ function Frame({
         name: String(args.name ?? ''),
         container: args.container ? String(args.container) : undefined,
         question: args.question ? String(args.question) : undefined,
+        // Whether the person is looking at the log of the run that died. It is
+        // usually the one with the answer in it.
+        previous: Boolean(args.previous),
       });
       if (!brief.ok) return brief;
       const sessionId = await store.newSession({
         kind: 'claude',
         title: `why ${String(args.name ?? '')}`.slice(0, 28),
-        ...beside(panelId),
+        /*
+         * An account that is actually signed in.
+         *
+         * The default one usually is, and when it is not, a session opens onto
+         * a sign-in prompt and the brief sits in a queue behind it — which
+         * looks like the button not working. Any signed-in account can answer a
+         * question about a cluster.
+         */
+        profileId: signedInProfile(),
+        ...below(panelId),
       });
       if (!sessionId) return { ok: false, error: 'the app could not open a session' };
       // It rides the same queue as a handover, so it lands the moment Claude is
@@ -305,22 +326,45 @@ function Frame({
   }, [panelId, root, view.title, revealFile]);
 
   /**
-   * Where a tab this panel opens should go: anywhere but on top of the panel.
-   *
-   * A dashboard you clicked *from* disappearing the moment you click is the
-   * oldest bad habit in this kind of tool — the terminal you asked for arrives
-   * and the thing you were reading is gone. So it goes into another pane if
-   * there is one, and splits below if there is not. The panel stays where it
-   * was, still following its log, still showing the row you were on.
+   * An account that can actually answer: the usual one if it is signed in,
+   * otherwise whichever is.
    */
-  function beside(id: string) {
+  function signedInProfile(): string | undefined {
+    const { profiles, settings, authByProfile } = useStore.getState();
+    const usual = profiles.find((profile) => profile.id === settings.defaultProfileId) ?? profiles[0];
+    if (usual && authByProfile[usual.id]?.loggedIn !== false) return usual.id;
+    return profiles.find((profile) => authByProfile[profile.id]?.loggedIn)?.id ?? usual?.id;
+  }
+
+  /**
+   * Below the panel, in a strip that is reused.
+   *
+   * A terminal cannot live *inside* the panel: the frame has no pty and no way
+   * to reach one, and a shell drawn in HTML is a toy. What it can have is a real
+   * one directly underneath — a pane split off the panel's own, which is the
+   * bottom of the Kubernetes area in every sense that matters, and is a real
+   * terminal with a real TTY.
+   *
+   * Read out of the layout rather than remembered. A remembered pane id is a
+   * thing that can go stale — the pane is closed, or the window is restored, or
+   * the panel is dragged somewhere else — and a stale one sends a terminal into
+   * a pane that no longer exists, which is how one ends up running with nowhere
+   * to be seen. The pane directly below is a fact about the layout, and asking
+   * the layout cannot be out of date.
+   */
+  function below(id: string) {
     const { layout } = useStore.getState();
     const mine = leafOfTab(layout, id);
     if (!mine) return {};
-    const elsewhere = allLeaves(layout).find((leaf) => leaf.id !== mine.id);
-    return elsewhere
-      ? { leafId: elsewhere.id, side: 'center' as const }
-      : { leafId: mine.id, side: 'bottom' as const };
+
+    const parent = parentOf(layout, mine.id);
+    if (parent?.direction === 'column') {
+      const at = parent.children.findIndex((child) => child.id === mine.id);
+      const under = parent.children[at + 1];
+      // Only a plain pane: a split below is somebody else's arrangement.
+      if (under && under.type === 'leaf') return { leafId: under.id, side: 'center' as const };
+    }
+    return { leafId: mine.id, side: 'bottom' as const };
   }
 
   /*

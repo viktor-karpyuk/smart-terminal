@@ -1105,7 +1105,7 @@ async function summary({ context } = {}) {
  * it, and — for a pod — the tail of the log, including the log of the container
  * that died, which is the one that usually says why.
  */
-async function brief({ kind, name, namespace, context, container, question }) {
+async function brief({ kind, name, namespace, context, container, question, previous = false }) {
   const kindName = safeArg(kind, 'the resource kind');
   const objectName = safeArg(name, 'the name');
   const isPod = /^pods?$/i.test(kindName) || kindName === 'Pod';
@@ -1149,11 +1149,27 @@ async function brief({ kind, name, namespace, context, container, question }) {
     );
   }
 
+  /*
+   * The log of the run that died goes first when there is one, and says so.
+   *
+   * A container that has restarted is showing a log that has been running for
+   * ten seconds and knows nothing; the one before it is where the reason is.
+   * When the person was already looking at that one — they pressed Previous —
+   * it is what they are asking about, and it is said in those words.
+   */
   if (crashed?.ok && crashed.text?.trim()) {
-    parts.push('', '## Log of the previous container — the one that stopped', '```', crashed.text.trim(), '```');
+    parts.push(
+      '',
+      previous
+        ? '## The log I am looking at — the previous container, the one that stopped'
+        : '## Log of the previous container — the one that stopped',
+      '```',
+      crashed.text.trim(),
+      '```',
+    );
   }
   if (log?.ok && log.text?.trim()) {
-    parts.push('', '## Log, last 120 lines', '```', log.text.trim(), '```');
+    parts.push('', `## Log${previous ? ' of the container running now' : ', last 120 lines'}`, '```', log.text.trim(), '```');
   } else if (isPod && log && !log.ok) {
     parts.push('', `The log could not be read: ${log.error}`);
   }

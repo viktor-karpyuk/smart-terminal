@@ -1,6 +1,7 @@
 import { useStore } from '../state/store';
 import { formatBytes, sessionLabel } from '../lib/labels';
 import { SESSION_MIME } from '../lib/drag';
+import { SessionMark } from './icons';
 
 interface Props {
   sessionId: string;
@@ -94,16 +95,21 @@ export function SessionTab({ sessionId, selected, tight, grouped }: Props) {
       }}
     >
       {/*
-        The account, as a colour rather than as words. It used to be spelled out
-        in front of every tab, which cost more room than the name of the session
-        itself — and the name is the part you are reading. The dot says the same
-        thing in seven pixels, and hovering it says it in words.
+        The account as a colour, and what the tab *is* as a shape.
+
+        The account used to be spelled out in front of every tab, which cost more
+        room than the name of the session itself — and the name is the part you
+        are reading. This says it in nine pixels, and hovering says it in words.
+        The shape is the second thing it says: with seventeen tabs open, which of
+        them are conversations and which are plain shells is exactly what you
+        were squinting for, and it costs no width at all.
       */}
       <span
-        className="tab-dot"
-        style={{ background: color }}
-        title={`${profile?.name ?? 'account'}${profile?.configDir ? '' : ' (default config)'}`}
-      />
+        className="tab-mark"
+        title={`${kindOf(session.kind)} · ${profile?.name ?? 'account'}${profile?.configDir ? '' : ' (default config)'}`}
+      >
+        <SessionMark kind={session.kind} color={color} />
+      </span>
       {alert && (
         <span
           className={`tab-alert is-${alert}`}
@@ -189,4 +195,11 @@ export function SessionTab({ sessionId, selected, tight, grouped }: Props) {
       </button>
     </div>
   );
+}
+
+/** What a tab is, in one word, for what you get when you hover its mark. */
+function kindOf(kind: 'claude' | 'shell' | 'login') {
+  if (kind === 'shell') return 'shell';
+  if (kind === 'login') return 'signing in';
+  return 'Claude';
 }

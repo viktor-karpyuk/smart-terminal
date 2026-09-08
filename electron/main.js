@@ -674,6 +674,29 @@ function registerIpc() {
     return { ok: true, url: `panel://${key}/` };
   });
 
+  /**
+   * Write some text to a file the person chooses.
+   *
+   * The dialog is the consent: an extension can ask to save something, and what
+   * it can save is text it already had, to a place a human just pointed at. No
+   * path comes from the caller — only a suggested name, which the dialog is
+   * free to ignore.
+   */
+  ipcMain.handle('system:save-text', async (event, { name, text } = {}) => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+    const { canceled, filePath } = await dialog.showSaveDialog(win, {
+      defaultPath: path.join(app.getPath('downloads'), String(name || 'output.txt').replace(/[/\\]/g, '-')),
+      title: 'Save',
+    });
+    if (canceled || !filePath) return { ok: false, canceled: true };
+    try {
+      fs.writeFileSync(filePath, String(text ?? ''), 'utf8');
+      return { ok: true, path: filePath, bytes: Buffer.byteLength(String(text ?? '')) };
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  });
+
   ipcMain.handle('extensions:picture', (_e, { id, file } = {}) => {
     // `builtInExtensions` is both places already: the ones shipped, and the
     // ones under the user's data directory.

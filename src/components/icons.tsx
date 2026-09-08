@@ -58,6 +58,48 @@ export function ClustersIcon() {
   );
 }
 
+/**
+ * What a tab is, in the shape of its mark.
+ *
+ * The account has always been a coloured dot in front of every session tab, and
+ * a dot says one thing. These say two in the same seven pixels: the colour is
+ * still the account, and now the shape is what the tab *is* — a conversation, a
+ * shell, or a sign-in. With seventeen tabs open that second fact is the one you
+ * were squinting for.
+ *
+ * Filled rather than stroked, deliberately: the colour is doing the account's
+ * work and an outline at this size hardly carries one.
+ */
+export function SessionMark({ kind, color }: { kind: 'claude' | 'shell' | 'login'; color: string }) {
+  if (kind === 'shell') {
+    // A prompt: the chevron and the line you type on.
+    return (
+      <svg width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden>
+        <path d="M1.2 2.2 4 5l-2.8 2.8" stroke={color} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M5.4 7.8h3.4" stroke={color} strokeWidth="1.6" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  if (kind === 'login') {
+    // A key: this tab exists to get an account signed in, and then it is done.
+    return (
+      <svg width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden>
+        <circle cx="3.4" cy="3.4" r="2.2" stroke={color} strokeWidth="1.5" />
+        <path d="M5 5l3.4 3.4M6.4 6.4l-.9.9M7.6 7.6l-.9.9" stroke={color} strokeWidth="1.5" strokeLinecap="round" />
+      </svg>
+    );
+  }
+  // A conversation: the spark, filled, so the account's colour still reads.
+  return (
+    <svg width="9" height="9" viewBox="0 0 10 10" aria-hidden>
+      <path
+        d="M5 0.6 6.1 3.9 9.4 5 6.1 6.1 5 9.4 3.9 6.1 0.6 5 3.9 3.9Z"
+        fill={color}
+      />
+    </svg>
+  );
+}
+
 /** Blocks that fit together — what an extension does to the app. */
 export function ExtensionsIcon() {
   return (

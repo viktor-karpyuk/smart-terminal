@@ -818,6 +818,11 @@ declare global {
         homedir(): Promise<string>;
         paths(): Promise<{ home: string; accountsRoot: string }>;
         openExternal(url: string): void;
+        /** Save some text to a file the person picks. The dialog is the consent. */
+        saveText(
+          name: string,
+          text: string,
+        ): Promise<{ ok: boolean; path?: string; bytes?: number; canceled?: boolean; error?: string }>;
       };
       onMenuAction(handler: (payload: { id: string }) => void): () => void;
     };

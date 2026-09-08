@@ -550,6 +550,10 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .tab-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-rename { width: 110px; padding: 1px 4px; font-size: 12px; }
 .tab-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+/* The session's mark: the account's colour, in the shape of what the tab is.
+   Takes the room the dot took, so nothing else on the tab moves. */
+.tab-mark { display: flex; align-items: center; flex: 0 0 auto; line-height: 0; }
+.tab-exited .tab-mark, .tab-paused .tab-mark { opacity: 0.55; }
 .tab-unread { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex: 0 0 auto; }
 
 .tab-busy {
