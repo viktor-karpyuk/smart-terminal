@@ -41,7 +41,12 @@
 
   /* The columns are set from script, so they can be dragged. The values here
      are only what they start at. */
-  .body { display: grid; grid-template-columns: 178px 1fr; min-height: 0; }
+  /* `overflow: hidden` is what keeps the overview inside its own row. Squeezed
+     to nothing — by a log dragged to the top of the panel, or by one filling
+     the window — the crumb still wants its thirty-odd pixels, and `.body` is
+     positioned, so it paints them straight over the log's tabs. Clipped, the
+     row that has no height shows nothing. */
+  .body { display: grid; grid-template-columns: 178px 1fr; min-height: 0; overflow: hidden; }
   .body.with-detail { grid-template-columns: 178px 1fr 34%; }
 
   /* The line between two columns, wide enough to grab and quiet until you do —
@@ -349,8 +354,33 @@
     display: grid; grid-template-rows: auto auto minmax(0, 1fr);
     border-top: 1px solid var(--border); background: var(--bg-panel);
   }
-  .dock-grip { height: 5px; margin-top: -5px; cursor: ns-resize; background: transparent; }
-  .dock-grip:hover { background: var(--accent-soft); }
+  /* A handle you can see and can hit.
+     It was five transparent pixels with nothing to say it was a handle, sitting
+     above the dock's own top edge where the eye reads them as the gap between
+     two things. So people found no way to resize the log and concluded there
+     was none. It is taller now, it draws a line to be grabbed by, it lights up
+     under the pointer, and it is positioned so that nothing overlapping it can
+     take the click. The tab strip below drags it too — see the mousedown. */
+  .dock-grip {
+    position: relative; z-index: 4;
+    height: 9px; margin-top: -5px; cursor: ns-resize; background: transparent;
+  }
+  .dock-grip::after {
+    content: ''; display: block; width: 42px; height: 3px; margin: 3px auto 0;
+    border-radius: 2px; background: var(--border);
+  }
+  .dock-grip:hover::after, .dock-grip.is-held::after { background: var(--accent); }
+  .dock-tabs { cursor: ns-resize; }
+  .dock-tabs > *, .dock-tools > * { cursor: default; }
+  .dock-tabs button, .dock-tabs .btn { cursor: pointer; }
+  .dock-tabs input, .dock-tabs select { cursor: text; }
+
+  /* Filling the window: the table's row goes to nothing and the dock's takes
+     what is left, so the log is as tall as the panel rather than as tall as
+     some number of pixels somebody dragged to. */
+  #app.dock-full { grid-template-rows: auto 0 minmax(0, 1fr) auto auto; }
+  #dock-slot { min-height: 0; }
+  .dock.is-full { height: 100%; }
   .dock-tabs { display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
   .dock-tab {
     display: inline-flex; align-items: center; gap: 6px; padding: 2px 6px 2px 8px;
@@ -433,7 +463,7 @@
      * — and a viewer that can only hold one turns that into clicking back and
      * forth from memory.
      */
-    logs: [], logAt: 0, dock: 240, dockOpen: true,
+    logs: [], logAt: 0, dock: 240, dockOpen: true, dockFull: false,
     forwards: [],
     /** Whether a request is in the air, and how long the last one took. */
     busy: false, tookMs: 0, showing: true, started: false,
@@ -2949,7 +2979,11 @@
 
   function drawDock(toBottom) {
     var slot = document.getElementById('dock-slot');
-    if (!state.logs.length) { slot.innerHTML = ''; return; }
+    if (!state.logs.length) {
+      slot.innerHTML = '';
+      document.getElementById('app').classList.remove('dock-full');
+      return;
+    }
 
     var log = currentLog();
     var tabs = state.logs.map(function (entry, at) {
@@ -2985,7 +3019,11 @@
       '<button class="btn" data-do="copy-log">Copy</button>' +
       '<button class="btn" data-do="save-log" title="Save this log to a file">Download</button>' +
       (isLog ? '<button class="btn" data-do="ask-log" title="Open a Claude session about this pod">Ask Claude</button>' : '') +
-      '<button class="btn" data-do="dock">' + (state.dockOpen ? '▾' : '▴') + '</button>';
+      '<button class="btn' + (state.dockFull ? ' on' : '') + '" data-do="dock-full" title="' +
+        (state.dockFull ? 'Give the table its room back' : 'Fit the log to the window') + '">' +
+        (state.dockFull ? '⤡' : '⤢') + '</button>' +
+      '<button class="btn" data-do="dock" title="' + (state.dockOpen ? 'Put the log away' : 'Bring the log back') +
+        '">' + (state.dockOpen ? '▾' : '▴') + '</button>';
 
     var body = log.loading
       ? '<div class="dim">reading…</div>'
@@ -2997,15 +3035,38 @@
     // Whatever else happens below, this is what the DOM will hold.
     log.drawn = log.loading ? 0 : log.lines.length;
 
-    slot.innerHTML = '<div class="dock" style="height:' + (state.dockOpen ? state.dock + 'px' : 'auto') + '">' +
+    // Read before the redraw, because the redraw is what destroys it.
+    var old = document.getElementById('dock-body');
+    var wasAt = old ? old.scrollTop : 0;
+    var wasAtBottom = old ? old.scrollHeight - old.scrollTop - old.clientHeight < 40 : true;
+
+    /*
+     * Full height is the grid's business, not this element's: the row above
+     * gives up its space and this one takes it. Which is why the class goes on
+     * the app and not only on the dock.
+     */
+    var full = state.dockOpen && state.dockFull;
+    document.getElementById('app').classList.toggle('dock-full', full);
+
+    slot.innerHTML = '<div class="dock' + (full ? ' is-full' : '') + '" style="' +
+      (state.dockOpen && !full ? 'height:' + state.dock + 'px' : '') + '">' +
       '<div class="dock-grip" id="dock-grip"></div>' +
       '<div class="dock-tabs">' + tabs + '<span class="dock-tools">' + tools + '</span></div>' +
       (state.dockOpen ? '<div class="dock-body" id="dock-body">' + body + '</div>' : '') +
       '</div>';
 
-    if (state.dockOpen && (toBottom || log.following)) {
+    /*
+     * Where the reader was, kept.
+     *
+     * A followed log redraws whenever anything else does — a search, a wrap, the
+     * table refreshing underneath — and jumping to the bottom every time is what
+     * makes a log impossible to read: you scroll up to the line that matters and
+     * it throws you back down a second later. So the tail is only followed when
+     * the reader was already at it. Scrolled up, they stay where they were.
+     */
+    if (state.dockOpen) {
       var pane = document.getElementById('dock-body');
-      if (pane) pane.scrollTop = pane.scrollHeight;
+      if (pane) pane.scrollTop = toBottom || (log.following && wasAtBottom) ? pane.scrollHeight : wasAt;
     }
   }
 
@@ -3236,16 +3297,46 @@
   });
 
   document.addEventListener('mousedown', function (event) {
-    if (!event.target.closest('#dock-grip')) return;
+    /*
+     * The strip is part of the handle.
+     *
+     * A line a few pixels tall is a small target and an unlikely place to try,
+     * so the bar under it drags as well — every window manager on earth lets you
+     * move a thing by its title bar. Anything in the strip that does something
+     * of its own keeps doing it.
+     */
+    var onStrip = event.target.closest('.dock-tabs') &&
+      !event.target.closest('button, input, select, .dock-tab, a');
+    var grip = event.target.closest('#dock-grip') || (onStrip ? document.getElementById('dock-grip') : null);
+    if (!grip) return;
     event.preventDefault();
+    grip.classList.add('is-held');
+    /*
+     * Dragging out of full height rather than refusing to move.
+     *
+     * Filling the window is a height the grid decides, so the pixels the drag
+     * starts from have to be measured rather than remembered — and full height
+     * has to be given up in the same breath, or the inline height the drag sets
+     * would be overruled by the class and the dock would sit there ignoring the
+     * pointer.
+     */
+    var dock = document.querySelector('.dock');
     var startY = event.clientY;
-    var startHeight = state.dock;
+    var startHeight = state.dockFull && dock ? dock.getBoundingClientRect().height : state.dock;
+    if (state.dockFull) {
+      state.dockFull = false;
+      drawDock();
+      dock = document.querySelector('.dock');
+    }
     var move = function (moved) {
       state.dock = Math.max(90, Math.min(window.innerHeight - 190, startHeight + (startY - moved.clientY)));
-      var dock = document.querySelector('.dock');
-      if (dock) dock.style.height = state.dock + 'px';
+      // Re-queried every move: a following log redraws the dock underneath us.
+      var live = document.querySelector('.dock');
+      if (live) live.style.height = state.dock + 'px';
     };
     var up = function () {
+      var held = document.getElementById('dock-grip');
+      if (held) held.classList.remove('is-held');
       document.removeEventListener('mousemove', move);
       document.removeEventListener('mouseup', up);
     };
@@ -3469,6 +3560,14 @@
       if (what === 'previous') { readLog(log, true); return; }
       if (what === 'wrap') { log.wrap = !log.wrap; drawDock(); return; }
       if (what === 'dock') { state.dockOpen = !state.dockOpen; drawDock(true); return; }
+      // Filling the window is also a way of opening it — asking for a bigger log
+      // while it is shut and getting nothing would be the wrong answer.
+      if (what === 'dock-full') {
+        state.dockFull = !state.dockFull;
+        if (state.dockFull) state.dockOpen = true;
+        drawDock(true);
+        return;
+      }
       if (what === 'save-log') {
         var whole = shownLines(log).map(function (line) { return line.text; }).join('\n');
         host.emit('save', { name: log.name + '.log', text: whole });
