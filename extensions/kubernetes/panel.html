@@ -171,6 +171,11 @@
   .chart-line { fill: none; stroke: var(--accent); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
   .chart-fill { fill: var(--accent-soft); stroke: none; }
   .chart-foot { display: flex; justify-content: space-between; font-size: 9.5px; color: var(--text-faint); }
+  .chart.is-read { border-color: var(--accent); }
+  .chart.is-read .chart-when { color: var(--accent); }
+  .chart-cursor { stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; opacity: 0.7; }
+  .chart-range { display: flex; align-items: flex-start; gap: 4px; }
+  .chart-range .btn { padding: 2px 7px; font-size: 10.5px; }
 
   /* On the overview the charts sit under the cards, so they take that padding. */
   #table > .charts { padding: 0 12px; }
@@ -181,6 +186,65 @@
   .card span { font-size: 10.5px; color: var(--text-faint); }
   .card.bad b { color: var(--danger); }
   .card.warn b { color: var(--git-new); }
+
+  /* Capacity: one bar carrying two facts, promised behind and used in front. */
+  .gauges { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; padding: 0 12px 12px; }
+  .gauge { border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 11px; background: var(--bg-panel); }
+  .gauge-head { display: flex; align-items: baseline; gap: 5px; font-size: 10.5px; color: var(--text-faint); }
+  .gauge-head span:first-child { flex: 1; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 600; }
+  .gauge-head b { font-size: 15px; font-weight: 550; color: var(--text); }
+  .gauge-bar {
+    position: relative; height: 9px; margin: 7px 0 6px; border-radius: 99px;
+    background: var(--bg-input); overflow: hidden;
+  }
+  .gauge-bar span { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 99px; }
+  .gauge-req { background: var(--accent-soft); }
+  .gauge-use { background: var(--accent); height: 4px !important; top: 2.5px !important; }
+  .gauge-use.is-over { background: var(--git-new); }
+  .gauge-foot { display: flex; justify-content: space-between; gap: 8px; font-size: 10px; color: var(--text-faint); }
+  .gauge-foot i { display: inline-block; width: 7px; height: 7px; border-radius: 2px; margin-right: 5px; vertical-align: baseline; }
+  .key-req { background: var(--accent-soft); }
+  .key-use { background: var(--accent); }
+  .key-use.is-over { background: var(--git-new); }
+
+  /* Two blocks side by side where there is room, stacked where there is not. */
+  .split { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; padding: 0 12px 12px; }
+  .panel-block { border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 11px 7px; background: var(--bg-panel); }
+  .panel-block h4 {
+    margin: 0 0 7px; font-size: 9.5px; font-weight: 600; color: var(--text-faint);
+    text-transform: uppercase; letter-spacing: 0.07em;
+  }
+  .panel-block h4 .dim { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .panel-block table { font-size: 11px; }
+  .panel-block td { border-bottom: 0; padding: 2px 8px 2px 0; }
+
+  .meter { display: flex; align-items: center; gap: 7px; font-size: 11px; padding: 2px 0; }
+  .meter-name { flex: 0 0 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+  .meter-track { flex: 1; height: 6px; border-radius: 99px; background: var(--bg-input); overflow: hidden; }
+  .meter-track.wide { flex: 2; }
+  .meter-track i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+  .meter-track i.is-warn { background: var(--git-new); }
+  .meter-track i.is-bad { background: var(--danger); }
+  .meter-num { flex: 0 0 auto; min-width: 34px; text-align: right; color: var(--text-dim); font-size: 10.5px; }
+  .meter-legend { display: flex; gap: 7px; font-size: 9.5px; color: var(--text-faint); padding-top: 3px; }
+  .meter-legend span:nth-child(1) { flex: 0 0 34%; }
+  .meter-legend span:nth-child(2), .meter-legend span:nth-child(4), .meter-legend span:nth-child(6) { flex: 1; }
+  /* Inside a half-width block the names must give way to the numbers. */
+  .half .meter-name { flex: 0 0 44%; }
+  .half .meter-num { min-width: 44px; }
+
+  .halves { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .half h5 { margin: 0 0 4px; font-size: 9.5px; font-weight: 600; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.07em; }
+  .all-well { margin: 2px 0 4px; font-size: 11.5px; color: var(--text-dim); }
+  tbody tr.clickable { cursor: default; }
+
+  /* Pressure: rare, and worth the room when it is there. */
+  .pressure {
+    margin: 0 12px 12px; padding: 8px 11px; font-size: 11.5px;
+    border: 1px solid var(--danger); border-radius: var(--radius);
+    background: rgba(247, 118, 142, 0.08); color: var(--text);
+  }
+  .pressure b { color: var(--danger); font-weight: 600; }
 
   .note { padding: 22px 16px; color: var(--text-dim); font-size: 12px; line-height: 1.6; max-width: 60ch; }
   .note code { font-family: "JetBrains Mono", Menlo, ui-monospace, monospace; font-size: 11px; color: var(--text); }
@@ -296,8 +360,10 @@
     navWidth: 178, detailWidth: 380,
     /** The open watch, if any: what it is watching and whether a redraw is due. */
     watch: { id: null, kind: null, of: null, token: 0, draw: 0 },
+    /** How full the nodes' own disks are, when anything is measuring them. */
+    disk: null,
     /** Where this cluster's Prometheus is, and what it has said so far. */
-    prom: { checked: false, found: null, series: {} },
+    prom: { checked: false, found: null, series: {}, minutes: 60 },
   };
 
   var $ = function (id) { return document.getElementById(id); };
@@ -522,7 +588,7 @@
       if (mine !== loadToken) return;
       state.loading = false;
       state.error = null;
-      if (state.view.type === 'overview') { state.overview = result; loadCharts(null); }
+      if (state.view.type === 'overview') { state.overview = result; loadCharts(null); loadDisk(); }
       else {
         state.table = result;
         if (state.view.name) state.counts[state.view.name] = (result.rows || []).length;
@@ -646,7 +712,8 @@
     state.namespaces = [];
     state.counts = {};
     state.helm = { checked: false, releases: 0 };
-    state.prom = { checked: false, found: null, series: {} };
+    state.prom = { checked: false, found: null, series: {}, minutes: state.prom.minutes };
+    state.disk = null;
     drawNav();
     drawTop();
 
@@ -719,11 +786,59 @@
   /** How many subjects' charts to keep. Past this, the oldest is forgotten. */
   var CHART_MEMORY = 40;
 
+  /**
+   * How full the disks are, which nothing else in the cluster will tell you.
+   *
+   * The API server knows how much disk a node *has* and nothing about how much
+   * is left; only the node exporter measures that. Matched back to nodes by
+   * their internal address, which is what the exporter labels its series with.
+   */
+  function loadDisk() {
+    var prom = state.prom.found;
+    if (!prom || !state.overview) return;
+    var ask = function (query) {
+      return call('kube.promNow', {
+        context: state.context, namespace: prom.namespace, service: prom.name, query: query,
+      }).then(function (r) { return r.values || []; }).catch(function () { return []; });
+    };
+
+    Promise.all([
+      ask('node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"}'),
+      ask('node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"}'),
+    ]).then(function (answers) {
+      var byHost = {};
+      var total = 0;
+      var free = 0;
+      answers[0].forEach(function (one) {
+        var host = String(one.labels.instance || '').split(':')[0];
+        byHost[host] = { size: one.value, avail: 0 };
+        total += one.value;
+      });
+      answers[1].forEach(function (one) {
+        var host = String(one.labels.instance || '').split(':')[0];
+        if (byHost[host]) byHost[host].avail = one.value;
+        free += one.value;
+      });
+      if (!total) return;
+
+      state.disk = { total: total, used: total - free };
+      (state.overview.nodeUsage || []).forEach(function (node) {
+        var found = byHost[node.ip];
+        if (!found) return;
+        node.disk = found.size - found.avail;
+        node.diskTotal = found.size;
+      });
+      if (state.view.type === 'overview') draw();
+    });
+  }
+
   function loadCharts(row) {
     var prom = state.prom.found;
     var wanted = queriesFor(row);
     if (!prom || !wanted) return;
-    var key = row ? row.uid : 'cluster';
+    // Keyed by the range as well: an hour and a day are different questions
+    // about the same thing, and one must not be served from the other's answer.
+    var key = (row ? row.uid : 'cluster') + '@' + state.prom.minutes;
     if (state.prom.series[key]) return;
 
     /*
@@ -743,7 +858,7 @@
     Promise.all(['cpu', 'memory'].map(function (which) {
       return call('kube.promQuery', {
         context: state.context, namespace: prom.namespace, service: prom.name,
-        query: wanted[which], minutes: 60,
+        query: wanted[which], minutes: state.prom.minutes,
       }).then(function (r) { return r.empty ? null : (r.series[0] || null); }).catch(function () { return null; });
     })).then(function (answers) {
       state.prom.series[key] = { cpu: answers[0], memory: answers[1] };
@@ -751,9 +866,20 @@
     });
   }
 
-  /** Cores, the way Kubernetes writes them. */
-  function cores(value) {
-    return value >= 1 ? value.toFixed(2) : Math.round(value * 1000) + 'm';
+  /*
+   * Two units, two names, and the names say which.
+   *
+   * Prometheus counts CPU in cores and Kubernetes counts it in thousandths of
+   * one, and both numbers land on this screen. When both formatters were called
+   * `cores` the later one won and the chart printed `1.2673684232019298m` —
+   * a whole core described as a thousandth of one.
+   */
+  function fromCores(value) {
+    return value >= 1 ? value.toFixed(2) + ' cores' : Math.round(value * 1000) + 'm';
+  }
+
+  function fromMillicores(m) {
+    return m >= 1000 ? (m / 1000).toFixed(m >= 10000 ? 0 : 1) + ' cores' : Math.round(m) + 'm';
   }
 
   /** Bytes, in the unit a person would have said. */
@@ -791,23 +917,38 @@
     }).join(' ');
 
     var last = points[points.length - 1][1];
-    return '<div class="chart">' +
-      '<div class="chart-head"><span>' + esc(title) + '</span><b>' + esc(format(last)) + '</b></div>' +
-      '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" aria-hidden="true">' +
+    var span = state.prom.minutes;
+    var over = span < 1440 ? 'last ' + span / 60 + ' hours' : span === 1440 ? 'last day' : 'last ' + span / 1440 + ' days';
+    /*
+     * The points ride along on the element, so hovering can answer "what was it
+     * at that moment" without asking anything again. A chart you cannot
+     * interrogate is a picture.
+     */
+    return '<div class="chart" data-points="' + esc(JSON.stringify(points)) + '" data-unit="' + esc(title) + '">' +
+      '<div class="chart-head"><span>' + esc(title) + '</span><b class="chart-value">' + esc(format(last)) + '</b></div>' +
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' +
       '<path d="' + path + ' L' + W + ' ' + H + ' L0 ' + H + ' Z" class="chart-fill" />' +
       '<path d="' + path + '" class="chart-line" />' +
+      '<line class="chart-cursor" y1="0" y2="' + H + '" x1="-10" x2="-10" />' +
       '</svg>' +
-      '<div class="chart-foot"><span>peak ' + esc(format(top)) + '</span><span>last hour</span></div>' +
+      '<div class="chart-foot"><span>peak ' + esc(format(top)) + '</span><span class="chart-when">' + esc(over) + '</span></div>' +
       '</div>';
   }
 
   /** Both charts for one subject, or nothing at all. */
   function chartsFor(row) {
-    var key = row ? row.uid : 'cluster';
+    var key = (row ? row.uid : 'cluster') + '@' + state.prom.minutes;
     var got = state.prom.series[key];
     if (!got || got.loading) return '';
-    var html = chart(got.cpu, cores, 'CPU') + chart(got.memory, bytes, 'Memory');
-    return html ? '<div class="charts">' + html + '</div>' : '';
+    var html = chart(got.cpu, fromCores, 'CPU') + chart(got.memory, bytes, 'Memory');
+    if (!html) return '';
+    // How far back, offered where the charts are rather than in a settings
+    // menu: it is a question about what you are looking at.
+    var ranges = [60, 360, 1440].map(function (minutes) {
+      return '<button class="btn' + (state.prom.minutes === minutes ? ' on' : '') + '" data-range="' + minutes + '">' +
+        (minutes < 1440 ? minutes / 60 + 'h' : minutes / 1440 + 'd') + '</button>';
+    }).join('');
+    return '<div class="charts">' + html + '<div class="chart-range">' + ranges + '</div></div>';
   }
 
   /* ---------------------------------------------------------------------- *
@@ -1269,7 +1410,234 @@
         }).join('') + '</tbody></table>';
     }
 
-    $('table').innerHTML = '<div class="cards">' + cards + '</div>' + chartsFor(null) + trouble + recent;
+    $('table').innerHTML =
+      '<div class="cards">' + cards + '</div>' +
+      capacityOf(data) +
+      chartsFor(null) +
+      pressureOf(data) +
+      '<div class="split">' + nodesOf(data) + busiestOf(data) + '</div>' +
+      '<div class="split">' + whereOf(data) + incompleteOf(data) + '</div>' +
+      reasonsOf(data) +
+      trouble +
+      recent;
+  }
+
+  /** Bytes at cluster scale, where MiB is noise. */
+  function gigs(b) {
+    if (b >= 1099511627776) return (b / 1099511627776).toFixed(1) + ' TiB';
+    if (b >= 1073741824) return (b / 1073741824).toFixed(b >= 10737418240 ? 0 : 1) + ' GiB';
+    return Math.round(b / 1048576) + ' MiB';
+  }
+  /** 668523 → 668k. The magnitude is the information. */
+  function many(n) {
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1000) return Math.round(n / 1000) + 'k';
+    return String(n);
+  }
+
+  /**
+   * Two bars that say the thing five numbers never did.
+   *
+   * *Allocatable* is what the nodes will hand out. *Requested* is what the
+   * scheduler has already promised, and it — not usage — is what decides
+   * whether the next pod fits. *Used* is what is actually being consumed. The
+   * gap between the last two is the whole story: promised and idle means the
+   * requests were written without measuring, and used above promised means the
+   * cluster is running on room nobody reserved.
+   */
+  function capacityOf(data) {
+    var cap = data.capacity;
+    if (!cap || !cap.cpu.allocatable) return '';
+
+    var bar = function (title, of, format) {
+      var pct = function (n) { return Math.max(0, Math.min(100, (n / of.allocatable) * 100)); };
+      var over = of.used > of.requested;
+      return '<div class="gauge">' +
+        '<div class="gauge-head"><span>' + title + '</span>' +
+          '<b>' + format(of.used) + '</b><span class="dim"> used of ' + format(of.allocatable) + '</span></div>' +
+        '<div class="gauge-bar">' +
+          '<span class="gauge-req" style="width:' + pct(of.requested).toFixed(1) + '%"></span>' +
+          '<span class="gauge-use' + (over ? ' is-over' : '') + '" style="width:' + pct(of.used).toFixed(1) + '%"></span>' +
+        '</div>' +
+        '<div class="gauge-foot">' +
+          '<span><i class="key-req"></i>' + format(of.requested) + ' promised to pods · ' +
+            Math.round((of.requested / of.allocatable) * 100) + '%</span>' +
+          '<span><i class="key-use' + (over ? ' is-over' : '') + '"></i>' +
+            Math.round((of.used / of.allocatable) * 100) + '% in use</span>' +
+        '</div>' +
+        '</div>';
+    };
+
+    var gauges = bar('CPU', cap.cpu, fromMillicores) + bar('Memory', cap.memory, gigs);
+
+    /*
+     * Disk, when the node exporter is there to measure it. Node disk and volume
+     * storage are two different pools — an attached volume is not the node's —
+     * so the claims are said beside it rather than added into it.
+     */
+    if (state.disk && state.disk.total) {
+      var used = state.disk.used;
+      var pct = (used / state.disk.total) * 100;
+      var vols = data.volumes;
+      gauges += '<div class="gauge">' +
+        '<div class="gauge-head"><span>Disk</span><b>' + gigs(used) + '</b>' +
+          '<span class="dim"> used of ' + gigs(state.disk.total) + '</span></div>' +
+        '<div class="gauge-bar"><span class="gauge-use ' + (pct >= 85 ? 'is-over' : '') + '" style="width:' +
+          pct.toFixed(1) + '%"></span></div>' +
+        '<div class="gauge-foot"><span>' + Math.round(pct) + '% of the nodes\u2019 own disks</span>' +
+          (vols ? '<span>' + vols.count + ' volumes · ' + gigs(vols.claimed) +
+            (vols.pending ? ' · <b class="warn-text">' + vols.pending + ' pending</b>' : '') + '</span>' : '') +
+        '</div></div>';
+    }
+    return '<div class="gauges">' + gauges + '</div>';
+  }
+
+  /**
+   * Every node, hottest first.
+   *
+   * A cluster at sixty percent with one node at ninety-seven is not a cluster
+   * at sixty percent — it is a cluster with one node about to start evicting
+   * things, and an average is exactly what hides that.
+   */
+  function nodesOf(data) {
+    var nodes = data.nodeUsage || [];
+    if (!nodes.length) return '';
+    return '<div class="panel-block"><h4>Nodes<span class="dim"> · busiest first</span></h4>' +
+      nodes.map(function (node) {
+        var cpu = node.cpuAllocatable ? (node.cpu / node.cpuAllocatable) * 100 : 0;
+        var mem = node.memoryAllocatable ? (node.memory / node.memoryAllocatable) * 100 : 0;
+        var short = node.name.replace(/\.(compute\.internal|ec2\.internal).*$/, '');
+        return '<div class="meter" title="' + esc(node.name) + '">' +
+          '<span class="meter-name' + (node.ready ? '' : ' bad-text') + '">' + esc(short) +
+            (node.schedulable ? '' : ' <span class="dim">cordoned</span>') + '</span>' +
+          '<span class="meter-track"><i style="width:' + cpu.toFixed(1) + '%" class="' + heat(cpu) + '"></i></span>' +
+          '<span class="meter-num">' + Math.round(cpu) + '%</span>' +
+          '<span class="meter-track"><i style="width:' + mem.toFixed(1) + '%" class="' + heat(mem) + '"></i></span>' +
+          '<span class="meter-num">' + Math.round(mem) + '%</span>' +
+          (node.diskTotal
+            ? '<span class="meter-track"><i style="width:' + ((node.disk / node.diskTotal) * 100).toFixed(1) +
+                '%" class="' + heat((node.disk / node.diskTotal) * 100) + '"></i></span>' +
+              '<span class="meter-num">' + Math.round((node.disk / node.diskTotal) * 100) + '%</span>'
+            : '') +
+          '</div>';
+      }).join('') +
+      '<div class="meter-legend"><span></span><span>CPU</span><span></span><span>memory</span><span></span>' +
+        (nodes[0] && nodes[0].diskTotal ? '<span>disk</span><span></span>' : '') + '</div>' +
+      '</div>';
+  }
+
+  /** Green up to two thirds, amber to the edge, red past it. */
+  function heat(pct) { return pct >= 90 ? 'is-bad' : pct >= 66 ? 'is-warn' : ''; }
+
+  /**
+   * Where the room is going, by namespace.
+   *
+   * Ordered by what has been promised rather than by what is used: the
+   * namespace holding a third of the cluster's CPU without touching it is the
+   * one worth finding, and by usage it looks like the quietest thing there.
+   */
+  function whereOf(data) {
+    var rows = data.namespaces || [];
+    if (!rows.length) return '';
+    var most = rows[0].cpu || 1;
+    return '<div class="panel-block"><h4>Where the CPU is promised<span class="dim"> · by namespace</span></h4>' +
+      rows.map(function (row) {
+        return '<div class="meter" data-namespace="' + esc(row.namespace) + '">' +
+          '<span class="meter-name">' + esc(row.namespace) + '</span>' +
+          '<span class="meter-track wide"><i style="width:' + ((row.cpu / most) * 100).toFixed(1) + '%"></i></span>' +
+          '<span class="meter-num">' + fromMillicores(row.cpu) + '</span>' +
+          '<span class="meter-num dim">' + row.pods + 'p</span>' +
+          '</div>';
+      }).join('') + '</div>';
+  }
+
+  /**
+   * What is actually burning the cluster right now.
+   *
+   * Not what anything asked for — what it is using. Requests say what the
+   * scheduler believes; this says where the afternoon went, and on a real
+   * cluster the two are nowhere near each other.
+   */
+  function busiestOf(data) {
+    var busy = data.busiest;
+    if (!busy || (!busy.cpu.length && !busy.memory.length)) return '';
+    var column = function (title, rows, most, format, field) {
+      return '<div class="half"><h5>' + title + '</h5>' + rows.map(function (row) {
+        return '<div class="meter" title="' + esc(row.namespace + '/' + row.name) + '">' +
+          '<span class="meter-name">' + esc(row.name) + '</span>' +
+          '<span class="meter-track"><i style="width:' + ((row[field] / (most || 1)) * 100).toFixed(1) + '%"></i></span>' +
+          '<span class="meter-num">' + format(row[field]) + '</span>' +
+          '</div>';
+      }).join('') + '</div>';
+    };
+    return '<div class="panel-block"><h4>Busiest right now<span class="dim"> · measured, not requested</span></h4>' +
+      '<div class="halves">' +
+        column('CPU', busy.cpu, busy.cpu[0] && busy.cpu[0].cpu, fromMillicores, 'cpu') +
+        column('Memory', busy.memory, busy.memory[0] && busy.memory[0].memory, gigs, 'memory') +
+      '</div></div>';
+  }
+
+  /**
+   * The workloads that are not what they were asked to be.
+   *
+   * A pod count says how many are running. It does not say that a Deployment
+   * asked for five and has three — which is the thing somebody gets paged
+   * about, and the thing a wall of green pods hides.
+   */
+  function incompleteOf(data) {
+    var health = data.workloads;
+    if (!health) return '';
+    if (!health.shortCount) {
+      return '<div class="panel-block"><h4>Workloads</h4>' +
+        '<p class="all-well">All ' + health.total + ' are at the number they asked for.</p></div>';
+    }
+    return '<div class="panel-block"><h4>Not at their number' +
+      '<span class="dim"> · ' + health.shortCount + ' of ' + health.total + '</span></h4>' +
+      '<table><tbody>' + health.short.map(function (row) {
+        return '<tr class="clickable" data-goto="' + esc(row.kind) + '">' +
+          '<td class="name"><span class="dot ' + (row.ready ? 'warn' : 'bad') + '"></span>' + esc(row.name) + '</td>' +
+          '<td class="dim">' + esc(row.kind) + '</td>' +
+          '<td class="dim">' + esc(row.namespace) + '</td>' +
+          '<td class="' + (row.ready ? 'warn-text' : 'bad-text') + '">' + row.ready + '/' + row.wanted + '</td>' +
+          '</tr>';
+      }).join('') + '</tbody></table></div>';
+  }
+
+  /**
+   * Pressure, when there is any.
+   *
+   * `Ready` is the condition everybody watches and the last one to turn: disk
+   * and memory pressure show up first, and a node under them is already
+   * refusing pods and evicting things while still calling itself ready. It is
+   * absent when there is none, because a permanent green line saying "no
+   * pressure" is a line people stop reading.
+   */
+  function pressureOf(data) {
+    var rows = data.pressure || [];
+    if (!rows.length) return '';
+    return '<div class="pressure">' + rows.map(function (row) {
+      return '<div><b>' + esc(row.condition) + '</b> on ' + esc(row.node) +
+        '<span class="dim"> — ' + esc(row.message) + '</span></div>';
+    }).join('') + '</div>';
+  }
+
+  /**
+   * The warnings, gathered by what they are.
+   *
+   * Forty lines of FailedScheduling are one problem, and a list of forty shows
+   * them as forty. How many kinds of thing are wrong is the number somebody
+   * came for.
+   */
+  function reasonsOf(data) {
+    var rows = data.reasons || [];
+    if (!rows.length) return '';
+    return '<div class="panel-block"><h4>What the cluster is complaining about</h4>' +
+      '<table><tbody>' + rows.map(function (row) {
+        return '<tr><td class="warn-text">' + esc(row.reason) + '</td>' +
+          '<td class="dim">' + many(row.count) + '×</td>' +
+          '<td class="dim">' + esc(row.newest) + '</td>' +
+          '<td class="grow dim">' + esc(String(row.example || '').slice(0, 120)) + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
   }
 
   /**
@@ -1966,6 +2334,59 @@
       closeRowMenu();
     });
     setTimeout(function () { document.addEventListener('click', closeRowMenu, { once: true }); }, 0);
+  });
+
+  /**
+   * Reading a value off the chart.
+   *
+   * The points are on the element, so this is arithmetic rather than another
+   * question to Prometheus — and it is what turns a shape into a measurement:
+   * "it was two cores at ten past four" is the sentence somebody is trying to
+   * say when they point at a bump.
+   */
+  document.addEventListener('mousemove', function (event) {
+    var chart = event.target.closest('.chart');
+    if (!chart) {
+      [].forEach.call(document.querySelectorAll('.chart.is-read'), function (one) {
+        one.classList.remove('is-read');
+        one.querySelector('.chart-cursor').setAttribute('x1', -10);
+        one.querySelector('.chart-cursor').setAttribute('x2', -10);
+        var head = one.querySelector('.chart-value');
+        if (head && one.dataset.last) head.textContent = one.dataset.last;
+        var when = one.querySelector('.chart-when');
+        if (when && one.dataset.over) when.textContent = one.dataset.over;
+      });
+      return;
+    }
+    var points;
+    try { points = JSON.parse(chart.dataset.points); } catch (e) { return; }
+    if (!points.length) return;
+
+    var svg = chart.querySelector('svg');
+    var box = svg.getBoundingClientRect();
+    var share = Math.max(0, Math.min(1, (event.clientX - box.left) / box.width));
+    var at = Math.round(share * (points.length - 1));
+    var point = points[at];
+
+    var head = chart.querySelector('.chart-value');
+    var when = chart.querySelector('.chart-when');
+    if (!chart.dataset.last) { chart.dataset.last = head.textContent; chart.dataset.over = when.textContent; }
+    chart.classList.add('is-read');
+    head.textContent = chart.dataset.unit === 'Memory' ? bytes(point[1]) : fromCores(point[1]);
+    when.textContent = new Date(point[0]).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+    var cursor = chart.querySelector('.chart-cursor');
+    var x = (at / (points.length - 1)) * 240;
+    cursor.setAttribute('x1', x);
+    cursor.setAttribute('x2', x);
+  });
+
+  document.addEventListener('click', function (event) {
+    var range = event.target.closest('[data-range]');
+    if (!range) return;
+    state.prom.minutes = Number(range.dataset.range);
+    loadCharts(state.selected);
+    draw();
   });
 
   document.addEventListener('mousedown', function (event) {

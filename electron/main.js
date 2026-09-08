@@ -1104,6 +1104,7 @@ function registerIpc() {
     brief: (args) => kube.brief(args),
     prometheus: (args) => kube.prometheus(args),
     promQuery: (args) => kube.promQuery(args),
+    promNow: (args) => kube.promNow(args),
     remove: (args) => kube.remove(args),
     scale: (args) => kube.scale(args),
     restart: (args) => kube.restart(args),

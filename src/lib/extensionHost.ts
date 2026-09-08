@@ -82,6 +82,7 @@ const KUBE_READ = [
   'brief',
   'prometheus',
   'promQuery',
+  'promNow',
 ] as const;
 
 /**

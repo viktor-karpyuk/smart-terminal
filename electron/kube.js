@@ -798,7 +798,15 @@ async function promQuery({ service, port = 9090, namespace, query, minutes = 60,
   if (!Number.isInteger(onPort) || onPort < 1 || onPort > 65535) return { ok: false, error: `Not a port: ${port}` };
   const end = Math.floor(Date.now() / 1000);
   const start = end - Math.max(60, Number(minutes) || 60) * 60;
-  const seconds = Number(step) || Math.max(60, Math.round(((end - start) / 60) * 2));
+  /*
+   * About a hundred and twenty points, whatever the range.
+   *
+   * A fixed step gives an hour a fine line and a day a coarse one, and the day
+   * is the range where a spike matters most — it is the one you look at
+   * *because* something happened and you do not know when. Prometheus is asked
+   * for the same resolution either way.
+   */
+  const seconds = Number(step) || Math.max(15, Math.round((end - start) / 120));
 
   const search = new URLSearchParams({
     query: String(query ?? ''),
@@ -812,6 +820,39 @@ async function promQuery({ service, port = 9090, namespace, query, minutes = 60,
   if (!result.ok) return result;
   try {
     return { ok: true, ...seriesFrom(JSON.parse(result.stdout)) };
+  } catch (error) {
+    return { ok: false, error: `Prometheus answered with something unreadable — ${String(error?.message ?? error)}` };
+  }
+}
+
+/**
+ * One number per series, now.
+ *
+ * A range is for a shape; this is for a gauge. Disk is the case that needs it:
+ * nobody wants a line of how full a node has been, they want to know how full
+ * it is, and asking for a range and throwing away all but the last point is a
+ * hundred and twenty values fetched to use one.
+ */
+async function promNow({ service, port = 9090, namespace, query, context }) {
+  const at = String(namespace ?? '').trim();
+  const name = String(service ?? '').trim();
+  const onPort = Number(port);
+  if (!isDnsName(at) || !isDnsName(name)) return { ok: false, error: 'Not a place a cluster could have.' };
+  if (!Number.isInteger(onPort)) return { ok: false, error: `Not a port: ${port}` };
+
+  const search = new URLSearchParams({ query: String(query ?? '') });
+  const path = `/api/v1/namespaces/${at}/services/${name}:${onPort}/proxy/api/v1/query?${search}`;
+  const result = await run([...scope({ context }), 'get', '--raw', path], { timeout: 20000 });
+  if (!result.ok) return result;
+  try {
+    const answer = JSON.parse(result.stdout);
+    return {
+      ok: true,
+      values: (answer?.data?.result ?? []).map((entry) => ({
+        labels: entry.metric ?? {},
+        value: Number(entry.value?.[1]),
+      })),
+    };
   } catch (error) {
     return { ok: false, error: `Prometheus answered with something unreadable — ${String(error?.message ?? error)}` };
   }
@@ -899,6 +940,132 @@ function metrics(text) {
     };
   }
   return out;
+}
+
+/**
+ * A Kubernetes quantity, as a number.
+ *
+ * CPU is written in cores or in thousandths of one — `2`, `500m` — and memory
+ * in bytes with a binary or decimal suffix, which are not the same thing:
+ * `1Ki` is 1024 and `1k` is 1000, and a cluster's manifests use both. Returned
+ * in the smallest sensible unit for its kind — millicores, and bytes — so that
+ * adding two of them is just addition.
+ */
+function quantity(value) {
+  const text = String(value ?? '').trim();
+  if (!text) return 0;
+  const match = /^(-?[\d.]+)([a-zA-Z]*)$/.exec(text);
+  if (!match) return 0;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount)) return 0;
+  const suffix = match[2];
+
+  const scale = {
+    '': 1,
+    m: 0.001,
+    k: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15,
+    Ki: 1024, Mi: 1024 ** 2, Gi: 1024 ** 3, Ti: 1024 ** 4, Pi: 1024 ** 5,
+    n: 1e-9, u: 1e-6,
+  };
+  return amount * (scale[suffix] ?? 1);
+}
+
+/** CPU as millicores, which is how Kubernetes itself counts it. */
+function millicores(value) {
+  return Math.round(quantity(value) * 1000);
+}
+
+/**
+ * What the cluster has, what has been promised, and what is actually in use.
+ *
+ * Three different numbers that get conflated constantly, and the gap between
+ * them is the whole story. *Allocatable* is what the nodes will give out.
+ * *Requested* is what the scheduler has already promised to pods, and it is
+ * what decides whether the next pod fits — not usage. *Used* is what is being
+ * consumed right now, and a cluster with 90% requested and 12% used is one
+ * where somebody wrote the requests without measuring.
+ */
+function capacityFrom(nodes, pods, usage = {}) {
+  const totals = {
+    cpu: { allocatable: 0, requested: 0, limit: 0, used: 0 },
+    memory: { allocatable: 0, requested: 0, limit: 0, used: 0 },
+    // Disk on the nodes themselves. What a volume claims is a different pool
+    // entirely — an EBS disk is not the node's — so it is counted separately.
+    disk: { allocatable: 0, requested: 0, limit: 0, used: 0 },
+  };
+
+  for (const node of nodes) {
+    const room = node.status?.allocatable ?? node.status?.capacity ?? {};
+    totals.cpu.allocatable += millicores(room.cpu);
+    totals.memory.allocatable += quantity(room.memory);
+    totals.disk.allocatable += quantity(room['ephemeral-storage']);
+  }
+
+  for (const pod of pods) {
+    // A pod that has finished is not holding anything.
+    const phase = pod.status?.phase;
+    if (phase === 'Succeeded' || phase === 'Failed') continue;
+    for (const container of pod.spec?.containers ?? []) {
+      totals.cpu.requested += millicores(container.resources?.requests?.cpu);
+      totals.memory.requested += quantity(container.resources?.requests?.memory);
+      totals.disk.requested += quantity(container.resources?.requests?.['ephemeral-storage']);
+      totals.cpu.limit += millicores(container.resources?.limits?.cpu);
+      totals.memory.limit += quantity(container.resources?.limits?.memory);
+      totals.disk.limit += quantity(container.resources?.limits?.['ephemeral-storage']);
+    }
+  }
+
+  for (const key of Object.keys(usage)) {
+    totals.cpu.used += millicores(usage[key].cpu);
+    totals.memory.used += quantity(usage[key].memory);
+  }
+  return totals;
+}
+
+/**
+ * Where the cluster's room is going, by namespace.
+ *
+ * Sorted by what they have been promised rather than by what they are using:
+ * the namespace holding a third of the cluster's CPU without touching it is the
+ * one worth finding, and by usage it looks like the quietest thing there.
+ */
+function byNamespace(pods, limit = 8) {
+  const seen = new Map();
+  for (const pod of pods) {
+    const phase = pod.status?.phase;
+    if (phase === 'Succeeded' || phase === 'Failed') continue;
+    const at = pod.metadata?.namespace ?? '';
+    const row = seen.get(at) ?? { namespace: at, pods: 0, cpu: 0, memory: 0 };
+    row.pods += 1;
+    for (const container of pod.spec?.containers ?? []) {
+      row.cpu += millicores(container.resources?.requests?.cpu);
+      row.memory += quantity(container.resources?.requests?.memory);
+    }
+    seen.set(at, row);
+  }
+  return [...seen.values()].sort((a, b) => b.cpu - a.cpu || b.pods - a.pods).slice(0, limit);
+}
+
+/**
+ * The warnings, gathered by what they are rather than listed as they came.
+ *
+ * Forty lines of `FailedScheduling` are one problem, and a list shows them as
+ * forty. Grouping says how many kinds of thing are wrong, which is the number
+ * somebody actually wants.
+ */
+function warningsByReason(events, limit = 8) {
+  const seen = new Map();
+  for (const event of events) {
+    const key = event.status || 'Unknown';
+    const row = seen.get(key) ?? { reason: key, count: 0, newest: '', example: '' };
+    row.count += event.count || 1;
+    if (!row.newest) {
+      row.newest = event.age;
+      row.example = event.message;
+    }
+    seen.set(key, row);
+  }
+  return [...seen.values()].sort((a, b) => b.count - a.count).slice(0, limit);
 }
 
 /**
@@ -1074,21 +1241,189 @@ async function top({ what = 'pods', ...rest }) {
   return { ok: true, metrics: metrics(result.stdout), missing: null };
 }
 
-/** Everything the first screen needs, in one round trip rather than four. */
+/**
+ * Everything the first screen needs, in one round trip rather than six.
+ *
+ * The raw objects are kept alongside the rows for exactly as long as it takes
+ * to add them up: capacity and the per-namespace split need what is inside a
+ * pod's spec, which a row deliberately throws away. What crosses to the panel
+ * is still only the totals.
+ */
 async function summary({ context } = {}) {
-  const [nodes, pods, warnings] = await Promise.all([
-    list({ kind: 'nodes', context }),
-    list({ kind: 'pods', context, allNamespaces: true }),
+  const [nodes, pods, warnings, usage, podUsage, workloads, claims] = await Promise.all([
+    listRaw({ kind: 'nodes', context }),
+    listRaw({ kind: 'pods', context, allNamespaces: true }),
     events({ context, allNamespaces: true }),
+    top({ what: 'nodes', context }),
+    top({ what: 'pods', context, allNamespaces: true }),
+    // One call for all three kinds: what is not fully available is one question.
+    listRaw({ kind: 'deployments,statefulsets,daemonsets', context, allNamespaces: true }),
+    listRaw({ kind: 'persistentvolumeclaims', context, allNamespaces: true }),
   ]);
   if (!nodes.ok && !pods.ok) return nodes.ok ? pods : nodes;
+
+  const nodeItems = nodes.data?.items ?? [];
+  const podItems = pods.data?.items ?? [];
+  const now = Date.now();
+  const nodeRows = table('Node', nodes.data, now).rows;
+  const podRows = table('Pod', pods.data, now).rows;
   const warningRows = (warnings.rows ?? []).filter((row) => row.type === 'Warning');
+
   return {
     ok: true,
-    ...overview({ nodes: nodes.rows ?? [], pods: pods.rows ?? [], events: warningRows }),
+    ...overview({ nodes: nodeRows, pods: podRows, events: warningRows }),
+    capacity: capacityFrom(nodeItems, podItems, usage.metrics ?? {}),
+    busiest: busiestPods(podUsage.metrics ?? {}),
+    workloads: workloadHealth(workloads.data?.items ?? []),
+    pressure: nodePressure(nodeItems),
+    volumes: volumeTotals(claims.data?.items ?? []),
+    namespaces: byNamespace(podItems),
+    reasons: warningsByReason(warningRows),
+    nodeUsage: nodeUsage(nodeItems, usage.metrics ?? {}, now),
     recent: warningRows.slice(0, 25),
-    nodeRows: nodes.rows ?? [],
+    nodeRows,
   };
+}
+
+/**
+ * What the persistent volumes add up to.
+ *
+ * Nothing to do with the disk on the nodes: a claim is fulfilled by a volume
+ * the cloud attaches, and adding the two together would produce a number that
+ * describes nothing. Kept apart, and counted — including the ones that are
+ * still waiting, because a Pending claim is a pod that will never start.
+ */
+function volumeTotals(claims) {
+  let claimed = 0;
+  let bound = 0;
+  let pending = 0;
+  for (const claim of claims) {
+    claimed += quantity(claim.status?.capacity?.storage ?? claim.spec?.resources?.requests?.storage);
+    if (claim.status?.phase === 'Bound') bound += 1;
+    else pending += 1;
+  }
+  return { count: claims.length, claimed, bound, pending };
+}
+
+/**
+ * The pods actually burning the cluster's CPU and memory right now.
+ *
+ * Not what they asked for — what they are using. Requests tell you what the
+ * scheduler believes; this tells you where the cluster's afternoon went, and
+ * the two are routinely nowhere near each other.
+ */
+function busiestPods(usage, limit = 6) {
+  const rows = Object.keys(usage).map((key) => {
+    const cut = key.indexOf('/');
+    return {
+      namespace: key.slice(0, cut),
+      name: key.slice(cut + 1),
+      cpu: millicores(usage[key].cpu),
+      memory: quantity(usage[key].memory),
+    };
+  });
+  return {
+    cpu: [...rows].sort((a, b) => b.cpu - a.cpu).slice(0, limit),
+    memory: [...rows].sort((a, b) => b.memory - a.memory).slice(0, limit),
+  };
+}
+
+/**
+ * Which workloads are not what they are supposed to be.
+ *
+ * A pod count says how many are running; it does not say that a Deployment
+ * asked for five and has three, which is the thing somebody is paged about. A
+ * DaemonSet counts differently from the other two — it wants one per node, not
+ * a number — so it is asked its own question.
+ */
+function workloadHealth(items) {
+  const short = [];
+  let total = 0;
+  for (const item of items) {
+    const kind = item.kind ?? '';
+    total += 1;
+    const status = item.status ?? {};
+    let wanted;
+    let ready;
+    if (kind === 'DaemonSet') {
+      wanted = status.desiredNumberScheduled ?? 0;
+      ready = status.numberReady ?? 0;
+    } else {
+      wanted = item.spec?.replicas ?? 0;
+      ready = status.readyReplicas ?? 0;
+    }
+    // Scaled to zero on purpose is not a fault.
+    if (wanted === 0 || ready >= wanted) continue;
+    short.push({
+      kind,
+      name: item.metadata?.name ?? '',
+      namespace: item.metadata?.namespace ?? '',
+      ready,
+      wanted,
+    });
+  }
+  short.sort((a, b) => a.ready / (a.wanted || 1) - b.ready / (b.wanted || 1));
+  return { total, short: short.slice(0, 10), shortCount: short.length };
+}
+
+/**
+ * What the nodes are complaining about besides being ready.
+ *
+ * `Ready` is the condition everybody looks at and the last one to turn: disk
+ * and memory pressure show up first, and a node under them is already
+ * refusing pods and evicting things while still reporting itself ready.
+ */
+function nodePressure(nodes) {
+  const found = [];
+  for (const node of nodes) {
+    for (const condition of node.status?.conditions ?? []) {
+      if (condition.type === 'Ready' || condition.status !== 'True') continue;
+      found.push({
+        node: node.metadata?.name ?? '',
+        condition: condition.type,
+        message: condition.message ?? '',
+      });
+    }
+  }
+  return found;
+}
+
+/** A list as the API server sent it, for the sums that need what is inside. */
+async function listRaw({ kind, ...rest }) {
+  const args = [...scope(rest), 'get', safeArg(kind, 'the resource kind'), ...everywhere(rest), '-o', 'json'];
+  return runJson(args);
+}
+
+/**
+ * Each node, with what it is holding against what it can hold.
+ *
+ * Per node rather than only in total, because a cluster at 60% with one node at
+ * 97% is not a cluster at 60% — it is a cluster with one node about to start
+ * evicting things, and the average hides exactly that.
+ */
+function nodeUsage(nodes, usage, now = Date.now()) {
+  return nodes
+    .map((node) => {
+      const name = node.metadata?.name ?? '';
+      const room = node.status?.allocatable ?? node.status?.capacity ?? {};
+      const measured = usage[`/${name}`] ?? usage[name] ?? {};
+      const conditions = node.status?.conditions ?? [];
+      const internal = (node.status?.addresses ?? []).find((one) => one.type === 'InternalIP');
+      return {
+        name,
+        // What node-exporter labels its series with, so disk can be matched to
+        // a node without a second lookup on the other side.
+        ip: internal?.address ?? '',
+        cpu: millicores(measured.cpu),
+        cpuAllocatable: millicores(room.cpu),
+        memory: quantity(measured.memory),
+        memoryAllocatable: quantity(room.memory),
+        ready: conditions.find((one) => one.type === 'Ready')?.status === 'True',
+        schedulable: node.spec?.unschedulable !== true,
+        age: age(node.metadata?.creationTimestamp, now),
+      };
+    })
+    .sort((a, b) => b.cpu / (b.cpuAllocatable || 1) - a.cpu / (a.cpuAllocatable || 1));
 }
 
 /**
@@ -1496,6 +1831,7 @@ module.exports = {
   summary,
   brief,
   promQuery,
+  promNow,
   prometheus,
   // changing
   remove,
@@ -1527,6 +1863,16 @@ module.exports = {
   whatToRemove,
   metrics,
   overview,
+  quantity,
+  millicores,
+  nodeUsage,
+  capacityFrom,
+  busiestPods,
+  workloadHealth,
+  nodePressure,
+  volumeTotals,
+  byNamespace,
+  warningsByReason,
   seriesFrom,
   findPrometheus,
   safeArg,

@@ -10,6 +10,18 @@ export function CloseConfirm() {
   const pending = useStore((s) => s.pendingClose);
   const confirmClose = useStore((s) => s.confirmClose);
   const cancelClose = useStore((s) => s.cancelClose);
+  /*
+   * What the thing being closed is called.
+   *
+   * "Close session" over a shell is the app using its own word for something
+   * the person is looking at and calling a terminal — and next to a Kubernetes
+   * panel, where the shell was opened by a button that said Terminal, it reads
+   * as though it were about to close something else.
+   */
+  const onlyShells = useStore((s) => {
+    const ids = pending?.sessionIds ?? [];
+    return ids.length > 0 && ids.every((id) => s.sessions[id]?.kind !== 'claude');
+  });
 
   if (!pending) return null;
   return (
@@ -27,7 +39,9 @@ export function CloseConfirm() {
           <button className="danger-btn" onClick={confirmClose}>
             {pending.groupId
               ? `Close ${pending.sessionIds.length} session${pending.sessionIds.length === 1 ? '' : 's'}`
-              : 'Close session'}
+              : onlyShells
+                ? 'Close terminal'
+                : 'Close session'}
           </button>
         </div>
       </div>
