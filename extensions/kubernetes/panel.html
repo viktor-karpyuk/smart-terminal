@@ -31,8 +31,18 @@
   .btn.bad:hover { color: var(--danger); border-color: var(--danger); }
   .btn[disabled] { opacity: 0.4; pointer-events: none; }
 
-  .body { display: grid; grid-template-columns: 178px minmax(0, 1fr); min-height: 0; }
-  .body.with-detail { grid-template-columns: 178px minmax(0, 1fr) minmax(300px, 34%); }
+  /* The columns are set from script, so they can be dragged. The values here
+     are only what they start at. */
+  .body { display: grid; grid-template-columns: 178px 1fr; min-height: 0; }
+  .body.with-detail { grid-template-columns: 178px 1fr 34%; }
+
+  /* The line between two columns, wide enough to grab and quiet until you do —
+     the same handle the log drawer has, standing up. */
+  .grip {
+    position: absolute; top: 0; bottom: 0; width: 7px; margin-left: -4px;
+    cursor: col-resize; z-index: 3;
+  }
+  .grip:hover, .grip.is-held { background: var(--accent-soft); }
 
   nav {
     overflow-y: auto; border-right: 1px solid var(--border);
@@ -239,7 +249,7 @@
     <button class="btn" id="reload" title="Refresh now">Refresh</button>
   </header>
 
-  <div class="body" id="body">
+  <div class="body" id="body" style="position: relative">
     <nav id="nav"></nav>
     <main>
       <div class="crumb" id="crumb"></div>
@@ -282,6 +292,8 @@
     helm: { checked: false, releases: 0 },
     /** Which rows are ticked, by uid. Ticking is not the same act as opening. */
     picked: [],
+    /** How wide the two columns that can be dragged are. */
+    navWidth: 178, detailWidth: 380,
     /** The open watch, if any: what it is watching and whether a redraw is due. */
     watch: { id: null, kind: null, of: null, token: 0, draw: 0 },
     /** Where this cluster's Prometheus is, and what it has said so far. */
@@ -962,6 +974,7 @@
     drawDock();
     drawPicked();
     drawBar();
+    drawGrips();
   }
 
   function drawCrumb() {
@@ -1284,6 +1297,74 @@
   /* ---------------------------------------------------------------------- *
    * The detail pane.
    * ---------------------------------------------------------------------- */
+  /**
+   * The lines between the columns, and dragging them.
+   *
+   * The navigation and the detail pane were fixed widths, which is fine until
+   * the thing you are reading is a name that does not fit or a description that
+   * wants the room. Both edges move now, and the middle takes what is left.
+   *
+   * Absolutely positioned rather than made grid children: a grid column of its
+   * own would have to be threaded through both of the layouts below, and the
+   * only thing a handle needs to know is where the edge it drags currently is.
+   */
+  function drawGrips() {
+    var body = $('body');
+    var nav = body.querySelector('nav');
+    var aside = body.querySelector('aside');
+    [].forEach.call(body.querySelectorAll('.grip'), function (old) { old.remove(); });
+    if (!nav) return;
+
+    var edges = [{ at: nav.getBoundingClientRect().width, which: 'nav' }];
+    if (aside) edges.push({ at: body.getBoundingClientRect().width - aside.getBoundingClientRect().width, which: 'detail' });
+
+    edges.forEach(function (edge) {
+      var grip = document.createElement('div');
+      grip.className = 'grip';
+      grip.dataset.grip = edge.which;
+      grip.style.left = edge.at + 'px';
+      body.appendChild(grip);
+    });
+  }
+
+  document.addEventListener('mousedown', function (event) {
+    var grip = event.target.closest('.grip');
+    if (!grip) return;
+    event.preventDefault();
+    grip.classList.add('is-held');
+
+    var body = $('body');
+    var which = grip.dataset.grip;
+    var whole = body.getBoundingClientRect();
+
+    var move = function (moved) {
+      if (which === 'nav') {
+        // Never so narrow that its own headings stop fitting, never past half.
+        state.navWidth = Math.round(Math.max(120, Math.min(whole.width * 0.5, moved.clientX - whole.left)));
+      } else {
+        state.detailWidth = Math.round(Math.max(260, Math.min(whole.width - state.navWidth - 200, whole.right - moved.clientX)));
+      }
+      applyColumns();
+      var edge = which === 'nav' ? state.navWidth : whole.width - state.detailWidth;
+      grip.style.left = edge + 'px';
+    };
+    var up = function () {
+      grip.classList.remove('is-held');
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+      drawGrips();
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+
+  function applyColumns() {
+    var body = $('body');
+    body.style.gridTemplateColumns = body.classList.contains('with-detail')
+      ? state.navWidth + 'px 1fr ' + state.detailWidth + 'px'
+      : state.navWidth + 'px 1fr';
+  }
+
   function drawDetail() {
     /*
      * Never over somebody's typing. The detail pane is rebuilt wholesale, and a
@@ -1293,6 +1374,7 @@
     if (state.editing) return;
     var chosen = state.selected;
     $('body').className = 'body' + (chosen ? ' with-detail' : '');
+    applyColumns();
     var existing = document.querySelector('aside');
     if (!chosen) { if (existing) existing.remove(); return; }
 
@@ -2478,6 +2560,12 @@
     // Coming back: find out what changed while it was away, rather than
     // waiting out the rest of a timer.
     if (was === false && state.live && !state.busy) load(true);
+  });
+
+  window.addEventListener('resize', function () {
+    // The edges move with the window, so the handles have to be told where
+    // they are now.
+    drawGrips();
   });
 
   host.on('theme', function () { /* the app rebuilds the frame; nothing to do here */ });
