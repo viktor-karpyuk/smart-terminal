@@ -592,3 +592,29 @@ test('a failure is not remembered, so a blip is not a minute of nothing', async 
   assert.equal((await kube.memo('flaky', 60000, work)).ok, true, 'it tried again');
   assert.equal(ran, 2);
 });
+
+test('every workload with a pod template says its settings can be edited', () => {
+  const now = Date.now();
+  const at = new Date().toISOString();
+  const rowsOf = (kind, item) => kube.table(kind, { items: [item] }, now).rows[0];
+
+  const spec = { replicas: 1, selector: { matchLabels: { app: 'api' } } };
+  assert.equal(rowsOf('Deployment', { metadata: { name: 'a', creationTimestamp: at }, spec, status: {} }).configurable, true);
+  assert.equal(rowsOf('StatefulSet', { metadata: { name: 'b', creationTimestamp: at }, spec, status: {} }).configurable, true);
+  assert.equal(rowsOf('DaemonSet', { metadata: { name: 'c', creationTimestamp: at }, spec, status: {} }).configurable, true);
+  assert.equal(
+    rowsOf('CronJob', { metadata: { name: 'd', creationTimestamp: at }, spec: { schedule: '* * * * *' }, status: {} }).configurable,
+    true,
+  );
+  // A pod has no template to configure — it *is* the thing a template made.
+  assert.equal(
+    rowsOf('Pod', { metadata: { name: 'e', creationTimestamp: at }, spec: { containers: [] }, status: { phase: 'Running' } }).configurable,
+    undefined,
+  );
+});
+
+test('a patch of nothing is refused before it reaches the cluster', async () => {
+  assert.equal((await kube.configure({ kind: 'deployments', name: 'api', patch: {} })).ok, false);
+  assert.equal((await kube.configure({ kind: 'deployments', name: 'api' })).ok, false);
+  assert.match((await kube.configure({ kind: 'deployments', name: 'api', patch: null })).error, /nothing to change/);
+});

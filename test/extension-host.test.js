@@ -78,6 +78,28 @@ test('the questions asked before changing a cluster name where, not just what', 
   assert.match(owned, /Helm installed this, as part of the release "argocd"/);
   assert.match(owned, /next upgrade of that release will put it back/);
   assert.ok(!/Helm installed/.test(H.needsConsent('kube.apply', { yaml: 'kind: ConfigMap' }) ?? ''));
+  /*
+   * A patch says what it will change, because it can. "Apply this manifest?" is
+   * a question nobody can answer without reading the manifest; a list of four
+   * lines is a question you can actually answer.
+   */
+  const patched = H.needsConsent('kube.configure', {
+    kind: 'Deployment',
+    name: 'api',
+    namespace: 'prod',
+    summary: ['image of api: registry/api:1 → registry/api:2', 'memory limit of api: 1Gi → 2Gi'],
+    patch: { spec: { template: {} } },
+  });
+  assert.match(patched, /Change Deployment api in namespace prod/);
+  assert.match(patched, /• image of api: registry\/api:1 → registry\/api:2/);
+  assert.match(patched, /• memory limit of api: 1Gi → 2Gi/);
+  assert.equal(H.needsConsent('kube.configure', { name: 'api', dryRun: true }), null);
+  // Scaling to zero still says what scaling to zero means, whichever form it took.
+  assert.match(
+    H.needsConsent('kube.configure', { name: 'api', summary: ['replicas: 3 → 0'], patch: { spec: { replicas: 0 } } }),
+    /everything it runs stops/,
+  );
+
   assert.match(H.needsConsent('kube.cordon', { name: 'node-1' }), /Stop scheduling/);
 
   const drain = H.needsConsent('kube.drain', { name: 'ip-10-0-1-2', context: 'live' });

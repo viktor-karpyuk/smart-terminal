@@ -441,6 +441,8 @@ function deploymentRow(item, now) {
     replicas: wanted,
     scalable: true,
     restartable: true,
+    /** It has a pod template, so its image, limits and variables can be edited. */
+    configurable: true,
     /** Deployments alone can be held mid-rollout, and told to go back. */
     pausable: true,
     revisioned: true,
@@ -462,6 +464,7 @@ function statefulSetRow(item, now) {
     replicas: wanted,
     scalable: true,
     restartable: true,
+    configurable: true,
     revisioned: true,
     selector: selectorOf(item),
   };
@@ -481,6 +484,7 @@ function daemonSetRow(item, now) {
     available: status.numberAvailable ?? 0,
     replicas: wanted,
     restartable: true,
+    configurable: true,
     revisioned: true,
     selector: selectorOf(item),
     misscheduled: status.numberMisscheduled ?? 0,
@@ -525,6 +529,8 @@ function cronJobRow(item, now) {
     schedule: item.spec?.schedule ?? '',
     active: (item.status?.active ?? []).length,
     lastRun: item.status?.lastScheduleTime ? age(item.status.lastScheduleTime, now) : '',
+    /** Its template is one level deeper, but it is a pod template like any other. */
+    configurable: true,
     /** The jobs it has made carry it as their owner, which is how they are found. */
     ownsJobs: true,
     triggerable: true,
@@ -1310,6 +1316,26 @@ async function manifest({ kind, name, ...rest }) {
   return result.ok ? { ok: true, yaml: result.stdout } : result;
 }
 
+/**
+ * One object, whole, as data.
+ *
+ * The manifest above is for reading; this is for changing. A form that offers
+ * an image, a limit and an environment variable has to know what they are now,
+ * and parsing YAML in a panel to find out would be writing a YAML parser — so
+ * the object comes back as JSON and the form reads fields off it.
+ */
+async function object({ kind, name, ...rest }) {
+  const result = await runJson([
+    ...scope(rest),
+    'get',
+    safeArg(kind, 'the resource kind'),
+    safeArg(name, 'the name'),
+    '-o',
+    'json',
+  ]);
+  return result.ok ? { ok: true, object: result.data } : result;
+}
+
 async function describe({ kind, name, ...rest }) {
   const result = await run([
     ...scope(rest),
@@ -1726,6 +1752,40 @@ async function apply({ yaml, dryRun = false, ...rest }) {
 }
 
 /**
+ * Change some fields of a workload, and only those fields.
+ *
+ * Not `apply`. Applying means sending the whole object, which makes every field
+ * in it a field you are asserting — including the ones a controller, a webhook
+ * or another person set between the read and the write, which then go back to
+ * whatever they were when the panel last read them. A patch says "this image,
+ * this limit, this variable" and leaves the rest of the object alone, which is
+ * what changing a setting should mean.
+ *
+ * Strategic merge, because it is the one that knows a list of containers is
+ * keyed by name: `[{name: "api", image: "…"}]` changes that container's image
+ * and does not delete the other three. It is also why removing an environment
+ * variable is spelled `{name: "FOO", $patch: "delete"}` — the panel builds
+ * that; this only carries it.
+ */
+async function configure({ kind, name, patch, dryRun = false, ...rest }) {
+  const body = patch && typeof patch === 'object' ? patch : null;
+  if (!body || !Object.keys(body).length) return { ok: false, error: 'There is nothing to change.' };
+  const args = [
+    ...scope(rest),
+    'patch',
+    safeArg(kind, 'the resource kind'),
+    safeArg(name, 'the name'),
+    '--type=strategic',
+    '--patch',
+    JSON.stringify(body),
+  ];
+  if (dryRun) args.push('--dry-run=server');
+  const result = await run(args);
+  if (result.ok) return { ok: true, text: result.stdout.trim(), dryRun };
+  return { ...result, error: shortenApiError(result.error) };
+}
+
+/**
  * Take a cluster out of kubeconfig.
  *
  * The one thing in this file that edits a file of the person's rather than
@@ -2090,6 +2150,7 @@ module.exports = {
   resources,
   list,
   manifest,
+  object,
   describe,
   logs,
   events,
@@ -2104,6 +2165,7 @@ module.exports = {
   scale,
   restart,
   apply,
+  configure,
   cordon,
   history,
   rollback,

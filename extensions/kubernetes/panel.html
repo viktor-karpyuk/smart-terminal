@@ -157,6 +157,13 @@
   .log-line.err { color: var(--danger); }
 
   .yaml-tools { display: flex; align-items: center; gap: 5px; margin-bottom: 7px; flex-wrap: wrap; }
+  /* Stuck to the top of the pane: a form long enough to scroll is a form whose
+     save button you cannot see, and a save button you cannot see is one people
+     reasonably conclude is not there. */
+  .yaml-tools.is-stuck {
+    position: sticky; top: -9px; z-index: 2; margin: -9px -10px 7px; padding: 9px 10px 7px;
+    background: var(--bg-panel); border-bottom: 1px solid var(--border);
+  }
   .yaml-tools .dim { font-size: 10.5px; }
   #yaml-edit {
     width: 100%; min-height: 320px; height: calc(100% - 34px); resize: vertical;
@@ -347,6 +354,35 @@
     max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
 
+  /* The configuration form.
+
+     Laid out as fields rather than as a document, because that is what it is:
+     four things you set and a list you add to. The inputs look like the rest of
+     the panel's inputs — nothing here is trying to look like a form from
+     somewhere else. */
+  .config-grid { display: grid; gap: 6px 10px; padding: 0 2px 2px; }
+  .config-grid.config-four { grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); }
+  .config-grid.config-narrow { grid-template-columns: 120px; }
+  .config-field { display: grid; gap: 2px; font-size: 11px; min-width: 0; }
+  .config-field > span { color: var(--text-faint); }
+  .config-field input,
+  .config-env input {
+    font: inherit; font-size: 11px; color: var(--text); background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 3px 6px; min-width: 0;
+  }
+  .config-field input:focus, .config-env input:focus { outline: none; border-color: var(--accent); }
+  .config-envs { display: grid; gap: 4px; padding: 4px 2px 2px; }
+  .config-env { display: grid; grid-template-columns: minmax(90px, 34%) 1fr auto; gap: 5px; align-items: center; }
+  .config-env.is-from { font-size: 11px; }
+  .config-env .env-name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .config-env .btn { padding: 2px 6px; opacity: 0.5; }
+  .config-env:hover .btn { opacity: 1; }
+  .config-envs > .btn { justify-self: start; margin-top: 2px; }
+  /* What is about to happen, in the same words the dialog will use. */
+  .config-diff { margin: 0; padding: 0 0 0 16px; font-size: 11px; color: var(--text); }
+  .config-diff li { margin: 1px 0; }
+  .btn[disabled] { opacity: 0.4; cursor: default; }
+
   /* Three rows, because there are three children: the grip you drag it by, the
      tabs, and the log. Two rows put the log in an implicit row that sized
      itself to a thousand lines and painted over the tabs. */
@@ -464,6 +500,8 @@
      * forth from memory.
      */
     logs: [], logAt: 0, dock: 240, dockOpen: true, dockFull: false,
+    /** The workload being configured, what it is now, and what it would be. */
+    config: null,
     forwards: [],
     /** Whether a request is in the air, and how long the last one took. */
     busy: false, tookMs: 0, showing: true, started: false,
@@ -1532,6 +1570,14 @@
       return;
     }
     state.selected = found;
+    /*
+     * Whatever was being typed was being typed about something else. Left
+     * standing, the guard that protects an edit from a redraw would keep this
+     * new object's detail from ever being drawn — the drafts themselves are
+     * kept, each against the object it belongs to.
+     */
+    state.editing = false;
+    state.editingYaml = false;
     state.detail = { tab: 'overview' };
     state.detailData = {};
     draw();
@@ -2078,6 +2124,7 @@
      * other objects — the pods it selects, the revisions it owns — which is why
      * a table of workloads cannot answer either, and why they are here.
      */
+    if (!release && chosen.configurable) tabs.splice(1, 0, 'configure');
     if (!release && chosen.selector) tabs.splice(1, 0, 'pods');
     if (!release && chosen.ownsJobs) tabs.splice(1, 0, 'jobs');
     if (!release && chosen.revisioned) tabs.splice(chosen.selector ? 2 : 1, 0, 'rollout');
@@ -2237,6 +2284,360 @@
             : '<button class="btn" data-undo="' + rev.revision + '">Roll back</button>') + '</td>' +
           '</tr>';
       }).join('') + '</tbody></table>';
+  }
+
+
+  /* ------------------------------------------------------------------ *
+   * Configuring a workload.
+   *
+   * The YAML tab can already change anything, and that is exactly its problem:
+   * everything a person actually wants to change about a running workload —
+   * which image, how many, how much memory, what is in the environment — is
+   * four hundred lines down a document that also contains a status, a set of
+   * managed fields and every default the API server filled in. Finding the one
+   * line is the work, and a mistyped indent two lines away is an outage.
+   *
+   * So the same four things get a form. What leaves here is not the object: it
+   * is a patch of what you changed, which is the difference between saying
+   * "this image" and re-asserting every field in the manifest as it looked when
+   * the panel last read it.
+   * ------------------------------------------------------------------ */
+
+  /** Where the pod template is. A cron job keeps its one level deeper. */
+  function templatePath(kind) {
+    return kind === 'CronJob'
+      ? ['spec', 'jobTemplate', 'spec', 'template', 'spec']
+      : ['spec', 'template', 'spec'];
+  }
+
+  function dig(object, path) {
+    return path.reduce(function (at, key) { return at == null ? at : at[key]; }, object);
+  }
+
+  /** Where an environment variable comes from, when it does not come from a value. */
+  function envSource(from) {
+    if (!from) return null;
+    if (from.secretKeyRef) return 'secret ' + from.secretKeyRef.name + ' · ' + from.secretKeyRef.key;
+    if (from.configMapKeyRef) return 'config map ' + from.configMapKeyRef.name + ' · ' + from.configMapKeyRef.key;
+    if (from.fieldRef) return 'the pod · ' + from.fieldRef.fieldPath;
+    if (from.resourceFieldRef) return 'the container · ' + from.resourceFieldRef.resource;
+    return 'somewhere else';
+  }
+
+  /**
+   * The editable shape of a workload: the few fields a form can honestly offer.
+   *
+   * Honestly is the word that matters. Everything here is a field you can set
+   * and read back; nothing in it is a summary of something more complicated,
+   * because a form that simplifies is a form that silently drops what it did
+   * not understand.
+   */
+  function configOf(object, kind) {
+    var pod = dig(object, templatePath(kind)) || {};
+    var read = function (list, init) {
+      return (list || []).map(function (container) {
+        var resources = container.resources || {};
+        return {
+          name: container.name,
+          init: init,
+          image: container.image || '',
+          requests: {
+            cpu: (resources.requests || {}).cpu || '',
+            memory: (resources.requests || {}).memory || '',
+          },
+          limits: {
+            cpu: (resources.limits || {}).cpu || '',
+            memory: (resources.limits || {}).memory || '',
+          },
+          env: (container.env || []).map(function (entry) {
+            return { name: entry.name, value: entry.value == null ? '' : String(entry.value), from: envSource(entry.valueFrom) };
+          }),
+        };
+      });
+    };
+    return {
+      // A daemon set has as many as there are nodes, and a cron job has none.
+      replicas: kind === 'DaemonSet' || kind === 'CronJob'
+        ? null
+        : ((object.spec || {}).replicas == null ? 0 : object.spec.replicas),
+      containers: read(pod.containers, false).concat(read(pod.initContainers, true)),
+    };
+  }
+
+  function copyOf(value) { return JSON.parse(JSON.stringify(value)); }
+
+  /** The draft for this object, kept across redraws and across tabs. */
+  function ensureConfig(row, object) {
+    var key = row.kind + '/' + (row.namespace || '') + '/' + row.name;
+    if (state.config && state.config.key === key) return state.config;
+    var live = configOf(object, row.kind);
+    state.config = { key: key, kind: row.kind, live: live, draft: copyOf(live) };
+    return state.config;
+  }
+
+  /** A number if it is one, and the thing itself if it is not — for comparing. */
+  function same(a, b) { return String(a == null ? '' : a) === String(b == null ? '' : b); }
+
+  /**
+   * What is different, said the way a person would say it.
+   *
+   * This is both the count on the bar and the list in the dialog that asks
+   * whether to go ahead, and it is the same list on purpose: the question you
+   * are answering has to be the thing you were looking at.
+   */
+  function configChanges(config) {
+    var live = config.live;
+    var draft = config.draft;
+    var out = [];
+    if (draft.replicas != null && !same(draft.replicas, live.replicas)) {
+      out.push('replicas: ' + live.replicas + ' → ' + draft.replicas);
+    }
+    draft.containers.forEach(function (now, at) {
+      var was = live.containers[at];
+      var of = ' of ' + now.name;
+      if (!same(now.image, was.image)) out.push('image' + of + ': ' + (was.image || 'none') + ' → ' + (now.image || 'none'));
+      ['requests', 'limits'].forEach(function (which) {
+        ['cpu', 'memory'].forEach(function (what) {
+          if (same(now[which][what], was[which][what])) return;
+          out.push(what + ' ' + which.slice(0, -1) + of + ': ' +
+            (was[which][what] || 'none') + ' → ' + (now[which][what] || 'none'));
+        });
+      });
+      var byName = {};
+      was.env.forEach(function (entry) { byName[entry.name] = entry; });
+      var kept = {};
+      now.env.forEach(function (entry) {
+        kept[entry.name] = true;
+        var before = byName[entry.name];
+        if (!before) { out.push(entry.name + of + ': new, ' + (entry.value || 'empty')); return; }
+        if (before.from || same(entry.value, before.value)) return;
+        out.push(entry.name + of + ': ' + (before.value || 'empty') + ' → ' + (entry.value || 'empty'));
+      });
+      was.env.forEach(function (entry) {
+        if (!kept[entry.name]) out.push(entry.name + of + ': removed');
+      });
+    });
+    return out;
+  }
+
+  /**
+   * The patch. Strategic merge, which is the one that knows a list of
+   * containers is keyed by name — so naming one container changes that one and
+   * leaves the others alone. Removing an environment variable has to be spelled
+   * out, because merging a list that no longer mentions it would not remove it.
+   */
+  function configPatch(config) {
+    var live = config.live;
+    var draft = config.draft;
+    var patch = {};
+    if (draft.replicas != null && !same(draft.replicas, live.replicas)) {
+      patch.spec = { replicas: Number(draft.replicas) };
+    }
+    var groups = { containers: [], initContainers: [] };
+    draft.containers.forEach(function (now, at) {
+      var was = live.containers[at];
+      var change = {};
+      if (!same(now.image, was.image)) change.image = now.image;
+
+      var resources = {};
+      ['requests', 'limits'].forEach(function (which) {
+        var part = {};
+        ['cpu', 'memory'].forEach(function (what) {
+          if (same(now[which][what], was[which][what])) return;
+          // Emptied means "take it off", and null is how a merge patch says that.
+          part[what] = now[which][what] ? now[which][what] : null;
+        });
+        if (Object.keys(part).length) resources[which] = part;
+      });
+      if (Object.keys(resources).length) change.resources = resources;
+
+      var env = [];
+      var byName = {};
+      was.env.forEach(function (entry) { byName[entry.name] = entry; });
+      var kept = {};
+      now.env.forEach(function (entry) {
+        if (!entry.name) return;
+        kept[entry.name] = true;
+        var before = byName[entry.name];
+        // One that comes from a secret or a config map is shown, not edited.
+        if (before && before.from) return;
+        if (before && same(entry.value, before.value)) return;
+        env.push({ name: entry.name, value: String(entry.value == null ? '' : entry.value) });
+      });
+      was.env.forEach(function (entry) {
+        if (!kept[entry.name]) env.push({ name: entry.name, $patch: 'delete' });
+      });
+      if (env.length) change.env = env;
+
+      if (!Object.keys(change).length) return;
+      change.name = now.name;
+      groups[now.init ? 'initContainers' : 'containers'].push(change);
+    });
+
+    if (groups.containers.length || groups.initContainers.length) {
+      var pod = {};
+      if (groups.containers.length) pod.containers = groups.containers;
+      if (groups.initContainers.length) pod.initContainers = groups.initContainers;
+      // Wrapped in whatever path this kind keeps its template at, so a cron
+      // job's extra level costs nothing but the path.
+      patch = deepen(patch, templatePath(config.kind), pod);
+    }
+    return patch;
+  }
+
+  /** `{a: {b: {c: value}}}` from `['a','b','c']`, merged onto what is there. */
+  function deepen(onto, path, value) {
+    var out = assign({}, onto || {});
+    if (!path.length) return value;
+    out[path[0]] = deepen(out[path[0]], path.slice(1), value);
+    return out;
+  }
+
+  function containerCard(container, at) {
+    var field = function (label, what, value, placeholder) {
+      return '<label class="config-field"><span>' + esc(label) + '</span>' +
+        '<input data-config="' + what + '" data-at="' + at + '" value="' + esc(value) + '" ' +
+        'placeholder="' + esc(placeholder || '') + '" spellcheck="false" /></label>';
+    };
+    var env = container.env.map(function (entry, i) {
+      if (entry.from) {
+        return '<div class="config-env is-from">' +
+          '<span class="env-name">' + esc(entry.name) + '</span>' +
+          '<span class="dim">from ' + esc(entry.from) + '</span>' +
+          '<button class="btn" data-config-drop="' + at + '" data-env="' + i + '" title="Remove this variable">✕</button>' +
+          '</div>';
+      }
+      return '<div class="config-env">' +
+        '<input class="env-name" data-config="env-name" data-at="' + at + '" data-env="' + i + '" ' +
+          'value="' + esc(entry.name) + '" spellcheck="false" />' +
+        '<input data-config="env-value" data-at="' + at + '" data-env="' + i + '" ' +
+          'value="' + esc(entry.value) + '" spellcheck="false" />' +
+        '<button class="btn" data-config-drop="' + at + '" data-env="' + i + '" title="Remove this variable">✕</button>' +
+        '</div>';
+    }).join('');
+
+    return '<section class="block config-container">' +
+      '<h4 class="block-head">' + esc(container.name) +
+        (container.init ? ' <span class="dim">init</span>' : '') + '</h4>' +
+      '<div class="config-grid">' +
+        field('Image', 'image', container.image, 'repository:tag') +
+      '</div>' +
+      '<div class="config-grid config-four">' +
+        field('CPU request', 'requests.cpu', container.requests.cpu, 'none') +
+        field('CPU limit', 'limits.cpu', container.limits.cpu, 'none') +
+        field('Memory request', 'requests.memory', container.requests.memory, 'none') +
+        field('Memory limit', 'limits.memory', container.limits.memory, 'none') +
+      '</div>' +
+      '<div class="config-envs">' + (env || '<div class="dim">No environment variables set here.</div>') +
+        '<button class="btn" data-config-add="' + at + '">+ Variable</button>' +
+      '</div>' +
+      '</section>';
+  }
+
+  function configureBody(row) {
+    var object = state.detailData.object;
+    if (object == null) return '<pre>reading…</pre>';
+    if (typeof object === 'string') return '<div class="error">' + esc(object) + '</div>';
+
+    var config = ensureConfig(row, object);
+    var changes = configChanges(config);
+    var draft = config.draft;
+
+    return '<div class="yaml-tools is-stuck">' +
+      '<button class="btn go" data-do="config-apply" title="Save these changes to the cluster"' +
+        (changes.length ? '' : ' disabled') + '>Apply</button>' +
+      '<button class="btn" data-do="config-check" title="Ask the server whether this is legal, and change nothing"' +
+        (changes.length ? '' : ' disabled') + '>Dry run</button>' +
+      '<button class="btn" data-do="config-revert"' + (changes.length ? '' : ' disabled') + '>Revert</button>' +
+      '<span class="dim" id="config-count">' + esc(configCountText(changes)) + '</span>' +
+      '</div>' +
+      (draft.replicas == null ? '' :
+        '<section class="block"><h4 class="block-head">Replicas</h4>' +
+        '<div class="config-grid config-narrow">' +
+          '<label class="config-field"><span>How many</span>' +
+          '<input type="number" min="0" data-config="replicas" value="' + esc(String(draft.replicas)) + '" /></label>' +
+        '</div></section>') +
+      draft.containers.map(containerCard).join('') +
+      (changes.length
+        ? '<section class="block"><h4 class="block-head">Not applied yet</h4><ul class="config-diff">' +
+          changes.map(function (line) { return '<li>' + esc(line) + '</li>'; }).join('') + '</ul></section>'
+        : '');
+  }
+
+  function configCountText(changes) {
+    if (!changes.length) return 'as it is in the cluster';
+    return changes.length === 1 ? '1 change, not applied' : changes.length + ' changes, not applied';
+  }
+
+  /**
+   * A keystroke goes into the draft and nowhere near the DOM.
+   *
+   * Redrawing on every character would take the cursor out of the field being
+   * typed in, so only the count is written back — the rest of the form is
+   * already showing what was typed, because the person typed it.
+   */
+  function editConfig(field) {
+    var config = state.config;
+    if (!config) return;
+    var value = field.value;
+    var what = field.dataset.config;
+    if (what === 'replicas') {
+      config.draft.replicas = value === '' ? 0 : Math.max(0, Number(value) || 0);
+    } else {
+      var container = config.draft.containers[Number(field.dataset.at)];
+      if (!container) return;
+      if (what === 'image') container.image = value;
+      else if (what === 'env-name' || what === 'env-value') {
+        var entry = container.env[Number(field.dataset.env)];
+        if (!entry) return;
+        if (what === 'env-name') entry.name = value; else entry.value = value;
+      } else {
+        var parts = what.split('.');
+        if (container[parts[0]]) container[parts[0]][parts[1]] = value;
+      }
+    }
+    var changes = configChanges(config);
+    // Nothing to protect once it matches the cluster again.
+    state.editing = changes.length > 0;
+    var count = document.getElementById('config-count');
+    if (count) count.textContent = configCountText(changes);
+    ['config-apply', 'config-check', 'config-revert'].forEach(function (name) {
+      var button = document.querySelector('[data-do="' + name + '"]');
+      if (button) button.disabled = !changes.length;
+    });
+  }
+
+  /** Send it, after the server has said it is legal. */
+  function applyConfig(checkOnly) {
+    var config = state.config;
+    var row = state.selected;
+    if (!config || !row) return;
+    var changes = configChanges(config);
+    if (!changes.length) return;
+    var patch = configPatch(config);
+    var at = { context: state.context, kind: row.kind, name: row.name, patch: patch, summary: changes };
+    if (row.namespace) at.namespace = row.namespace;
+
+    say('Asking the server whether this is legal…');
+    call('kube.configure', assign({ dryRun: true }, at)).then(function (dry) {
+      if (checkOnly) {
+        say(dry.text || 'The server accepted it. Nothing was changed.');
+        return null;
+      }
+      return call('kube.configure', at).then(function (done) {
+        say(done.text || 'Changed.');
+        state.editing = false;
+        state.config = null;
+        state.detailData.object = null;
+        state.detailData.yaml = null;
+        drawDetail(true);
+        loadDetail();
+        setTimeout(function () { load(true); }, 900);
+        return null;
+      });
+    }).catch(function (error) {
+      say(String(error.message || error), true);
+    });
   }
 
 
@@ -2481,7 +2882,8 @@
 
   function factsBlock(row) {
     var skip = ['uid', 'labels', 'containers', 'forwardable', 'health', 'scalable', 'restartable', 'createdAt',
-      'kind', 'selector', 'revisioned', 'pausable', 'suspendable', 'triggerable', 'ownsJobs', 'owner'];
+      'kind', 'selector', 'revisioned', 'pausable', 'suspendable', 'triggerable', 'ownsJobs', 'owner',
+      'configurable'];
     var facts = Object.keys(row).filter(function (key) {
       // The flags that say what the buttons above may do are not facts about the
       // object; they are already on screen, as buttons.
@@ -2593,6 +2995,7 @@
           ? '<textarea id="yaml-edit" spellcheck="false">' + esc(body) + '</textarea>'
           : '<pre class="yaml">' + yamlHtml(body) + '</pre>');
     }
+    if (tab === 'configure') return configureBody(row);
     if (tab === 'pods') return podsBody(row);
     if (tab === 'jobs') return jobsBody(row);
     if (tab === 'rollout') return rolloutBody(row);
@@ -2753,6 +3156,13 @@
         if (state.selected === row) { state.detailData.yaml = result.yaml || ''; drawDetail(); }
       }).catch(function (error) {
         if (state.selected === row) { state.detailData.yaml = String(error.message || error); drawDetail(); }
+      });
+    }
+    if (state.detail.tab === 'configure' && state.detailData.object == null) {
+      call('kube.object', at).then(function (result) {
+        if (state.selected === row) { state.detailData.object = result.object || {}; drawDetail(true); }
+      }).catch(function (error) {
+        if (state.selected === row) { state.detailData.object = String(error.message || error); drawDetail(true); }
       });
     }
     if (state.detail.tab === 'pods' && !state.detailData.pods) {
@@ -3260,6 +3670,36 @@
    * draws. Clicking goes there rather than leaving somebody to find it, which
    * is the difference between a dashboard and a poster.
    */
+  /* Adding and removing a variable, which is the one edit that changes the shape
+     of the form rather than the value of a field — so it redraws, and the redraw
+     is forced past the guard that exists to protect what is being typed. */
+  document.addEventListener('click', function (event) {
+    var add = event.target.closest('[data-config-add]');
+    if (add && state.config) {
+      var container = state.config.draft.containers[Number(add.dataset.configAdd)];
+      if (!container) return;
+      container.env.push({ name: '', value: '', from: null });
+      drawDetail(true);
+      var fields = document.querySelectorAll('[data-config="env-name"][data-at="' + add.dataset.configAdd + '"]');
+      if (fields.length) fields[fields.length - 1].focus();
+      return;
+    }
+    var drop = event.target.closest('[data-config-drop]');
+    if (drop && state.config) {
+      var from = state.config.draft.containers[Number(drop.dataset.configDrop)];
+      if (!from) return;
+      from.env.splice(Number(drop.dataset.env), 1);
+      state.editing = configChanges(state.config).length > 0;
+      drawDetail(true);
+      return;
+    }
+  });
+
+  document.addEventListener('input', function (event) {
+    var field = event.target.closest('[data-config]');
+    if (field) editConfig(field);
+  });
+
   document.addEventListener('click', function (event) {
     var stat = event.target.closest('[data-stat]');
     if (stat) { show({ type: 'stats', focus: stat.dataset.stat }); return; }
@@ -3656,6 +4096,18 @@
       var field = document.getElementById('yaml-edit');
       if (!field) return;
       applyYaml(field.value, what === 'yaml-check');
+      return;
+    }
+
+    if (what === 'config-revert') {
+      if (!state.config) return;
+      state.config.draft = copyOf(state.config.live);
+      state.editing = false;
+      drawDetail(true);
+      return;
+    }
+    if (what === 'config-check' || what === 'config-apply') {
+      applyConfig(what === 'config-check');
       return;
     }
 

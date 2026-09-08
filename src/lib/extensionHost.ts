@@ -74,6 +74,7 @@ const KUBE_READ = [
   'resources',
   'list',
   'manifest',
+  'object',
   'describe',
   'logs',
   'events',
@@ -99,6 +100,7 @@ const KUBE_WRITE = [
   'scale',
   'restart',
   'apply',
+  'configure',
   'cordon',
   'rollback',
   'pause',
@@ -222,6 +224,21 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
           'The next upgrade of that release will put it back the way the chart says.'
         : '';
       return `Apply this manifest${where}?${managed}`;
+    }
+    /*
+     * Changing a few fields, and the question says which.
+     *
+     * "Apply this manifest?" is a question nobody can answer without reading the
+     * manifest. A patch is small enough to say out loud, and what it says is
+     * exactly what will be different a second from now — so the dialog lists it,
+     * and scaling to zero still says what scaling to zero means.
+     */
+    if (name === 'kube.configure' && !args.dryRun) {
+      const lines = Array.isArray(args.summary) ? args.summary.map((line) => `• ${String(line)}`) : [];
+      const zero = Number((args.patch as { spec?: { replicas?: number } })?.spec?.replicas) === 0
+        ? '\n\nAt zero replicas everything it runs stops.'
+        : '';
+      return `Change ${what}${where}?\n\n${lines.join('\n')}${zero}`;
     }
     if (name === 'kube.scale' && Number(args.replicas) === 0) {
       return `Scale ${what} to zero${where}?\n\nEverything it runs stops.`;
