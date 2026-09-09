@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { FOLLOW_APP, resolveTerminalTheme } from '../terminals/themes';
 import { generateSessionName } from '../lib/names';
 import { shortContext, terminalSetup } from '../lib/extensionHost';
+import { whatItDid } from '../lib/gitUpdate';
 import { arrangeGroup, moveGroupTo } from './groups';
 import { closePane, movePane, panePlace, restorePaneAt, splitEmpty, splitOffTabs, swapPanes } from './layout';
 import { GIT_TAB } from './types';
@@ -233,7 +234,12 @@ interface RepoState {
   stashes: Array<{ ref: string; subject: string; date: string }>;
   /** What a long-running verb is doing, and what it said when it finished. */
   busy: string | null;
-  notice: { kind: 'ok' | 'warn' | 'bad'; text: string } | null;
+  notice: {
+    kind: 'ok' | 'warn' | 'bad';
+    text: string;
+    /** What an update brought, when it brought anything. */
+    files?: Array<{ status: string; path: string }>;
+  } | null;
 }
 
 interface State {
@@ -1911,7 +1917,7 @@ export const useStore = create<State>((set, get) => ({
                 ...prev.repos[root],
                 busy: null,
                 notice: result.ok
-                  ? { kind: 'ok', text: `${label ?? name} — done.` }
+                  ? whatItDid(name, label, result)
                   : { kind: 'bad', text: result.error ?? 'git failed' },
               },
             },

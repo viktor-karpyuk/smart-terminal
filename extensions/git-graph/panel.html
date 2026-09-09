@@ -278,12 +278,34 @@
   }
 
   /** A verb that changes the repository: run it, say what happened, reload. */
+  /**
+   * What an update brought, in the number of things it brought.
+   *
+   * "Pulling — done" is true and says nothing: the question after an update is
+   * always whether anything came in, and how much.
+   */
+  function whatItBrought(result) {
+    var changed = result && result.changed;
+    if (!changed) return null;
+    if (!changed.total) return 'All files are up to date.';
+    var parts = [];
+    if (changed.updated) parts.push(changed.updated + ' updated');
+    if (changed.added) parts.push(changed.added + ' new');
+    if (changed.removed) parts.push(changed.removed + ' deleted');
+    if (changed.renamed) parts.push(changed.renamed + ' moved');
+    var commits = changed.commits
+      ? ' in ' + changed.commits + (changed.commits === 1 ? ' commit' : ' commits')
+      : '';
+    return 'Updated ' + changed.total + (changed.total === 1 ? ' file' : ' files') +
+      commits + ' — ' + parts.join(', ') + '.';
+  }
+
   function act(label, name, args) {
     busy(label + '…');
     return call(name, args)
-      .then(function () {
+      .then(function (result) {
         busy('');
-        host.emit('notify', { text: label + ' — done' });
+        host.emit('notify', { text: whatItBrought(result) || label + ' — done' });
         return load();
       })
       .catch(function (error) {

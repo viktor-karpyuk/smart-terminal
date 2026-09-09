@@ -147,6 +147,19 @@ export interface GitResult {
   tags?: Array<{ name: string; sha: string; date: string }>;
   stashes?: Array<{ ref: string; subject: string; date: string }>;
   patch?: string;
+  /** What a pull brought in: nothing, or how many of what. */
+  changed?: GitPullSummary;
+}
+
+/** The count behind "Updated 12 files — 8 updated, 3 new, 1 deleted." */
+export interface GitPullSummary {
+  commits: number;
+  added: number;
+  updated: number;
+  removed: number;
+  renamed: number;
+  total: number;
+  files?: Array<{ status: string; path: string }>;
 }
 
 export interface GitFile {

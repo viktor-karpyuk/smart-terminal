@@ -63,12 +63,7 @@ export function GitPanel({ panelId }: { panelId: string }) {
         </button>
       </div>
 
-      {repo?.notice && (
-        <div className={`git-notice is-${repo.notice.kind}`}>
-          <span className="file-bar-dot" />
-          <span className="file-bar-text">{repo.notice.text}</span>
-        </div>
-      )}
+      {repo?.notice && <UpdateNotice notice={repo.notice} root={root} panelId={panelId} />}
       {repo?.busy && (
         <div className="git-notice is-busy">
           <span className="git-spinner" />
@@ -146,6 +141,57 @@ function BranchBar({ panelId, root }: { panelId: string; root: string }) {
  * sides — *Merge into main*, never a bare *Merge*: the direction is the whole
  * decision, and getting it backwards is the mistake everyone makes once.
  */
+/**
+ * What an update did, and — when it did something — what to.
+ *
+ * A count is the answer to "did anything come in"; the names are the answer to
+ * the question that always follows it. They are behind one click rather than in
+ * the bar, because the bar is one line and twelve paths are not, and because
+ * most of the time the count is the whole answer.
+ *
+ * Every name opens the file, since the reason for wanting the list is to go and
+ * look at what somebody else changed.
+ */
+function UpdateNotice({
+  notice,
+  root,
+  panelId,
+}: {
+  notice: { kind: 'ok' | 'warn' | 'bad'; text: string; files?: Array<{ status: string; path: string }> };
+  root: string;
+  panelId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const openFile = useStore((s) => s.openFile);
+  const files = notice.files ?? [];
+
+  return (
+    <div className={`git-notice is-${notice.kind}${files.length ? ' has-files' : ''}`}>
+      <span className="file-bar-dot" />
+      {files.length ? (
+        <button className="git-notice-open" onClick={() => setOpen((was) => !was)}>
+          <span className="file-bar-text">{notice.text}</span>
+          <span className="git-notice-caret">{open ? '⌃' : '⌄'}</span>
+        </button>
+      ) : (
+        <span className="file-bar-text">{notice.text}</span>
+      )}
+      {open && (
+        <ul className="git-notice-files">
+          {files.map((file) => (
+            <li key={file.path}>
+              <button onClick={() => openFile(panelId, `${root}/${file.path}`)} title={file.path}>
+                <span className={`git-mark is-${file.status.toLowerCase()}`}>{file.status}</span>
+                <span className="git-notice-path">{file.path}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function BranchMenu({
   panelId,
   root,

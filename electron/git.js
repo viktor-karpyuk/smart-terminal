@@ -391,7 +391,54 @@ const push = (root, { force = false, setUpstream = null } = {}) =>
     ...(setUpstream ? ['--set-upstream', 'origin', setUpstream] : []),
   ]);
 
-const pull = (root, { rebase = false } = {}) => run(root, ['pull', ...(rebase ? ['--rebase'] : ['--ff'])]);
+/**
+ * What a pull actually brought.
+ *
+ * `git pull` says "Fast-forward" and a diffstat, or "Already up to date", and
+ * both are sentences rather than counts — so this asks the question the way it
+ * can be answered: where HEAD was, where it is now, and what is different
+ * between the two. Renames are asked for (`-M`) because a file that moved is
+ * one file that moved, not one deleted and one created.
+ *
+ * Pure, so the counting is tested rather than believed.
+ */
+function summarizePull(nameStatus, commitCount) {
+  const summary = { commits: Number(String(commitCount ?? '').trim()) || 0, added: 0, updated: 0, removed: 0, renamed: 0, total: 0, files: [] };
+  for (const line of String(nameStatus ?? '').split('\n')) {
+    if (!line.trim()) continue;
+    const parts = line.split('\t');
+    const mark = parts[0][0];
+    // A rename is `R100\told\tnew`; everything else is `X\tpath`.
+    const path = mark === 'R' || mark === 'C' ? parts[2] : parts[1];
+    if (!path) continue;
+    if (mark === 'A') summary.added += 1;
+    else if (mark === 'D') summary.removed += 1;
+    else if (mark === 'R' || mark === 'C') summary.renamed += 1;
+    else summary.updated += 1;
+    summary.total += 1;
+    // Enough to look through, not enough to be a second copy of the diff.
+    if (summary.files.length < 200) summary.files.push({ status: mark, path });
+  }
+  return summary;
+}
+
+async function pull(root, { rebase = false } = {}) {
+  const before = await run(root, ['rev-parse', 'HEAD']);
+  const result = await run(root, ['pull', ...(rebase ? ['--rebase'] : ['--ff'])]);
+  if (!result.ok) return result;
+
+  const from = (before.stdout ?? '').trim();
+  const after = await run(root, ['rev-parse', 'HEAD']);
+  const to = (after.stdout ?? '').trim();
+  // Nowhere to compare from, or nowhere new: nothing came in.
+  if (!from || !to || from === to) return { ...result, changed: summarizePull('', '0') };
+
+  const [names, commits] = await Promise.all([
+    run(root, ['diff', '--name-status', '-M', `${from}..${to}`]),
+    run(root, ['rev-list', '--count', `${from}..${to}`]),
+  ]);
+  return { ...result, changed: summarizePull(names.stdout, commits.stdout) };
+}
 const fetch = (root) => run(root, ['fetch', '--prune']);
 const checkout = (root, ref) => run(root, ['checkout', ref]);
 const createBranch = (root, name, from) => run(root, ['checkout', '-b', name, ...(from ? [from] : [])]);
@@ -428,6 +475,7 @@ module.exports = {
   commit,
   push,
   pull,
+  summarizePull,
   fetch,
   checkout,
   createBranch,

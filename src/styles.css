@@ -1800,6 +1800,34 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .git-notice.is-ok { background: rgba(158, 206, 106, 0.10); color: var(--text-dim); }
 .git-notice.is-bad { background: rgba(247, 118, 142, 0.12); color: var(--text); }
 
+/* An update that brought something: the count on one line, the names under it
+   when you ask. The notice becomes a column, because a list is not a row. */
+.git-notice.has-files { flex-direction: column; align-items: stretch; gap: 0; }
+.git-notice.has-files .file-bar-dot { display: none; }
+.git-notice-open {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 0;
+  font: inherit; color: inherit; background: none; border: 0; cursor: pointer; text-align: left;
+}
+.git-notice-open:hover { color: var(--text); }
+.git-notice-caret { margin-left: auto; opacity: 0.6; font-size: 10px; }
+.git-notice-files { list-style: none; margin: 5px 0 0; padding: 0; max-height: 190px; overflow: auto; }
+.git-notice-files li { margin: 0; }
+.git-notice-files button {
+  display: flex; align-items: center; gap: 7px; width: 100%; padding: 2px 4px;
+  font: inherit; font-size: 11px; color: var(--text-dim); background: none; border: 0;
+  border-radius: var(--radius); cursor: pointer; text-align: left;
+}
+.git-notice-files button:hover { background: var(--bg-elevated); color: var(--text); }
+.git-notice-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; }
+.git-mark {
+  flex: 0 0 auto; width: 13px; text-align: center; font-size: 9.5px; font-weight: 700;
+  color: var(--text-faint);
+}
+.git-mark.is-a { color: var(--git-new); }
+.git-mark.is-m { color: var(--accent); }
+.git-mark.is-d { color: var(--danger); }
+.git-mark.is-r { color: var(--text-dim); }
+
 /*
  * Over the panel rather than above it. A panel is a whole working surface —
  * a table, a drawer, a log — and a message that reflows all three to say
