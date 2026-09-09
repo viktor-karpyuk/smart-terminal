@@ -220,6 +220,8 @@ contextBridge.exposeInMainWorld('api', {
     openExternal: (url) => ipcRenderer.send('system:open-external', url),
     /** Save some text to a file the person picks. The dialog is the consent. */
     saveText: (name, text) => ipcRenderer.invoke('system:save-text', { name, text }),
+    // An image on the clipboard, written down so its path can be pasted.
+    saveImage: (data, type) => ipcRenderer.invoke('system:save-image', { data, type }),
   },
 
   onMenuAction: (handler) => on('menu:action', handler),

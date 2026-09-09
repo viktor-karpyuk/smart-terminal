@@ -86,6 +86,41 @@ export function TerminalMenu() {
   );
 }
 
+/**
+ * When something a terminal tried to do for you did not work.
+ *
+ * There is one of these so far: an image pasted into a session, which is
+ * written to a file so its path can be typed. When that succeeds the path
+ * appears in the prompt and says so by being there; when it fails, nothing
+ * happens at all, and nothing happening is indistinguishable from the app
+ * ignoring you.
+ */
+export function TerminalNotice() {
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    const heard = (event: Event) => {
+      const text = (event as CustomEvent<{ text: string }>).detail?.text;
+      if (text) setNotice(text);
+    };
+    window.addEventListener('terminal-notice', heard);
+    return () => window.removeEventListener('terminal-notice', heard);
+  }, []);
+
+  useEffect(() => {
+    if (!notice) return;
+    const going = setTimeout(() => setNotice(null), 5000);
+    return () => clearTimeout(going);
+  }, [notice]);
+
+  if (!notice) return null;
+  return (
+    <div className="terminal-notice" onClick={() => setNotice(null)} role="status">
+      {notice}
+    </div>
+  );
+}
+
 /** "3 lines" or the text itself when it is short — enough to know what it is. */
 function lines(text: string) {
   const count = text.split('\n').length;

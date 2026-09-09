@@ -8,7 +8,7 @@ import { Sidebar, SIDEBAR_MIN } from './components/Sidebar';
 import { TitleBar } from './components/TitleBar';
 import { ProfileEditor } from './components/ProfileEditor';
 import { SessionContextMenu } from './components/SessionContextMenu';
-import { TerminalMenu } from './components/TerminalMenu';
+import { TerminalMenu, TerminalNotice } from './components/TerminalMenu';
 import { UsagePanel } from './components/UsagePanel';
 import { AppearancePanel } from './components/AppearancePanel';
 import { HistoryPanel } from './components/HistoryPanel';
@@ -71,6 +71,7 @@ export function App() {
       <MinimizedDock />
       <SessionContextMenu />
       <TerminalMenu />
+      <TerminalNotice />
       {profileEditorOpen && <ProfileEditor />}
       {usagePanelOpen && <UsagePanel />}
       {historyOpen && <HistoryPanel />}

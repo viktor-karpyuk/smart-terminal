@@ -836,6 +836,11 @@ declare global {
           name: string,
           text: string,
         ): Promise<{ ok: boolean; path?: string; bytes?: number; canceled?: boolean; error?: string }>;
+        /** An image from the clipboard, written into the app's folder. */
+        saveImage(
+          data: Uint8Array,
+          type: string,
+        ): Promise<{ ok: boolean; file?: string; bytes?: number; error?: string }>;
       };
       onMenuAction(handler: (payload: { id: string }) => void): () => void;
     };

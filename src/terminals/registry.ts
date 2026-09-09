@@ -194,6 +194,57 @@ export function ensureTerminal(id: string, options: CreateOptions): TerminalHand
     );
   });
 
+  /**
+   * Pasting a picture into something that only reads bytes.
+   *
+   * A terminal cannot carry an image: on the other end of the pty is a program
+   * reading text, and ⌘V of a screenshot has nothing to type — which is why it
+   * did nothing at all. What Claude *can* read is a path, so the image is
+   * written into the app's own folder and the path is pasted instead. The same
+   * gesture, with one step in between that nobody has to think about.
+   *
+   * Only when there is no text. A copy out of a browser or a design tool puts
+   * both flavours on the clipboard, and a person who copied a sentence and got
+   * a filename would rightly call that broken — so text wins whenever there is
+   * any, and this only takes over when the clipboard holds a picture and
+   * nothing else.
+   *
+   * In the capture phase, because xterm's own paste handler is on the textarea
+   * inside this element and would otherwise have already dropped it.
+   */
+  host.addEventListener(
+    'paste',
+    (event) => {
+      const clipboard = (event as ClipboardEvent).clipboardData;
+      if (!clipboard) return;
+      if (clipboard.getData('text/plain').trim()) return;
+      const picture = [...clipboard.items].find((item) => item.type.startsWith('image/'));
+      if (!picture) return;
+      const file = picture.getAsFile();
+      if (!file) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      void file
+        .arrayBuffer()
+        .then((bytes) => window.api.system.saveImage(new Uint8Array(bytes), file.type))
+        .then((saved) => {
+          if (saved?.ok && saved.file) {
+            // A path with a space in it is a path a shell would split, and the
+            // prompt on the other side is not always Claude's.
+            term.paste(/\s/.test(saved.file) ? `'${saved.file}'` : saved.file);
+            return;
+          }
+          window.dispatchEvent(
+            new CustomEvent('terminal-notice', {
+              detail: { id, text: saved?.error ?? 'That image could not be saved.' },
+            }),
+          );
+        });
+    },
+    true,
+  );
+
   term.onData(options.onData);
   term.onBinary((data) => options.onData(data));
   term.onTitleChange(options.onTitle);

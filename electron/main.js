@@ -32,7 +32,7 @@ const { parseReport, replyFor, wantsBrief, compactionNote } = require('./hooks')
 const { Autopilot, looksLikeADecision } = require('./autopilot');
 const { tabsInLayout, minimizedIds, sectionIds, sessionsToRestore, unaccountedTabs } = require('./restore');
 const { MessageBridge } = require('./message-bridge');
-const { listDir, readTextFile, writeTextFile, FileWatcher } = require('./files');
+const { listDir, readTextFile, writeTextFile, FileWatcher, savePastedImage, forgetOldPastes } = require('./files');
 const git = require('./git');
 const { layout: layoutGraph } = require('./git-graph');
 const kube = require('./kube');
@@ -695,6 +695,23 @@ function registerIpc() {
     } catch (error) {
       return { ok: false, error: String(error?.message ?? error) };
     }
+  });
+
+  /**
+   * An image from the clipboard, written down so a terminal can name it.
+   *
+   * No dialog, unlike saving text: this is one half of a paste, and a paste
+   * that stops to ask where to put something is not a paste. The bytes come
+   * from the renderer's own clipboard read; the folder is the app's, so nothing
+   * the renderer says decides where this lands.
+   */
+  ipcMain.handle('system:save-image', async (_e, { data, type } = {}) => {
+    const dir = path.join(app.getPath('userData'), 'pasted');
+    const saved = await savePastedImage(dir, data, type);
+    // Old ones go on the way past, which is often enough for a folder nobody
+    // opens and never costs anybody a wait.
+    if (saved.ok) void forgetOldPastes(dir).catch(() => {});
+    return saved;
   });
 
   ipcMain.handle('extensions:picture', (_e, { id, file } = {}) => {

@@ -183,4 +183,97 @@ class FileWatcher {
   }
 }
 
-module.exports = { listDir, readTextFile, writeTextFile, FileWatcher, looksBinary, hasGit, MAX_BYTES, NOISE };
+/**
+ * An image from the clipboard, put somewhere Claude can read it.
+ *
+ * A terminal cannot carry a picture: the thing on the other end of the pty is a
+ * program reading bytes, and ⌘V of an image has nothing to type. What Claude
+ * Code *can* read is a path — so the image is written down and the path is
+ * pasted, which is the same gesture with one step in between that nobody has to
+ * think about.
+ *
+ * The name carries the time rather than a random id so the folder reads as a
+ * history, and the extension comes from what the clipboard said it was rather
+ * than from sniffing the bytes: the clipboard is the one that knows.
+ */
+const IMAGE_TYPES = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/jpg': '.jpg',
+  'image/gif': '.gif',
+  'image/webp': '.webp',
+  'image/bmp': '.bmp',
+  'image/tiff': '.tiff',
+  'image/svg+xml': '.svg',
+};
+
+function imageExtension(type) {
+  return IMAGE_TYPES[String(type ?? '').toLowerCase().trim()] ?? null;
+}
+
+/** `pasted-2026-09-09T04-17-42-087Z.png` — sortable, and says when. */
+function pastedImageName(type, at = Date.now()) {
+  const extension = imageExtension(type);
+  if (!extension) return null;
+  return `pasted-${new Date(at).toISOString().replace(/[:.]/g, '-')}${extension}`;
+}
+
+async function savePastedImage(dir, bytes, type, at = Date.now()) {
+  const name = pastedImageName(type, at);
+  if (!name) return { ok: false, error: `The clipboard holds ${type || 'something'}, which is not an image.` };
+  const body = Buffer.from(bytes ?? []);
+  if (!body.length) return { ok: false, error: 'The clipboard image was empty.' };
+  try {
+    await fsp.mkdir(dir, { recursive: true });
+    const file = path.join(dir, name);
+    await fsp.writeFile(file, body);
+    return { ok: true, file, bytes: body.length };
+  } catch (error) {
+    return { ok: false, error: String(error?.message ?? error) };
+  }
+}
+
+/**
+ * Throw away the ones nobody is going to look at again.
+ *
+ * Every paste leaves a file behind, and a folder that only grows is a folder
+ * somebody finds in a year wondering what it is. A week is longer than any
+ * conversation that referred to one.
+ */
+async function forgetOldPastes(dir, { days = 7, now = Date.now() } = {}) {
+  let names = [];
+  try {
+    names = await fsp.readdir(dir);
+  } catch {
+    return 0;
+  }
+  let gone = 0;
+  for (const name of names) {
+    if (!name.startsWith('pasted-')) continue;
+    const file = path.join(dir, name);
+    try {
+      const stat = await fsp.stat(file);
+      if (now - stat.mtimeMs < days * 24 * 60 * 60 * 1000) continue;
+      await fsp.unlink(file);
+      gone += 1;
+    } catch {
+      /* it went by itself, or is not ours to remove */
+    }
+  }
+  return gone;
+}
+
+module.exports = {
+  listDir,
+  readTextFile,
+  writeTextFile,
+  FileWatcher,
+  looksBinary,
+  hasGit,
+  savePastedImage,
+  pastedImageName,
+  imageExtension,
+  forgetOldPastes,
+  MAX_BYTES,
+  NOISE,
+};
