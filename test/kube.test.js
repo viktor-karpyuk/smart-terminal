@@ -618,3 +618,171 @@ test('a patch of nothing is refused before it reaches the cluster', async () => 
   assert.equal((await kube.configure({ kind: 'deployments', name: 'api' })).ok, false);
   assert.match((await kube.configure({ kind: 'deployments', name: 'api', patch: null })).error, /nothing to change/);
 });
+
+/*
+ * A pod that has finished is not a pod that is running.
+ *
+ * `Completed` is not in the list of words that mean trouble and not in the list
+ * that mean waiting, so a finished job pod came out green and the card counted
+ * it among the running. On a real cluster with four of them that read
+ * "170 / 171 pods running" when 166 were running, 4 had finished and 1 was
+ * pending — three different things said as one number, and the wrong one.
+ */
+test('pods that have finished are counted as finished, not as running', () => {
+  const out = kube.overview({
+    nodes: [{ name: 'a', health: 'ok' }],
+    pods: [
+      { name: 'p1', status: 'Running', health: 'ok', restarts: 0 },
+      { name: 'p2', status: 'Running', health: 'ok', restarts: 2 },
+      { name: 'p3', status: 'Pending', health: 'warn', restarts: 0 },
+      { name: 'done', status: 'Completed', health: 'ok', restarts: 0 },
+      { name: 'also-done', status: 'Succeeded', health: 'ok', restarts: 0 },
+    ],
+    events: [],
+  });
+  assert.equal(out.podsRunning, 2);
+  assert.equal(out.pods, 3, 'the finished ones are in neither half');
+  assert.equal(out.podsDone, 2);
+  // A job pod that restarted twice a week ago is not the cluster restarting now.
+  assert.equal(out.restarts, 2);
+});
+
+/* --- what a pod actually holds ------------------------------------------- */
+
+const podWith = (spec, extra = {}) => ({
+  metadata: { namespace: 'prod' },
+  spec: { nodeName: 'ip-10-0-1-1', ...spec },
+  status: { phase: 'Running' },
+  ...extra,
+});
+const asks = (cpu, memory) => ({ resources: { requests: { cpu, memory } } });
+
+/*
+ * The rule the scheduler uses, which is not the sum of the containers: an init
+ * container runs before the others and gives its room back, so the reservation
+ * is the larger of the two, not both.
+ */
+test('a heavy init container reserves its own room, not room on top', () => {
+  const pod = podWith({
+    initContainers: [{ name: 'migrate', ...asks('2', '1Gi') }],
+    containers: [{ name: 'api', ...asks('100m', '128Mi') }],
+  });
+  const wants = kube.podRequests(pod);
+  assert.equal(wants.cpu, 2000, 'the migration is what has to fit, not the tenth of a core after it');
+  assert.equal(wants.memory, 1024 ** 3);
+});
+
+test('the containers win when they are the bigger half', () => {
+  const pod = podWith({
+    initContainers: [{ name: 'wait', ...asks('10m', '16Mi') }],
+    containers: [{ name: 'api', ...asks('500m', '512Mi') }, { name: 'sidecar', ...asks('100m', '64Mi') }],
+  });
+  assert.equal(kube.podRequests(pod).cpu, 600);
+});
+
+/*
+ * A native sidecar — an init container with `restartPolicy: Always` — runs for
+ * the whole life of the pod, so its request is held for the whole life of the
+ * pod. That is Istio, Vault, Linkerd and every log shipper: on a cluster using
+ * them, adding up only `spec.containers` leaves out a fixed share of everything
+ * the cluster has promised.
+ */
+test('a native sidecar is held for as long as the pod is, and adds to both sides', () => {
+  const pod = podWith({
+    initContainers: [
+      { name: 'istio-proxy', restartPolicy: 'Always', ...asks('100m', '128Mi') },
+      { name: 'migrate', ...asks('2', '1Gi') },
+    ],
+    containers: [{ name: 'api', ...asks('500m', '512Mi') }],
+  });
+  const wants = kube.podRequests(pod);
+  // max(500 regular, 2000 init) + 100 sidecar
+  assert.equal(wants.cpu, 2100);
+  assert.equal(wants.memory, 1024 ** 3 + 128 * 1024 ** 2);
+});
+
+test('limits are read by the same rule as requests', () => {
+  const pod = podWith({
+    containers: [{ name: 'api', resources: { limits: { cpu: '1', memory: '1Gi' } } }],
+    initContainers: [{ name: 'boot', resources: { limits: { cpu: '4', memory: '2Gi' } } }],
+  });
+  assert.equal(kube.podRequests(pod, 'limits').cpu, 4000);
+});
+
+/*
+ * A pod nothing will schedule has been promised nothing. Counting it against
+ * allocatable says the cluster is fuller than it is — which is the opposite of
+ * the truth, because that is exactly the room the pod could not find.
+ */
+test('a pod no node has taken is not holding any of the cluster', () => {
+  const waiting = { metadata: { namespace: 'prod' }, spec: { containers: [asks('4', '8Gi')] }, status: { phase: 'Pending' } };
+  const running = podWith({ containers: [{ name: 'api', ...asks('100m', '128Mi') }] });
+  const nodes = [{ status: { allocatable: { cpu: '8', memory: '32Gi' } } }];
+
+  const totals = kube.capacityFrom(nodes, [waiting, running]);
+  assert.equal(totals.cpu.requested, 100, 'only what a node is actually holding');
+  assert.equal(kube.holdsRoom(waiting), false);
+  assert.equal(kube.holdsRoom(running), true);
+  assert.equal(kube.holdsRoom(podWith({}, { status: { phase: 'Succeeded' } })), false);
+});
+
+test('the namespace split adds up to the same total as the gauge', () => {
+  const pods = [
+    podWith({ containers: [{ name: 'a', ...asks('200m', '0') }], initContainers: [{ name: 'i', restartPolicy: 'Always', ...asks('50m', '0') }] }),
+    podWith({ containers: [{ name: 'b', ...asks('300m', '0') }] }),
+  ];
+  const nodes = [{ status: { allocatable: { cpu: '8', memory: '32Gi' } } }];
+  const split = kube.byNamespace(pods);
+  const totals = kube.capacityFrom(nodes, pods);
+  assert.equal(split.reduce((sum, row) => sum + row.cpu, 0), totals.cpu.requested);
+  assert.equal(totals.cpu.requested, 550);
+});
+
+/* --- a ReplicaSet is not a Deployment ------------------------------------ */
+
+/*
+ * It was drawn with the Deployment's shaper outright, which handed every
+ * ReplicaSet a Pause button, a Restart button and a Rollout tab. `rollout pause`
+ * only knows Deployments, `rollout restart` refuses a ReplicaSet by name, and a
+ * ReplicaSet's revisions belong to the Deployment above it — so the tab looked
+ * for ControllerRevisions owned by the ReplicaSet, of which there are never any.
+ */
+test('a ReplicaSet a Deployment owns offers nothing that cannot work', () => {
+  const owned = kube.table('ReplicaSet', {
+    items: [{
+      kind: 'ReplicaSet',
+      metadata: {
+        name: 'api-7d9f8b', namespace: 'prod', uid: 'rs-1',
+        ownerReferences: [{ kind: 'Deployment', uid: 'dep-1', controller: true }],
+      },
+      spec: { replicas: 3 },
+      status: { readyReplicas: 3, availableReplicas: 3 },
+    }],
+  }).rows[0];
+
+  assert.equal(owned.pausable, false, 'rollout pause only knows Deployments');
+  assert.equal(owned.restartable, false, 'rollout restart refuses a ReplicaSet');
+  assert.equal(owned.revisioned, false, 'its revisions belong to the Deployment above it');
+  // These two work, and are undone by the controller within a second — which is
+  // worse than failing, because it looks like it worked.
+  assert.equal(owned.scalable, false);
+  assert.equal(owned.configurable, false);
+  assert.equal(owned.controlledBy, 'Deployment');
+});
+
+test('a ReplicaSet nothing owns is a thing you can operate', () => {
+  const alone = kube.table('ReplicaSet', {
+    items: [{
+      kind: 'ReplicaSet',
+      metadata: { name: 'standalone', namespace: 'prod', uid: 'rs-2' },
+      spec: { replicas: 2 },
+      status: { readyReplicas: 2, availableReplicas: 2 },
+    }],
+  }).rows[0];
+
+  assert.equal(alone.scalable, true);
+  assert.equal(alone.configurable, true);
+  // Still not these: neither is supported for a ReplicaSet at all.
+  assert.equal(alone.pausable, false);
+  assert.equal(alone.restartable, false);
+});

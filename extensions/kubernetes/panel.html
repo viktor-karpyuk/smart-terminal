@@ -554,7 +554,7 @@
     /** How wide the two columns that can be dragged are. */
     navWidth: 178, detailWidth: 380,
     /** The open watch, if any: what it is watching and whether a redraw is due. */
-    watch: { id: null, kind: null, of: null, token: 0, draw: 0 },
+    watch: { id: null, kind: null, of: null, token: 0, draw: 0, pane: false },
     /**
      * How full the nodes' own disks are, when anything is measuring them, and
      * the same per node address — kept across refreshes so a slow answer reads
@@ -858,8 +858,11 @@
       else {
         state.table = result;
         if (state.view.name) state.counts[state.view.name] = (result.rows || []).length;
+        // The pane, if one is open, is about one of these rows — and this is a
+        // new set of them. See refreshSelection.
+        refreshSelection();
       }
-      draw();
+      draw(quiet ? { keepDock: true } : null);
       /*
        * Somebody clicked a node on the overview and this is the table it was
        * on. Opening it is what they were asking for.
@@ -1340,14 +1343,24 @@
     }
     if (!changed) return;
     if (state.view.name) state.counts[state.view.name] = state.table.rows.length;
+    // The cluster said something about the row the pane is open on: that is the
+    // one case where a watch event has to reach the drawer as well as the table.
+    // Kept on the state rather than in the closure: several batches can land
+    // before the frame runs, and it is the whole lot that decides.
+    if (refreshSelection()) state.watch.pane = true;
     if (!state.watch.draw) {
       state.watch.draw = requestAnimationFrame(function () {
         state.watch.draw = 0;
         // Never over an editor, and never while a question is open.
         if (state.editing || document.getElementById('prompt')) return;
+        var pane = state.watch.pane;
+        state.watch.pane = false;
         drawTable();
         drawCrumb();
         drawNav();
+        // Only when something it shows actually moved: rebuilding the drawer
+        // takes the reader back to the top of whatever they were reading.
+        if (pane) drawDetail();
       });
     }
   }
@@ -1380,6 +1393,12 @@
       var cut = text.lastIndexOf('/');
       return cut >= 0 ? text.slice(cut + 1) : text;
     }
+    // `gke_my-project_southamerica-east1-a_prod` — four fields joined by
+    // underscores, of which the last is the only one anybody says out loud.
+    if (text.indexOf('gke_') === 0) {
+      var parts = text.split('_');
+      return parts[parts.length - 1] || text;
+    }
     return text;
   }
 
@@ -1408,13 +1427,22 @@
   /* ---------------------------------------------------------------------- *
    * Drawing.
    * ---------------------------------------------------------------------- */
-  function draw() {
+  /**
+   * Everything, from the state.
+   *
+   * `keepDock` for the refresh that happens on a timer: nothing it reads has
+   * anything to do with the logs at the bottom, and rebuilding those takes a
+   * selection out of a log somebody is in the middle of copying from. Which is
+   * why the timer used to stop altogether while a log was followed — and a
+   * dashboard that stops being true because you opened a log is the wrong trade.
+   */
+  function draw(options) {
     drawCrumb();
     if (state.view.type === 'overview') drawOverview();
     else if (state.view.type === 'stats') drawStats();
     else drawTable();
     drawDetail();
-    drawDock();
+    if (!options || !options.keepDock) drawDock();
     drawPicked();
     drawBar();
     drawGrips();
@@ -1434,6 +1462,18 @@
       var total = (state.table.rows || []).length;
       var shown = visible().length;
       bits.push(shown === total ? total + ' items' : shown + ' of ' + total);
+    }
+    /*
+     * Why the list is short, and the way out of it.
+     *
+     * Clicking "pods failing" on the overview opens the pods with only the
+     * failing ones in it — which is exactly right, and used to look identical
+     * to a table that had lost most of its rows: "3 of 171" and no word about
+     * a filter anywhere. The filter says its own name now, and takes it off.
+     */
+    if (state.only === 'bad' && listing) {
+      bits.push('<button class="link" data-do="show-all" title="Show all of them again">' +
+        'only the ones that are failing ✕</button>');
     }
     if (state.loading) bits.push('<span class="spin">◐</span>');
     $('crumb').innerHTML =
@@ -1456,7 +1496,10 @@
     if (state.search) {
       var term = state.search;
       rows = rows.filter(function (row) {
-        return (row.name + ' ' + row.namespace + ' ' + (row.status || '') + ' ' + (row.message || '')).toLowerCase().indexOf(term) >= 0;
+        // Every part guarded: a node has no namespace, and the word "undefined"
+        // in the haystack is a search term that matches every row there is.
+        return (row.name + ' ' + (row.namespace || '') + ' ' + (row.status || '') + ' ' +
+          (row.message || '')).toLowerCase().indexOf(term) >= 0;
       });
     }
     if (state.sort.column) {
@@ -1481,6 +1524,13 @@
     duration: 'Duration', message: 'Message', count: 'Count', object: 'Object',
     cpu: 'CPU', memory: 'Memory',
     chart: 'Chart', chartVersion: 'Version', appVersion: 'App', revision: 'Rev',
+    // Said in words, because these reach the summary in the drawer as well as a
+    // column heading — and `failedCount` printed at somebody is not a fact, it
+    // is a field name that got out.
+    replicas: 'Replicas', ip: 'IP', controlledBy: 'Controlled by', failedCount: 'Failed',
+    misscheduled: 'Misscheduled', volume: 'Volume', modes: 'Access modes', pods: 'Pods',
+    restartNote: 'Last restart', node: 'Node',
+    cpuCapacity: 'CPU capacity', memoryCapacity: 'Memory capacity', podCapacity: 'Pod capacity',
   };
 
   /** How many rows are drawn at once. Past this, scrolling costs more than it is worth. */
@@ -1646,12 +1696,18 @@
    * selected thing" — and because after a delete or a restart, that is the
    * thing you want in front of you anyway.
    */
+  /** The row the open ⋮ menu belongs to, and what was selected before it opened. */
+  var menuRow = null;
+  var menuWas = null;
+
   function openRowMenu(uid, near) {
     closeRowMenu();
     var rows = (state.table && state.table.rows) || [];
     var row = null;
     for (var i = 0; i < rows.length; i += 1) if (rows[i].uid === uid) row = rows[i];
     if (!row) return;
+    menuWas = state.selected;
+    menuRow = row;
     state.selected = row;
 
     var box = document.createElement('div');
@@ -1665,13 +1721,94 @@
     box.style.left = Math.max(6, Math.min(at.right - box.offsetWidth, window.innerWidth - box.offsetWidth - 6)) + 'px';
     box.style.top = (below ? at.bottom + 4 : at.top - box.offsetHeight - 4) + 'px';
 
-    // One click anywhere closes it, including the one that chose something.
-    setTimeout(function () { document.addEventListener('click', closeRowMenu, { once: true }); }, 0);
+    /*
+     * One click anywhere closes it, including the one that chose something —
+     * and a click that chose nothing puts the selection back.
+     *
+     * The menu has to select the row, because every action below it acts on
+     * "the selected thing". But changing your mind used to leave that selection
+     * standing invisibly: the drawer was not drawn, so nothing on screen said
+     * anything had been selected, and then the next redraw — the refresh timer,
+     * ten seconds later — opened the detail pane on a row nobody had asked for.
+     */
+    setTimeout(function () {
+      document.addEventListener('click', function (click) {
+        var chose = click.target.closest && click.target.closest('.row-menu');
+        var mine = menuRow === row;
+        var before = menuWas;
+        closeRowMenu();
+        if (mine && !chose && state.selected === row) {
+          state.selected = before;
+          drawTable();
+        }
+      }, { once: true });
+    }, 0);
   }
 
   function closeRowMenu() {
     var open = document.querySelector('.row-menu');
     if (open) open.remove();
+    menuRow = null;
+    menuWas = null;
+  }
+
+  /**
+   * Keep the open pane pointed at the object, not at a photograph of it.
+   *
+   * Every refresh replaces the whole table with new row objects, and the pane
+   * went on holding the one it was opened with — so a pod that started failing
+   * read Running for as long as anybody looked at it, and the buttons decided
+   * what they did from the same stale copy: after pausing a rollout the button
+   * still said Pause, and pressing it paused the thing again.
+   *
+   * The object is updated in place rather than replaced, and put back into the
+   * table, so the two are the same object again. That matters because the
+   * detail's own in-flight answers are guarded by `state.selected === row` —
+   * swapping the reference would make every one of them arrive too late to
+   * count.
+   *
+   * Returns whether anything the pane shows is now different, so a watch event
+   * about a row nobody can see does not redraw a drawer.
+   */
+  /**
+   * What the drawer shows about an object, so a change to any of it is a change
+   * worth redrawing for — and a change to none of it is not. The age is in here
+   * because the header says it out loud.
+   */
+  var WATCHED_FIELDS = ['status', 'health', 'ready', 'restarts', 'replicas', 'available', 'upToDate',
+    'paused', 'suspended', 'schedulable', 'active', 'age'];
+
+  function paneWouldChange(before, after) {
+    for (var f = 0; f < WATCHED_FIELDS.length; f += 1) {
+      if (before[WATCHED_FIELDS[f]] !== after[WATCHED_FIELDS[f]]) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Take the fresh facts onto the object the pane is holding.
+   *
+   * In place, and put back into the list, so the two are one object again —
+   * which is the whole point, because the detail's own in-flight answers are
+   * guarded by `state.selected === row` and swapping the reference would make
+   * every one of them arrive too late to count. Returns whether the pane is now
+   * showing something different.
+   */
+  function adoptInto(chosen, rows) {
+    if (!chosen || !chosen.uid || !rows) return false;
+    for (var i = 0; i < rows.length; i += 1) {
+      if (rows[i].uid !== chosen.uid) continue;
+      if (rows[i] === chosen) return false;
+      var moved = paneWouldChange(chosen, rows[i]);
+      assign(chosen, rows[i]);
+      rows[i] = chosen;
+      return moved;
+    }
+    return false;
+  }
+
+  function refreshSelection() {
+    return adoptInto(state.selected, state.table && state.table.rows);
   }
 
   function select(uid) {
@@ -1719,7 +1856,10 @@
      */
     var cards = [
       { value: data.nodes, label: 'nodes', bad: data.nodesUnhealthy > 0, go: 'nodes' },
-      { value: data.podsRunning + ' / ' + data.pods, label: 'pods running', go: 'pods' },
+      // The ones that finished are neither running nor a problem, and saying
+      // nothing about them makes a total that used to include them look wrong.
+      { value: data.podsRunning + ' / ' + data.pods,
+        label: 'pods running' + (data.podsDone ? ' · ' + data.podsDone + ' finished' : ''), go: 'pods' },
       { value: data.podsFailing, label: 'pods failing', bad: data.podsFailing > 0, go: 'pods', only: 'bad' },
       { value: data.restarts, label: 'restarts', warn: data.restarts > 0, go: 'pods', sort: 'restarts' },
       { value: data.warnings, label: 'warning events', warn: data.warnings > 0, go: 'events' },
@@ -3029,9 +3169,15 @@
   }
 
   function factsBlock(row) {
+    /*
+      * The flags that say what the buttons above may do are not facts about the
+      * object; they are already on screen, as buttons. So are the three that say
+      * what state those buttons are in — a Deployment with a Pause button over it
+      * does not also need a line reading "paused false".
+      */
     var skip = ['uid', 'labels', 'containers', 'forwardable', 'health', 'scalable', 'restartable', 'createdAt',
       'kind', 'selector', 'revisioned', 'pausable', 'suspendable', 'triggerable', 'ownsJobs', 'owner',
-      'configurable'];
+      'configurable', 'paused', 'suspended', 'schedulable'];
     var facts = Object.keys(row).filter(function (key) {
       // The flags that say what the buttons above may do are not facts about the
       // object; they are already on screen, as buttons.
@@ -3421,10 +3567,11 @@
         return;
       }
     }
-    var containers = (row.containers || []).filter(function (c) { return !c.init; });
+    var all = row.containers || [];
+    var containers = all.filter(function (c) { return !c.init; });
     state.logs.push({
       id: null, name: row.name, namespace: row.namespace, context: state.context,
-      containers: row.containers || [], container: container || (containers[0] || row.containers[0] || {}).name || null,
+      containers: all, container: container || (containers[0] || all[0] || {}).name || null,
       lines: [], pending: '', drawn: 0, following: false, wrap: true, search: '', loading: false,
     });
     state.logAt = state.logs.length - 1;
@@ -3458,6 +3605,9 @@
     if (!log) return;
     if (log.id) call('kube.stopFollow', { id: log.id }).catch(function () {});
     state.logs.splice(at, 1);
+    // Closing a tab to the left of the open one must not change which one is
+    // open: every index after it has moved down by one, including this one.
+    if (at < state.logAt) state.logAt -= 1;
     state.logAt = Math.max(0, Math.min(state.logAt, state.logs.length - 1));
     drawDock();
   }
@@ -3774,9 +3924,17 @@
    * "it was two cores at ten past four" is the sentence somebody is trying to
    * say when they point at a bump.
    */
+  /** Whether any chart is currently being read, so the common case costs nothing. */
+  var readingChart = false;
+
   document.addEventListener('mousemove', function (event) {
     var chart = event.target.closest('.chart');
     if (!chart) {
+      // A mousemove fires sixty times a second over the whole panel, and
+      // sweeping the document for a class that is almost never set is work paid
+      // for on every one of them.
+      if (!readingChart) return;
+      readingChart = false;
       [].forEach.call(document.querySelectorAll('.chart.is-read'), function (one) {
         one.classList.remove('is-read');
         one.querySelector('.chart-cursor').setAttribute('x1', -10);
@@ -3802,6 +3960,7 @@
     var when = chart.querySelector('.chart-when');
     if (!chart.dataset.last) { chart.dataset.last = head.textContent; chart.dataset.over = when.textContent; }
     chart.classList.add('is-read');
+    readingChart = true;
     head.textContent = chart.dataset.unit === 'Memory' ? bytes(point[1]) : fromCores(point[1]);
     when.textContent = new Date(point[0]).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
@@ -3877,6 +4036,17 @@
 
     var node = event.target.closest('[data-node]');
     if (node) { show({ type: 'kind', name: 'nodes' }, { wanted: node.dataset.node }); return; }
+
+    /*
+     * A kind, named by something that is not the navigation.
+     *
+     * "See them all" under the volumes on the Disk page carried `data-kind` and
+     * nothing listened for it outside `nav`, so it was a button that did
+     * nothing at all. Anything on the overview may name a kind now; the guard
+     * is only there so a click in the navigation is not handled twice.
+     */
+    var kind = event.target.closest('[data-kind]');
+    if (kind && !kind.closest('nav')) { show({ type: 'kind', name: kind.dataset.kind }); return; }
 
     var range = event.target.closest('[data-range]');
     if (!range) return;
@@ -4107,6 +4277,14 @@
       }
       host.emit('copy', { text: lines.join('\n') });
       say('Copied ' + rows.length + ' rows.');
+      return;
+    }
+
+    if (what === 'show-all') {
+      state.only = null;
+      remember();
+      drawCrumb();
+      drawTable();
       return;
     }
 
@@ -4584,10 +4762,10 @@
       // the browser saying whether the window is. Either one means nobody is
       // looking, and a cluster nobody is looking at is not worth asking.
       if (!state.live || state.busy || state.loading || document.hidden || state.showing === false) return;
-      // Never while a question is open, and never while a log is streaming:
-      // both would redraw the thing somebody is in the middle of using.
+      // Never while a question is open: it would redraw the thing behind it.
+      // A followed log is no longer a reason to stop — a quiet refresh leaves
+      // the dock alone, so there is nothing of the reader's for it to disturb.
       if (document.getElementById('prompt')) return;
-      if (state.logs.some(function (log) { return log.following; })) return;
       load(true);
     }, wait);
   }

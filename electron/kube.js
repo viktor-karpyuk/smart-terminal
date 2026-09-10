@@ -451,6 +451,40 @@ function deploymentRow(item, now) {
   };
 }
 
+/**
+ * A ReplicaSet is drawn like a Deployment and cannot be operated like one.
+ *
+ * It was sharing `deploymentRow` outright, which handed every ReplicaSet a
+ * Pause button, a Restart button and a Rollout tab. None of the three can work:
+ * `rollout pause` only knows Deployments, `rollout restart` refuses a ReplicaSet
+ * by name, and a ReplicaSet's revisions belong to the Deployment above it — the
+ * tab looked for ControllerRevisions owned by the ReplicaSet, of which there are
+ * never any, so it was always empty.
+ *
+ * Scaling and editing are worse than that, because they *work*: the Deployment's
+ * controller puts both back within a second, so the panel appears to do
+ * something and then quietly undoes it. So they are offered only for a
+ * ReplicaSet nothing owns — which is a real thing, and the only case where
+ * operating one means anything.
+ */
+function replicaSetRow(item, now) {
+  const row = deploymentRow(item, now);
+  const managed = Boolean(row.owner);
+  // A ReplicaSet's status has no `updatedReplicas`; inherited from the Deployment
+  // shaper it was a permanent "Up to date: 0" about a set that is perfectly fine.
+  delete row.upToDate;
+  return {
+    ...row,
+    scalable: !managed,
+    configurable: !managed,
+    restartable: false,
+    pausable: false,
+    revisioned: false,
+    /** Which Deployment this belongs to, since that is the thing to operate. */
+    controlledBy: (item.metadata?.ownerReferences ?? [])[0]?.kind ?? '',
+  };
+}
+
 function statefulSetRow(item, now) {
   const status = item.status ?? {};
   const wanted = item.spec?.replicas ?? 0;
@@ -601,9 +635,18 @@ function nodeRow(item, now) {
     version: item.status?.nodeInfo?.kubeletVersion ?? '',
     instance: item.metadata?.labels?.['node.kubernetes.io/instance-type'] ?? '',
     zone: item.metadata?.labels?.['topology.kubernetes.io/zone'] ?? '',
-    cpu: item.status?.capacity?.cpu ?? '',
-    memory: item.status?.capacity?.memory ?? '',
-    pods: item.status?.capacity?.pods ?? '',
+    /*
+     * Capacity, named as capacity.
+     *
+     * `kubectl top` is folded onto every node row afterwards, and it writes what
+     * the node is *using* to `cpu` and `memory` — so a plain `cpu` here was the
+     * node's eight cores until the measurement landed and its 240 millicores
+     * after, under the same word, in the same place. Two different quantities
+     * cannot share a name.
+     */
+    cpuCapacity: item.status?.capacity?.cpu ?? '',
+    memoryCapacity: item.status?.capacity?.memory ?? '',
+    podCapacity: item.status?.capacity?.pods ?? '',
     warnings: complaints,
     schedulable: !unschedulable,
   };
@@ -697,7 +740,7 @@ const SHAPES = {
   Deployment: { row: deploymentRow, columns: ['name', 'namespace', 'ready', 'upToDate', 'available', 'status', 'age'] },
   StatefulSet: { row: statefulSetRow, columns: ['name', 'namespace', 'ready', 'status', 'age'] },
   DaemonSet: { row: daemonSetRow, columns: ['name', 'namespace', 'ready', 'upToDate', 'available', 'status', 'age'] },
-  ReplicaSet: { row: deploymentRow, columns: ['name', 'namespace', 'ready', 'status', 'age'] },
+  ReplicaSet: { row: replicaSetRow, columns: ['name', 'namespace', 'ready', 'status', 'age'] },
   Job: { row: jobRow, columns: ['name', 'namespace', 'ready', 'status', 'duration', 'age'] },
   CronJob: { row: cronJobRow, columns: ['name', 'namespace', 'schedule', 'active', 'lastRun', 'status', 'age'] },
   Service: { row: serviceRow, columns: ['name', 'namespace', 'type', 'clusterIP', 'external', 'ports', 'age'] },
@@ -1056,6 +1099,72 @@ function millicores(value) {
  * consumed right now, and a cluster with 90% requested and 12% used is one
  * where somebody wrote the requests without measuring.
  */
+/**
+ * What one pod actually holds, by the rule the scheduler uses.
+ *
+ * Not the sum of its containers. Kubernetes reserves
+ * `max(sum of the regular containers, the largest init container)` — an init
+ * container runs before the others and its room is given back, so a migration
+ * step asking for two cores reserves two cores even though the app it starts
+ * asks for a tenth of one.
+ *
+ * And since 1.28 an init container with `restartPolicy: Always` is a *sidecar*:
+ * it runs for the whole life of the pod, so its request is held for the whole
+ * life of the pod and adds to both sides. That is Istio, Vault, Linkerd, Dapr
+ * and every log shipper — on a cluster using them, adding up only
+ * `spec.containers` leaves out a fixed share of everything that is promised.
+ *
+ * Pure, so this is tested against shapes rather than believed.
+ */
+function podRequests(pod, field = 'requests') {
+  const of = (container) => (container.resources ?? {})[field] ?? {};
+  let cpu = 0;
+  let memory = 0;
+  let disk = 0;
+  for (const container of pod.spec?.containers ?? []) {
+    cpu += millicores(of(container).cpu);
+    memory += quantity(of(container).memory);
+    disk += quantity(of(container)['ephemeral-storage']);
+  }
+  let sidecarCpu = 0;
+  let sidecarMemory = 0;
+  let sidecarDisk = 0;
+  let initCpu = 0;
+  let initMemory = 0;
+  let initDisk = 0;
+  for (const container of pod.spec?.initContainers ?? []) {
+    const want = of(container);
+    if (container.restartPolicy === 'Always') {
+      sidecarCpu += millicores(want.cpu);
+      sidecarMemory += quantity(want.memory);
+      sidecarDisk += quantity(want['ephemeral-storage']);
+    } else {
+      initCpu = Math.max(initCpu, millicores(want.cpu));
+      initMemory = Math.max(initMemory, quantity(want.memory));
+      initDisk = Math.max(initDisk, quantity(want['ephemeral-storage']));
+    }
+  }
+  return {
+    cpu: Math.max(cpu, initCpu) + sidecarCpu,
+    memory: Math.max(memory, initMemory) + sidecarMemory,
+    disk: Math.max(disk, initDisk) + sidecarDisk,
+  };
+}
+
+/**
+ * Whether this pod is holding any of the cluster's room.
+ *
+ * Bound to a node and not finished. A pod that is Pending because nothing will
+ * schedule it has been promised nothing — counting it against allocatable says
+ * the cluster is fuller than it is, which is the opposite of the truth: it is
+ * exactly the room that pod could not find.
+ */
+function holdsRoom(pod) {
+  const phase = pod.status?.phase;
+  if (phase === 'Succeeded' || phase === 'Failed') return false;
+  return Boolean(pod.spec?.nodeName);
+}
+
 function capacityFrom(nodes, pods, usage = {}) {
   const totals = {
     cpu: { allocatable: 0, requested: 0, limit: 0, used: 0 },
@@ -1073,17 +1182,15 @@ function capacityFrom(nodes, pods, usage = {}) {
   }
 
   for (const pod of pods) {
-    // A pod that has finished is not holding anything.
-    const phase = pod.status?.phase;
-    if (phase === 'Succeeded' || phase === 'Failed') continue;
-    for (const container of pod.spec?.containers ?? []) {
-      totals.cpu.requested += millicores(container.resources?.requests?.cpu);
-      totals.memory.requested += quantity(container.resources?.requests?.memory);
-      totals.disk.requested += quantity(container.resources?.requests?.['ephemeral-storage']);
-      totals.cpu.limit += millicores(container.resources?.limits?.cpu);
-      totals.memory.limit += quantity(container.resources?.limits?.memory);
-      totals.disk.limit += quantity(container.resources?.limits?.['ephemeral-storage']);
-    }
+    if (!holdsRoom(pod)) continue;
+    const wants = podRequests(pod, 'requests');
+    const ceiling = podRequests(pod, 'limits');
+    totals.cpu.requested += wants.cpu;
+    totals.memory.requested += wants.memory;
+    totals.disk.requested += wants.disk;
+    totals.cpu.limit += ceiling.cpu;
+    totals.memory.limit += ceiling.memory;
+    totals.disk.limit += ceiling.disk;
   }
 
   for (const key of Object.keys(usage)) {
@@ -1103,15 +1210,15 @@ function capacityFrom(nodes, pods, usage = {}) {
 function byNamespace(pods, limit = 8) {
   const seen = new Map();
   for (const pod of pods) {
-    const phase = pod.status?.phase;
-    if (phase === 'Succeeded' || phase === 'Failed') continue;
+    if (!holdsRoom(pod)) continue;
     const at = pod.metadata?.namespace ?? '';
     const row = seen.get(at) ?? { namespace: at, pods: 0, cpu: 0, memory: 0 };
     row.pods += 1;
-    for (const container of pod.spec?.containers ?? []) {
-      row.cpu += millicores(container.resources?.requests?.cpu);
-      row.memory += quantity(container.resources?.requests?.memory);
-    }
+    // The same rule as the gauge above it, or the parts would not add up to the
+    // whole and the two would quietly disagree.
+    const wants = podRequests(pod, 'requests');
+    row.cpu += wants.cpu;
+    row.memory += wants.memory;
     seen.set(at, row);
   }
   return [...seen.values()].sort((a, b) => b.cpu - a.cpu || b.pods - a.pods).slice(0, limit);
@@ -1146,17 +1253,37 @@ function warningsByReason(events, limit = 8) {
  * control plane is up, which is not the question anybody opens a dashboard to
  * ask. What they want to know is whether anything is on fire.
  */
+/**
+ * A pod that has finished is not a pod that is running.
+ *
+ * `podStatus` reports a completed pod as `Completed`, which is not in the list
+ * of words that mean trouble and not in the list that mean waiting — so it came
+ * out green, and the card counted it among the running. A cluster with four
+ * finished job pods on it therefore read "170 / 171 pods running" when a hundred
+ * and sixty-six were running, four had finished and one was pending: three
+ * different things said as one number, and the wrong one.
+ *
+ * They are left out of both halves rather than moved to one of them. A job pod
+ * that did its work and exited is not something the cluster is failing to run,
+ * and putting it in the denominator makes a healthy cluster look short.
+ */
+const FINISHED = new Set(['Completed', 'Succeeded']);
+
 function overview({ nodes = [], pods = [], events = [] } = {}) {
-  const badPods = pods.filter((pod) => pod.health === 'bad');
+  const done = pods.filter((pod) => FINISHED.has(pod.status));
+  const live = pods.filter((pod) => !FINISHED.has(pod.status));
+  const badPods = live.filter((pod) => pod.health === 'bad');
   const badNodes = nodes.filter((node) => node.health !== 'ok');
   const warnings = events.filter((event) => event.type === 'Warning');
   return {
     nodes: nodes.length,
     nodesUnhealthy: badNodes.length,
-    pods: pods.length,
-    podsRunning: pods.filter((pod) => pod.health === 'ok').length,
+    pods: live.length,
+    podsRunning: live.filter((pod) => pod.health === 'ok').length,
+    /** Said separately, because they are neither running nor a problem. */
+    podsDone: done.length,
     podsFailing: badPods.length,
-    restarts: pods.reduce((sum, pod) => sum + (pod.restarts ?? 0), 0),
+    restarts: live.reduce((sum, pod) => sum + (pod.restarts ?? 0), 0),
     warnings: warnings.length,
     trouble: [
       ...badNodes.map((node) => ({ kind: 'Node', name: node.name, namespace: '', status: node.status })),
@@ -1636,9 +1763,22 @@ async function brief({ kind, name, namespace, context, container, question, prev
   const warnings = (seen?.rows ?? []).filter((row) => row.type === 'Warning');
   const shownEvents = (warnings.length ? warnings : (seen?.rows ?? [])).slice(0, 25);
   if (shownEvents.length) {
+    /*
+     * Whose events these are, said rather than implied.
+     *
+     * For a pod they are the pod's, asked for by name. For anything else they
+     * are the whole namespace's — a Deployment says almost nothing about itself
+     * and what went wrong is on its ReplicaSet or its pods, so the namespace is
+     * the useful answer. It is not the one the heading claimed: under "I am
+     * looking at a Deployment called X", a bare "## Events" reads as X's, and
+     * what was being handed over was a namespace's worth of somebody else's.
+     */
+    const about = isPod
+      ? objectName
+      : `${namespace ? `namespace ${namespace}` : 'the cluster'} — not only ${objectName}`;
     parts.push(
       '',
-      `## Events${warnings.length ? ' (warnings)' : ''}`,
+      `## Events${warnings.length ? ' (warnings)' : ''} in ${about}`,
       '```',
       ...shownEvents.map((row) => `${row.age.padStart(6)}  ${row.type}  ${row.status}  ${row.message}`),
       '```',
@@ -2206,6 +2346,8 @@ module.exports = {
   nodePressure,
   volumeTotals,
   byNamespace,
+  podRequests,
+  holdsRoom,
   warningsByReason,
   seriesFrom,
   findPrometheus,
