@@ -202,3 +202,53 @@ test('growth is still enough to skip a re-read', () => {
   const first = monitor.read('t');
   assert.equal(monitor.read('t'), first, 'a file that has barely grown gives the same object back');
 });
+
+/*
+ * The two things the panel puts in the largest type on the page, and the reason
+ * they were going stale.
+ *
+ * `worthAnnouncing` decided on the finding list alone, and the finding list is
+ * blind to a compaction that happens below the high-context threshold: the
+ * severity and the titles read the same either side of it. Measured on a real
+ * ten-day transcript, two of six compactions were never announced — one of them
+ * took the context from 552,000 tokens to 68,000, and the panel went on saying
+ * 552,000 for as long as anybody looked at it.
+ */
+const verdict = (extra) => ({
+  ok: true,
+  worst: 'low',
+  findings: [{ id: 'high-context', severity: 'low' }],
+  compactions: [],
+  context: { window: 1000000, last: 552461 },
+  ...extra,
+});
+
+test('a compaction is announced even when the findings read the same', () => {
+  const before = verdict({ compactions: [{ at: 1 }] });
+  const after = verdict({ compactions: [{ at: 1 }, { at: 2 }], context: { window: 1000000, last: 68355 } });
+
+  const ids = (v) => v.findings.map((f) => `${f.id}:${f.severity}`).join('|');
+  assert.equal(ids(before), ids(after), 'the findings are identical — which is what used to silence it');
+  assert.equal(before.worst, after.worst);
+  assert.equal(worthAnnouncing(before, after), true);
+});
+
+test('the context on screen is never far from the context there is', () => {
+  const at = (last) => verdict({ context: { window: 1000000, last } });
+  // A turn's worth of growth is not news, and redrawing on every one of them is
+  // what this rule exists to avoid.
+  assert.equal(worthAnnouncing(at(400000), at(408000)), false);
+  // Half the window later, what is on screen is a different answer.
+  assert.equal(worthAnnouncing(at(400000), at(460000)), true);
+  // And a small window is a smaller number of tokens, because the question that
+  // figure answers is always "how close to the ceiling".
+  const small = (last) => verdict({ context: { window: 200000, last } });
+  assert.equal(worthAnnouncing(small(100000), small(108000)), false);
+  assert.equal(worthAnnouncing(small(100000), small(112000)), true);
+});
+
+test('a verdict with no context at all is still judged on its findings', () => {
+  const bare = { ok: true, worst: null, findings: [] };
+  assert.equal(worthAnnouncing(bare, { ...bare }), false);
+  assert.equal(worthAnnouncing(bare, { ...bare, findings: [{ id: 'x', severity: 'low' }] }), true);
+});

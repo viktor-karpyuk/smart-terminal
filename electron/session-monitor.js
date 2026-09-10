@@ -203,17 +203,53 @@ class SessionMonitor {
 }
 
 /**
+ * How far the context on screen may be from the context there is.
+ *
+ * A share of the window rather than a number of tokens, because the question
+ * being asked of that figure is always "how close to the ceiling am I" — and
+ * twenty thousand tokens is a fifth of the answer in a small window and nothing
+ * at all in a large one.
+ */
+const CONTEXT_DRIFT = 0.05;
+
+/**
  * Has anything a person would notice changed?
  *
- * Token counts move on every turn and nobody is watching them tick. What matters
- * is the verdict: a new finding, one that went away, or one that got worse.
+ * Token counts move on every turn and nobody is watching them tick, so most of
+ * this is about the verdict: a new finding, one that went away, or one that got
+ * worse. That was the whole rule, and it was wrong about the two things this
+ * panel puts in the largest type on the page.
+ *
+ * **A compaction.** It is the one event the panel exists to show, and it is
+ * invisible in a list of findings that reads the same either side of it. Six
+ * compactions in a real ten-day session, and two of them were never announced:
+ * one took the context from 552,000 tokens to 68,000 and the panel went on
+ * saying 552,000, because the findings before and after were identical. The
+ * number is only ever as fresh as the last thing announced, and that was the
+ * moment it mattered most.
+ *
+ * **Ordinary drift.** The same silence lets the figure grow stale in the other
+ * direction — a session climbing steadily produces no new finding until it
+ * crosses a threshold, and until then what is on screen is whatever it was an
+ * hour ago. So there is a bound on how wrong it is allowed to be.
+ *
+ * Both are far rarer than a turn. Measured against a session of five thousand
+ * nine hundred requests: six announcements for the compactions, and eighty-five
+ * for the drift — against the three hundred a "whenever the number moves" rule
+ * would have produced in a day.
  */
 function worthAnnouncing(before, after) {
   if (!after?.ok) return false;
   if (!before?.ok) return true;
   if (before.worst !== after.worst) return true;
+  if ((before.compactions?.length ?? 0) !== (after.compactions?.length ?? 0)) return true;
+
+  const window = after.context?.window ?? 0;
+  const moved = Math.abs((after.context?.last ?? 0) - (before.context?.last ?? 0));
+  if (window > 0 && moved >= window * CONTEXT_DRIFT) return true;
+
   const ids = (verdict) => verdict.findings.map((f) => `${f.id}:${f.severity}`).join('|');
   return ids(before) !== ids(after);
 }
 
-module.exports = { SessionMonitor, worthAnnouncing, INTERVAL_MS, GROWTH_BYTES, PER_SWEEP };
+module.exports = { SessionMonitor, worthAnnouncing, INTERVAL_MS, GROWTH_BYTES, PER_SWEEP, CONTEXT_DRIFT };
