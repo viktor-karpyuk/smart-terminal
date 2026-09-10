@@ -49,6 +49,14 @@
   .find input:focus { outline: none; border-color: var(--accent); }
   .find .count { font-size: 10.5px; color: var(--text-faint); min-width: 46px; text-align: right; }
 
+  /* A merge that stopped is the one thing worth saying across the whole panel. */
+  .stuck {
+    display: flex; align-items: center; gap: 8px; flex: 0 0 auto;
+    padding: 5px 10px; font-size: 11.5px;
+    border-bottom: 1px solid var(--border); background: var(--accent-soft);
+  }
+  .stuck.is-hidden { display: none; }
+
   /* ---------- the two halves ---------- */
 
   .body { flex: 1; display: flex; min-height: 0; }
@@ -122,6 +130,32 @@
   .file .path { flex: 1; overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); direction: rtl; }
   .file .add { color: var(--ok); font-size: 10.5px; }
   .file .del { color: var(--danger); font-size: 10.5px; }
+  .file.is-open { background: var(--bg-elevated); }
+  .file.is-open .path { color: var(--text); }
+  .file .open { color: var(--text-faint); font-size: 10px; padding: 0 3px; border-radius: 3px; opacity: 0; }
+  .file:hover .open { opacity: 1; }
+  .file .open:hover { color: var(--accent); }
+
+  /* The diff of one file, in the panel, because that is what a click was asking. */
+  .patch {
+    margin: 1px 0 5px; padding: 6px 8px; max-height: 320px; overflow: auto;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10.5px; line-height: 1.45; white-space: pre; tab-size: 2;
+  }
+  .patch .p-add { color: var(--ok); }
+  .patch .p-del { color: var(--danger); }
+  .patch .p-at { color: var(--accent); }
+  .patch .p-meta { color: var(--text-faint); }
+
+  .chip {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text-faint); border-radius: 3px; padding: 0 3px;
+  }
+  .chip:hover { color: var(--accent); background: var(--bg-elevated); }
+
+  .more { display: flex; align-items: center; gap: 8px; padding: 10px 12px; }
+  .more span { color: var(--text-faint); font-size: 11px; }
 
   .naming { display: flex; gap: 6px; margin-bottom: 12px; }
   .naming input {
@@ -166,6 +200,8 @@
     <button class="icon-btn" id="reload" title="Read the history again">⟳</button>
   </header>
 
+  <div class="stuck is-hidden" id="stuck"></div>
+
   <div class="body">
     <div class="list" id="list">
       <div class="spacer" id="spacer">
@@ -189,15 +225,22 @@
     commits: [],
     rowOf: new Map(),   // sha -> index into commits
     width: 1,
-    status: null,       // the working tree, for the row at the top
-    refs: null,
+    status: null,       // the working tree, for the row that rides on HEAD
+    refs: null,         // branches, tags and stashes, as git reports them
+    headAt: -1,         // which commit HEAD is, as an index into commits
+    wipAt: -1,          // the row the uncommitted work occupies, or -1 for none
     selected: null,     // a sha, or the string 'wip'
     query: '',
-    matches: [],
+    matches: [],        // the matching commits, in order, for stepping between
+    matchAt: new Set(), // the same, for asking about one row without a scan
     at: -1,             // which match the search is sitting on
     limit: 500,
+    deeper: false,      // the history is longer than what has been read
     rowH: 28,
     error: null,
+    showing: true,
+    reading: null,      // the read in flight, so a second one waits for it
+    stale: null,        // what needs re-reading once somebody looks again
   };
 
   var LANE_W = 15;
@@ -209,6 +252,7 @@
     lanes: document.getElementById('lanes'),
     rows: document.getElementById('rows'),
     empty: document.getElementById('empty'),
+    stuck: document.getElementById('stuck'),
     detail: document.getElementById('detail'),
     head: document.getElementById('head'),
     ahead: document.getElementById('ahead'),
@@ -216,6 +260,7 @@
     busy: document.getElementById('busy'),
     find: document.getElementById('find'),
     found: document.getElementById('found'),
+    density: document.getElementById('density'),
   };
 
   // ---------------------------------------------------------------- helpers
@@ -277,7 +322,6 @@
     });
   }
 
-  /** A verb that changes the repository: run it, say what happened, reload. */
   /**
    * What an update brought, in the number of things it brought.
    *
@@ -300,63 +344,220 @@
       commits + ' — ' + parts.join(', ') + '.';
   }
 
+  /** A verb that changes the repository: run it, say what happened, reload. */
   function act(label, name, args) {
     busy(label + '…');
     return call(name, args)
       .then(function (result) {
         busy('');
         host.emit('notify', { text: whatItBrought(result) || label + ' — done' });
-        return load();
+        return load('all');
       })
       .catch(function (error) {
         busy('');
         host.emit('notify', { text: label + ' failed: ' + error.message, kind: 'bad' });
+        // A merge that stops on a conflict, a checkout refused because of an
+        // uncommitted file: the command failed and the repository still moved,
+        // or is now mid-something. Reading it again is how that becomes visible.
+        return load('all');
       });
+  }
+
+  // ---------------------------------------------------------------- the rows
+
+  /**
+   * Which commit HEAD is on.
+   *
+   * Not the top of the list, which is the mistake this replaces. `--all` draws
+   * every branch, so the newest commit on screen belongs to whichever branch
+   * happens to have it — and hanging "Uncommitted" off *that* tells you your
+   * unsaved work sits on a branch you are not even on. HEAD says where it is
+   * itself: it is the commit git decorated with it.
+   */
+  function headIndex(commits) {
+    for (var i = 0; i < commits.length; i += 1) {
+      var refs = commits[i].refs || [];
+      for (var r = 0; r < refs.length; r += 1) if (refs[r].head) return i;
+    }
+    return -1;
+  }
+
+  /**
+   * Rows and commits are no longer the same list.
+   *
+   * The uncommitted work is a row with no commit behind it, and it sits
+   * immediately above HEAD rather than at the top — which is the same place when
+   * you are on the newest branch, and the truthful place when you are not. These
+   * two convert between the two numberings, and `wipAt` of -1 means there is
+   * nothing uncommitted and the two are the same thing.
+   */
+  function rowOfCommit(index, wipAt) {
+    return wipAt >= 0 && index >= wipAt ? index + 1 : index;
+  }
+
+  function commitOfRow(row, wipAt) {
+    if (wipAt < 0) return row;
+    if (row === wipAt) return -1;
+    return row > wipAt ? row - 1 : row;
+  }
+
+  /** Where HEAD is and whether anything is uncommitted, after every read. */
+  function locate() {
+    state.headAt = headIndex(state.commits);
+    var files = (state.status && state.status.files) || [];
+    // With no commits at all there is nothing for it to sit on, and it is the
+    // only row there is — which is the whole of a repository somebody has just
+    // run `git init` in.
+    state.wipAt = files.length ? Math.max(0, state.headAt) : -1;
+  }
+
+  function totalRows() {
+    return state.commits.length + (state.wipAt >= 0 ? 1 : 0);
+  }
+
+  /** The files git could not merge. Their own state, not a guess from an error. */
+  function conflicted() {
+    var files = (state.status && state.status.files) || [];
+    var out = [];
+    for (var i = 0; i < files.length; i += 1) if (files[i].conflicted) out.push(files[i]);
+    return out;
+  }
+
+  /** Whether a branch of this name is already here, which decides how to check it out. */
+  function haveLocal(name) {
+    var local = (state.refs && state.refs.local) || [];
+    for (var i = 0; i < local.length; i += 1) if (local[i].name === name) return true;
+    return false;
   }
 
   // ---------------------------------------------------------------- loading
 
-  function load() {
+  /** Of two things waiting to be re-read, the one that covers both. */
+  function strongest(a, b) {
+    return a === 'all' || b === 'all' ? 'all' : (a || b || null);
+  }
+
+  /**
+   * Read the repository.
+   *
+   * `what` is 'status' when only the working tree moved — a file saved, a build
+   * writing — because re-reading five hundred commits and every ref to find out
+   * that one file is now modified is two git processes spent on nothing. A
+   * commit, a checkout or a fetch moves the history, and that is 'all'.
+   */
+  function load(what) {
     if (!state.root) return Promise.resolve();
+    var wanted = what || 'all';
+    // A tab behind another one is not kept true. It is caught up on the way in.
+    if (!state.showing) {
+      state.stale = strongest(state.stale, wanted);
+      return Promise.resolve();
+    }
+    /*
+     * One read at a time.
+     *
+     * A working tree being written to reports a change every few hundred
+     * milliseconds, and reading a large repository takes longer than that — so
+     * without this the reads overlap, each spawning git processes whose answer
+     * the next one throws away, on a machine that is already busy. What was
+     * asked for meanwhile happens once, when this one lands.
+     */
+    if (state.reading) {
+      state.stale = strongest(state.stale, wanted);
+      return state.reading;
+    }
+    var only = wanted === 'status' && state.commits.length > 0;
     busy('Reading…');
-    return Promise.all([
-      call('graph', { limit: state.limit }),
+    state.reading = Promise.all([
+      only ? Promise.resolve(null) : call('graph', { limit: state.limit }),
       call('status', {}),
-      call('refs', {}),
+      only ? Promise.resolve(null) : call('refs', {}),
     ])
       .then(function (answers) {
-        state.commits = answers[0].commits || [];
-        state.width = Math.max(1, answers[0].width || 1);
-        state.status = answers[1];
-        state.refs = answers[2];
-        state.error = null;
+        if (answers[0]) {
+          state.commits = answers[0].commits || [];
+          state.width = Math.max(1, answers[0].width || 1);
+          // git was asked for `limit` and gave exactly that many: there is
+          // almost certainly more behind it.
+          state.deeper = state.commits.length >= state.limit;
 
-        // A map, not a scan. Every merge line has to find the row of its
-        // parent, and doing that by walking the list turns a long history into
-        // something quadratic — which is the difference between this being
-        // usable at five thousand commits and not.
-        state.rowOf = new Map();
-        for (var i = 0; i < state.commits.length; i += 1) state.rowOf.set(state.commits[i].sha, i);
+          // A map, not a scan. Every merge line has to find the row of its
+          // parent, and doing that by walking the list turns a long history into
+          // something quadratic — which is the difference between this being
+          // usable at five thousand commits and not.
+          state.rowOf = new Map();
+          for (var i = 0; i < state.commits.length; i += 1) state.rowOf.set(state.commits[i].sha, i);
+        }
+        state.status = answers[1];
+        if (answers[2]) state.refs = answers[2];
+        state.error = null;
+        locate();
+        // A commit that was selected and is no longer in the history — rebased
+        // away, or behind the end of what was read — is not a selection.
+        if (state.selected && state.selected !== 'wip' && !state.rowOf.has(state.selected)) state.selected = null;
+        if (state.selected === 'wip' && state.wipAt < 0) state.selected = null;
 
         busy('');
         search(state.query);
         drawBar();
         draw();
+        drawDetail();
+        if (resumeTop !== null) {
+          el.list.scrollTop = resumeTop;
+          resumeTop = null;
+          draw();
+        }
       })
       .catch(function (error) {
         state.error = error.message;
         busy('');
         draw();
+      })
+      .then(function () {
+        state.reading = null;
+        if (!state.stale) return;
+        var owed = state.stale;
+        state.stale = null;
+        load(owed);
       });
+    return state.reading;
   }
 
   // ---------------------------------------------------------------- the bar
 
   function drawBar() {
     var status = state.status || {};
-    el.head.textContent = status.detached ? 'detached HEAD' : (status.branch || '—');
+    var at = state.headAt >= 0 ? state.commits[state.headAt] : null;
+    // A detached HEAD with no sha beside it is a state you cannot act on: the
+    // sha is the only name the place you are standing in has.
+    el.head.textContent = status.detached
+      ? 'detached at ' + (at ? at.sha.slice(0, 7) : '?')
+      : (status.branch || '—');
+    el.head.title = status.upstream ? 'Tracking ' + status.upstream : 'No upstream branch';
     el.ahead.textContent = status.ahead ? '↑' + status.ahead : '';
     el.behind.textContent = status.behind ? '↓' + status.behind : '';
+    drawStuck();
+  }
+
+  /**
+   * A merge that stopped, said once and across the whole panel.
+   *
+   * Not because the conflicted files are invisible — they are in the row at the
+   * top — but because the way out is not. `git merge --abort` is the thing
+   * everybody wants and nobody remembers the name of, and a panel that offers
+   * merge and no way back out of one is a trap with a button on it.
+   */
+  function drawStuck() {
+    var stuck = conflicted();
+    el.stuck.textContent = '';
+    el.stuck.className = 'stuck' + (stuck.length ? '' : ' is-hidden');
+    if (!stuck.length) return;
+    el.stuck.appendChild(h('span', null,
+      'A merge stopped on ' + stuck.length + (stuck.length === 1 ? ' file' : ' files') +
+      ' git could not put together. Fix them and commit, or:'));
+    var abort = h('button', 'btn', 'Abort the merge');
+    abort.addEventListener('click', function () { act('Aborting the merge', 'abortMerge', {}); });
+    el.stuck.appendChild(abort);
   }
 
   // ---------------------------------------------------------------- searching
@@ -365,15 +566,18 @@
     state.query = query;
     var term = query.trim().toLowerCase();
     state.matches = [];
+    state.matchAt = new Set();
     if (term) {
       for (var i = 0; i < state.commits.length; i += 1) {
         var commit = state.commits[i];
         if (
           String(commit.subject || '').toLowerCase().indexOf(term) >= 0 ||
+          String(commit.body || '').toLowerCase().indexOf(term) >= 0 ||
           String(commit.author || '').toLowerCase().indexOf(term) >= 0 ||
           commit.sha.indexOf(term) === 0
         ) {
           state.matches.push(i);
+          state.matchAt.add(i);
         }
       }
     }
@@ -386,13 +590,15 @@
     state.at = (state.at + by + state.matches.length) % state.matches.length;
     el.found.textContent = (state.at + 1) + '/' + state.matches.length;
     var index = state.matches[state.at];
-    select(state.commits[index].sha);
+    state.selected = state.commits[index].sha;
+    draw();
+    drawDetail();
+    remember();
     scrollTo(index);
   }
 
   function scrollTo(commitIndex) {
-    var row = commitIndex + wipRows();
-    var top = row * state.rowH;
+    var top = rowOfCommit(commitIndex, state.wipAt) * state.rowH;
     var view = el.list.clientHeight;
     if (top < el.list.scrollTop || top + state.rowH > el.list.scrollTop + view) {
       el.list.scrollTop = Math.max(0, top - view / 3);
@@ -401,19 +607,14 @@
 
   // ---------------------------------------------------------------- drawing
 
-  /** Whether the working tree gets a row of its own at the top. */
-  function wipRows() {
-    return state.status && state.status.files && state.status.files.length ? 1 : 0;
-  }
-
-  function totalRows() {
-    return state.commits.length + wipRows();
-  }
-
   var laneX = function (lane) { return 11 + lane * LANE_W; };
 
+  function windowKey() {
+    return Math.floor(el.list.scrollTop / state.rowH) + ':' + Math.ceil(el.list.clientHeight / state.rowH);
+  }
+
   function draw() {
-    drawnWindow = Math.floor(el.list.scrollTop / state.rowH) + ':' + Math.ceil(el.list.clientHeight / state.rowH);
+    drawnWindow = windowKey();
     el.rows.textContent = '';
     while (el.lanes.firstChild) el.lanes.removeChild(el.lanes.firstChild);
 
@@ -423,13 +624,13 @@
       el.empty.appendChild(h('p', 'bad', state.error));
       return;
     }
-    if (!state.commits.length) {
+    var rows = totalRows();
+    if (!rows) {
       el.spacer.style.height = '0px';
       el.empty.appendChild(h('p', 'note', 'No commits yet.'));
       return;
     }
 
-    var rows = totalRows();
     var height = rows * state.rowH;
     var graphW = state.width * LANE_W + 14;
     el.spacer.style.height = height + 'px';
@@ -442,45 +643,51 @@
     var first = Math.max(0, Math.floor(el.list.scrollTop / state.rowH) - OVERSCAN);
     var last = Math.min(rows - 1, Math.ceil((el.list.scrollTop + el.list.clientHeight) / state.rowH) + OVERSCAN);
 
-    var offset = wipRows();
     for (var row = first; row <= last; row += 1) {
-      if (offset && row === 0) {
-        drawWip();
-        continue;
-      }
-      drawCommit(row - offset, row);
+      var index = commitOfRow(row, state.wipAt);
+      if (index < 0) drawWip(row);
+      else drawCommit(index, row);
     }
+
+    if (state.deeper) el.empty.appendChild(deeper());
   }
 
   /**
-   * The uncommitted work, sitting on top of the branch it is on.
+   * The uncommitted work, sitting on the commit it is actually on.
    *
    * A history that starts at the last commit is a history that leaves out the
-   * part you are actually in the middle of. It is drawn as an open circle on a
-   * dashed line so that it never reads as something that happened.
+   * part you are in the middle of. It is drawn as an open circle on a dashed
+   * line so it never reads as something that happened, in HEAD's lane and
+   * directly above HEAD's row — which is where it will be when it is committed.
    */
-  function drawWip() {
-    var top = state.commits[0];
-    var lane = top ? top.lane : 0;
-    var colour = top ? top.colour : 'var(--accent)';
-    var y = state.rowH / 2;
+  function drawWip(row) {
+    var anchor = state.headAt >= 0 ? state.commits[state.headAt] : null;
+    var lane = anchor ? anchor.lane : 0;
+    var colour = anchor ? anchor.colour : 'var(--accent)';
+    var top = row * state.rowH;
+    var y = top + state.rowH / 2;
 
-    el.lanes.appendChild(svg('path', {
-      d: 'M' + laneX(lane) + ' ' + y + ' V ' + state.rowH,
-      stroke: colour,
-      'stroke-dasharray': '3 3',
-      opacity: '0.8',
-    }));
+    if (anchor) {
+      el.lanes.appendChild(svg('path', {
+        d: 'M' + laneX(lane) + ' ' + y + ' V ' + (top + state.rowH),
+        stroke: colour,
+        'stroke-dasharray': '3 3',
+        opacity: '0.8',
+      }));
+    }
     el.lanes.appendChild(svg('circle', {
       cx: laneX(lane), cy: y, r: 4.5,
       fill: 'var(--bg)', stroke: colour, 'stroke-dasharray': '2.5 2.5',
     }));
 
     var node = h('div', 'row is-wip' + (state.selected === 'wip' ? ' is-selected' : ''));
-    node.style.top = '0px';
+    node.style.top = top + 'px';
     node.style.height = state.rowH + 'px';
     var count = state.status.files.length;
-    node.appendChild(h('span', 'subject', 'Uncommitted — ' + count + (count === 1 ? ' file' : ' files')));
+    var stuck = conflicted().length;
+    node.appendChild(h('span', 'subject',
+      'Uncommitted — ' + count + (count === 1 ? ' file' : ' files') +
+      (stuck ? ' · ' + stuck + ' conflicted' : '')));
     node.addEventListener('click', function () { select('wip'); });
     el.rows.appendChild(node);
   }
@@ -505,7 +712,9 @@
       var target = state.rowOf.has(edge.sha) ? state.rowOf.get(edge.sha) : -1;
       // A parent below the end of what was read still gets a stub, so the line
       // leaves the page rather than stopping in mid-air.
-      var endY = target === -1 ? y + state.rowH : (target + wipRows()) * state.rowH + state.rowH / 2;
+      var endY = target === -1
+        ? y + state.rowH
+        : rowOfCommit(target, state.wipAt) * state.rowH + state.rowH / 2;
       var x1 = laneX(edge.from);
       var x2 = laneX(edge.to);
 
@@ -532,11 +741,11 @@
       stroke: commit.colour,
     }));
 
-    var dim = state.query.trim() && state.matches.indexOf(index) < 0;
+    var hit = state.matchAt.has(index);
     var node = h('div', 'row' +
       (state.selected === commit.sha ? ' is-selected' : '') +
-      (state.matches.indexOf(index) >= 0 ? ' is-match' : '') +
-      (dim ? ' is-dim' : ''));
+      (hit ? ' is-match' : '') +
+      (state.query.trim() && !hit ? ' is-dim' : ''));
     node.style.top = top + 'px';
     node.style.height = state.rowH + 'px';
 
@@ -561,6 +770,25 @@
   }
 
   /**
+   * More history, asked for rather than assumed.
+   *
+   * Five hundred commits is a lot to draw and nothing at all next to a repository
+   * that has been alive for years, and the old panel simply stopped there without
+   * saying so — a history that ends in 2023 and no clue that it does not.
+   */
+  function deeper() {
+    var box = h('div', 'more');
+    var button = h('button', 'btn', 'Read further back');
+    button.addEventListener('click', function () {
+      state.limit += 1000;
+      load('all');
+    });
+    box.appendChild(button);
+    box.appendChild(h('span', null, state.commits.length + ' commits read; there is more behind them.'));
+    return box;
+  }
+
+  /**
    * A branch, a remote or a tag, on the commit it points at.
    *
    * Clickable, because a label you can see but not use is half a feature: a
@@ -571,7 +799,7 @@
     var pill = h('button', 'ref is-' + ref.kind + (ref.head ? ' is-head' : ''), ref.name);
     pill.title =
       ref.kind === 'local' ? 'Local branch — click to check out'
-      : ref.kind === 'remote' ? 'On the remote — click to check it out as a local branch'
+      : ref.kind === 'remote' ? 'On the remote — click to check it out'
       : ref.kind === 'tag' ? 'Tag — click to check out'
       : ref.kind;
     if (ref.kind !== 'head') pill.appendChild(h('span', 'dot'));
@@ -579,7 +807,12 @@
       event.stopPropagation();
       if (ref.kind === 'remote') {
         var local = ref.name.split('/').slice(1).join('/');
-        act('Checking out ' + local, 'trackRemote', { remote: ref.name, local: local });
+        // `checkout -b --track` refuses outright when the branch is already
+        // here — which is the usual case, because a branch you can see on the
+        // remote is normally one you pushed. Then it is a plain checkout, and
+        // the local branch is already tracking this one.
+        if (haveLocal(local)) act('Checking out ' + local, 'checkout', { ref: local });
+        else act('Checking out ' + local, 'trackRemote', { remote: ref.name, local: local });
       } else if (ref.kind === 'local' || ref.kind === 'tag') {
         act('Checking out ' + ref.name, 'checkout', { ref: ref.name });
       }
@@ -593,6 +826,7 @@
     state.selected = state.selected === what ? null : what;
     draw();
     drawDetail();
+    remember();
   }
 
   function drawDetail() {
@@ -604,12 +838,7 @@
     el.detail.className = 'detail';
 
     if (state.selected === 'wip') {
-      el.detail.appendChild(h('h2', null, 'Uncommitted changes'));
-      el.detail.appendChild(h('p', 'meta', 'Not committed anywhere yet.'));
-      var list = h('div', 'files');
-      var files = (state.status && state.status.files) || [];
-      for (var i = 0; i < files.length; i += 1) list.appendChild(fileRow(files[i].path, files[i].added, files[i].removed, files[i].letter));
-      el.detail.appendChild(list);
+      drawWipDetail();
       return;
     }
 
@@ -617,8 +846,22 @@
     if (!commit) return;
 
     el.detail.appendChild(h('h2', null, commit.subject || '(no message)'));
-    el.detail.appendChild(h('p', 'meta',
-      commit.sha.slice(0, 10) + ' · ' + commit.author + ' · ' + new Date(commit.date).toLocaleString()));
+
+    var meta = h('p', 'meta');
+    var sha = h('button', 'chip', commit.sha.slice(0, 10));
+    sha.title = 'Copy the whole hash';
+    sha.addEventListener('click', function () {
+      host.emit('copy', { text: commit.sha });
+      host.emit('notify', { text: 'Copied ' + commit.sha });
+    });
+    meta.appendChild(sha);
+    meta.appendChild(h('span', null, ' · ' + commit.author + ' · ' + new Date(commit.date).toLocaleString()));
+    el.detail.appendChild(meta);
+
+    // The rest of the message. A subject line is a title, and a panel that shows
+    // only titles cannot answer the question people open a history to ask, which
+    // is why somebody did this.
+    if (commit.body) el.detail.appendChild(h('pre', null, commit.body));
 
     var acts = h('div', 'acts');
     acts.appendChild(action('Check out', function () {
@@ -636,6 +879,9 @@
     acts.appendChild(action('Merge into current', function () {
       act('Merging ' + commit.sha.slice(0, 7), 'merge', { ref: commit.sha });
     }));
+    acts.appendChild(action('Rebase onto this', function () {
+      act('Rebasing onto ' + commit.sha.slice(0, 7), 'rebase', { ref: commit.sha });
+    }));
     el.detail.appendChild(acts);
 
     var files = h('div', 'files');
@@ -649,13 +895,109 @@
       var listed = result.files || [];
       if (!listed.length) files.appendChild(h('p', 'note', 'No files in it — an empty commit.'));
       for (var i = 0; i < listed.length; i += 1) {
-        files.appendChild(fileRow(listed[i].path, listed[i].added, listed[i].removed, null));
+        files.appendChild(fileRow(listed[i], { sha: wanted, file: listed[i].path }));
       }
     }).catch(function (error) {
       if (state.selected !== wanted) return;
       files.textContent = '';
       files.appendChild(h('p', 'bad', error.message));
     });
+  }
+
+  /** The uncommitted work: what is in it, and its diff a click away. */
+  function drawWipDetail() {
+    var files = (state.status && state.status.files) || [];
+    var stuck = conflicted();
+    el.detail.appendChild(h('h2', null, 'Uncommitted changes'));
+    el.detail.appendChild(h('p', 'meta',
+      stuck.length
+        ? stuck.length + (stuck.length === 1 ? ' file' : ' files') + ' still conflicted.'
+        : 'Not committed anywhere yet.'));
+
+    var list = h('div', 'files');
+    for (var i = 0; i < files.length; i += 1) {
+      var file = files[i];
+      list.appendChild(fileRow(file, { file: file.path, untracked: !!file.untracked }));
+    }
+    el.detail.appendChild(list);
+  }
+
+  /**
+   * One file, and its diff when you ask for it.
+   *
+   * A click used to open the file as it is now — which, for a file in a commit
+   * from March, is somebody else's answer to the question being asked. What
+   * changed *in this commit* is the diff, so that is what a click gives. The
+   * arrow still opens the file as it stands today, and now says so.
+   */
+  function fileRow(file, ask) {
+    var wrap = h('div', 'file-wrap');
+    var row = h('button', 'file');
+    if (file.letter) row.appendChild(h('span', 'sha', file.letter));
+    // Right-to-left so the ellipsis eats the start of a long path and leaves
+    // the filename, which is the part anybody is looking for.
+    row.appendChild(h('span', 'path', file.path));
+    if (file.added) row.appendChild(h('span', 'add', '+' + file.added));
+    if (file.removed) row.appendChild(h('span', 'del', '−' + file.removed));
+
+    var open = h('span', 'open', '↗');
+    open.title = 'Open the file as it is now';
+    open.addEventListener('click', function (event) {
+      event.stopPropagation();
+      host.emit('openFile', { path: state.root + '/' + file.path });
+    });
+    row.appendChild(open);
+
+    row.title = file.path;
+    row.addEventListener('click', function () {
+      var shown = wrap.querySelector('.patch');
+      if (shown) {
+        shown.remove();
+        row.className = 'file';
+        return;
+      }
+      row.className = 'file is-open';
+      var box = h('pre', 'patch', 'Reading…');
+      wrap.appendChild(box);
+      call('diff', ask).then(function (result) {
+        box.textContent = '';
+        paint(box, result.patch || '');
+      }).catch(function (error) {
+        box.textContent = error.message;
+      });
+    });
+
+    wrap.appendChild(row);
+    return wrap;
+  }
+
+  /** What a line of a diff is, which is the whole of how one is read. */
+  function patchKind(line) {
+    if (line.slice(0, 2) === '@@') return 'p-at';
+    if (line.slice(0, 3) === '+++' || line.slice(0, 3) === '---') return 'p-meta';
+    if (line.charAt(0) === '+') return 'p-add';
+    if (line.charAt(0) === '-') return 'p-del';
+    if (line.slice(0, 4) === 'diff' || line.slice(0, 5) === 'index') return 'p-meta';
+    return '';
+  }
+
+  /** How much of a patch is worth putting in a side panel before it is a file. */
+  var PATCH_LINES = 600;
+
+  function paint(box, patch) {
+    var lines = String(patch).split('\n');
+    if (!String(patch).trim()) {
+      box.appendChild(h('span', 'p-meta', 'No text changed — a binary file, or only its mode.'));
+      return;
+    }
+    var shown = lines.slice(0, PATCH_LINES);
+    for (var i = 0; i < shown.length; i += 1) {
+      box.appendChild(h('span', patchKind(shown[i]), shown[i] + '\n'));
+    }
+    var left = lines.length - shown.length;
+    if (left > 0) {
+      box.appendChild(h('span', 'p-meta', '\n… ' + left + ' more lines. Open the file to read the rest.'));
+    }
   }
 
   /** Ask for a branch name in the panel itself, and start it at this commit. */
@@ -694,22 +1036,47 @@
     return button;
   }
 
-  function fileRow(path, added, removed, letter) {
-    var row = h('button', 'file');
-    if (letter) {
-      var mark = h('span', 'sha', letter);
-      row.appendChild(mark);
-    }
-    // Right-to-left so the ellipsis eats the start of a long path and leaves
-    // the filename, which is the part anybody is looking for.
-    row.appendChild(h('span', 'path', path));
-    if (added) row.appendChild(h('span', 'add', '+' + added));
-    if (removed) row.appendChild(h('span', 'del', '−' + removed));
-    row.title = path;
-    row.addEventListener('click', function () {
-      host.emit('openFile', { path: state.root + '/' + path });
+  // ---------------------------------------------------------------- coming back
+
+  /**
+   * Where this panel was, kept by the app rather than by the frame.
+   *
+   * The frame is thrown away and rebuilt for things that have nothing to do with
+   * git — the theme changing, a session opening underneath it — and a rebuilt
+   * frame is a new document that starts at the top of the history with nothing
+   * selected. Only the navigation goes across: what was on screen, never what
+   * was read out of the repository, because the repository is read again anyway.
+   */
+  function remember() {
+    host.emit('remember', {
+      selected: state.selected,
+      query: state.query,
+      rowH: state.rowH,
+      limit: state.limit,
+      top: Math.round(el.list.scrollTop),
     });
-    return row;
+  }
+
+  var resumeTop = null;
+
+  function resume(saved) {
+    if (!saved) return;
+    state.selected = saved.selected || null;
+    state.query = saved.query || '';
+    if (saved.rowH === 22 || saved.rowH === 28) state.rowH = saved.rowH;
+    if (saved.limit > state.limit) state.limit = saved.limit;
+    // The search box is part of the document rather than of the state, so it has
+    // to be put back too — a search that is applied and not shown is a list that
+    // is greyed out for no reason anybody can see.
+    if (state.query) el.find.value = state.query;
+    density(state.rowH === 22);
+    resumeTop = Number(saved.top) || 0;
+  }
+
+  function density(compact) {
+    state.rowH = compact ? 22 : 28;
+    el.density.textContent = compact ? 'Comfortable' : 'Compact';
+    el.density.className = 'btn' + (compact ? ' is-on' : '');
   }
 
   // ---------------------------------------------------------------- wiring
@@ -721,16 +1088,20 @@
    * sixty rows and their lanes for a two-pixel move is work nobody asked for.
    */
   var drawnWindow = '';
+  var scrolled = null;
   el.list.addEventListener('scroll', function () {
-    var first = Math.floor(el.list.scrollTop / state.rowH);
-    var key = first + ':' + Math.ceil(el.list.clientHeight / state.rowH);
+    // Where the list is scrolled to is worth coming back to, but it changes at
+    // the rate of a finger on a trackpad, so it is said once the finger stops.
+    if (scrolled) clearTimeout(scrolled);
+    scrolled = setTimeout(function () { scrolled = null; remember(); }, 400);
+    var key = windowKey();
     if (key === drawnWindow) return;
     drawnWindow = key;
     draw();
   });
   window.addEventListener('resize', function () { draw(); });
 
-  document.getElementById('reload').addEventListener('click', load);
+  document.getElementById('reload').addEventListener('click', function () { load('all'); });
   document.getElementById('fetch').addEventListener('click', function () { act('Fetching', 'fetch', {}); });
   document.getElementById('pull').addEventListener('click', function () { act('Pulling', 'pull', {}); });
   document.getElementById('push').addEventListener('click', function () {
@@ -738,51 +1109,88 @@
     act('Pushing', 'push', status.upstream ? {} : { setUpstream: status.branch });
   });
 
-  document.getElementById('density').addEventListener('click', function () {
-    var compact = state.rowH !== 22;
-    state.rowH = compact ? 22 : 28;
-    this.textContent = compact ? 'Comfortable' : 'Compact';
-    this.className = 'btn' + (compact ? ' is-on' : '');
+  el.density.addEventListener('click', function () {
+    density(state.rowH !== 22);
     draw();
+    remember();
   });
 
   el.find.addEventListener('input', function () {
     search(this.value);
     draw();
+    remember();
     if (state.matches.length) scrollTo(state.matches[0]);
   });
   el.find.addEventListener('keydown', function (event) {
     if (event.key === 'Enter') step(event.shiftKey ? -1 : 1);
+    if (event.key === 'Escape') { this.value = ''; search(''); draw(); remember(); }
   });
   document.getElementById('next').addEventListener('click', function () { step(1); });
   document.getElementById('prev').addEventListener('click', function () { step(-1); });
 
   document.addEventListener('keydown', function (event) {
     if (event.target === el.find) return;
-    if (event.key === '/' ) { event.preventDefault(); el.find.focus(); return; }
+    if (event.key === '/') { event.preventDefault(); el.find.focus(); return; }
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    if (!totalRows()) return;
     event.preventDefault();
-    var index = state.selected && state.selected !== 'wip' ? state.rowOf.get(state.selected) : -1;
-    var next = Math.max(0, Math.min(state.commits.length - 1, (index === undefined ? 0 : index) + (event.key === 'ArrowDown' ? 1 : -1)));
-    state.selected = state.commits[next].sha;
+    // Walk rows rather than commits, so the uncommitted row is somewhere the
+    // keyboard can reach rather than a thing only the mouse knows about.
+    var row = state.selected === 'wip'
+      ? state.wipAt
+      : (state.selected && state.rowOf.has(state.selected)
+        ? rowOfCommit(state.rowOf.get(state.selected), state.wipAt)
+        : -1);
+    var next = Math.max(0, Math.min(totalRows() - 1, row + (event.key === 'ArrowDown' ? 1 : -1)));
+    var index = commitOfRow(next, state.wipAt);
+    state.selected = index < 0 ? 'wip' : state.commits[index].sha;
     draw();
     drawDetail();
-    scrollTo(next);
+    remember();
+    if (index >= 0) scrollTo(index);
+    else el.list.scrollTop = Math.max(0, next * state.rowH - el.list.clientHeight / 3);
   });
 
   // The app answers `ready` with where we are, and tells us when the working
   // tree moves. Everything else this panel knows, it asked for.
   host.on('context', function (context) {
     state.root = context.root;
-    load();
+    if (context.showing === false) state.showing = false;
+    resume(context.resume);
+    load('all');
   });
+
+  /**
+   * Whether this tab is in front.
+   *
+   * A panel behind another tab is not kept true: three git processes per change
+   * notice, for a picture nobody is looking at, in a repository a build may be
+   * writing into. It catches up on the way back in instead, which is the moment
+   * the question "what happened while I was away" is actually being asked.
+   */
+  host.on('showing', function (payload) {
+    var was = state.showing;
+    state.showing = !payload || payload.showing !== false;
+    if (!state.showing || was) return;
+    var owed = state.stale;
+    state.stale = null;
+    load(owed || 'status');
+  });
+
   var settle = null;
-  host.on('changed', function () {
+  host.on('changed', function (payload) {
     // A build can produce a change notice every few hundred milliseconds. The
     // history is not moving that fast, and three git calls per notice would be
     // the panel making the machine busy to tell you nothing new.
+    var kind = payload && payload.kind === 'git' ? 'all' : 'status';
+    state.stale = strongest(state.stale, kind);
     if (settle) clearTimeout(settle);
-    settle = setTimeout(function () { settle = null; load(); }, 900);
+    settle = setTimeout(function () {
+      settle = null;
+      var owed = state.stale;
+      state.stale = null;
+      load(owed);
+    }, 900);
   });
   host.ready();
 })();

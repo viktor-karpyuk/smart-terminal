@@ -172,7 +172,10 @@ async function stat(root, { staged = false } = {}) {
 
 /** The commits, newest first, with their parents and refs — the graph's input. */
 async function log(root, { limit = 200, all = true } = {}) {
-  const format = ['%H', '%P', '%an', '%aI', '%D', '%s'].join(FS) + RS;
+  // `%b` last, and read as everything after the subject: a body is the only
+  // field here that can be any length and contain anything, so nothing is put
+  // behind it and it is never assumed to be one field.
+  const format = ['%H', '%P', '%an', '%aI', '%D', '%s', '%b'].join(FS) + RS;
   // `--topo-order` is not a preference. In date order a branch's commits can be
   // listed before the merge that brings them in, and the lane layout then opens a
   // lane for the branch and pushes the trunk sideways — the trunk stops being a
@@ -193,20 +196,31 @@ async function log(root, { limit = 200, all = true } = {}) {
     .map((record) => record.replace(/^\n/, ''))
     .filter(Boolean)
     .map((record) => {
-      const [sha, parents, author, date, refs, subject] = record.split(FS);
+      const [sha, parents, author, date, refs, subject, ...body] = record.split(FS);
       return {
         sha,
         parents: parents ? parents.split(' ').filter(Boolean) : [],
         author,
         date,
         subject,
+        // The rest of the message. A subject is a title, and half the reason
+        // anyone opens a history is to read the paragraph under one.
+        body: body.join(FS).replace(/\s+$/, ''),
         refs: parseRefs(refs),
       };
     });
   return { ok: true, commits };
 }
 
-/** `HEAD -> refs/heads/main, refs/remotes/origin/main, refs/tags/v1` */
+/**
+ * `HEAD -> refs/heads/main, tag: refs/tags/v1, refs/remotes/origin/main`
+ *
+ * The `tag: ` is git's, and only on an *annotated* tag — a lightweight one is
+ * decorated as a bare `refs/tags/v1`. Both are tags to everybody except the
+ * person who made them, so the prefix comes off here rather than turning every
+ * annotated tag in the graph into an unrecognised label reading
+ * "tag: refs/tags/v1".
+ */
 function parseRefs(decoration) {
   if (!decoration) return [];
   return decoration
@@ -215,7 +229,7 @@ function parseRefs(decoration) {
     .filter(Boolean)
     .map((raw) => {
       const head = raw.startsWith('HEAD -> ');
-      const name = head ? raw.slice(8) : raw;
+      const name = (head ? raw.slice(8) : raw).replace(/^tag: /, '');
       if (name === 'HEAD') return { kind: 'head', name: 'HEAD', head: true };
       if (name.startsWith('refs/heads/')) return { kind: 'local', name: name.slice(11), head };
       if (name.startsWith('refs/remotes/')) return { kind: 'remote', name: name.slice(13), head: false };
@@ -354,9 +368,66 @@ async function diff(root, { sha = null, file = null, staged = false, untracked =
 
 // --- the verbs -------------------------------------------------------------
 
-const stage = (root, paths) => run(root, ['add', '--', ...paths]);
+/**
+ * A command line has a size. A changeset does not.
+ *
+ * Every path goes into the argument list, and the kernel refuses a list past
+ * ARG_MAX — a megabyte on macOS, and the environment is counted against it too.
+ * Ten thousand ordinary paths is a quarter of that and goes through fine; a
+ * checkout that drops a vendored tree into the working copy, or an untracked
+ * folder with a build in it, is not, and "Stage everything" came back as
+ * `spawn E2BIG` — a sentence nobody can act on, from a button that had just
+ * stopped working for no visible reason.
+ *
+ * So the paths go over in batches that fit. Well under the real limit, because
+ * the real limit is not a number this can know: it depends on how big the
+ * person's environment is.
+ */
+const ARG_BUDGET = 96 * 1024;
+
+/** Pure, so the arithmetic is tested rather than assumed. */
+function batches(paths, budget = ARG_BUDGET) {
+  const out = [];
+  let current = [];
+  let size = 0;
+  for (const path of paths) {
+    const cost = Buffer.byteLength(String(path)) + 1;
+    if (current.length && size + cost > budget) {
+      out.push(current);
+      current = [];
+      size = 0;
+    }
+    // A single path longer than the whole budget still goes, on its own: the
+    // alternative is this deciding that a legal filename is not one.
+    current.push(path);
+    size += cost;
+  }
+  if (current.length) out.push(current);
+  return out;
+}
+
+/**
+ * The same command, over as many argument lists as it takes.
+ *
+ * Sequential rather than parallel: `git add` takes the index lock, and two of
+ * them at once is one of them failing with a lock error. It stops at the first
+ * failure, so a batch that goes wrong is reported instead of being buried under
+ * the ones after it.
+ */
+async function overPaths(root, command, paths) {
+  const list = (paths ?? []).filter((path) => typeof path === 'string' && path);
+  if (!list.length) return { ok: true, stdout: '', stderr: '' };
+  let last = { ok: true, stdout: '', stderr: '' };
+  for (const batch of batches(list)) {
+    last = await run(root, [...command, ...batch]);
+    if (!last.ok) return last;
+  }
+  return last;
+}
+
+const stage = (root, paths) => overPaths(root, ['add', '--'], paths);
 /** `reset` leaves the working tree alone; it only takes things back out of the index. */
-const unstage = (root, paths) => run(root, ['reset', '--quiet', 'HEAD', '--', ...paths]);
+const unstage = (root, paths) => overPaths(root, ['reset', '--quiet', 'HEAD', '--'], paths);
 
 /**
  * Commit what is staged.
@@ -490,4 +561,5 @@ module.exports = {
   stashPop,
   parseRefs,
   entry,
+  batches,
 };

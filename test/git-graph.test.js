@@ -2,7 +2,7 @@ const assert = require('node:assert');
 const test = require('node:test');
 
 const { layout } = require('../electron/git-graph');
-const { parseRefs, entry } = require('../electron/git');
+const { parseRefs, entry, batches } = require('../electron/git');
 
 /** `a <- b` reads "a's parent is b", which is the direction git reports. */
 const c = (sha, ...parents) => ({ sha, parents });
@@ -155,4 +155,55 @@ test('a path is split into the folder and the name the tree groups by', () => {
     (({ dir, name }) => ({ dir, name }))(entry('/repo', 'README.md', '.M')),
     { dir: '', name: 'README.md' },
   );
+});
+
+/*
+ * An *annotated* tag is decorated `tag: refs/tags/v1`; a lightweight one is a
+ * bare `refs/tags/v1`. Only the second was recognised, so every release tag in
+ * a repository that makes annotated ones — which is every repository that uses
+ * `git tag -a` — drew as an unknown label reading "tag: refs/tags/v0.6.4".
+ */
+test('an annotated tag is a tag, prefix and all', () => {
+  assert.deepStrictEqual(
+    parseRefs('HEAD -> refs/heads/main, tag: refs/tags/v0.6.4, refs/remotes/origin/main'),
+    [
+      { kind: 'local', name: 'main', head: true },
+      { kind: 'tag', name: 'v0.6.4', head: false },
+      { kind: 'remote', name: 'origin/main', head: false },
+    ],
+  );
+});
+
+/*
+ * Staging a large change used to come back as `spawn E2BIG`: every path goes
+ * into the argument list, and the kernel refuses one past ARG_MAX. These are
+ * the sums that decide where the list gets cut.
+ */
+test('paths are handed to git in argument lists that fit', () => {
+  const paths = [];
+  for (let i = 0; i < 25000; i += 1) paths.push(`src/pkg/a-fairly-ordinary-file-name-${i}.ts`);
+  const lists = batches(paths);
+
+  assert.ok(lists.length > 1, 'a quarter of a million bytes of paths is more than one list');
+  assert.deepStrictEqual(lists.flat(), paths, 'every path goes, exactly once, in order');
+  for (const list of lists) {
+    const bytes = list.join(' ').length;
+    assert.ok(bytes <= 96 * 1024, `a list of ${bytes} bytes is over the budget`);
+  }
+});
+
+test('a short list is one list, and an empty one is none', () => {
+  assert.deepStrictEqual(batches(['a.ts', 'b.ts']), [['a.ts', 'b.ts']]);
+  assert.deepStrictEqual(batches([]), []);
+});
+
+/*
+ * A path longer than the whole budget still goes. Refusing it would be this
+ * deciding that a filename git is perfectly happy with is not a real one.
+ */
+test('a path bigger than the budget goes on its own rather than being dropped', () => {
+  const huge = 'x'.repeat(200 * 1024);
+  const lists = batches(['a.ts', huge, 'b.ts']);
+  assert.deepStrictEqual(lists.flat(), ['a.ts', huge, 'b.ts']);
+  assert.deepStrictEqual(lists[1], [huge]);
 });

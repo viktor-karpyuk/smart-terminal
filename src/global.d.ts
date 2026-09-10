@@ -134,6 +134,8 @@ export interface GitResult {
   behind?: number;
   detached?: boolean;
   files?: GitFile[];
+  /** Whether the line counts beside each file were read; see `status` in main. */
+  counted?: boolean;
   commits?: GitCommit[];
   width?: number;
   current?: string | null;
@@ -191,6 +193,8 @@ export interface GitCommit {
   author: string;
   date: string;
   subject: string;
+  /** The rest of the message, under the subject line. Empty when there is none. */
+  body: string;
   refs: GitRef[];
   /** Filled in by the lane layout: where this commit's dot and lines go. */
   lane: number;

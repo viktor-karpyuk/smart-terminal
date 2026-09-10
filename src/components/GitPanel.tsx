@@ -680,6 +680,13 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
           />
           <span className="git-selectall-count">
             {staged.length} of {files.length} staged
+            {/*
+              Said, rather than left as rows that quietly have no numbers on
+              them. Counting the lines means opening every changed file, twice,
+              on every refresh — which on a change this size is the slowest thing
+              the panel does, and it is doing it again the moment anything writes.
+            */}
+            {repo && !repo.counted && ' · too many files to count lines'}
           </span>
           <span style={{ flex: 1 }} />
           <button className="link-btn" disabled={allStaged} onClick={selectAll}>

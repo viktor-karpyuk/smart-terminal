@@ -190,6 +190,21 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
   if (name === 'deleteBranch' && args?.force) {
     return `Delete the branch "${String(args.name ?? '')}" even though it is not merged?`;
   }
+  /*
+   * A rebase, unlike the two above, takes nothing away that the reflog cannot
+   * give back. It is here because of where the button is: in the graph it sits
+   * beside "Merge into current", the two read alike, and one of them replays
+   * every commit on this branch as a new commit with a new hash. On a branch
+   * anybody else has pulled, that is the difference between a merge and an
+   * afternoon — and it is one click either way.
+   */
+  if (name === 'rebase') {
+    return (
+      `Rebase the current branch onto ${String(args.ref ?? 'this commit')}?\n\n` +
+      'Every commit on it is replayed as a new one. If the branch is already pushed, ' +
+      'what is on the remote no longer matches it.'
+    );
+  }
 
   /*
    * A cluster is not a working tree. There is no undo, no reflog and no copy on

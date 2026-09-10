@@ -169,3 +169,16 @@ test('a kubectl terminal is an alias, so nothing outside the tab changes', () =>
   // Nothing that a shell would read as an expansion when the alias is used.
   assert.throws(() => H.terminalSetup({ context: 'a$(whoami)' }), /cannot pass to a shell safely/);
 });
+
+/*
+ * The graph puts "Rebase onto this" next to "Merge into current". They read
+ * alike and one of them replays every commit on the branch under a new hash, so
+ * that one is asked about and the other is not.
+ */
+test('a rebase says what it is about to rewrite; a merge is left alone', () => {
+  const asked = H.needsConsent('rebase', { ref: 'origin/main' });
+  assert.match(asked, /Rebase the current branch onto origin\/main/);
+  assert.match(asked, /replayed as a new one/);
+  assert.equal(H.needsConsent('merge', { ref: 'origin/main' }), null);
+  assert.equal(H.needsConsent('checkout', { ref: 'main' }), null);
+});

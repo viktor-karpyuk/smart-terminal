@@ -1,10 +1,10 @@
 {
   "id": "git-graph",
   "name": "Git Graph",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Smart Terminal",
   "summary": "The history as a graph you can work in, not a list you can read.",
-  "description": "Every branch and every merge drawn as lanes, with the uncommitted work sitting at the top of them where it actually is. Branches, remotes and tags ride on the commit they point at, and clicking one checks it out. Select a commit for its whole message, its files and their line counts, and for the things you can do from there — check out, revert, branch, merge, rebase. Search runs over messages, authors and hashes and steps between the matches rather than hiding the shape of the history. Handles a long history because it only draws what is on screen. This is a panel, not a preview: it brings its own code and runs it in a frame with an origin of its own, with no reach into the app except a fixed list of git operations, two of which stop to ask you first.",
+  "description": "Every branch and every merge drawn as lanes, with the uncommitted work sitting on the commit it is actually on — HEAD, not whichever branch happens to have the newest commit. Branches, remotes and tags ride on the commit they point at, and clicking one checks it out. Select a commit for its whole message, its files and their line counts, and for the things you can do from there — check out, revert, branch, merge, rebase. Click a file for what changed in it, in that commit, rather than the file as it stands today. A merge that stops on a conflict says so across the top, with the way back out. Search runs over messages, authors and hashes and steps between the matches rather than hiding the shape of the history. Handles a long history because it only draws what is on screen, and reads further back when you ask. This is a panel, not a preview: it brings its own code and runs it in a frame with an origin of its own, with no reach into the app except a fixed list of git operations, two of which stop to ask you first.",
   "contributes": {
     "panels": [
       {

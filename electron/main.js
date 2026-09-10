@@ -1029,22 +1029,43 @@ function registerIpc() {
    * handler for, and every one of these takes its arguments as an array that
    * never touches a shell.
    */
+  /** How many changed files are still worth counting the lines of. See `status`. */
+  const COUNTED_LIMIT = 2000;
+
   const GIT = {
     root: (root) => git.repoRoot(root),
     status: async (root) => {
-      const [state, unstaged, staged] = await Promise.all([
-        git.status(root),
+      const state = await git.status(root);
+      if (!state.ok) return state;
+      /*
+       * Line counts, unless counting them is the slowest thing the panel does.
+       *
+       * `git diff --numstat` opens every changed file to count its lines: a
+       * tenth of a millisecond each, which is nothing at forty files and most of
+       * a second at eight thousand — twice, because staged and unstaged are two
+       * diffs. And a working tree that big is usually one being written to, so
+       * that cost is paid again every time anything changes. Past this many the
+       * numbers go, and the panel says why rather than showing rows that have
+       * lost their numbers for no reason.
+       */
+      if (state.files.length > COUNTED_LIMIT) {
+        for (const file of state.files) {
+          file.added = null;
+          file.removed = null;
+        }
+        return { ...state, counted: false };
+      }
+      const [unstaged, staged] = await Promise.all([
         git.stat(root, { staged: false }),
         git.stat(root, { staged: true }),
       ]);
-      if (!state.ok) return state;
       // A file's line counts live in whichever diff it is actually in.
       for (const file of state.files) {
         const counts = staged[file.path] ?? unstaged[file.path] ?? null;
         file.added = counts?.added ?? null;
         file.removed = counts?.removed ?? null;
       }
-      return state;
+      return { ...state, counted: true };
     },
     graph: async (root, { limit = 200 } = {}) => {
       const result = await git.log(root, { limit });

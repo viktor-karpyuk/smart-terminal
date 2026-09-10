@@ -187,6 +187,25 @@ let initStarted = false;
  * a panel changes folders or closes, and what it was holding is known rather
  * than guessed at.
  */
+/**
+ * One read of a repository at a time, and at most one more queued behind it.
+ *
+ * A working tree that is being written to reports a change every few hundred
+ * milliseconds, and reading a big one takes longer than that: a checkout, a
+ * build, a session running `git add`. Without this the reads overlap — each
+ * spawning git processes whose answer the next one overwrites, on a repository
+ * that is now busy enough to be slow because of it. The read in flight is
+ * allowed to finish, and everything asked for while it ran happens once, after.
+ */
+type RepoRead = 'status' | 'graph' | 'refs' | 'all';
+const readingRepo = new Map<string, { running: Promise<void>; queued: RepoRead | null }>();
+
+/** Of two things asked for, the one read that answers both. */
+function covering(a: RepoRead | null, b: RepoRead): RepoRead {
+  if (!a) return b;
+  return a === b ? a : 'all';
+}
+
 const followedRoots = new Map<string, string>();
 
 /**
@@ -225,6 +244,14 @@ interface RepoState {
   behind: number;
   detached: boolean;
   files: GitFile[];
+  /**
+   * Whether the line counts beside each file were read.
+   *
+   * They are not, past a few thousand changed files: counting them means opening
+   * every one of them, twice, on every refresh. False means the rows have no
+   * numbers because nobody asked for them, not because the files have none.
+   */
+  counted: boolean;
   commits: GitCommit[];
   graphWidth: number;
   current: string | null;
@@ -1844,54 +1871,78 @@ export const useStore = create<State>((set, get) => ({
    */
   async refreshRepo(root, what = 'status') {
     if (!root) return;
-    const base: RepoState = get().repos[root] ?? {
-      loading: false, error: null, branch: null, upstream: null, ahead: 0, behind: 0,
-      detached: false, files: [], commits: [], graphWidth: 1, current: null,
-      local: [], remote: [], tags: [], stashes: [], busy: null, notice: null,
-    };
-    set((prev) => ({ repos: { ...prev.repos, [root]: { ...base, loading: true } } }));
+    // Somebody is already reading this one; ride along with it, and make sure
+    // what is being asked for now happens once it lands. See `readingRepo`.
+    const waiting = readingRepo.get(root);
+    if (waiting) {
+      waiting.queued = covering(waiting.queued, what);
+      return waiting.running;
+    }
+    const turn: { running: Promise<void>; queued: RepoRead | null } = { running: Promise.resolve(), queued: null };
+    readingRepo.set(root, turn);
+    turn.running = (async () => {
+      let next: RepoRead | null = what;
+      while (next) {
+        const now: RepoRead = next;
+        turn.queued = null;
+        await readRepo(now);
+        next = turn.queued;
+      }
+      readingRepo.delete(root);
+    })();
+    return turn.running;
 
-    const wants = (kind: string) => what === 'all' || what === kind;
-    const [status, graph, refs] = await Promise.all([
-      wants('status') ? window.api.git.call('status', root) : Promise.resolve(null),
-      wants('graph') ? window.api.git.call('graph', root, { limit: 200 }) : Promise.resolve(null),
-      wants('refs') ? window.api.git.call('refs', root) : Promise.resolve(null),
-    ]);
-
-    set((prev) => {
-      const current = prev.repos[root] ?? base;
-      const error = [status, graph, refs].find((r) => r && !r.ok)?.error ?? null;
-      return {
-        repos: {
-          ...prev.repos,
-          [root]: {
-            ...current,
-            loading: false,
-            error,
-            ...(status?.ok
-              ? {
-                  branch: status.branch ?? null,
-                  upstream: status.upstream ?? null,
-                  ahead: status.ahead ?? 0,
-                  behind: status.behind ?? 0,
-                  detached: status.detached ?? false,
-                  files: status.files ?? [],
-                }
-              : {}),
-            ...(graph?.ok ? { commits: graph.commits ?? [], graphWidth: graph.width ?? 1 } : {}),
-            ...(refs?.ok
-              ? {
-                  current: refs.current ?? null,
-                  local: refs.local ?? [],
-                  remote: refs.remote ?? [],
-                  tags: refs.tags ?? [],
-                  stashes: refs.stashes ?? [],
-                }
-              : {}),
-          },
-        },
+    async function readRepo(wanted: RepoRead) {
+      const base: RepoState = get().repos[root] ?? {
+        loading: false, error: null, branch: null, upstream: null, ahead: 0, behind: 0,
+        detached: false, files: [], counted: true, commits: [], graphWidth: 1, current: null,
+        local: [], remote: [], tags: [], stashes: [], busy: null, notice: null,
       };
-    });
+      set((prev) => ({ repos: { ...prev.repos, [root]: { ...base, loading: true } } }));
+
+      const wants = (kind: string) => wanted === 'all' || wanted === kind;
+      const [status, graph, refs] = await Promise.all([
+        wants('status') ? window.api.git.call('status', root) : Promise.resolve(null),
+        wants('graph') ? window.api.git.call('graph', root, { limit: 200 }) : Promise.resolve(null),
+        wants('refs') ? window.api.git.call('refs', root) : Promise.resolve(null),
+      ]);
+
+      set((prev) => {
+        const current = prev.repos[root] ?? base;
+        const error = [status, graph, refs].find((r) => r && !r.ok)?.error ?? null;
+        return {
+          repos: {
+            ...prev.repos,
+            [root]: {
+              ...current,
+              loading: false,
+              error,
+              ...(status?.ok
+                ? {
+                    branch: status.branch ?? null,
+                    upstream: status.upstream ?? null,
+                    ahead: status.ahead ?? 0,
+                    behind: status.behind ?? 0,
+                    detached: status.detached ?? false,
+                    files: status.files ?? [],
+                    counted: status.counted !== false,
+                  }
+                : {}),
+              ...(graph?.ok ? { commits: graph.commits ?? [], graphWidth: graph.width ?? 1 } : {}),
+              ...(refs?.ok
+                ? {
+                    current: refs.current ?? null,
+                    local: refs.local ?? [],
+                    remote: refs.remote ?? [],
+                    tags: refs.tags ?? [],
+                    stashes: refs.stashes ?? [],
+                  }
+                : {}),
+            },
+          },
+        };
+      });
+    }
   },
 
   /**
