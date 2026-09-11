@@ -1324,17 +1324,39 @@ function registerIpc() {
       return { ok: true, run: started };
     },
     stop: (args = {}) => springRuns.stop(runOr(args.id, rootOf(args)).id),
-    forget: (args = {}) => springRuns.forget(runOr(args.id, rootOf(args)).id),
+    forget: (args = {}) => {
+      const root = rootOf(args);
+      const run = springRuns.get(String(args.id ?? ''));
+      // Already gone — forgotten from another panel — is the state asked for.
+      if (!run) return { ok: true };
+      if (!spring.underRoot(run, root)) throw new Error('That run is not known — it may have been forgotten');
+      const gone = spring.summary(run);
+      const result = springRuns.forget(run.id);
+      // Every panel drops it, not only the one that asked.
+      if (result.ok) send('spring:state', { ...gone, forgotten: true });
+      return result;
+    },
+    /*
+     * Read on a port the application itself printed, and only while it is up.
+     * A port from the configuration is a number somebody wrote in a file, and
+     * a file in a folder is not a reason to send a request to a port.
+     */
+    readable: (run) => {
+      const s = spring.summary(run);
+      if (s.status !== 'up' || !s.portFromLog) throw new Error('The actuator can be read once the application is up');
+      return s;
+    },
     actuator: async (args = {}) => {
       const run = runOr(args.id, rootOf(args));
-      const url = spring.actuatorUrl(spring.summary(run), String(args.endpoint ?? ''), args.name ? String(args.name) : '');
+      const url = spring.actuatorUrl(SPRING.readable(run), String(args.endpoint ?? ''), args.name ? String(args.name) : '');
       return spring.fetchJson(url);
     },
     setLogLevel: async (args = {}) => {
       const run = runOr(args.id, rootOf(args));
+      const summary = SPRING.readable(run);
       const wanted = String(args.level ?? '').toUpperCase();
       if (wanted !== 'NULL' && !spring.LEVELS.has(wanted)) throw new Error(`"${args.level}" is not a log level`);
-      const url = spring.actuatorUrl(spring.summary(run), 'loggers', String(args.logger ?? ''));
+      const url = spring.actuatorUrl(summary, 'loggers', String(args.logger ?? ''));
       return spring.fetchJson(url, { method: 'POST', body: { configuredLevel: wanted === 'NULL' ? null : wanted } });
     },
     brief: (args = {}) => {
@@ -1346,7 +1368,7 @@ function registerIpc() {
   };
 
   ipcMain.handle('spring:call', async (_e, { name, args } = {}) => {
-    const handler = SPRING[name];
+    const handler = name === 'readable' ? null : SPRING[name];
     if (!handler) return { ok: false, error: `No such Spring Boot action: ${name}` };
     try {
       return await handler(args ?? {});
@@ -1791,13 +1813,19 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   else createWindow();
 
   app.on('activate', () => {
+    // Not on the way out: the database is closed and a window would open onto nothing.
+    if (isQuitting) return;
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
 app.on('window-all-closed', () => {
   ptys?.killAll();
-  if (process.platform !== 'darwin') app.quit();
+  // Every window was closed on purpose; there is nobody left to ask.
+  if (process.platform !== 'darwin') {
+    quitConfirmed = true;
+    app.quit();
+  }
 });
 
 /**
@@ -2315,14 +2343,10 @@ function retireLegacyWorkspace() {
  * them running with nothing on screen to show it.
  */
 let springStopped = false;
-app.on('will-quit', (event) => {
+app.on('will-quit', () => {
   kubeStreams.stopAll();
-  if (springStopped || !springRuns.liveCount) return;
-  event.preventDefault();
-  springRuns.stopAll().then(() => {
-    springStopped = true;
-    app.quit();
-  });
+  // Whatever is still going — a run that began after the stop — gets its signal on the way out.
+  if (!springStopped) springRuns.stopAll({ grace: 0 });
 });
 
 /*
@@ -2353,6 +2377,23 @@ app.on('before-quit', (event) => {
       return;
     }
   }
+
+  /*
+   * The applications first, and the rest of the quit only once they are gone.
+   * Done here, with the database still open and the windows still up, rather
+   * than from `will-quit`: a quit cancelled there and started again would run
+   * this handler a second time against a database already closed.
+   */
+  if (!springStopped && springRuns.liveCount) {
+    event.preventDefault();
+    springRuns.stopAll().then(() => {
+      springStopped = true;
+      setImmediate(() => app.quit());
+    });
+    return;
+  }
+  // A quit that is already under way: nothing here is done twice.
+  if (isQuitting) return;
 
   isQuitting = true;
   // Re-assert every window still on screen as open. Relying on the close handler

@@ -526,6 +526,9 @@ export interface SpringRun {
   pid: number | null;
   steps: string[];
   step: number;
+  portFromLog: boolean;
+  /** Sent once, when a run is forgotten, so every panel drops it. */
+  forgotten?: boolean;
 }
 
 export interface ExtensionPanelView {
@@ -863,7 +866,9 @@ declare global {
       /** Spring Boot: the applications under a folder, and the ones running. */
       spring: {
         call(name: string, args?: unknown): Promise<{ ok: boolean; error?: string; [key: string]: unknown }>;
-        onOutput(handler: (payload: { id: string; text: string; stream: 'out' | 'err' | 'app' }) => void): () => void;
+        onOutput(
+          handler: (payload: { id: string; root: string | null; dir: string; seq: number; text: string; stream: 'out' | 'err' | 'app' }) => void,
+        ): () => void;
         onState(handler: (payload: SpringRun) => void): () => void;
       };
       /** Maven and Gradle projects, read — never run — by the main process. */

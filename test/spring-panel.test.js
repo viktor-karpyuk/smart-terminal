@@ -16,7 +16,7 @@ const vm = require('node:vm');
 function fromPanel() {
   const html = fs.readFileSync(path.join(__dirname, '..', 'extensions', 'spring-boot', 'panel.html'), 'utf8');
   const source = /<script>([\s\S]*)<\/script>/.exec(html)[1];
-  const wanted = ['esc', 'ANSI_COLOURS', 'ansiToHtml', 'statusClass', 'statusWords', 'majorOf', 'profileList', 'relativeTo'];
+  const wanted = ['esc', 'ANSI_COLOURS', 'ansiToHtml', 'statusClass', 'statusWords', 'profileList', 'relativeTo'];
   const starts = wanted.map((name) => {
     const at = source.search(new RegExp(`\\n  (?:var|function) ${name}\\b`));
     assert.ok(at >= 0, `the panel no longer defines ${name}`);
@@ -56,12 +56,11 @@ test('a run has a colour and a sentence', () => {
   assert.equal(P.statusWords({ status: 'up', port: 8222, seconds: 12.3 }), 'up on :8222 · 12.3s');
   assert.equal(P.statusWords({ status: 'building', phase: 'mvn install' }), 'building — mvn install');
   assert.equal(P.statusWords({ status: 'failed', code: 1 }), 'failed to start (exit 1)');
+  assert.equal(P.statusWords({ status: 'failed', code: -2 }), 'failed to start', 'a negative code is Node’s, not the program’s');
   assert.equal(P.statusWords({ status: 'exited', code: 0 }), 'exited (0)');
 });
 
 test('the small readers agree with the backend', () => {
-  assert.equal(P.majorOf('17.0.12'), '17');
-  assert.equal(P.majorOf('1.8'), '8');
   assert.deepEqual(P.profileList(' local, dev  prod'), ['local', 'dev', 'prod']);
   assert.equal(P.relativeTo('/w', '/w/be/app'), 'be/app');
   assert.equal(P.relativeTo('/w', '/w'), 'w');

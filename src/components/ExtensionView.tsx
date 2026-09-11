@@ -592,11 +592,15 @@ function Frame({
     // Only a panel that asked. A build prints a line per write, and every
     // frame in every window hearing each one is the wrong shape for a channel.
     if (!view.listens?.includes('spring') || !root) return;
-    const stopOutput = window.api.spring.onOutput((payload) => tell('spring', { kind: 'output', ...payload }));
+    // Its own folder's runs; another folder's are another panel's news — the
+    // console as much as the state, because a console is where secrets are printed.
+    const mine = (payload: { root?: string | null; dir?: unknown }) =>
+      payload.root === root || (typeof payload.dir === 'string' && (payload.dir === root || payload.dir.startsWith(`${root}/`)));
+    const stopOutput = window.api.spring.onOutput((payload) => {
+      if (mine(payload)) tell('spring', { kind: 'output', ...payload });
+    });
     const stopState = window.api.spring.onState((run) => {
-      // Its own folder's runs; another folder's are another panel's news.
-      if (run.root !== root && !(typeof run.dir === 'string' && (run.dir === root || run.dir.startsWith(`${root}/`)))) return;
-      tell('spring', { kind: 'state', run });
+      if (mine(run)) tell('spring', { kind: 'state', run });
     });
     return () => {
       stopOutput();

@@ -207,7 +207,7 @@
     filter: '',
     /** Applications the person asked to restart: stop, and start again when it has stopped — with the debugger, when it had one. */
     restarting: {},
-    actuator: { tab: 'health', data: null, error: null, loading: false, filter: '', forRun: null },
+    actuator: { tab: 'health', data: null, error: null, loading: false, filter: '', forRun: null, cache: {}, filterTimer: null },
     saveTimer: null,
     savedAt: 0,
     loadedAt: 0,
@@ -217,7 +217,11 @@
     /** Consoles being fetched, so two askers get one answer. */
     fetching: {},
     filterTimer: null,
+    /** Applications whose start was asked for and not yet answered. */
+    starting: {},
   };
+  /** A line longer than this is a progress bar, not a line — the same cut the app makes. */
+  var MAX_LINE = 64 * 1024;
   /** How many lines the console keeps on screen — the same as the app keeps. */
   var CONSOLE_CAP = 5000;
 
@@ -301,11 +305,11 @@
       case 'starting': return 'starting';
       case 'up': return 'up on :' + run.port + (run.seconds ? ' · ' + run.seconds + 's' : '');
       case 'failing': return 'failing';
-      case 'failed': return 'failed to start' + (run.code != null ? ' (exit ' + run.code + ')' : '');
+      case 'failed': return 'failed to start' + (run.code != null && run.code > 0 ? ' (exit ' + run.code + ')' : '');
       case 'buildFailed': return 'build failed';
       case 'stopping': return 'stopping';
       case 'stopped': return 'stopped';
-      case 'exited': return 'exited' + (run.code != null ? ' (' + run.code + ')' : '');
+      case 'exited': return 'exited' + (run.code != null && run.code >= 0 ? ' (' + run.code + ')' : '');
       default: return run.status;
     }
   }
@@ -349,11 +353,6 @@
     };
   }
 
-  /** `17`, `17.0.12` and `1.8` all say a major. */
-  function majorOf(version) {
-    var m = /(?:^|[^\d])(1\.(\d)|(\d{1,2}))(?:\D|$)/.exec(String(version || ''));
-    return m ? (m[2] || m[3] || '') : '';
-  }
 
   /** The JDK the app will pick for an application when the configuration names none. */
   function autoJdk(app) {
@@ -453,6 +452,8 @@
     }
     var html = '';
     var groups = groupByReactor(state.apps);
+    var names = {};
+    for (var n = 0; n < state.apps.length; n += 1) names[state.apps[n].name] = (names[state.apps[n].name] || 0) + 1;
     for (var g = 0; g < groups.length; g += 1) {
       var group = groups[g];
       if (groups.length > 1 || group.apps.length > 1) html += '<div class="group">' + esc(group.label) + '</div>';
@@ -464,7 +465,7 @@
         html += '<div class="item' + (state.selected === app.dir ? ' is-selected' : '') + '" data-app="' + esc(app.dir) + '">' +
           '<span class="dot ' + cls + '"></span>' +
           '<span class="label"><span class="n">' + esc(app.name) + '</span>' +
-          '<span class="s">' + esc(run ? statusWords(run) : (app.modulePath || app.tool)) + '</span></span>' +
+          '<span class="s">' + esc(run ? statusWords(run) : names[app.name] > 1 ? relativeTo(state.root, app.dir) : (app.modulePath || app.tool)) + '</span></span>' +
           '<span class="port">' + esc(port) + '</span></div>';
       }
     }
@@ -559,8 +560,8 @@
           ? '<button class="btn bad" id="stop"' + (run.status === 'stopping' ? ' disabled' : '') + '>Stop</button>' +
             '<button class="btn" id="restart"' + (run.status === 'stopping' ? ' disabled' : '') + '>Restart</button>' +
             (run.debugPort ? '<button class="btn" id="jdb" title="The JDK\'s own debugger, in a terminal, attached to this JVM">jdb</button>' : '')
-          : '<button class="btn go" id="run">Run</button>' +
-            '<button class="btn go" id="debug" title="Run with the JVM listening for a debugger on localhost">Debug</button>') +
+          : '<button class="btn go" id="run"' + (state.starting[app.dir] ? ' disabled' : '') + '>Run</button>' +
+            '<button class="btn go" id="debug" title="Run with the JVM listening for a debugger on localhost"' + (state.starting[app.dir] ? ' disabled' : '') + '>Debug</button>') +
         '<button class="btn" id="shell" title="A terminal in this folder, with this JDK">Shell</button>' +
         '<button class="btn" id="ask"' + (run ? '' : ' disabled title="Run it first"') + '>Ask Claude</button>' +
       '</div>';
@@ -642,6 +643,8 @@
   function rebuildConsole(run) {
     var pre = $('console');
     if (!pre || !run) return;
+    // Not another application's console: a debounced filter can land after a switch.
+    if (run.appId !== state.selected) return;
     state.queued = [];
     var held = state.consoles[run.id];
     if (!held) {
@@ -661,7 +664,11 @@
   }
 
   function lineHtml(line) {
-    return '<span class="l' + (line.stream === 'err' ? ' err' : line.stream === 'app' ? ' app' : '') + '">' + ansiToHtml(line.text) + '</span>';
+    // What a terminal would show of a line redrawn with carriage returns: the last drawing.
+    var text = line.text;
+    var cr = text.lastIndexOf('\r');
+    if (cr >= 0) text = text.slice(cr + 1);
+    return '<span class="l' + (line.stream === 'err' ? ' err' : line.stream === 'app' ? ' app' : '') + '">' + ansiToHtml(text) + '</span>';
   }
 
   function scrollToEnd() {
@@ -677,7 +684,7 @@
       var lines = (result.lines || []).map(function (line) { return { text: String(line.text || ''), stream: line.stream || 'out' }; });
       // Nothing that arrived meanwhile is lost: what the app sends is what it
       // has kept, and what it kept includes everything it sent before this answer.
-      state.consoles[run.id] = { lines: lines, rest: String(result.rest || ''), restStream: result.restStream || 'out' };
+      state.consoles[run.id] = { lines: lines, rest: String(result.rest || ''), restStream: result.restStream || 'out', seq: Number(result.seq) || 0 };
     }).catch(function (error) {
       state.consoles[run.id] = { lines: [{ text: String(error.message || error), stream: 'err' }], rest: '', restStream: 'out' };
     }).then(function () {
@@ -694,10 +701,20 @@
     if (!run) return;
     var held = state.consoles[payload.id];
     if (!held) return; // not loaded yet: it will arrive with the whole console
+    // A chunk the snapshot already had: the app numbers both, so this is exact.
+    if (typeof payload.seq === 'number') {
+      if (payload.seq <= (held.seq || 0)) return;
+      held.seq = payload.seq;
+    }
     var text = held.rest + payload.text;
     var parts = text.split('\n');
     held.rest = parts.pop();
     held.restStream = payload.stream;
+    // A line that never ends is a progress bar redrawn in place; it is cut and shown as one.
+    if (held.rest.length > MAX_LINE) {
+      parts.push(held.rest);
+      held.rest = '';
+    }
     var fresh = [];
     for (var i = 0; i < parts.length; i += 1) {
       var line = { text: parts[i], stream: payload.stream };
@@ -833,9 +850,10 @@
       call('spring.saveConfig', { app: app.dir, config: config }).then(function () {
         var saved = $('saved');
         if (saved) saved.textContent = 'saved';
-      }).catch(function (error) { say('Could not save the configuration: ' + error.message, true); });
+      }).catch(function (error) { say('The configuration could not be saved (' + error.message + '). It is used for this run but will not be remembered.', true); });
     };
-    if (now) save(); else state.saveTimer = setTimeout(save, 500);
+    state.pendingSave = save;
+    if (now) { state.pendingSave = null; save(); } else state.saveTimer = setTimeout(function () { state.pendingSave = null; save(); }, 500);
     // The sidebar's port for this application, without rebuilding the sidebar.
     var item = document.querySelector('nav .item[data-app="' + app.dir.replace(/"/g, '&quot;') + '"] .port');
     var current = runFor(app);
@@ -870,8 +888,13 @@
         drawActuator(app, run);
       };
     }
-    $('act-refresh').onclick = function () { state.actuator.data = null; drawActuator(app, run); };
-    $('act-filter').oninput = function () { state.actuator.filter = this.value; drawActuatorBody(run); };
+    $('act-refresh').onclick = function () { delete state.actuator.cache[run.id + '|' + state.actuator.tab]; state.actuator.data = null; drawActuator(app, run); };
+    $('act-filter').oninput = function () {
+      var value = this.value;
+      // A table of thousands of rows is not rebuilt per keystroke.
+      clearTimeout(state.actuator.filterTimer);
+      state.actuator.filterTimer = setTimeout(function () { state.actuator.filter = value; drawActuatorBody(run); }, 120);
+    };
     if (state.actuator.data && state.actuator.forRun === run.id && !state.actuator.error) drawActuatorBody(run);
     else loadActuator(run);
   }
@@ -880,11 +903,21 @@
     var tabName = state.actuator.tab;
     state.actuator.loading = true;
     state.actuator.forRun = run.id;
+    // Read once per run and tab; a switch back does not fetch five megabytes again.
+    var cached = state.actuator.cache[run.id + '|' + tabName];
+    if (cached) {
+      state.actuator.data = cached;
+      state.actuator.error = null;
+      state.actuator.loading = false;
+      drawActuatorBody(run);
+      return;
+    }
     var act = $('act');
     if (act) act.innerHTML = '<div class="loading">asking /actuator/' + esc(tabName) + '…</div>';
     call('spring.actuator', { id: run.id, endpoint: tabName }).then(function (result) {
       if (state.actuator.tab !== tabName || state.actuator.forRun !== run.id) return;
       state.actuator.data = result.data;
+      state.actuator.cache[run.id + '|' + tabName] = result.data;
       state.actuator.error = null;
       state.actuator.loading = false;
       drawActuatorBody(run);
@@ -940,7 +973,7 @@
     var status = part && part.status ? String(part.status) : '?';
     var cls = status === 'UP' ? 'up' : status === 'DOWN' || status === 'OUT_OF_SERVICE' ? 'bad' : 'off';
     // v3 nests under `components`; v2 nests under `details` beside the plain values. Both are listed as what they are.
-    var nested = (part && part.components) || {};
+    var nested = Object.assign({}, part && part.components);
     var plain = {};
     var keys = part && part.details ? Object.keys(part.details) : [];
     for (var i = 0; i < keys.length; i += 1) {
@@ -1034,6 +1067,7 @@
     if (hidden && !shown) {
       html += '<div class="note">Every value is hidden. Set <code>management.endpoint.env.show-values=always</code> (or <code>when-authorized</code>) to see them here.</div>';
     }
+    var total = 0;
     for (var i = 0; i < sources.length; i += 1) {
       var props = sources[i].properties || {};
       var keys = Object.keys(props).sort();
@@ -1041,10 +1075,12 @@
       for (var k = 0; k < keys.length; k += 1) {
         var value = props[keys[k]] && props[keys[k]].value != null ? String(props[keys[k]].value) : '';
         if (filter && (keys[k] + '=' + value).toLowerCase().indexOf(filter) < 0) continue;
+        total += 1;
+        if (total > 800) break;
         rows += '<tr><td>' + esc(keys[k]) + '</td><td class="faint">' + esc(value) + '</td></tr>';
       }
-      if (!rows) continue;
-      html += '<table class="rows"><tr><th colspan="2">' + esc(sources[i].name) + '</th></tr>' + rows + '</table>';
+      if (rows) html += '<table class="rows"><tr><th colspan="2">' + esc(sources[i].name) + '</th></tr>' + rows + '</table>';
+      if (total > 800) { html += '<div class="faint" style="padding:6px 8px">… more; filter to see them</div>'; break; }
     }
     return html;
   }
@@ -1081,8 +1117,13 @@
         var level = el.value || 'null';
         call('spring.setLogLevel', { id: run.id, logger: logger, level: level }).then(function () {
           say(logger + ' → ' + (el.value || 'inherited'));
-          state.actuator.data = null;
-          loadActuator(run);
+          // The answer is known; the three thousand loggers are not fetched again for it.
+          var data = state.actuator.data;
+          if (data && data.loggers && data.loggers[logger]) {
+            data.loggers[logger].configuredLevel = el.value || null;
+            if (el.value) data.loggers[logger].effectiveLevel = el.value;
+          }
+          drawActuatorBody(run);
         }).catch(function (error) { say(error.message, true); });
       };
     }
@@ -1143,10 +1184,11 @@
       state.filter = '';
       remember();
     }
+    state.starting[app.dir] = true;
     call('spring.start', { app: { dir: app.dir }, config: config, debug: Boolean(debug) }).then(function (result) {
+      delete state.starting[app.dir];
       var run = result.run;
       state.runs[run.id] = run;
-      if (!state.consoles[run.id]) state.consoles[run.id] = { lines: [], rest: '', restStream: 'out' };
       // The previous run of the same application is history now; its console goes with it.
       if (old && old.done && old.id !== run.id) {
         delete state.runs[old.id];
@@ -1155,6 +1197,7 @@
       }
       draw();
     }).catch(function (error) {
+      delete state.starting[app.dir];
       say(error.message, true);
       draw();
     });
@@ -1163,16 +1206,31 @@
 
   function stop(run) {
     if (!run) return;
-    call('spring.stop', { id: run.id }).catch(function (error) { say(error.message, true); });
+    call('spring.stop', { id: run.id }).catch(function (error) {
+      // A stop that did not happen is not a restart waiting to happen.
+      delete state.restarting[run.appId];
+      say(error.message, true);
+    });
+  }
+
+  /** Drop a run from this panel, whether or not the app still had it. */
+  function dropRun(id) {
+    delete state.runs[id];
+    delete state.consoles[id];
+    delete state.fetching[id];
   }
 
   function forget(run) {
     if (!run) return;
     call('spring.forget', { id: run.id }).then(function () {
-      delete state.runs[run.id];
-      delete state.consoles[run.id];
+      dropRun(run.id);
       draw();
-    }).catch(function (error) { say(error.message, true); });
+    }).catch(function (error) {
+      // Forgotten elsewhere already: gone is what was asked for.
+      dropRun(run.id);
+      say(error.message, true);
+      draw();
+    });
   }
 
   function debuggerFor(app, run) {
@@ -1189,13 +1247,21 @@
 
   function ask(run) {
     if (!run) return;
-    call('spring.ask', { id: run.id }).catch(function (error) { say(error.message, true); });
+    call('spring.ask', { id: run.id }).then(function (result) {
+      if (result && result.delivered === false) say('The briefing is waiting for Claude to start; it lands when the session is at its prompt.');
+    }).catch(function (error) { say(error.message, true); });
   }
 
   /** Where the run stands changed. */
   function onState(run) {
     if (!run || !run.id) return;
     if (!belongsHere(run)) return;
+    if (run.forgotten) {
+      if (!state.runs[run.id]) return;
+      dropRun(run.id);
+      draw();
+      return;
+    }
     var before = state.runs[run.id];
     state.runs[run.id] = run;
     // Its console is fetched when it is looked at, not for every run that exists.
@@ -1233,10 +1299,17 @@
    * ---------------------------------------------------------------------- */
 
   function load() {
+    // An edit still waiting to be saved goes first, or the answer would overwrite it.
+    if (state.saveTimer) {
+      clearTimeout(state.saveTimer);
+      state.saveTimer = null;
+      if (state.pendingSave) state.pendingSave();
+    }
     state.loading = true;
     state.stale = false;
     state.error = null;
-    draw();
+    // No redraw while there is something on screen: a refresh should not take the console away to bring it back.
+    if (!state.apps.length) draw();
     return Promise.all([
       call('spring.projects'),
       call('spring.configs'),
@@ -1247,8 +1320,22 @@
       state.configs = results[1].configs || {};
       state.jdks = results[3].jdks || [];
       var runs = results[2].runs || [];
-      for (var i = 0; i < runs.length; i += 1) state.runs[runs[i].id] = runs[i];
-      // Applications that were running from a folder no longer here are still worth a row.
+      // What the app has is what there is: a run forgotten elsewhere goes, and one started elsewhere arrives.
+      var known = {};
+      for (var i = 0; i < runs.length; i += 1) {
+        known[runs[i].id] = true;
+        state.runs[runs[i].id] = runs[i];
+      }
+      Object.keys(state.runs).forEach(function (id) { if (!known[id]) dropRun(id); });
+      // A run whose application the folder no longer shows still needs a row, or it could not be stopped from here.
+      var dirs = {};
+      for (var a = 0; a < state.apps.length; a += 1) dirs[state.apps[a].dir] = true;
+      for (var r = 0; r < runs.length; r += 1) {
+        if (dirs[runs[r].appId]) continue;
+        dirs[runs[r].appId] = true;
+        state.apps.push({ id: runs[r].appId, dir: runs[r].appId, name: runs[r].appName, tool: runs[r].tool, reactor: runs[r].appId, module: '', modulePath: '', profiles: [], byProfile: {}, port: runs[r].port, actuator: runs[r].actuator, javaVersion: '', orphan: true });
+      }
+      if (results[0].truncated) say('Some modules were too large to read to the end; an application in them may be missing. Refresh to look again.', true);
       if (!state.selected || !appById(state.selected)) {
         state.selected = state.apps.length ? preferredApp().dir : null;
       }
@@ -1292,6 +1379,7 @@
     if (!item) return;
     state.selected = item.getAttribute('data-app');
     state.filter = '';
+    clearTimeout(state.filterTimer);
     state.actuator.data = null;
     remember();
     draw();

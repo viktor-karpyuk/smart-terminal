@@ -733,7 +733,12 @@ function ExtensionButtons({ panelId }: { panelId: string }) {
             aria-label={title}
             title={title}
           >
-            {needs === 'build' ? (
+            {needs === 'folder' ? (
+              // A folder panel runs things: a play mark.
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
+                <path d="M4 2.2v9.6l7.4-4.8z" />
+              </svg>
+            ) : needs === 'build' ? (
               // A build: the layers of an artifact, being put together.
               <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
                 <path d="M7 1.8 12.4 4.5 7 7.2 1.6 4.5z" />
