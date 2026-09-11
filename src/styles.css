@@ -1696,6 +1696,14 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .file-tab.is-selected { background: var(--bg); color: var(--text); }
 .file-tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-tab-dirty { width: 6px; height: 6px; border-radius: 50%; background: var(--text); flex: 0 0 auto; }
+
+/* What the repository under a folder is waiting for, in the colours the Git tab
+   already uses: amber for changes that are only in the working tree, green for
+   commits that are only on this machine. A dot and a number rather than two
+   dots, because the two are answered by different actions and reading them
+   apart at a glance is the whole point. */
+.tab-git-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--git-new); flex: 0 0 auto; }
+.tab-git-up { font-size: 10px; line-height: 1; color: var(--ok); flex: 0 0 auto; letter-spacing: -0.02em; }
 .file-tab:hover .tab-close, .file-tab.is-selected .tab-close { opacity: 1; }
 
 .file-crumbs { display: flex; align-items: center; gap: 4px; padding: 4px 12px; border-bottom: 1px solid var(--border); font-size: 10.5px; color: var(--text-faint); }

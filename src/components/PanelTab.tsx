@@ -1,5 +1,6 @@
 import { useStore } from '../state/store';
 import { PANEL_MIME } from '../lib/drag';
+import { folderGit } from '../lib/folderGit';
 
 /**
  * The tab a file panel wears.
@@ -24,9 +25,29 @@ export function PanelTab({
   const setDraggingId = useStore((s) => s.setDraggingSessionId);
   const setActiveLeaf = useStore((s) => s.setActiveLeaf);
   const focusPanel = useStore((s) => s.focusPanel);
+  /*
+   * Unsaved text, in *this* folder.
+   *
+   * It used to be every buffer the app had open, so a file edited in one folder
+   * put the dot on every folder tab on screen — which says the opposite of what
+   * a dot on a tab is for.
+   */
+  const folder = panel?.kind === 'files' ? panel.root : '';
   const unsaved = useStore((s) =>
-    Object.values(s.buffers).some((buffer) => buffer.text !== buffer.savedText),
+    Object.entries(s.buffers).some(
+      ([file, buffer]) =>
+        buffer.text !== buffer.savedText && (!folder || file === folder || file.startsWith(`${folder}/`)),
+    ),
   );
+  /*
+   * And what the repository underneath it is waiting for.
+   *
+   * The folder finds its repository when it opens rather than when Git does, so
+   * this is answered before anybody has clicked anything — see followFolderGit.
+   */
+  const gitRoot = panel?.kind === 'files' ? panel.gitRoot : null;
+  const repo = useStore((s) => (gitRoot ? s.repos[gitRoot] : undefined));
+  const git = folderGit(repo);
 
   if (!panel) return null;
   const monitor = panel.kind === 'monitor';
@@ -93,6 +114,20 @@ export function PanelTab({
       </svg>
       <span className="tab-title">{name}</span>
       {!monitor && !view && unsaved && <span className="file-tab-dirty" title="unsaved changes" />}
+      {/*
+        The same two colours the Git tab uses for the same two things, so a
+        folder tab and the panel behind it are never saying different things:
+        amber for work that is only in the working tree, green for commits that
+        are only on this machine.
+      */}
+      {!monitor && !view && git.state === 'uncommitted' && (
+        <span className="tab-git-dot" title={git.title} aria-label={git.title} />
+      )}
+      {!monitor && !view && git.state === 'unpushed' && (
+        <span className="tab-git-up" title={git.title} aria-label={git.title}>
+          ↑{git.count}
+        </span>
+      )}
       {/* A folder can be put down without being closed, the same as a session:
           the tree it is showing takes real work to get back to. */}
       <button
