@@ -340,10 +340,15 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
    * is one double-click away from the one everybody runs.
    */
   if (name === 'build.run') {
-    const goals = Array.isArray(args.goals) ? args.goals.map(String) : [];
-    if (goals.some(publishes)) {
+    // Everything that ends up on the line, not only what the tree called a
+    // goal: `deploy` typed into the run box is the same deploy.
+    const words = [
+      ...(Array.isArray(args?.goals) ? args.goals.map(String) : []),
+      ...(Array.isArray(args?.extra) ? args.extra.map(String) : []),
+    ];
+    if (words.some(publishes)) {
       return (
-        `Run ${goals.join(' ')}?\n\n` +
+        `Run ${words.join(' ')}?\n\n` +
         'This publishes the artifact to a remote repository, where everybody else resolves it from.'
       );
     }
@@ -351,10 +356,23 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
   return null;
 }
 
-/** Whether a goal or task sends something to a remote repository. */
-function publishes(goal: string): boolean {
-  const name = goal.includes(':') ? goal.slice(goal.lastIndexOf(':') + 1) : goal;
-  if (name === 'deploy' || name === 'deploy-file' || name === 'perform') return true;
+/**
+ * Whether a goal or task sends something off the machine.
+ *
+ * Maven's `deploy` phase and the goals that do the same thing under other
+ * names — `site:deploy`, `release:perform`, `nexus-staging:deploy`,
+ * `gpg:sign-and-deploy-file`, `docker:push`, `jib:build` (which pushes to a
+ * registry) — and Gradle's `publish*`, except to Maven Local. An execution id
+ * (`deploy@release`) is not part of the name.
+ */
+export function publishes(goal: string): boolean {
+  const bare = String(goal ?? '').replace(/@[^:]*$/, '');
+  const cut = bare.lastIndexOf(':');
+  const name = cut === -1 ? bare : bare.slice(cut + 1);
+  const prefix = cut === -1 ? '' : bare.slice(0, cut).split(':').pop() ?? '';
+  if (/^(deploy|deploy-file|perform|sign-and-deploy-file|stage-deploy|push)$/.test(name)) return true;
+  if (name === 'build' && prefix === 'jib') return true;
+  if (name === 'release' && /nexus|staging/.test(prefix)) return true;
   // Gradle: `publish`, `publishAllPublicationsToX`, … but not to mavenLocal.
   return /^publish/i.test(name) && !/mavenlocal$/i.test(name);
 }
@@ -481,8 +499,103 @@ export function terminalSetup({ context, namespace }: Where): string {
 function word(value: string, what: string): string {
   const text = String(value ?? '');
   if (!text) throw new Error(`${what} is missing`);
-  if (/^[A-Za-z0-9_.:@=/,+-]+$/.test(text)) return text;
+  // A leading `=` is zsh's own: `=ls` becomes `/bin/ls`. Quoted, it is text.
+  if (/^[A-Za-z0-9_.:@/,+-][A-Za-z0-9_.:@=/,+-]*$/.test(text)) return text;
   return shellQuote(text, what);
+}
+
+/**
+ * The flags a panel may put on a build's command line.
+ *
+ * Anything that is not a flag is a goal or a task, and those run inside the
+ * project by construction. A flag is different: `-f other/pom.xml`,
+ * `--settings x.xml`, `--init-script evil.gradle`, `-Dmaven.repo.local=…`
+ * each make the build something other than this project's build, in a real
+ * terminal, under the person's own shell — which is exactly the reach an
+ * extension must not have. So flags are an allow-list, and the list is the
+ * ones that change *how* the build runs and never *what* it builds.
+ */
+/*
+ * Per tool, because the same letter means different things: `-s` is
+ * `--stacktrace` to Gradle and `--settings` to Maven, `-t` is `--continuous`
+ * to one and `--toolchains` to the other.
+ */
+const SAFE_FLAGS: Record<'maven' | 'gradle', Set<string>> = {
+  maven: new Set([
+    '-o', '--offline', '-q', '--quiet', '-X', '--debug', '-e', '--errors', '-B', '--batch-mode', '-U',
+    '--update-snapshots', '-N', '--non-recursive', '-V', '--show-version', '-ntp', '--no-transfer-progress',
+    '-am', '--also-make', '-amd', '--also-make-dependents', '-fae', '--fail-at-end', '-ff', '--fail-fast', '-fn',
+    '--fail-never', '-C', '--strict-checksums', '-c', '--lax-checksums', '-cpu', '--check-plugin-updates', '-npu',
+    '--no-plugin-updates', '-up', '--update-plugins', '-nsu', '--no-snapshot-updates', '-llr',
+    '--legacy-local-repository',
+  ]),
+  gradle: new Set([
+    '--offline', '-q', '--quiet', '--info', '-i', '--warn', '-w', '--debug', '-d', '--stacktrace', '-s',
+    '--full-stacktrace', '-S', '--continue', '--rerun-tasks', '--no-daemon', '--daemon', '--parallel',
+    '--no-parallel', '--build-cache', '--no-build-cache', '--configuration-cache', '--no-configuration-cache',
+    '--refresh-dependencies', '--dry-run', '-m', '--scan', '--no-scan', '--continuous', '-t', '--profile',
+    '--console=plain', '--console=rich', '--console=verbose', '--warning-mode=all', '--warning-mode=none',
+    '--warning-mode=summary', '--warning-mode=fail',
+  ]),
+};
+/** Flags whose next word belongs to them, and is safe: a module, a task, a thread count, a test name. */
+const SAFE_FLAGS_WITH_VALUE: Record<'maven' | 'gradle', Set<string>> = {
+  maven: new Set(['-pl', '--projects', '-rf', '--resume-from', '-T', '--threads', '-P', '--activate-profiles']),
+  gradle: new Set(['-x', '--exclude-task', '--tests', '--max-workers']),
+};
+/** System properties that move the build somewhere else, or run something else. */
+const UNSAFE_PROPERTIES = /^-D(maven\.(repo\.local|home|multiModuleProjectDirectory|conf|ext\.class\.path|user\.home)|user\.(home|dir)|java\.(home|ext\.dirs|library\.path|security\.[a-z.]+)|org\.gradle\.(java\.home|jvmargs|user\.home|project\.cache\.dir)|gradle\.user\.home|jdk\.[a-z.]*)=/i;
+
+/**
+ * Check the words of a run against the allow-list, in order.
+ *
+ * `-pl :app` is two words that are one flag; the second is let through
+ * because the first said so. A `-D` property is fine unless it is one of the
+ * few that relocate the build. Anything else that starts with a dash is
+ * refused by name, so an extension asking for it can see why.
+ */
+function checkFlags(tool: 'maven' | 'gradle', words: string[], what: string): void {
+  let owed: string | null = null;
+  for (const text of words) {
+    if (owed) {
+      if (text.startsWith('-')) throw new Error(`${owed} needs a value, not another flag`);
+      owed = null;
+      continue;
+    }
+    if (!text.startsWith('-')) continue;
+    if (SAFE_FLAGS[tool].has(text)) continue;
+    if (SAFE_FLAGS_WITH_VALUE[tool].has(text)) {
+      owed = text;
+      continue;
+    }
+    // The attached spellings: `-Pprod`, `-T4`, `-T1C`.
+    if (tool === 'maven' && /^-(P[!A-Za-z0-9_.,-]+|T\d+C?)$/.test(text)) continue;
+    // A system property, unless it is one of the few that relocate the build.
+    if (/^-D[A-Za-z0-9_.-]+(=|$)/.test(text) && !UNSAFE_PROPERTIES.test(text)) continue;
+    // Gradle's own `-P` project properties.
+    if (tool === 'gradle' && /^-P[A-Za-z0-9_.-]+(=|$)/.test(text)) continue;
+    throw new Error(`${what} "${text}" is not a flag a panel may pass to a build`);
+  }
+  if (owed) throw new Error(`${owed} needs a value`);
+}
+
+/**
+ * A path with `.` and `..` folded away, so that "inside the project" can be
+ * decided by looking at it. `/p/shop/../../etc` starts with `/p/shop/` and is
+ * not inside anything of the kind.
+ */
+export function normalisePath(value: string): string {
+  const absolute = value.startsWith('/');
+  const out: string[] = [];
+  for (const part of value.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') {
+      if (out.length) out.pop();
+      continue;
+    }
+    out.push(part);
+  }
+  return (absolute ? '/' : '') + out.join('/');
 }
 
 export type BuildRun = {
@@ -514,28 +627,43 @@ export type BuildRun = {
  * path (`:app:build`) already says which project and the wrapper lives there.
  */
 export function buildCommand(run: BuildRun): { command: string; cwd: string; title: string } {
-  const goals = (run.goals ?? []).map((goal) => word(goal, 'A goal'));
-  if (!goals.length) throw new Error('Nothing to run');
-  const extra = (run.extra ?? []).map((part) => word(part, 'An argument'));
+  if (run.tool !== 'maven' && run.tool !== 'gradle') throw new Error('That is not a build tool this panel runs');
   if (!run.root) throw new Error('The project has no root');
+  const root = normalisePath(String(run.root));
+  const rawGoals = (run.goals ?? []).map(String);
+  const rawExtra = (run.extra ?? []).map(String);
+  if (!rawGoals.length) throw new Error('Nothing to run');
+  // A goal is a goal, not a flag in a goal's seat; the flags are checked as
+  // one list because `-pl` in one and `:app` in the other is still `-pl :app`.
+  checkFlags(run.tool, [...rawGoals, ...rawExtra], 'An argument');
+  const goals = rawGoals.map((goal) => word(goal, 'A goal'));
+  const extra = rawExtra.map((part) => word(part, 'An argument'));
+  const profiles = (run.profiles ?? []).map(String);
+  for (const profile of profiles) {
+    if (!/^!?[A-Za-z0-9_.-]+$/.test(profile)) throw new Error(`"${profile}" is not a profile id`);
+  }
   // Inside the project, or not at all: the panel was opened on this root, and
-  // a module it names is one of the root's, not a directory of its own choosing.
-  if (run.dir && run.dir !== run.root && !run.dir.startsWith(`${run.root}/`)) {
+  // a module it names is one of the root's, not a directory of its own
+  // choosing — folded first, so `..` cannot say otherwise.
+  const dir = run.dir ? normalisePath(String(run.dir)) : root;
+  if (dir !== root && !dir.startsWith(`${root}/`)) {
     throw new Error('That module is not inside the project');
   }
 
   if (run.tool === 'maven') {
     // The wrapper lives at the root; from a module it is reached by its path.
-    const executable = run.wrapper ? shellQuote(`${run.root}/mvnw`, 'The wrapper') : 'mvn';
+    const executable = run.wrapper ? shellQuote(`${root}/mvnw`, 'The wrapper') : 'mvn';
     const parts = [executable];
     if (run.offline) parts.push('-o');
-    if (run.profiles?.length) parts.push(`-P${run.profiles.map((p) => word(p, 'A profile')).join(',')}`);
+    // Through `word`, because `!dev` deactivates a profile to Maven and
+    // starts a history expansion to an interactive zsh: quoted, it is text.
+    if (profiles.length) parts.push(word(`-P${profiles.join(',')}`, 'The profiles'));
     parts.push(...goals);
     if (run.skipTests) parts.push('-DskipTests');
     parts.push(...extra);
     return {
       command: parts.join(' '),
-      cwd: run.dir || run.root,
+      cwd: dir,
       title: `mvn ${goals.join(' ')}`.slice(0, 28),
     };
   }
@@ -547,7 +675,7 @@ export function buildCommand(run: BuildRun): { command: string; cwd: string; tit
   parts.push(...extra);
   return {
     command: parts.join(' '),
-    cwd: run.root,
+    cwd: root,
     title: `gradle ${goals.map((g) => g.slice(g.lastIndexOf(':') + 1)).join(' ')}`.slice(0, 28),
   };
 }

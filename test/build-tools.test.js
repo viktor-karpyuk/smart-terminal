@@ -30,6 +30,24 @@ test('parseXml keeps elements and text, drops comments, CDATA wrappers and names
   assert.equal(project.children[3].text.trim(), 'a &amp; b &lt; c', 'entities are decoded when read, not when parsed');
 });
 
+test('a `>` inside an attribute value does not end the tag', () => {
+  const model = B.parsePom('<project><name a="x>y">Shop</name><artifactId>s</artifactId></project>');
+  assert.equal(model.name, 'Shop');
+  assert.equal(model.artifactId, 's');
+});
+
+test('entities decode once, and an impossible one is left as written rather than breaking the module', () => {
+  const model = B.parsePom('<project><name>&#38;lt; &amp;amp; &#x41;&#99999999;</name></project>');
+  assert.equal(model.name, '&lt; &amp; A&#99999999;');
+});
+
+test('names that are also Object prototype keys are just names', () => {
+  assert.equal(B.resolveProps('${constructor}', {}), '${constructor}');
+  assert.equal(B.resolveProps('${toString}', Object.assign(Object.create(null), { toString: 'x' })), 'x');
+  const model = B.parsePom('<project><properties><constructor>c</constructor></properties></project>');
+  assert.equal(model.properties.constructor, 'c');
+});
+
 test('a pom being edited still reads: an unclosed element is closed, a stray close tag is ignored', () => {
   const model = B.parsePom(`<project>
   <artifactId>half</artifactId>
@@ -179,9 +197,11 @@ test('parsePluginDescriptor reads goals and their first sentence, HTML stripped'
   ]);
 });
 
-test('compareVersions is numeric where it matters', () => {
+test('compareVersions is numeric where it matters, and a qualifier is older than the release', () => {
   const sorted = ['3.9.0', '3.10.1', '3.8.1', '3.10.0'].sort(B.compareVersions);
   assert.deepEqual(sorted, ['3.8.1', '3.9.0', '3.10.0', '3.10.1']);
+  const qualified = ['3.9.0', '3.9.0-SNAPSHOT', '3.10.0-M1', '3.10.0'].sort(B.compareVersions);
+  assert.deepEqual(qualified, ['3.9.0-SNAPSHOT', '3.9.0', '3.10.0-M1', '3.10.0']);
 });
 
 /* --------------------------------------------------------------------------
@@ -286,6 +306,87 @@ test('readMavenProject reads the module tree, resolves managed versions up the p
   assert.equal(core.plugins.find((p) => p.artifactId === 'maven-compiler-plugin').implied, true);
 });
 
+test('a parent that is not beside the module is found in the local repository, the way Maven finds it', async () => {
+  const repo = scratch({
+    'com/acme/acme-parent/1.0/acme-parent-1.0.pom': `<project>
+      <groupId>com.acme</groupId><artifactId>acme-parent</artifactId><version>1.0</version><packaging>pom</packaging>
+      <dependencyManagement><dependencies>
+        <dependency><groupId>x</groupId><artifactId>y</artifactId><version>7.7</version></dependency>
+      </dependencies></dependencyManagement>
+      <build><plugins>
+        <plugin><groupId>org.springframework.boot</groupId><artifactId>spring-boot-maven-plugin</artifactId><version>3.3.2</version></plugin>
+        <plugin><artifactId>maven-antrun-plugin</artifactId><inherited>false</inherited></plugin>
+      </plugins></build>
+    </project>`,
+  });
+  const dir = scratch({
+    // An aggregator beside the module that is *not* its parent: the default
+    // `../pom.xml` lands on it, and Maven then goes to the repository.
+    'pom.xml': '<project><groupId>com.acme</groupId><artifactId>aggregator</artifactId><version>1</version><packaging>pom</packaging><modules><module>core</module></modules></project>',
+    'core/pom.xml': `<project>
+      <parent><groupId>com.acme</groupId><artifactId>acme-parent</artifactId><version>1.0</version></parent>
+      <artifactId>core</artifactId>
+      <dependencies><dependency><groupId>x</groupId><artifactId>y</artifactId></dependency></dependencies>
+    </project>`,
+  });
+  const before = process.env.MAVEN_OPTS;
+  process.env.MAVEN_OPTS = `-Dmaven.repo.local=${repo}`;
+  B.forgetLocalRepository();
+  try {
+    assert.equal(B.localRepository(), repo, 'MAVEN_OPTS names the local repository');
+    const read = await B.readMavenProject(dir, { goalsFor: noRepository });
+    const core = read.project.modules[0];
+    assert.equal(core.dependencies[0].version, '7.7');
+    const boot = core.plugins.find((p) => p.artifactId === 'spring-boot-maven-plugin');
+    assert.ok(boot, 'a plugin declared in the parent is listed on the child');
+    assert.equal(boot.inherited, 'acme-parent');
+    assert.equal(boot.version, '3.3.2');
+    assert.ok(!core.plugins.some((p) => p.artifactId === 'maven-antrun-plugin'), '<inherited>false</inherited> keeps it out');
+  } finally {
+    if (before === undefined) delete process.env.MAVEN_OPTS;
+    else process.env.MAVEN_OPTS = before;
+    B.forgetLocalRepository();
+  }
+});
+
+test('a pom packaging binds no compiler; a jar packaging does', async () => {
+  const dir = scratch({
+    'pom.xml': '<project><artifactId>top</artifactId><packaging>pom</packaging><modules><module>lib</module></modules></project>',
+    'lib/pom.xml': '<project><artifactId>lib</artifactId></project>',
+  });
+  const read = await B.readMavenProject(dir, { goalsFor: noRepository });
+  const names = (m) => m.plugins.map((p) => p.artifactId);
+  assert.ok(!names(read.project).includes('maven-compiler-plugin'));
+  assert.ok(!names(read.project).includes('maven-surefire-plugin'));
+  assert.ok(names(read.project).includes('maven-install-plugin'));
+  assert.ok(names(read.project.modules[0]).includes('maven-compiler-plugin'));
+});
+
+test('a module that is a symlink back to an ancestor is read once, and a module outside the root is marked', async () => {
+  const dir = scratch({
+    'proj/pom.xml': '<project><artifactId>top</artifactId><modules><module>loop</module><module>../beside</module></modules></project>',
+    'beside/pom.xml': '<project><artifactId>beside</artifactId></project>',
+  });
+  fs.symlinkSync(path.join(dir, 'proj'), path.join(dir, 'proj', 'loop'));
+  const read = await B.readMavenProject(path.join(dir, 'proj'), { goalsFor: noRepository });
+  assert.equal(read.project.modules.length, 1, 'the loop is not a module, and the read ended');
+  assert.equal(read.project.modules[0].artifactId, 'beside');
+  assert.equal(read.project.modules[0].outside, true);
+  assert.equal(read.project.outside, false);
+});
+
+test('project() reads at the folder it was opened on, and names a folder that is gone', async () => {
+  const dir = scratch({
+    'pom.xml': '<project><artifactId>above</artifactId><modules><module>inner</module></modules></project>',
+    'inner/pom.xml': '<project><artifactId>inner</artifactId></project>',
+  });
+  const inner = await B.project({ root: path.join(dir, 'inner') });
+  assert.equal(inner.project.artifactId, 'inner', 'a pom above does not take the panel over');
+  const gone = await B.project({ root: path.join(dir, 'nope') });
+  assert.equal(gone.ok, false);
+  assert.match(gone.error, /nope/);
+});
+
 test('a module whose pom cannot be read is shown as broken rather than dropped', async () => {
   const dir = scratch({
     'pom.xml': '<project><artifactId>top</artifactId><modules><module>gone</module></modules></project>',
@@ -308,14 +409,38 @@ test('parseGradleSettings reads both dialects and normalises project paths', () 
     includeBuild("../platform")
     // include("commented-out")
   `);
-  assert.deepEqual(kts, { name: 'shop', projects: [':app', ':lib', ':tools:cli'] });
+  assert.deepEqual(kts.name, 'shop');
+  assert.deepEqual(kts.projects, [':app', ':lib', ':tools:cli']);
+  assert.deepEqual(kts.dirs, { ':app': 'app', ':lib': 'lib', ':tools:cli': 'tools/cli' });
 
   const groovy = B.parseGradleSettings(`
     rootProject.name = 'shop'
     include 'app', 'lib'
     include ':docs'
   `);
-  assert.deepEqual(groovy, { name: 'shop', projects: [':app', ':lib', ':docs'] });
+  assert.equal(groovy.name, 'shop');
+  assert.deepEqual(groovy.projects, [':app', ':lib', ':docs']);
+});
+
+test('parseGradleSettings reads an include spread over lines, includeFlat, and a moved projectDir', () => {
+  const spread = B.parseGradleSettings(`
+    include(
+      ":app",
+      ":lib"
+    )
+    project(":lib").projectDir = file("libs/lib")
+  `);
+  assert.deepEqual(spread.projects, [':app', ':lib']);
+  assert.equal(spread.dirs[':lib'], 'libs/lib', 'a moved project is read from where it was moved to');
+
+  const groovy = B.parseGradleSettings(`
+    include ':a',
+            ':b'
+    includeFlat 'sibling'
+    include ':c'
+  `);
+  assert.deepEqual(groovy.projects, [':a', ':b', ':sibling', ':c']);
+  assert.equal(groovy.dirs[':sibling'], '../sibling', 'a flat include lives beside the root');
 });
 
 test('parseGradleDependencies reads the notations a dependencies block can hold', () => {
@@ -341,9 +466,38 @@ test('parseGradleDependencies reads the notations a dependencies block can hold'
     { configuration: 'testImplementation', notation: 'org.junit:junit-bom:5.10.2', platform: true },
     { configuration: 'testImplementation', notation: 'junit:junit:4.13.2' },
     { configuration: 'implementation', notation: 'libs.jackson.databind', catalog: true },
-    { configuration: 'implementation', notation: 'org.apache.commons:commons-lang3:3.14.0' },
-  ]);
+  ], 'a constraint is not a dependency');
   assert.deepEqual(B.parseGradleDependencies('plugins { }'), [], 'no block, no dependencies');
+});
+
+test('parseGradleDependencies skips the buildscript block, nested closures, and reads the catalog and kotlin forms', () => {
+  const deps = B.parseGradleDependencies(`
+    buildscript {
+      dependencies {
+        classpath("com.android.tools.build:gradle:8.2.0")
+      }
+    }
+    dependencies {
+      implementation("a:b:1") {
+        because("we need it")
+        version { strictly("1.0"); reject("2.0") }
+        exclude(group = "x")
+      }
+      testImplementation(platform(libs.junit.bom))
+      implementation(kotlin("stdlib"))
+      implementation(libs.guava.get())
+      add("runtimeOnly", "c:d:2")
+    }
+    subprojects {
+      dependencies { implementation("not:this:one") }
+    }
+  `);
+  assert.deepEqual(deps, [
+    { configuration: 'implementation', notation: 'a:b:1' },
+    { configuration: 'testImplementation', notation: 'libs.junit.bom', platform: true, catalog: true },
+    { configuration: 'implementation', notation: 'org.jetbrains.kotlin:kotlin-stdlib' },
+    { configuration: 'implementation', notation: 'libs.guava', catalog: true },
+  ]);
 });
 
 test('parseGradleTasks turns `gradle tasks --all` into groups, with the project each task belongs to', () => {
@@ -423,6 +577,36 @@ runtimeClasspath - Runtime classpath of source set 'main'.
 
   const missing = B.parseGradleDependencyTree('nothing here', 'runtimeClasspath');
   assert.deepEqual(missing, { configuration: 'runtimeClasspath', resolved: false, nodes: [] });
+
+  const odd = B.parseGradleDependencyTree(`
+runtimeClasspath - Runtime classpath of source set 'main'.
++--- project :lib
++--- org.a:x:1.0 FAILED
+\\--- org.c:z:1.0 -> project :lib
+`, 'runtimeClasspath');
+  assert.equal(odd.nodes[0].notation, 'project :lib');
+  assert.equal(odd.nodes[1].notation, 'org.a:x:1.0');
+  assert.equal(odd.nodes[1].failed, true);
+  assert.equal(odd.nodes[2].resolvedTo, 'project :lib', 'an arrow to a project is an arrow too');
+});
+
+test('cleanGradleError says something a person can act on', () => {
+  assert.match(B.cleanGradleError('', { code: 'ENOENT' }), /not installed/);
+  assert.match(B.cleanGradleError('', { code: 'EACCES' }), /chmod \+x gradlew/);
+  assert.match(B.cleanGradleError('', { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' }), /more than this panel can read/);
+  assert.match(B.cleanGradleError('Downloading https://services.gradle.org/x.zip\n', { killed: true }), /Downloading https/);
+  const wrong = B.cleanGradleError(`Picked up JAVA_TOOL_OPTIONS: -Xmx1g
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+A problem occurred evaluating project ':app'.
+> Could not find method foo() for arguments [bar].
+
+* Try:
+> Run with --stacktrace`, { code: 1 });
+  assert.equal(wrong, "A problem occurred evaluating project ':app'. > Could not find method foo() for arguments [bar].");
+  assert.equal(B.cleanGradleError('Picked up JAVA_TOOL_OPTIONS: -Xmx1g\nreal error', { code: 1 }), 'real error', 'the JVM banner is not the error');
 });
 
 test('readGradleProject reads the projects and the declared dependencies of each', () => {

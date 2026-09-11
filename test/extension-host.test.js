@@ -239,9 +239,57 @@ test('buildCommand refuses a word a shell would read as anything else, and a mod
   assert.throws(() => H.buildCommand({ tool: 'maven', root: '/p', goals: [] }), /Nothing to run/);
   assert.throws(() => H.buildCommand({ tool: 'maven', root: '/p', dir: '/etc', goals: ['install'] }), /not inside/);
   assert.throws(() => H.buildCommand({ tool: 'maven', root: '/p', dir: '/pwned', goals: ['install'] }), /not inside/);
+  // `..` is folded before the question is asked: `/p/shop/../../etc` starts
+  // with `/p/shop/` and is `/etc`.
+  assert.throws(() => H.buildCommand({ tool: 'maven', root: '/p/shop', dir: '/p/shop/../../etc', goals: ['install'] }), /not inside/);
+  assert.throws(() => H.buildCommand({ tool: 'maven', root: '/p/shop', dir: '/p/shop/core/../../.ssh', goals: ['x'] }), /not inside/);
+  assert.equal(H.buildCommand({ tool: 'maven', root: '/p/shop', dir: '/p/shop/./core/', goals: ['x'] }).cwd, '/p/shop/core');
+  assert.equal(H.buildCommand({ tool: 'maven', root: '/p/shop/', dir: '/p/shop/core', goals: ['x'] }).cwd, '/p/shop/core', 'a trailing slash on the root is not a different root');
+  assert.throws(() => H.buildCommand({ tool: 'npm', root: '/p', goals: ['x'] }), /not a build tool/);
   // A space or a dollar is quoted, not refused: `-Dexec.args="a b"` is a real thing to type.
   const spaced = H.buildCommand({ tool: 'maven', root: '/p', goals: ['exec:java'], extra: ['-Dexec.args=a b'] });
   assert.equal(spaced.command, "mvn exec:java '-Dexec.args=a b'");
+  // zsh's `=cmd` expansion: quoted, and therefore text.
+  assert.equal(H.buildCommand({ tool: 'maven', root: '/p', goals: ['x'], extra: ['=ls'] }).command, "mvn x '=ls'");
+});
+
+test('buildCommand lets through the flags that change how a build runs, and refuses the ones that change what it builds', () => {
+  const ok = (tool, extra) => H.buildCommand({ tool, root: '/p', goals: ['x'], extra }).command;
+  assert.equal(ok('maven', ['-pl', ':app', '-am', '-T', '4', '-Dspring.profiles.active=dev', '-Pprod,fast', '-U', '-X']), 'mvn x -pl :app -am -T 4 -Dspring.profiles.active=dev -Pprod,fast -U -X');
+  assert.equal(ok('gradle', ['-x', 'test', '--tests', 'com.acme.FooTest', '--info', '--stacktrace', '-Pfoo=bar', '--rerun-tasks']), 'gradle x -x test --tests com.acme.FooTest --info --stacktrace -Pfoo=bar --rerun-tasks');
+
+  const no = (tool, extra) => assert.throws(() => H.buildCommand({ tool, root: '/p', goals: ['x'], extra }), /not a flag a panel may pass/, extra.join(' '));
+  no('maven', ['-f', '/etc/evil/pom.xml']);
+  no('maven', ['--file', 'other.xml']);
+  no('maven', ['-s', '/tmp/settings.xml']);
+  no('maven', ['-gs', 'x']);
+  no('maven', ['-t', 'toolchains.xml']);
+  no('maven', ['-l', '/tmp/log']);
+  no('gradle', ['--init-script', '/tmp/evil.gradle']);
+  no('gradle', ['-I', 'x']);
+  no('gradle', ['-b', 'other.gradle']);
+  no('gradle', ['-p', '/other']);
+  no('gradle', ['--project-dir', '/other']);
+  no('gradle', ['-g', '/tmp/gradle-home']);
+  no('gradle', ['-t', 'x', '-c', 'settings.gradle']);
+  // The same letter is a different flag per tool.
+  no('maven', ['-i']);
+  no('gradle', ['-pl', ':app']);
+  // System properties are fine, unless they relocate the build.
+  no('maven', ['-Dmaven.repo.local=/tmp/x']);
+  no('gradle', ['-Dorg.gradle.java.home=/x']);
+  no('gradle', ['-Dorg.gradle.jvmargs=-javaagent:x.jar']);
+  no('maven', ['-Duser.home=/x']);
+  // A flag that wants a value does not take a flag as one.
+  assert.throws(() => H.buildCommand({ tool: 'maven', root: '/p', goals: ['x'], extra: ['-pl', '-am'] }), /needs a value/);
+  assert.throws(() => H.buildCommand({ tool: 'maven', root: '/p', goals: ['x'], extra: ['-pl'] }), /needs a value/);
+  // Flags in the goals list are checked like flags anywhere.
+  assert.throws(() => H.buildCommand({ tool: 'maven', root: '/p', goals: ['-f', 'x'] }), /not a flag/);
+  // A profile is an id (`!dev` deactivates one); anything a shell could read is not one.
+  assert.throws(() => H.buildCommand({ tool: 'maven', root: '/p', goals: ['x'], profiles: ['a b'] }), /not a profile/);
+  assert.throws(() => H.buildCommand({ tool: 'maven', root: '/p', goals: ['x'], profiles: ['x;rm'] }), /not a profile/);
+  assert.equal(H.buildCommand({ tool: 'maven', root: '/p', goals: ['x'], profiles: ['!dev', 'ci'] }).command, "mvn '-P!dev,ci' x", 'a `!` would be a history expansion to zsh');
+  assert.equal(H.buildCommand({ tool: 'maven', root: '/p', goals: ['x'], profiles: ['dev'] }).command, 'mvn -Pdev x');
 });
 
 test('deploying and publishing stop to ask; everything else in a build runs', () => {
@@ -250,7 +298,26 @@ test('deploying and publishing stop to ask; everything else in a build runs', ()
   assert.match(H.needsConsent('build.run', { goals: [':lib:publish'] }), /publishes/);
   assert.match(H.needsConsent('build.run', { goals: ['publishAllPublicationsToGitHubRepository'] }), /publishes/);
   assert.equal(H.needsConsent('build.run', { goals: ['publishToMavenLocal'] }), null, 'local is local');
+  assert.equal(H.needsConsent('build.run', { goals: ['publishMavenPublicationToMavenLocal'] }), null);
   assert.equal(H.needsConsent('build.run', { goals: ['clean', 'install'] }), null);
   assert.equal(H.needsConsent('build.run', { goals: ['spring-boot:run'] }), null);
   assert.equal(H.needsConsent('build.project', {}), null);
+  assert.equal(H.needsConsent('build.run', undefined), null);
+  // What is typed into the box is on the line too.
+  assert.match(H.needsConsent('build.run', { goals: ['clean'], extra: ['deploy'] }), /publishes/);
+  // An execution id is not part of the name; fully-qualified goals are goals.
+  assert.match(H.needsConsent('build.run', { goals: ['deploy@release'] }), /publishes/);
+  assert.match(H.needsConsent('build.run', { goals: ['org.apache.maven.plugins:maven-deploy-plugin:3.1.1:deploy'] }), /publishes/);
+  assert.match(H.needsConsent('build.run', { goals: ['site:deploy'] }), /publishes/);
+  assert.match(H.needsConsent('build.run', { goals: ['docker:push'] }), /publishes/);
+  assert.match(H.needsConsent('build.run', { goals: ['jib:build'] }), /publishes/);
+  assert.equal(H.needsConsent('build.run', { goals: ['jib:dockerBuild'] }), null, 'a local image is local');
+  assert.match(H.needsConsent('build.run', { goals: ['nexus-staging:release'] }), /publishes/);
+});
+
+test('normalisePath folds dots and doubled slashes', () => {
+  assert.equal(H.normalisePath('/p/shop/../../etc'), '/etc');
+  assert.equal(H.normalisePath('/p/shop/./core//'), '/p/shop/core');
+  assert.equal(H.normalisePath('/../x'), '/x');
+  assert.equal(H.normalisePath('/'), '/');
 });

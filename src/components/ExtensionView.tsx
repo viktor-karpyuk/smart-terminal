@@ -6,6 +6,7 @@ import {
   buildCommand,
   execCommand,
   needsConsent,
+  normalisePath,
   panelDocument,
   readTheme,
   route,
@@ -232,7 +233,10 @@ function Frame({
         if (message.name === 'openFile' && typeof message.payload?.path === 'string' && root) {
           // The panel says which file; the app says where it opens. A panel that
           // could choose the tab could also take over the one you were reading.
-          revealFile(root, message.payload.path);
+          // And only a file of the thing it was opened on: a panel is about a
+          // repository or a project, not about the disk.
+          const wanted = normalisePath(message.payload.path);
+          if (wanted === root || wanted.startsWith(`${root}/`)) revealFile(root, wanted);
         } else if (message.name === 'notify' && typeof message.payload?.text === 'string') {
           setNotice({ text: message.payload.text, bad: message.payload.kind === 'bad' });
         } else if (message.name === 'save' && typeof message.payload?.text === 'string') {
@@ -296,8 +300,11 @@ function Frame({
         if (channel === 'build') {
           if (!root) return reply(false, null, 'this panel has no project');
           // The root is the panel's, whatever the panel says: a build reader
-          // pointed at a folder of the panel's choosing would read any folder.
-          return reply(true, await window.api.build.call(name.slice(6), { ...args, root }), undefined);
+          // pointed at a folder of the panel's choosing would read any folder —
+          // and `root`, which asks about a folder, is asked about this one.
+          const verb = name.slice(6);
+          const scoped = verb === 'root' ? { dir: root } : { ...args, root };
+          return reply(true, await window.api.build.call(verb, scoped), undefined);
         }
         if (channel === 'kube-stream') {
           return reply(true, await stream(name.slice(5), args), undefined);
@@ -371,6 +378,19 @@ function Frame({
           offline: Boolean(args.offline),
           extra: Array.isArray(args.extra) ? args.extra.map(String) : [],
         });
+        /*
+         * The shell from the last run, when it is sitting at a prompt in the
+         * same directory: a build is the same thing run again, and IntelliJ
+         * reuses its Run tab for the same reason. Twenty runs in a day should
+         * not be twenty tabs of finished output. A shell still running
+         * something — the last build, a `spring-boot:run` — is left alone and
+         * a new one opens beside it.
+         */
+        const idle = idleShellUnder(panelId, run.cwd);
+        if (idle) {
+          store.runCommandIn(idle, run.command);
+          return { ok: true, sessionId: idle, command: run.command, cwd: run.cwd, reused: true };
+        }
         const sessionId = await store.openShellNear(panelId, run.title, run.command, { ...below(panelId), cwd: run.cwd });
         if (!sessionId) return { ok: false, error: 'the app could not open a terminal' };
         return { ok: true, sessionId, command: run.command, cwd: run.cwd };
@@ -464,6 +484,32 @@ function Frame({
     const usual = profiles.find((profile) => profile.id === settings.defaultProfileId) ?? profiles[0];
     if (usual && authByProfile[usual.id]?.loggedIn !== false) return usual.id;
     return profiles.find((profile) => authByProfile[profile.id]?.loggedIn)?.id ?? usual?.id;
+  }
+
+  /**
+   * A shell of this panel's own, under it, at a prompt, in the directory the
+   * run wants — or nothing.
+   *
+   * Only the strip directly below, and only shells this panel opened (their
+   * title is the build's): a terminal somebody else put there is theirs.
+   */
+  function idleShellUnder(id: string, cwd: string): string | null {
+    const { layout, sessions } = useStore.getState();
+    const mine = leafOfTab(layout, id);
+    if (!mine) return null;
+    const parent = parentOf(layout, mine.id);
+    if (parent?.direction !== 'column') return null;
+    const at = parent.children.findIndex((child) => child.id === mine.id);
+    const under = parent.children[at + 1];
+    if (!under || under.type !== 'leaf') return null;
+    for (const tabId of [...under.tabs].reverse()) {
+      const session = sessions[tabId];
+      if (!session || session.kind !== 'shell' || session.foreground) continue;
+      if (session.cwd !== cwd) continue;
+      if (!/^(mvn|gradle) /.test(session.customTitle ?? '')) continue;
+      return tabId;
+    }
+    return null;
   }
 
   /**

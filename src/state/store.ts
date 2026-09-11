@@ -1002,6 +1002,11 @@ export const useStore = create<State>((set, get) => ({
     // Re-open the folders the panels had, the files they were showing, and ask
     // git again for anything a Git tab was looking at.
     for (const any of Object.values(get().panels)) {
+      // A restored panel on a folder follows it again, the way it did when
+      // it was opened; see `openExtensionView`.
+      // The extension list may not have arrived yet, so what tells a folder
+      // from a cluster here is the root itself: a folder is a path.
+      if (any.kind === 'extension' && any.root?.startsWith('/')) followTree(any.id, any.root);
       const panel = asFilePanel(any);
       if (!panel) continue;
       if (panel.gitRoot) get().refreshRepo(panel.gitRoot, 'all');
@@ -2932,6 +2937,13 @@ export const useStore = create<State>((set, get) => ({
       }
       return { panels, layout: insertTab(prev.layout, targetLeafId, panelId), activeLeafId: targetLeafId };
     });
+    /*
+     * A panel about a folder follows that folder itself. It used to rely on a
+     * Files tab happening to watch the same path — which a build root under a
+     * repository root is not, and which closing that tab took away. A cluster
+     * is not a folder and follows nothing.
+     */
+    if (root && view?.needs !== 'kubernetes') followTree(panelId, root);
     schedulePersist(get);
   },
 

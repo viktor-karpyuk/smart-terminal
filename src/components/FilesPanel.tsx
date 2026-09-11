@@ -699,12 +699,14 @@ function GitButton({ panelId }: { panelId: string }) {
 function ExtensionButtons({ panelId }: { panelId: string }) {
   const root = useStore((s) => asFilePanel(s.panels[panelId])?.root ?? '');
   const gitRoot = useStore((s) => asFilePanel(s.panels[panelId])?.gitRoot ?? null);
-  const buildRoot = useBuildRoot(root);
   // Ids only: a selector that builds a fresh array of objects re-renders this
   // for ever, which is a lesson this file has already learned once.
   const viewIds = useStore(
     useShallow((s) => s.extensions.panels.map((view) => `${view.id}\u0000${view.title}\u0000${view.needs ?? ''}`)),
   );
+  // Asked only when something would be offered for the answer.
+  const wantsBuild = viewIds.some((packed) => packed.endsWith('\u0000build'));
+  const buildRoot = useBuildRoot(wantsBuild ? root : '');
   const openExtensionView = useStore((s) => s.openExtensionView);
   if (!viewIds.length) return null;
 
@@ -764,18 +766,28 @@ const buildRoots = new Map<string, string | null>();
 function useBuildRoot(root: string): string | null {
   const [found, setFound] = useState<string | null>(() => (root ? (buildRoots.get(root) ?? null) : null));
   useEffect(() => {
-    if (!root) return;
+    if (!root) {
+      setFound(null);
+      return;
+    }
     let alive = true;
+    // What was known, first, so a tab pointed at a new folder never offers
+    // the old folder's project for the length of a round trip.
+    setFound(buildRoots.get(root) ?? null);
     const ask = () =>
       void window.api.build.call('root', { dir: root }).then((answer) => {
         const where = answer.ok && typeof answer.root === 'string' ? answer.root : null;
         buildRoots.set(root, where);
         if (alive) setFound(where);
       });
-    if (!buildRoots.has(root)) ask();
-    else setFound(buildRoots.get(root) ?? null);
+    // Asked again on every mount, cache or no cache: the listener below is
+    // only there while this tab is in front, and a pom that arrived while it
+    // was behind another is a pom nobody was told about.
+    ask();
     const stop = window.api.files.onTreeChanged((change) => {
-      if (change.root === root && change.kind === 'tree') ask();
+      // `git` is not "only git": a burst is reported as its strongest kind,
+      // and a checkout that rewrites the pom arrives as one.
+      if (change.root === root && change.kind !== 'noise') ask();
     });
     return () => {
       alive = false;

@@ -176,13 +176,34 @@ function parseChildren(output) {
   for (const line of output.split('\n')) {
     const match = /^\s*(\d+)\s+(.*)$/.exec(line);
     if (!match) continue;
-    const command = match[2].trim();
+    const command = asTyped(match[2].trim());
     if (!command) continue;
     // The first token is the program; the rest are its arguments.
     const name = command.split(/\s+/)[0].split('/').pop();
     if (name) byParent.set(Number(match[1]), { name, command });
   }
   return byParent;
+}
+
+/**
+ * The line as a person typed it, for the two build tools that are shells
+ * around a JVM.
+ *
+ * `mvn install` runs as `java -classpath …/plexus-classworlds.jar …
+ * org.codehaus.plexus.classworlds.launcher.Launcher install`, and `./gradlew
+ * build` as `java … org.gradle.wrapper.GradleWrapperMain build`. The tab
+ * would say "java", and the thing offered back after a restart would be a
+ * three-hundred-character class path nobody typed. What they typed is the
+ * tool and the arguments after the launcher class.
+ */
+function asTyped(command) {
+  const maven = /\bjava\b.*?\borg\.codehaus\.plexus\.classworlds\.launcher\.Launcher\b\s*(.*)$/.exec(command);
+  if (maven) return `mvn ${maven[1]}`.trim();
+  const gradle = /\bjava\b.*?\borg\.gradle\.wrapper\.GradleWrapperMain\b\s*(.*)$/.exec(command);
+  if (gradle) return `./gradlew ${gradle[1]}`.trim();
+  const launcher = /\bjava\b.*?\borg\.gradle\.launcher\.GradleMain\b\s*(.*)$/.exec(command);
+  if (launcher) return `gradle ${launcher[1]}`.trim();
+  return command;
 }
 
 /** `lsof -Fpn` emits `p<pid>`, then `fcwd`, then `n<path>` per process. */
@@ -222,4 +243,4 @@ function worthRemembering(foreground, command) {
   return !NOT_WORTH_REMEMBERING.has(name);
 }
 
-module.exports = { CwdWatcher, worthRemembering };
+module.exports = { CwdWatcher, worthRemembering, asTyped };

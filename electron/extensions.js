@@ -216,6 +216,22 @@ function panelViews(rows) {
     if (row.status === 'available' || row.status === 'gone' || !row.enabled) continue;
     for (const panel of row.contributes?.panels ?? []) {
       if (!panel?.id || !panel.render) continue;
+      // A need nobody can satisfy is a panel offered nowhere and failing
+      // nowhere; better a sentence on the gallery than silence.
+      const needs = panel.needs ? String(panel.needs) : null;
+      if (needs && !PANEL_NEEDS.includes(needs)) {
+        panels.push({
+          id: String(panel.id),
+          title: String(panel.title ?? panel.id),
+          summary: String(panel.summary ?? ''),
+          needs,
+          render: String(panel.render),
+          from: row.id,
+          dir: row.dir ?? null,
+          error: `it needs "${needs}", which this app does not know how to provide`,
+        });
+        continue;
+      }
       panels.push({
         id: String(panel.id),
         title: String(panel.title ?? panel.id),
@@ -302,6 +318,7 @@ function pictures(manifest) {
 /** The panels, with the document each one is. */
 function withPanelSources(panels) {
   return panels.map((panel) => {
+    if (panel.error) return { ...panel, source: null };
     if (!panel.dir) return { ...panel, source: null, error: 'the extension has no folder' };
     const { source, error } = readInside(panel.dir, panel.render);
     return error ? { ...panel, source: null, error } : { ...panel, source };

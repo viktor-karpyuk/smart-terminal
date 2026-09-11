@@ -2179,7 +2179,12 @@ function retireLegacyWorkspace() {
  * followed log is a process still talking to a cluster on behalf of an app that
  * is gone.
  */
-app.on('will-quit', () => kubeStreams.stopAll());
+app.on('will-quit', () => {
+  kubeStreams.stopAll();
+  // A Gradle client asked for a task list is a JVM that would otherwise
+  // outlive the app by up to three minutes.
+  buildTools.stopAll();
+});
 
 /*
  * One hole, stated rather than papered over: a `kill` from outside.

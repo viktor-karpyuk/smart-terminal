@@ -166,9 +166,99 @@ function resolvedPath(shell = process.env.SHELL || '/bin/zsh', { ask = askShellF
   return wait;
 }
 
+/**
+ * A few named variables, as an interactive login shell would have them.
+ *
+ * The same problem as PATH and the same answer, for the handful of things a
+ * build needs that live in `.zshrc`: `JAVA_HOME` decides which JDK Gradle and
+ * Maven run under, `GRADLE_USER_HOME` which daemon and cache they use. Only
+ * what is asked for is taken, and only when the shell had a value for it —
+ * a variable the shell leaves empty is not set, so the app's own value (or
+ * none) stands.
+ *
+ * Printed one per line, `printf` again so nothing is appended; the last N
+ * lines are the answer, whatever a profile printed above them. Same timeout,
+ * same SIGKILL, same reason as `askShellForPath`.
+ */
+function askShellForVars(shell, names, deadline = TIMEOUT) {
+  const script = `printf '%s\\n' ${names.map((name) => `"$${name}"`).join(' ')}`;
+  return new Promise((resolve) => {
+    let settled = false;
+    const answer = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const child = execFile(
+      shell,
+      ['-ilc', script],
+      { timeout: deadline, killSignal: 'SIGKILL', maxBuffer: 1024 * 1024 },
+      (error, stdout) => answer(error && !stdout ? null : parseShellVars(stdout, names)),
+    );
+    const giveUp = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* already gone */
+      }
+      answer(null);
+    }, deadline + 500);
+    giveUp.unref?.();
+  });
+}
+
+/** The last `names.length` lines of what the shell printed, paired with the names. */
+function parseShellVars(stdout, names) {
+  const lines = String(stdout || '').replace(/\r/g, '').split('\n');
+  // `printf '%s\n'` ends with a newline, so the last element is an empty string.
+  if (lines.length && lines[lines.length - 1] === '') lines.pop();
+  if (lines.length < names.length) return null;
+  const tail = lines.slice(-names.length);
+  const out = {};
+  names.forEach((name, i) => {
+    const value = tail[i].trim();
+    if (value) out[name] = value;
+  });
+  return out;
+}
+
+const varsCache = new Map();
+const varsAsking = new Map();
+
+function resolvedVars(names, shell = process.env.SHELL || '/bin/zsh', { ask = askShellForVars } = {}) {
+  const key = `${shell}\u0000${names.join(',')}`;
+  const hit = varsCache.get(key);
+  if (hit && Date.now() - hit.at < TTL) return Promise.resolve(hit.value);
+  const already = varsAsking.get(key);
+  if (already) return already;
+
+  const wait = ask(shell, names)
+    .then((fromShell) => {
+      // Only the ones the shell answered for; everything else keeps what the
+      // app already has, which for a terminal launch is the right value.
+      const value = { ...(fromShell ?? {}) };
+      varsCache.set(key, { at: Date.now(), value });
+      return value;
+    })
+    .finally(() => varsAsking.delete(key));
+  varsAsking.set(key, wait);
+  return wait;
+}
+
 function forgetResolvedPath() {
   cache.clear();
   asking.clear();
+  varsCache.clear();
+  varsAsking.clear();
 }
 
-module.exports = { resolvedPath, forgetResolvedPath, mergePaths, parseShellPath, askShellForPath };
+module.exports = {
+  resolvedPath,
+  resolvedVars,
+  forgetResolvedPath,
+  mergePaths,
+  parseShellPath,
+  parseShellVars,
+  askShellForPath,
+  askShellForVars,
+};
