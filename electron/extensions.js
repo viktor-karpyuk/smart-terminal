@@ -206,6 +206,8 @@ const PANEL_NEEDS = [
   'repository',
   /** A cluster in kubeconfig. Nothing about the folder, so it opens from anywhere. */
   'kubernetes',
+  /** A Maven or Gradle project: a folder with a pom.xml or a Gradle build at or above it. */
+  'build',
 ];
 
 function panelViews(rows) {

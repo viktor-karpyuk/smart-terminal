@@ -209,6 +209,10 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   /** Helm: a different tool, a different door. */
+  build: {
+    call: (name, args) => ipcRenderer.invoke('build:call', { name, args }),
+  },
+
   helm: {
     call: (name, args) => ipcRenderer.invoke('helm:call', { name, args }),
   },
