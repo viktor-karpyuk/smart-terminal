@@ -1,0 +1,1347 @@
+<!--
+  Maven and Gradle — the build tool window.
+
+  This file is the whole extension. It runs in a frame with an origin of its
+  own: no DOM of the app, no `window.api`, no filesystem, no modules. Everything
+  it knows it asked for through `host.call`, and everything it runs it asked the
+  app to run — the panel names a goal and a module, the app writes the command
+  line and opens the terminal. If this throws, the app does not notice.
+
+  The head of the document belongs to the app — the reset, the theme variables
+  and the `host` bridge are already in place before anything below runs.
+-->
+
+<style>
+  #app { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100%; min-height: 0; }
+
+  /* ---------- the bar across the top ---------- */
+
+  .top {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--bg-panel);
+  }
+  .top input {
+    font: inherit; color: var(--text); background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 7px;
+  }
+  .top input:focus { outline: none; border-color: var(--accent); }
+  #run { flex: 1; min-width: 140px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+  #filter { width: 130px; }
+  .btn {
+    padding: 3px 9px; border: 1px solid var(--border); border-radius: var(--radius);
+    color: var(--text-dim); white-space: nowrap; font-size: 11.5px;
+  }
+  .btn:hover { color: var(--text); border-color: var(--border-strong); background: var(--bg-elevated); }
+  .btn.on { color: var(--accent); border-color: var(--accent); }
+  .btn.go { color: var(--accent); border-color: var(--accent); }
+  .btn[disabled] { opacity: 0.4; pointer-events: none; }
+  .sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; }
+
+  /* ---------- the tree and the detail beside it ---------- */
+
+  .body { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; overflow: hidden; position: relative; }
+  .body.with-detail { grid-template-columns: minmax(0, 1fr) 38%; }
+  /* Never sideways: a deep row gives up its description, then its name, and
+     the ▶ stays where the pointer expects it. */
+  .tree { overflow-y: auto; overflow-x: hidden; min-height: 0; padding: 4px 0 24px; outline: none; }
+  .tree:focus-visible .row.on { box-shadow: inset 0 0 0 1px var(--accent); }
+  .detail {
+    border-left: 1px solid var(--border); background: var(--bg-panel);
+    overflow: auto; min-height: 0; padding: 10px 12px 24px;
+  }
+
+  .row {
+    display: flex; align-items: center; gap: 5px; height: 24px; padding-right: 8px;
+    white-space: nowrap; cursor: default; user-select: none; -webkit-user-select: none;
+  }
+  .row:hover { background: var(--bg-elevated); }
+  .row.on { background: var(--accent-soft); }
+  .twist {
+    display: inline-flex; width: 16px; height: 16px; align-items: center; justify-content: center;
+    color: var(--text-faint); font-size: 10px; flex: 0 0 16px;
+  }
+  .twist.leaf { visibility: hidden; }
+  .icon { width: 14px; height: 14px; flex: 0 0 14px; color: var(--text-faint); }
+  .row.head .icon { color: var(--accent); }
+  /* The name never gives way to the description: a row that reads
+     "spring-boot:bu… Package an application…" has cut off the one word that
+     mattered. The description is what gets the ellipsis. */
+  .name { color: var(--text); flex: 0 1 auto; min-width: 4ch; overflow: hidden; text-overflow: ellipsis; }
+  .row.group .name { color: var(--text-dim); font-weight: 550; }
+  .row.runnable .name { color: var(--text); }
+  .meta { color: var(--text-faint); font-size: 11px; flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .meta.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .count { color: var(--text-faint); font-size: 10.5px; margin-left: 2px; }
+  .tag {
+    font-size: 9.5px; padding: 0 5px; border-radius: 8px; line-height: 15px;
+    border: 1px solid var(--border); color: var(--text-faint); flex: 0 0 auto;
+  }
+  .tag.profile { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); }
+  .tag.scope-test { color: var(--text-faint); }
+  .tag.scope-provided, .tag.scope-runtime { color: var(--accent); }
+  .tag.implied { opacity: 0.7; }
+  .row input[type="checkbox"] { margin: 0 2px 0 0; cursor: pointer; }
+  .play {
+    margin-left: auto; opacity: 0; color: var(--accent); padding: 0 4px; border-radius: var(--radius);
+    display: inline-flex; align-items: center; flex: 0 0 auto;
+  }
+  .row:hover .play, .row.on .play { opacity: 1; }
+  .play:hover { background: var(--bg-elevated); }
+  .row.dim .name, .row.dim .meta { color: var(--text-faint); }
+  .row.bad .name { color: var(--danger); }
+  /* Last, so a selected group or dim row still reads as selected. */
+  .row.on .name, .row.picked .name { color: var(--accent); }
+
+  /* ---------- detail ---------- */
+
+  .detail h3 { margin: 0 0 2px; font-size: 13px; font-weight: 600; word-break: break-all; }
+  .detail .sub { color: var(--text-dim); font-size: 11.5px; margin-bottom: 10px; word-break: break-all; }
+  .detail h4 {
+    margin: 12px 0 4px; font-size: 10.5px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--text-faint);
+  }
+  .detail .cmd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+    background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 6px 8px; white-space: pre-wrap; word-break: break-all; color: var(--text);
+  }
+  .detail .cmd .dir { color: var(--text-faint); }
+  .detail .actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .detail p { margin: 4px 0; color: var(--text-dim); }
+  .detail .bad { color: var(--danger); }
+  .detail .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 11.5px; }
+  .detail .kv span:nth-child(odd) { color: var(--text-faint); }
+  .detail .kv span:nth-child(even) { word-break: break-all; }
+  .goal-list .row { height: auto; min-height: 24px; white-space: normal; padding: 3px 4px 3px 0; }
+  .goal-list .meta { white-space: normal; }
+  .detail select {
+    font: inherit; color: var(--text); background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 3px 6px;
+  }
+  .dep-tree .row { height: 22px; }
+  .dep-tree .arrow { color: var(--git-new); }
+  .dep-tree .seen { color: var(--text-faint); }
+  .dep-tree .failed { color: var(--danger); }
+
+  /* ---------- the foot ---------- */
+
+  .foot {
+    display: flex; align-items: center; gap: 10px; padding: 4px 10px;
+    border-top: 1px solid var(--border); background: var(--bg-panel);
+    font-size: 11px; color: var(--text-faint); min-height: 24px;
+  }
+  .foot .grow { flex: 1; }
+  .foot .bad { color: var(--danger); }
+  .foot .stale { color: var(--git-new); }
+
+  .empty { padding: 30px 20px; color: var(--text-dim); text-align: center; }
+  .empty strong { color: var(--text); }
+</style>
+
+<div id="app">
+  <div class="top">
+    <button class="btn" id="reload" title="Read the project again">⟳ Reload</button>
+    <input id="run" placeholder="goals… (Enter runs on the selected module)" spellcheck="false" autocomplete="off">
+    <button class="btn go" id="go" title="Run what is in the box">▶ Run</button>
+    <span class="sep"></span>
+    <button class="btn" id="skip" title="Add -DskipTests / -x test to every run">Skip tests</button>
+    <button class="btn" id="offline" title="Do not touch the network: -o / --offline">Offline</button>
+    <span class="sep"></span>
+    <input id="filter" placeholder="Filter" spellcheck="false" autocomplete="off">
+  </div>
+  <div class="body" id="body">
+    <div class="tree" id="tree" tabindex="0"></div>
+    <div class="detail" id="detail" hidden></div>
+  </div>
+  <div class="foot">
+    <span id="summary"></span>
+    <span class="grow"></span>
+    <span id="stale" class="stale"></span>
+    <span id="busy"></span>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------------------------------------------------------------- state
+
+  var state = {
+    root: null,          // the folder the panel was opened on
+    project: null,       // what the app read: { tool, root, wrapper, project, ... }
+    tasks: null,         // gradle only: { groups, projects } once Gradle has been asked
+    tasksError: null,
+    tasksStale: false,   // a build file changed since the tasks were read
+    tasksOwed: false,    // hidden when they were due; asked for on the way back in
+    loadingTasks: false,
+    tree: [],            // the nodes, built from the project
+    byId: new Map(),
+    open: new Set(),     // which node ids are expanded
+    opened: false,       // whether the first level was ever opened by default
+    selected: null,      // node id
+    picked: [],          // runnable node ids to run together, in order (ctrl-click)
+    profiles: {},        // module id -> { profileId: true }
+    skipTests: false,
+    offline: false,
+    filter: '',
+    recent: [],          // { label, run, dir } of what ran, newest first
+    resolved: {},        // gradle: project path -> { configuration, nodes } | { error }
+    resolvedLoading: {}, // project path -> the configuration being asked for
+    resolvedOpen: new Set(),
+    scrollTop: 0,
+    showing: true,
+    stale: null,         // a change arrived while hidden
+    error: null,
+    loading: false,
+  };
+
+  var el = {
+    tree: document.getElementById('tree'),
+    detail: document.getElementById('detail'),
+    body: document.getElementById('body'),
+    run: document.getElementById('run'),
+    filter: document.getElementById('filter'),
+    summary: document.getElementById('summary'),
+    busy: document.getElementById('busy'),
+    stale: document.getElementById('stale'),
+    skip: document.getElementById('skip'),
+    offline: document.getElementById('offline'),
+    reload: document.getElementById('reload'),
+  };
+
+  // ---------------------------------------------------------------- helpers
+
+  function h(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined && text !== null) node.textContent = String(text);
+    return node;
+  }
+
+  var ICONS = {
+    module: 'M7 1.8 12.4 4.5 7 7.2 1.6 4.5zM1.6 7.2 7 9.9l5.4-2.7M1.6 9.9 7 12.6l5.4-2.7',
+    phase: 'M3.5 2.5v9l7.5-4.5z',
+    goal: 'M2 7h10M8.5 3.5 12 7l-3.5 3.5',
+    plugin: 'M4.5 2.5h5v2h2v5h-2v2h-5v-2h-2v-5h2z',
+    dep: 'M7 2.2a4.8 4.8 0 1 0 0 9.6 4.8 4.8 0 0 0 0-9.6zM7 4.8v4.4',
+    group: 'M2.5 3.5h9M2.5 7h9M2.5 10.5h5',
+    recent: 'M7 2.5a4.5 4.5 0 1 0 4.5 4.5M7 4.5V7l2 1.2',
+  };
+
+  function svgIcon(kind) {
+    var wrap = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    wrap.setAttribute('viewBox', '0 0 14 14');
+    wrap.setAttribute('class', 'icon');
+    wrap.setAttribute('fill', 'none');
+    wrap.setAttribute('stroke', 'currentColor');
+    wrap.setAttribute('stroke-width', '1.3');
+    wrap.setAttribute('stroke-linejoin', 'round');
+    wrap.setAttribute('stroke-linecap', 'round');
+    var path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', ICONS[kind] || ICONS.group);
+    wrap.appendChild(path);
+    return wrap;
+  }
+
+  function busy(text) { el.busy.textContent = text || ''; }
+
+  function call(name, args) {
+    return host.call(name, args).then(function (result) {
+      if (result && result.ok === false) throw new Error(result.error || 'the app said no');
+      return result;
+    });
+  }
+
+  function basename(p) { return String(p || '').replace(/\/+$/, '').split('/').pop() || p; }
+
+  function coords(m) {
+    return [m.groupId, m.artifactId, m.version].filter(Boolean).join(':');
+  }
+
+  // ---------------------------------------------------------------- building the tree
+
+  /**
+   * One node of the tree, attached to its parent as it is made.
+   *
+   * The parent is a pointer, not a prefix of the id: walking up by cutting the
+   * id at a slash worked until a module lived in `libs/core`, or was reached
+   * as `../sibling`. `run` is what double-clicking does — the parts the app
+   * needs to write a command — and is absent on anything that is not a thing
+   * to run. `text` is what the filter searches, lowered once.
+   */
+  function node(parent, id, kind, label, extra) {
+    var n = { id: id, kind: kind, label: label, parent: parent, children: [], meta: '', run: null, tags: [], cls: '' };
+    for (var key in extra || {}) n[key] = extra[key];
+    n.text = (label + ' ' + (n.meta || '')).toLowerCase();
+    state.byId.set(id, n);
+    if (parent) parent.children.push(n);
+    return n;
+  }
+
+  function buildTree() {
+    state.byId = new Map();
+    var p = state.project;
+    if (!p) { state.tree = []; return; }
+    var roots = [];
+    if (state.recent.length) roots.push(recentNode());
+    if (p.tool === 'maven') roots.push(mavenModule(null, p.project, 'm'));
+    else roots.push(gradleProject(null, p.project, true));
+    state.tree = roots;
+    // Only the first level opens itself, and only the first time: a project
+    // of thirty modules should arrive as a list of thirty, not as a thousand
+    // rows — and a tree somebody collapsed stays collapsed.
+    if (!state.opened) {
+      state.opened = true;
+      roots.forEach(function (r) {
+        state.open.add(r.id);
+        r.children.forEach(function (c) {
+          if (c.kind === 'lifecycle' || c.kind === 'modules' || c.kind === 'projects' || c.kind === 'tasks') state.open.add(c.id);
+        });
+      });
+    }
+  }
+
+  function recentNode() {
+    var n = node(null, 'recent', 'recent', 'Recent', { cls: 'group' });
+    state.recent.forEach(function (entry, i) {
+      node(n, 'recent/' + i, 'recentRun', entry.label, { run: entry.run, meta: entry.dir || '', cls: 'runnable' });
+    });
+    return n;
+  }
+
+  /** A Maven module, with everything IntelliJ puts under one. */
+  function mavenModule(parent, m, id) {
+    var head = node(parent, id, 'module', m.artifactId || basename(m.dir), {
+      module: m, dir: m.dir, meta: m.version || '', cls: 'head',
+      tags: [m.packaging || 'jar'].concat(m.profile ? [{ text: 'profile ' + m.profile, cls: 'profile' }] : []),
+    });
+    if (m.error) {
+      head.cls = 'bad';
+      head.meta = m.error;
+      head.text = (head.label + ' ' + head.meta).toLowerCase();
+      return head;
+    }
+    /*
+     * A module aggregated from outside the project folder is part of the
+     * build and not a place a run can start from here: the app refuses a
+     * directory that is not under the root, and rightly. It is shown, and
+     * says so, and offers nothing to run.
+     */
+    if (m.outside) {
+      head.cls = 'head dim';
+      head.meta = 'outside the project folder — open it in its own tab to build it';
+      head.text = (head.label + ' ' + head.meta).toLowerCase();
+    }
+    var run = m.outside
+      ? function () { return null; }
+      : function (goals) { return { tool: 'maven', dir: m.dir, moduleId: id, goals: goals }; };
+
+    var life = node(head, id + '/lifecycle', 'lifecycle', 'Lifecycle', { cls: 'group' });
+    state.project.lifecycle.forEach(function (phase) {
+      node(life, id + '/lifecycle/' + phase.name, 'phase', phase.name, {
+        run: run([phase.name]), meta: phase.description, cls: 'runnable',
+      });
+    });
+
+    var plugins = node(head, id + '/plugins', 'plugins', 'Plugins', { cls: 'group', count: m.plugins.length });
+    m.plugins.forEach(function (plugin) {
+      var pid = id + '/plugins/' + plugin.groupId + ':' + plugin.artifactId;
+      var tags = [];
+      if (plugin.implied) tags.push({ text: 'bound', cls: 'implied' });
+      if (plugin.inherited) tags.push({ text: 'from ' + plugin.inherited, cls: 'implied' });
+      var pn = node(plugins, pid, 'plugin', plugin.prefix, {
+        plugin: plugin, meta: plugin.artifactId + (plugin.version ? ' ' + plugin.version : ''), tags: tags,
+      });
+      plugin.goals.forEach(function (goal) {
+        node(pn, pid + '/' + goal.name, 'goal', plugin.prefix + ':' + goal.name, {
+          run: run([plugin.prefix + ':' + goal.name]), meta: goal.description || '', cls: 'runnable', goal: goal, plugin: plugin,
+        });
+      });
+      if (!plugin.goals.length) pn.cls = 'dim';
+    });
+
+    var deps = node(head, id + '/deps', 'deps', 'Dependencies', { cls: 'group', count: m.dependencies.length });
+    m.dependencies.forEach(function (dep, i) {
+      node(deps, id + '/deps/' + i, 'dep', dep.groupId + ':' + dep.artifactId, {
+        dep: dep, meta: dep.version || '', tags: dep.scope !== 'compile' ? [{ text: dep.scope, cls: 'scope-' + dep.scope }] : [],
+        cls: dep.optional ? 'dim' : '',
+      });
+    });
+    if (m.dependencies.length && !m.outside) {
+      node(deps, id + '/deps/tree', 'depTree', 'Show the resolved tree', {
+        run: run(['dependency:tree']), meta: 'mvn dependency:tree, in a terminal', cls: 'runnable dim',
+      });
+    }
+
+    if (m.profiles.length) {
+      var profiles = node(head, id + '/profiles', 'profiles', 'Profiles', { cls: 'group', count: m.profiles.length });
+      m.profiles.forEach(function (profile) {
+        node(profiles, id + '/profiles/' + profile.id, 'profile', profile.id, {
+          profile: profile, moduleId: id, meta: profile.activeByDefault ? 'active by default' : '',
+        });
+      });
+    }
+
+    if (m.modules.length) {
+      var modules = node(head, id + '/modules', 'modules', 'Modules', { cls: 'group', count: m.modules.length });
+      m.modules.forEach(function (sub, i) {
+        // Under `/modules/`, so `plugins` as a folder name is not the Plugins
+        // group; numbered, so two entries with one folder are two nodes.
+        mavenModule(modules, sub, id + '/modules/' + i + ':' + (sub.relative || sub.artifactId));
+      });
+    }
+    return head;
+  }
+
+  /**
+   * A Gradle project: tasks by group, declared dependencies, and its subprojects.
+   *
+   * A root task runs by its bare name (`build`), which is what IntelliJ runs
+   * from the root node and what runs it in every project; `:build` would be
+   * the root's own, which in most multi-project builds does not exist. A
+   * subproject's task keeps its path.
+   */
+  function gradleProject(parent, p, isRoot) {
+    var id = 'g' + p.path;
+    var head = node(parent, id, 'module', p.name, {
+      module: p, dir: p.dir, meta: isRoot ? '' : p.path, cls: 'head', project: p,
+      tags: isRoot ? [state.project.kotlin ? 'kotlin dsl' : 'groovy dsl'] : [],
+    });
+    var taskPath = function (task) { return p.path === ':' ? task.name : task.path; };
+    var run = function (goal) { return { tool: 'gradle', dir: state.project.root, moduleId: id, goals: [goal] }; };
+
+    var tasks = node(head, id + '/tasks', 'tasks', 'Tasks', { cls: 'group' });
+    if (state.tasks) {
+      var mine = state.tasks.groups.map(function (group) {
+        return { name: group.name, tasks: group.tasks.filter(function (t) { return t.project === p.path; }) };
+      }).filter(function (group) { return group.tasks.length; });
+      tasks.count = mine.reduce(function (n, g) { return n + g.tasks.length; }, 0);
+      mine.forEach(function (group) {
+        var gn = node(tasks, id + '/tasks/' + group.name, 'taskGroup', group.name.toLowerCase(), { cls: 'group', count: group.tasks.length });
+        group.tasks.forEach(function (task) {
+          node(gn, id + '/tasks/' + group.name + '/' + task.name, 'task', task.name, {
+            run: run(taskPath(task)), meta: task.description, cls: 'runnable', task: task,
+          });
+        });
+      });
+      if (!mine.length) node(tasks, id + '/tasks/none', 'note', 'No tasks in this project', { cls: 'dim' });
+    } else if (state.tasksError) {
+      node(tasks, id + '/tasks/error', 'note', state.tasksError, { cls: 'bad' });
+    } else {
+      node(tasks, id + '/tasks/loading', 'note', state.loadingTasks ? 'Asking Gradle…' : 'Not read yet', { cls: 'dim' });
+    }
+
+    var deps = node(head, id + '/deps', 'deps', 'Dependencies', { cls: 'group', count: p.dependencies.length, project: p });
+    var byConf = {};
+    p.dependencies.forEach(function (dep) { (byConf[dep.configuration] = byConf[dep.configuration] || []).push(dep); });
+    Object.keys(byConf).forEach(function (conf) {
+      var cn = node(deps, id + '/deps/' + conf, 'configuration', conf, { cls: 'group', count: byConf[conf].length });
+      byConf[conf].forEach(function (dep, i) {
+        var parts = dep.project ? [dep.notation, ''] : splitNotation(dep.notation);
+        node(cn, id + '/deps/' + conf + '/' + i, 'dep', parts[0], {
+          dep: dep, meta: parts[1], tags: dep.catalog ? ['catalog'] : dep.platform ? ['platform'] : [],
+        });
+      });
+    });
+    node(deps, id + '/deps/resolved', 'resolved', 'Resolved…', {
+      meta: 'what Gradle actually resolves, per configuration', project: p, cls: 'dim',
+    });
+
+    if (isRoot) {
+      // The projects settings named, and any Gradle named that settings did
+      // not say in a way that could be read — a loop, a plugin, a function.
+      var subs = (p.subprojects || []).slice();
+      var known = {};
+      subs.forEach(function (sub) { known[sub.path] = true; });
+      ((state.tasks && state.tasks.projects) || []).forEach(function (path) {
+        if (path === ':' || known[path]) return;
+        known[path] = true;
+        subs.push({ path: path, name: path.slice(path.lastIndexOf(':') + 1), dir: state.project.root + '/' + path.slice(1).split(':').join('/'), relative: path.slice(1).split(':').join('/'), file: null, dependencies: [], fromTasks: true });
+      });
+      if (subs.length) {
+        var projects = node(head, id + '/projects', 'projects', 'Projects', { cls: 'group', count: subs.length });
+        subs.forEach(function (sub) { gradleProject(projects, sub, false); });
+      }
+    }
+    return head;
+  }
+
+  /** "g:a:v" → ["g:a", "v"]; anything else stays whole. */
+  function splitNotation(notation) {
+    var parts = String(notation || '').split(':');
+    if (parts.length >= 3) return [parts[0] + ':' + parts[1], parts.slice(2).join(':')];
+    return [notation, ''];
+  }
+
+  // ---------------------------------------------------------------- drawing
+
+  /**
+   * The rows on screen: the tree walked to its open nodes, filtered if asked.
+   *
+   * Whether anything under a node matches is worked out once per node per
+   * walk, not once per ancestor: a tree of a few thousand nodes and a query
+   * of one letter was otherwise a few million string compares per keystroke.
+   */
+  function visibleRows() {
+    var rows = [];
+    var q = state.filter.trim().toLowerCase();
+    var below = new Map();
+    function anyBelow(n) {
+      if (below.has(n.id)) return below.get(n.id);
+      var yes = n.text.indexOf(q) !== -1;
+      for (var i = 0; !yes && i < n.children.length; i += 1) yes = anyBelow(n.children[i]);
+      below.set(n.id, yes);
+      return yes;
+    }
+    function walk(n, depth) {
+      if (q && !anyBelow(n)) return;
+      rows.push({ node: n, depth: depth });
+      // Filtering opens everything that has a match under it; the person is
+      // looking for something, and a closed group is a hidden answer.
+      var open = q ? true : state.open.has(n.id);
+      if (open) for (var i = 0; i < n.children.length; i += 1) walk(n.children[i], depth + 1);
+    }
+    state.tree.forEach(function (n) { walk(n, 0); });
+    return rows;
+  }
+
+  function rowClass(n) {
+    return 'row ' + (n.cls || '') + (n.id === state.selected ? ' on' : '') + (state.picked.indexOf(n.id) !== -1 ? ' picked' : '');
+  }
+
+  function draw() {
+    var rows = visibleRows();
+    var frag = document.createDocumentFragment();
+    if (!rows.length) {
+      var empty = h('div', 'empty');
+      if (state.error) {
+        empty.appendChild(h('strong', null, 'Could not read the project.'));
+        empty.appendChild(h('p', null, state.error));
+      } else if (state.loading) {
+        empty.textContent = 'Reading…';
+      } else if (state.filter) {
+        empty.textContent = 'Nothing matches.';
+      } else {
+        empty.textContent = 'Nothing here.';
+      }
+      frag.appendChild(empty);
+    }
+    rows.forEach(function (entry) {
+      var n = entry.node;
+      var row = h('div', rowClass(n));
+      row.dataset.id = n.id;
+      row.style.paddingLeft = (6 + entry.depth * 16) + 'px';
+
+      var twist = h('span', 'twist' + (n.children.length ? '' : ' leaf'), state.open.has(n.id) || state.filter ? '▾' : '▸');
+      twist.dataset.twist = n.id;
+      row.appendChild(twist);
+
+      if (n.kind === 'profile') {
+        var box = document.createElement('input');
+        box.type = 'checkbox';
+        box.checked = isProfileOn(n.moduleId, n.profile.id);
+        box.dataset.profile = n.id;
+        box.tabIndex = -1;
+        row.appendChild(box);
+      } else {
+        row.appendChild(svgIcon(iconFor(n)));
+      }
+
+      row.appendChild(h('span', 'name', n.label));
+      if (n.count !== undefined) row.appendChild(h('span', 'count', n.count));
+      (n.tags || []).forEach(function (tag) {
+        var text = typeof tag === 'string' ? tag : tag.text;
+        row.appendChild(h('span', 'tag ' + (typeof tag === 'string' ? '' : tag.cls || ''), text));
+      });
+      if (n.meta) row.appendChild(h('span', 'meta' + (n.kind === 'module' || n.kind === 'dep' ? ' mono' : ''), n.meta));
+
+      if (n.run) {
+        var play = h('button', 'play', '▶');
+        play.title = 'Run';
+        play.dataset.play = n.id;
+        // Enter on the tree runs the selection; two thousand invisible tab
+        // stops between the filter box and the next control is not a feature.
+        play.tabIndex = -1;
+        row.appendChild(play);
+      }
+      frag.appendChild(row);
+    });
+    el.tree.textContent = '';
+    el.tree.appendChild(frag);
+    drawFoot();
+  }
+
+  /** The row for a node, if it is on screen. */
+  function rowFor(id) {
+    if (id === null || id === undefined) return null;
+    var rows = el.tree.children;
+    for (var i = 0; i < rows.length; i += 1) if (rows[i].dataset && rows[i].dataset.id === id) return rows[i];
+    return null;
+  }
+
+  /** Selection and picks, painted onto the rows that are there, without redrawing them. */
+  function paintSelection(before) {
+    (before || []).concat([state.selected], state.picked).forEach(function (id) {
+      var row = rowFor(id);
+      var n = state.byId.get(id);
+      if (row && n) row.className = rowClass(n);
+    });
+  }
+
+  function iconFor(n) {
+    return {
+      module: 'module', phase: 'phase', goal: 'goal', plugin: 'plugin', dep: 'dep', task: 'phase',
+      recent: 'recent', recentRun: 'phase', taskGroup: 'group', configuration: 'group', depTree: 'goal', resolved: 'dep',
+    }[n.kind] || 'group';
+  }
+
+  function drawFoot() {
+    var p = state.project;
+    el.reload.disabled = state.loading || state.loadingTasks;
+    if (!p) { el.summary.textContent = ''; return; }
+    var parts = [];
+    if (p.tool === 'maven') {
+      var count = 0;
+      (function walk(m) { count += 1; (m.modules || []).forEach(walk); })(p.project);
+      parts.push('Maven', count === 1 ? '1 module' : count + ' modules', p.wrapper ? 'mvnw' : 'mvn on PATH');
+    } else {
+      parts.push('Gradle', (1 + (p.project.subprojects || []).length) + ' projects', p.wrapper ? 'gradlew' : 'gradle on PATH');
+      if (state.tasks) parts.push(state.tasks.groups.reduce(function (n, g) { return n + g.tasks.length; }, 0) + ' tasks');
+    }
+    el.summary.textContent = parts.join(' · ');
+    el.stale.textContent = state.tasksStale ? 'build files changed — reading the tasks again' : '';
+    el.skip.classList.toggle('on', state.skipTests);
+    el.offline.classList.toggle('on', state.offline);
+  }
+
+  // ---------------------------------------------------------------- selection
+
+  function toggle(id) {
+    // With a filter on, everything with a match is open whatever the state
+    // says; flipping it now would only surprise later.
+    if (state.filter) return;
+    if (state.open.has(id)) state.open.delete(id); else state.open.add(id);
+    draw();
+    remember();
+  }
+
+  function select(id) {
+    var before = [state.selected].concat(state.picked);
+    state.selected = id;
+    state.picked = [];
+    paintSelection(before);
+    drawDetail();
+    remember();
+  }
+
+  /**
+   * Adding to the run rather than replacing it.
+   *
+   * `clean` then `install` is the run everybody makes, and it is two rows; a
+   * ctrl-click on the second keeps the first. Only within one module: goals
+   * from two modules are two commands, and the app runs one at a time.
+   */
+  function pick(id) {
+    var n = state.byId.get(id);
+    if (!n || !n.run) { select(id); return; }
+    var current = state.byId.get(state.selected);
+    if (!current || !current.run || current.run.moduleId !== n.run.moduleId) { select(id); return; }
+    var before = [state.selected].concat(state.picked);
+    if (state.picked.indexOf(state.selected) === -1) state.picked = [state.selected];
+    var at = state.picked.indexOf(id);
+    if (at === -1) state.picked.push(id); else if (state.picked.length > 1) state.picked.splice(at, 1);
+    paintSelection(before);
+    drawDetail();
+  }
+
+  function isProfileOn(moduleId, profileId) {
+    var set = state.profiles[moduleId];
+    if (set && profileId in set) return Boolean(set[profileId]);
+    var n = state.byId.get(moduleId + '/profiles/' + profileId);
+    return Boolean(n && n.profile && n.profile.activeByDefault);
+  }
+
+  function toggleProfile(moduleId, profileId) {
+    var set = state.profiles[moduleId] = state.profiles[moduleId] || {};
+    set[profileId] = !isProfileOn(moduleId, profileId);
+    drawDetail();
+    remember();
+  }
+
+  /** The module node a node belongs to, by the parent pointers. */
+  function moduleOf(id) {
+    var n = state.byId.get(id);
+    while (n && n.kind !== 'module') n = n.parent;
+    return n || null;
+  }
+
+  /**
+   * The profiles switched on for a run started at a module: the module's
+   * own, every module above it (a profile is activated for the whole
+   * invocation), and every module below it (they are in this run's reactor).
+   */
+  function profilesFor(moduleId) {
+    var on = [];
+    function collect(n) {
+      if (!n || !n.module || !n.module.profiles) return;
+      n.module.profiles.forEach(function (p) {
+        if (isProfileOn(n.id, p.id) && on.indexOf(p.id) === -1) on.push(p.id);
+      });
+    }
+    var start = state.byId.get(moduleId);
+    for (var up = start; up; up = up.parent) if (up.kind === 'module') collect(up);
+    (function down(n) {
+      if (!n) return;
+      n.children.forEach(function (c) {
+        if (c.kind === 'module') collect(c);
+        down(c);
+      });
+    })(start);
+    return on;
+  }
+
+  // ---------------------------------------------------------------- running
+
+  /**
+   * What would run, from the selection, the toggles and the run box.
+   *
+   * What is typed goes after the selected goals *in the order it was typed*:
+   * `-pl :app -am` is three words that are one thing, and sorting them into
+   * goals and flags tore the module name from the flag that named it. A bare
+   * word is a goal; with nothing selected the leading bare words are the
+   * goals, and everything from the first flag on rides along as typed.
+   */
+  function plannedRun() {
+    var ids = state.picked.length ? state.picked : (state.selected ? [state.selected] : []);
+    var nodes = ids.map(function (id) { return state.byId.get(id); }).filter(function (n) { return n && n.run; });
+    // A recent entry is what it was, exactly; the box does not modify it.
+    if (nodes.length === 1 && nodes[0].kind === 'recentRun') return nodes[0].run;
+
+    var typed = el.run.value.trim().replace(/^(mvn|mvnw|\.\/mvnw|gradle|gradlew|\.\/gradlew)\s+/, '');
+    var words = typed ? typed.split(/\s+/) : [];
+
+    var base = nodes[0] ? nodes[0].run : null;
+    if (!base) {
+      // Nothing runnable selected: the box runs on the selected module, or the root.
+      var m = moduleOf(state.selected) || state.tree[state.tree.length - 1];
+      if (!m || !words.length || !m.dir) return null;
+      if (m.module && m.module.outside) return null;
+      base = { tool: state.project.tool, dir: m.dir, moduleId: m.id, goals: [] };
+    }
+    var goals = [];
+    nodes.forEach(function (n) { n.run.goals.forEach(function (g) { if (goals.indexOf(g) === -1) goals.push(g); }); });
+    var extra = [];
+    var leading = goals.length === 0;
+    words.forEach(function (w) {
+      if (w.charAt(0) === '-') leading = false;
+      if (leading) { if (goals.indexOf(w) === -1) goals.push(w); return; }
+      if (w.charAt(0) !== '-' && goals.indexOf(w) !== -1) return;
+      extra.push(w);
+    });
+    if (!goals.length) return null;
+
+    return {
+      tool: base.tool,
+      wrapper: Boolean(state.project.wrapper),
+      dir: base.dir,
+      goals: goals,
+      profiles: base.tool === 'maven' ? profilesFor(base.moduleId) : [],
+      skipTests: state.skipTests,
+      offline: state.offline,
+      extra: extra,
+      moduleId: base.moduleId,
+    };
+  }
+
+  /** The line the app will write, as best the panel can guess it, for the detail pane. */
+  function describeRun(run) {
+    var parts = [];
+    if (run.tool === 'maven') {
+      parts.push(run.wrapper ? './mvnw' : 'mvn');
+      if (run.offline) parts.push('-o');
+      if (run.profiles && run.profiles.length) parts.push('-P' + run.profiles.join(','));
+      parts = parts.concat(run.goals);
+      if (run.skipTests) parts.push('-DskipTests');
+    } else {
+      parts.push(run.wrapper ? './gradlew' : 'gradle');
+      if (run.offline) parts.push('--offline');
+      parts = parts.concat(run.goals);
+      if (run.skipTests) parts.push('-x', 'test');
+    }
+    return parts.concat(run.extra || []).join(' ');
+  }
+
+  function runSelection() {
+    var run = plannedRun();
+    if (!run) { host.emit('notify', { text: 'Select a phase, a goal or a task first, or type one.', kind: 'bad' }); return; }
+    execute(run);
+  }
+
+  function execute(run) {
+    var label = describeRun(run);
+    busy('Running ' + label + '…');
+    /*
+     * Written down before the call, not after. Opening the terminal splits the
+     * pane this panel is in, and a split rebuilds the frame — so the reply to
+     * this call lands in a document that no longer exists. What the person
+     * asked to run is known now; whether it started, the terminal will say.
+     */
+    var entry = rememberRecent(label, run);
+    return call('build.run', run)
+      .then(function (result) {
+        busy('');
+        host.emit('notify', { text: (result.reused ? 'Running in the terminal below: ' : 'Running in a terminal below: ') + (result.command || label) });
+      })
+      .catch(function (error) {
+        busy('');
+        // It did not run, so it is not something that ran.
+        forgetRecent(entry);
+        host.emit('notify', { text: 'Could not run: ' + error.message, kind: 'bad' });
+      });
+  }
+
+  /**
+   * Remembered as it ran — the goals, the flags, the profiles, the module —
+   * so that running it again runs *it*, not the same goals under whatever
+   * the toggles say today. Named by the module it ran in, because
+   * `mvn install` in two modules is two different things to run again.
+   */
+  function rememberRecent(label, run) {
+    var dir = run.tool === 'maven' ? basename(run.dir) : '';
+    var entry = { label: label, run: run, dir: dir };
+    state.recent = [entry]
+      .concat(state.recent.filter(function (r) { return r.label !== label || r.dir !== dir; }))
+      .slice(0, 8);
+    // The selection followed a recent row that just moved to the top.
+    if (state.selected && state.selected.indexOf('recent/') === 0) state.selected = 'recent/0';
+    buildTree();
+    state.open.add('recent');
+    draw();
+    drawDetail();
+    remember();
+    return entry;
+  }
+
+  function forgetRecent(entry) {
+    state.recent = state.recent.filter(function (r) { return r !== entry; });
+    if (state.selected && state.selected.indexOf('recent/') === 0) state.selected = null;
+    buildTree();
+    draw();
+    drawDetail();
+    remember();
+  }
+
+  // ---------------------------------------------------------------- detail
+
+  function drawDetail() {
+    var n = state.byId.get(state.selected);
+    if (!n) {
+      el.detail.hidden = true;
+      el.body.classList.remove('with-detail');
+      return;
+    }
+    el.detail.hidden = false;
+    el.body.classList.add('with-detail');
+    el.detail.textContent = '';
+
+    if (n.kind === 'module') return drawModule(n);
+    if (n.kind === 'plugin') return drawPlugin(n);
+    if (n.kind === 'dep') return drawDependency(n);
+    if (n.kind === 'resolved') return drawResolved(n.project);
+    if (n.kind === 'profile') {
+      el.detail.appendChild(h('h3', null, n.profile.id));
+      el.detail.appendChild(h('div', 'sub', 'profile'));
+      el.detail.appendChild(h('p', null, (isProfileOn(n.moduleId, n.profile.id) ? 'On: ' : 'Off: ') + 'the checkbox decides whether -P' + n.profile.id + ' goes on every run of this module and the ones under it.'));
+      return;
+    }
+
+    var run = plannedRun();
+    if (run) {
+      var runNodes = state.picked.length > 1 ? state.picked.map(function (id) { return state.byId.get(id); }) : [n];
+      el.detail.appendChild(h('h3', null, runNodes.map(function (r) { return r.label; }).join(' ')));
+      el.detail.appendChild(h('div', 'sub', runNodes.length === 1 && n.meta ? n.meta : ''));
+      el.detail.appendChild(h('h4', null, 'Runs'));
+      var line = describeRun(run);
+      var cmd = h('div', 'cmd');
+      cmd.appendChild(h('span', 'dir', (run.tool === 'maven' ? run.dir.replace(state.project.root, '') || '/' : '.') + ' $ '));
+      cmd.appendChild(document.createTextNode(line));
+      el.detail.appendChild(cmd);
+      if (run.tool === 'maven' && run.dir !== state.project.root) el.detail.appendChild(h('p', null, 'In the module, the way IntelliJ runs it: this module and the modules under it, not the whole reactor. For the siblings too, add -am in the box.'));
+      var ra = h('div', 'actions');
+      ra.appendChild(button('▶ Run in a terminal', function () { execute(run); }, 'go'));
+      ra.appendChild(button('Copy', function () { host.emit('copy', { text: line }); host.emit('notify', { text: 'Copied.' }); }));
+      el.detail.appendChild(ra);
+      if (n.kind === 'task' && n.task) {
+        el.detail.appendChild(h('h4', null, 'Task'));
+        var tkv = h('div', 'kv');
+        tkv.appendChild(h('span', null, 'path')); tkv.appendChild(h('span', null, n.task.path));
+        el.detail.appendChild(tkv);
+      }
+      if (n.kind !== 'recentRun') el.detail.appendChild(h('p', null, 'Double-click runs. ⌘-click another row to run them together.'));
+      return;
+    }
+
+    el.detail.appendChild(h('h3', null, n.label));
+    if (n.kind === 'note' && n.cls === 'bad') el.detail.appendChild(h('p', 'bad', n.label));
+    else if (n.count !== undefined) el.detail.appendChild(h('div', 'sub', n.count + ' inside'));
+  }
+
+  function drawModule(n) {
+    var m = n.module;
+    el.detail.appendChild(h('h3', null, m.name || m.artifactId || n.label));
+    el.detail.appendChild(h('div', 'sub', state.project.tool === 'maven' ? coords(m) : (m.path || ':')));
+    if (m.error) {
+      el.detail.appendChild(h('p', 'bad', 'Its pom could not be read: ' + m.error));
+      if (m.file) {
+        var fix = h('div', 'actions');
+        fix.appendChild(button('Open pom.xml', function () { host.emit('openFile', { path: m.file }); }));
+        el.detail.appendChild(fix);
+      }
+      return;
+    }
+    var kv = h('div', 'kv');
+    if (state.project.tool === 'maven') {
+      kv.appendChild(h('span', null, 'packaging')); kv.appendChild(h('span', null, m.packaging || 'jar'));
+      kv.appendChild(h('span', null, 'pom')); kv.appendChild(h('span', null, m.relative === '.' ? 'pom.xml' : m.relative + '/pom.xml'));
+      if (m.profile) { kv.appendChild(h('span', null, 'only with')); kv.appendChild(h('span', null, '-P' + m.profile)); }
+      var on = profilesFor(n.id);
+      if (on.length) { kv.appendChild(h('span', null, 'profiles on')); kv.appendChild(h('span', null, on.join(', '))); }
+    } else {
+      kv.appendChild(h('span', null, 'folder')); kv.appendChild(h('span', null, m.relative || '.'));
+      if (m.file) { kv.appendChild(h('span', null, 'script')); kv.appendChild(h('span', null, basename(m.file))); }
+      if (m.fromTasks) { kv.appendChild(h('span', null, 'from')); kv.appendChild(h('span', null, 'the task list — settings did not name it in a way this could read')); }
+    }
+    el.detail.appendChild(kv);
+    if (m.outside) {
+      el.detail.appendChild(h('p', null, 'This module lives outside the project folder, so nothing can be run in it from this panel. Open its own folder to build it.'));
+    }
+    var actions = h('div', 'actions');
+    if (m.file) actions.appendChild(button('Open ' + basename(m.file), function () { host.emit('openFile', { path: m.file }); }));
+    if (state.project.tool === 'maven' && !m.outside) {
+      actions.appendChild(button('▶ clean install', function () {
+        execute({ tool: 'maven', wrapper: Boolean(state.project.wrapper), dir: m.dir, goals: ['clean', 'install'], profiles: profilesFor(n.id), skipTests: state.skipTests, offline: state.offline, extra: [], moduleId: n.id });
+      }, 'go'));
+    } else if (state.project.tool === 'gradle') {
+      actions.appendChild(button('▶ build', function () {
+        execute({ tool: 'gradle', wrapper: Boolean(state.project.wrapper), dir: state.project.root, goals: [m.path === ':' ? 'build' : m.path + ':build'], profiles: [], skipTests: state.skipTests, offline: state.offline, extra: [], moduleId: n.id });
+      }, 'go'));
+    }
+    el.detail.appendChild(actions);
+    if (state.project.tool === 'maven') {
+      var fromTable = m.plugins.filter(function (p) { return !p.resolved && p.goals.length; }).length;
+      if (fromTable) el.detail.appendChild(h('p', null, fromTable + (fromTable === 1 ? ' plugin lists' : ' plugins list') + ' goals from a built-in table rather than from the plugin itself — it has not been downloaded to the local repository yet. A build fixes that.'));
+    }
+  }
+
+  function drawPlugin(n) {
+    var plugin = n.plugin;
+    el.detail.appendChild(h('h3', null, plugin.prefix));
+    el.detail.appendChild(h('div', 'sub', plugin.groupId + ':' + plugin.artifactId + (plugin.version ? ':' + plugin.version : '')));
+    if (plugin.implied) el.detail.appendChild(h('p', null, 'Not declared in the pom — Maven binds it to the lifecycle for this packaging.'));
+    if (plugin.inherited) el.detail.appendChild(h('p', null, 'Declared in the parent ' + plugin.inherited + ' and inherited from there.'));
+    if (!plugin.resolved && plugin.goals.length) el.detail.appendChild(h('p', null, 'Goals from a built-in table; the plugin is not in the local repository yet.'));
+    if (!plugin.goals.length) el.detail.appendChild(h('p', null, 'No goals known: the plugin is not in the local repository and it is not one this panel has a table for. Run a build and reload.'));
+    el.detail.appendChild(h('h4', null, 'Goals'));
+    var list = h('div', 'goal-list');
+    var mod = moduleOf(n.id);
+    plugin.goals.forEach(function (goal) {
+      var row = h('div', 'row runnable');
+      row.appendChild(svgIcon('goal'));
+      row.appendChild(h('span', 'name', plugin.prefix + ':' + goal.name));
+      if (goal.description) row.appendChild(h('span', 'meta', goal.description));
+      if (mod && !(mod.module && mod.module.outside)) {
+        row.addEventListener('dblclick', function () {
+          execute({ tool: 'maven', wrapper: Boolean(state.project.wrapper), dir: mod.dir, goals: [plugin.prefix + ':' + goal.name], profiles: profilesFor(mod.id), skipTests: state.skipTests, offline: state.offline, extra: [], moduleId: mod.id });
+        });
+      }
+      list.appendChild(row);
+    });
+    el.detail.appendChild(list);
+  }
+
+  function drawDependency(n) {
+    var dep = n.dep;
+    el.detail.appendChild(h('h3', null, n.label));
+    el.detail.appendChild(h('div', 'sub', dep.notation || coords(dep)));
+    var dkv = h('div', 'kv');
+    if (dep.version !== undefined) { dkv.appendChild(h('span', null, 'version')); dkv.appendChild(h('span', null, dep.version || '(managed above this pom, or by an imported BOM)')); }
+    if (dep.scope) { dkv.appendChild(h('span', null, 'scope')); dkv.appendChild(h('span', null, dep.scope)); }
+    if (dep.type && dep.type !== 'jar') { dkv.appendChild(h('span', null, 'type')); dkv.appendChild(h('span', null, dep.type)); }
+    if (dep.configuration) { dkv.appendChild(h('span', null, 'configuration')); dkv.appendChild(h('span', null, dep.configuration)); }
+    if (dep.optional) { dkv.appendChild(h('span', null, 'optional')); dkv.appendChild(h('span', null, 'yes')); }
+    if (dep.platform) { dkv.appendChild(h('span', null, 'platform')); dkv.appendChild(h('span', null, 'a BOM: versions, not a jar')); }
+    if (dep.catalog) { dkv.appendChild(h('span', null, 'from')); dkv.appendChild(h('span', null, 'the version catalog (gradle/libs.versions.toml)')); }
+    el.detail.appendChild(dkv);
+  }
+
+  function button(text, onClick, cls) {
+    var b = h('button', 'btn ' + (cls || ''), text);
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  /** Gradle's resolved tree for one project, one configuration, drawn in the detail pane. */
+  function showResolved(project) {
+    select('g' + project.path + '/deps/resolved');
+  }
+
+  function drawResolved(project) {
+    el.detail.hidden = false;
+    el.body.classList.add('with-detail');
+    el.detail.textContent = '';
+    var held = state.resolved[project.path];
+    var loading = state.resolvedLoading[project.path] || null;
+    var configuration = loading || (held ? held.configuration : 'runtimeClasspath');
+
+    el.detail.appendChild(h('h3', null, 'Resolved dependencies'));
+    el.detail.appendChild(h('div', 'sub', project.path === ':' ? project.name : project.path));
+    var pick = document.createElement('select');
+    ['compileClasspath', 'runtimeClasspath', 'testCompileClasspath', 'testRuntimeClasspath'].forEach(function (c) {
+      var opt = document.createElement('option');
+      opt.value = c; opt.textContent = c; opt.selected = c === configuration;
+      pick.appendChild(opt);
+    });
+    // Choosing a configuration is asking for it; a second click would be a tax.
+    pick.addEventListener('change', function () { loadResolved(project, pick.value); });
+    pick.disabled = Boolean(loading);
+    var actions = h('div', 'actions');
+    actions.appendChild(pick);
+    var again = button(held && held.configuration === configuration ? 'Read again' : 'Read', function () { loadResolved(project, pick.value); });
+    again.disabled = Boolean(loading);
+    actions.appendChild(again);
+    el.detail.appendChild(actions);
+
+    if (loading) { el.detail.appendChild(h('p', null, 'Asking Gradle for ' + loading + '…')); return; }
+    if (!held) {
+      el.detail.appendChild(h('p', null, 'Asks Gradle — a second or two with a warm daemon, longer cold.'));
+      loadResolved(project, configuration);
+      return;
+    }
+    if (held.error) { el.detail.appendChild(h('p', 'bad', held.error)); return; }
+    if (!held.nodes.length) { el.detail.appendChild(h('p', null, 'Nothing in ' + held.configuration + '.')); return; }
+
+    el.detail.appendChild(h('h4', null, held.configuration));
+    var tree = h('div', 'dep-tree');
+    var key = project.path + '#';
+    function walk(dnode, depth, path) {
+      var id = key + path;
+      var row = h('div', 'row');
+      row.style.paddingLeft = (depth * 14) + 'px';
+      var twist = h('span', 'twist' + (dnode.children.length ? '' : ' leaf'), state.resolvedOpen.has(id) ? '▾' : '▸');
+      row.appendChild(twist);
+      var parts = splitNotation(dnode.notation);
+      row.appendChild(h('span', 'name' + (dnode.seen ? ' seen' : '') + (dnode.failed ? ' failed' : ''), parts[0]));
+      if (parts[1]) row.appendChild(h('span', 'meta mono', parts[1]));
+      if (dnode.resolvedTo) { row.appendChild(h('span', 'meta arrow', '→ ' + dnode.resolvedTo)); }
+      if (dnode.constraint) row.appendChild(h('span', 'tag', 'constraint'));
+      if (dnode.failed) row.appendChild(h('span', 'tag', 'failed'));
+      if (dnode.seen) row.appendChild(h('span', 'tag', 'shown above'));
+      row.addEventListener('click', function () {
+        if (!dnode.children.length) return;
+        if (state.resolvedOpen.has(id)) state.resolvedOpen.delete(id); else state.resolvedOpen.add(id);
+        drawResolved(project);
+      });
+      tree.appendChild(row);
+      if (state.resolvedOpen.has(id)) dnode.children.forEach(function (c, i) { walk(c, depth + 1, path + '/' + i); });
+    }
+    held.nodes.forEach(function (dnode, i) { walk(dnode, 0, String(i)); });
+    el.detail.appendChild(tree);
+  }
+
+  /**
+   * Ask for one configuration, and show the answer only if it is still the
+   * one being asked about: two quick changes of the select are two Gradle
+   * runs, and the one that finishes last is not necessarily the one wanted.
+   */
+  function loadResolved(project, configuration) {
+    state.resolvedLoading[project.path] = configuration;
+    busy('Asking Gradle for ' + configuration + '…');
+    if (state.selected === 'g' + project.path + '/deps/resolved') drawResolved(project);
+    call('build.dependencies', { project: project.path, configuration: configuration })
+      .then(function (result) {
+        if (state.resolvedLoading[project.path] !== configuration) return;
+        state.resolved[project.path] = { configuration: result.configuration, nodes: result.nodes || [] };
+      })
+      .catch(function (error) {
+        if (state.resolvedLoading[project.path] !== configuration) return;
+        state.resolved[project.path] = { configuration: configuration, nodes: [], error: error.message };
+      })
+      .then(function () {
+        if (state.resolvedLoading[project.path] !== configuration) return;
+        delete state.resolvedLoading[project.path];
+        busy('');
+        remember();
+        if (state.selected === 'g' + project.path + '/deps/resolved') drawResolved(project);
+      });
+  }
+
+  // ---------------------------------------------------------------- loading
+
+  /** Read the project. `force` re-asks Gradle for its tasks as well. */
+  function load(force) {
+    if (!state.root) return Promise.resolve();
+    state.loading = true;
+    state.error = null;
+    busy('Reading…');
+    draw();
+    return call('build.project', {})
+      .then(function (project) {
+        state.project = project;
+        state.loading = false;
+        buildTree();
+        draw();
+        restoreScroll();
+        drawDetail();
+        busy('');
+        if (project.tool === 'gradle') return loadTasks(force);
+        return null;
+      })
+      .catch(function (error) {
+        state.loading = false;
+        state.error = error.message;
+        state.project = null;
+        state.tree = [];
+        state.byId = new Map();
+        state.selected = null;
+        state.picked = [];
+        draw();
+        drawDetail();
+        busy('');
+      });
+  }
+
+  /**
+   * Ask Gradle for the tasks — unless it is being asked, or nobody is looking.
+   *
+   * A restored workspace with three Gradle panels behind other tabs would
+   * otherwise start three JVMs at launch, while every session is being
+   * brought back: the worst possible moment, and for a list nobody can see.
+   * Hidden, the ask is owed, and paid on the way back in.
+   */
+  function loadTasks(force) {
+    if (state.loadingTasks) return Promise.resolve();
+    if (!force && state.tasks && !state.tasksStale) return Promise.resolve();
+    if (!state.showing) { state.tasksOwed = true; return Promise.resolve(); }
+    state.tasksOwed = false;
+    state.loadingTasks = true;
+    state.tasksError = null;
+    busy('Asking Gradle for its tasks…');
+    buildTree();
+    draw();
+    return call('build.tasks', { force: Boolean(force) })
+      .then(function (result) {
+        state.tasks = { groups: result.groups || [], projects: result.projects || [] };
+        state.tasksStale = false;
+      })
+      .catch(function (error) {
+        state.tasks = null;
+        state.tasksError = error.message;
+      })
+      .then(function () {
+        state.loadingTasks = false;
+        busy('');
+        buildTree();
+        draw();
+        drawDetail();
+      });
+  }
+
+  // ---------------------------------------------------------------- remembering
+
+  var rememberSoon = null;
+  function remember() {
+    // Coalesced: a keystroke in the run box or a scroll should not post the
+    // whole state to the app sixty times a second.
+    if (rememberSoon) return;
+    rememberSoon = setTimeout(function () {
+      rememberSoon = null;
+      host.emit('remember', {
+        open: Array.from(state.open),
+        opened: state.opened,
+        selected: state.selected,
+        profiles: state.profiles,
+        skipTests: state.skipTests,
+        offline: state.offline,
+        recent: state.recent,
+        resolved: state.resolved,
+        resolvedOpen: Array.from(state.resolvedOpen),
+        filter: state.filter,
+        run: el.run.value,
+        scrollTop: state.scrollTop,
+      });
+    }, 150);
+  }
+
+  function resume(saved) {
+    if (!saved) return;
+    state.open = new Set(saved.open || []);
+    state.opened = Boolean(saved.opened);
+    state.selected = saved.selected || null;
+    state.profiles = saved.profiles || {};
+    state.skipTests = Boolean(saved.skipTests);
+    state.offline = Boolean(saved.offline);
+    state.recent = saved.recent || [];
+    state.resolved = saved.resolved || {};
+    state.resolvedOpen = new Set(saved.resolvedOpen || []);
+    state.filter = saved.filter || '';
+    state.scrollTop = Number(saved.scrollTop) || 0;
+    el.filter.value = state.filter;
+    el.run.value = saved.run || '';
+  }
+
+  /** Back to where the tree was, or to the selected row when that is off-screen. */
+  function restoreScroll() {
+    if (state.scrollTop) el.tree.scrollTop = state.scrollTop;
+    var row = rowFor(state.selected);
+    if (row && row.scrollIntoView) {
+      var top = row.offsetTop - el.tree.scrollTop;
+      if (top < 0 || top > el.tree.clientHeight - 24) row.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  // ---------------------------------------------------------------- wiring
+
+  /*
+   * One listener for the whole tree. Rows are made by the hundred and thrown
+   * away on every redraw, and a listener per row was three thousand closures
+   * per draw on a project of any size; the row says which node it is, and
+   * the tree answers for all of them.
+   */
+  el.tree.addEventListener('click', function (event) {
+    var target = event.target;
+    var twist = target.closest && target.closest('[data-twist]');
+    if (twist) { toggle(twist.dataset.twist); return; }
+    var play = target.closest && target.closest('[data-play]');
+    if (play) { select(play.dataset.play); runSelection(); return; }
+    var box = target.closest && target.closest('[data-profile]');
+    if (box) {
+      var pn = state.byId.get(box.dataset.profile);
+      if (pn) toggleProfile(pn.moduleId, pn.profile.id);
+      return;
+    }
+    var row = target.closest && target.closest('.row');
+    if (!row || !row.dataset.id) return;
+    if (event.metaKey || event.ctrlKey) pick(row.dataset.id); else select(row.dataset.id);
+  });
+  el.tree.addEventListener('dblclick', function (event) {
+    var target = event.target;
+    if (target.closest && (target.closest('[data-twist]') || target.closest('[data-play]') || target.closest('[data-profile]'))) return;
+    var row = target.closest && target.closest('.row');
+    if (!row || !row.dataset.id) return;
+    var n = state.byId.get(row.dataset.id);
+    if (!n) return;
+    if (n.run) { select(n.id); runSelection(); return; }
+    if (n.kind === 'resolved') { showResolved(n.project); return; }
+    toggle(n.id);
+  });
+  var scrollSoon = null;
+  el.tree.addEventListener('scroll', function () {
+    if (scrollSoon) return;
+    scrollSoon = setTimeout(function () {
+      scrollSoon = null;
+      state.scrollTop = Math.round(el.tree.scrollTop);
+      remember();
+    }, 200);
+  });
+
+  el.reload.addEventListener('click', function () {
+    if (state.loading || state.loadingTasks) return;
+    state.resolved = {};
+    load(true);
+  });
+  document.getElementById('go').addEventListener('click', runSelection);
+  el.run.addEventListener('keydown', function (event) {
+    if (event.key === 'Enter') { event.preventDefault(); runSelection(); }
+  });
+  el.run.addEventListener('input', function () { drawDetail(); remember(); });
+  el.skip.addEventListener('click', function () { state.skipTests = !state.skipTests; drawFoot(); drawDetail(); remember(); });
+  el.offline.addEventListener('click', function () { state.offline = !state.offline; drawFoot(); drawDetail(); remember(); });
+  var filterSoon = null;
+  el.filter.addEventListener('input', function () {
+    state.filter = el.filter.value;
+    // One draw per frame, not one per keystroke that landed in it.
+    if (filterSoon) return;
+    filterSoon = requestAnimationFrame(function () {
+      filterSoon = null;
+      draw();
+      remember();
+    });
+  });
+
+  el.tree.addEventListener('keydown', function (event) {
+    var rows = visibleRows();
+    var at = rows.findIndex(function (r) { return r.node.id === state.selected; });
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      var next = Math.max(0, Math.min(rows.length - 1, at + (event.key === 'ArrowDown' ? 1 : -1)));
+      if (rows[next]) select(rows[next].node.id);
+      var row = rowFor(state.selected);
+      if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
+    } else if (event.key === 'ArrowRight' && at >= 0) {
+      event.preventDefault();
+      if (rows[at].node.children.length && !state.open.has(state.selected)) toggle(state.selected);
+    } else if (event.key === 'ArrowLeft' && at >= 0) {
+      event.preventDefault();
+      if (state.open.has(state.selected) && !state.filter) toggle(state.selected);
+      else if (rows[at].node.parent) select(rows[at].node.parent.id);
+    } else if (event.key === 'Enter' && at >= 0) {
+      event.preventDefault();
+      if (rows[at].node.run) runSelection();
+      else toggle(state.selected);
+    }
+  });
+
+  // The app answers `ready` with where we are, and tells us when the folder
+  // moves. Everything else this panel knows, it asked for.
+  host.on('context', function (context) {
+    state.root = context.root;
+    if (context.showing === false) state.showing = false;
+    resume(context.resume);
+    load(false);
+  });
+
+  host.on('showing', function (payload) {
+    var was = state.showing;
+    state.showing = !payload || payload.showing !== false;
+    if (!state.showing || was) return;
+    if (state.stale) { state.stale = null; load(false); return; }
+    if (state.tasksOwed) loadTasks(false);
+  });
+
+  /**
+   * The folder changed. A build writes hundreds of files into `target/` and
+   * none of them change what the tree says; a pom changing does. There is no
+   * way to know which from here, so the cheap read is repeated after things
+   * settle. For Gradle the tasks are asked for again as well — the app keeps
+   * them by the build files' mtimes, so when nothing relevant changed the
+   * answer is the cached one and costs nothing.
+   */
+  var settle = null;
+  host.on('changed', function (payload) {
+    if (payload && payload.kind === 'noise') return;
+    if (!state.showing) { state.stale = true; return; }
+    if (settle) clearTimeout(settle);
+    settle = setTimeout(function () {
+      settle = null;
+      var before = state.project ? JSON.stringify(state.project.project) : '';
+      call('build.project', {}).then(function (project) {
+        var after = JSON.stringify(project.project);
+        if (after !== before) {
+          state.project = project;
+          buildTree();
+          draw();
+          drawDetail();
+        }
+        if (project.tool === 'gradle') {
+          state.tasksStale = true;
+          drawFoot();
+          loadTasks(false);
+        }
+      }).catch(function () { /* the next read will say */ });
+    }, 1200);
+  });
+
+  host.ready();
+})();
+</script>

@@ -3,8 +3,10 @@ import { useStore } from '../state/store';
 import { leafOfTab, parentOf } from '../state/layout';
 import type { ExtensionPanelView } from '../global';
 import {
+  buildCommand,
   execCommand,
   needsConsent,
+  normalisePath,
   panelDocument,
   readTheme,
   route,
@@ -66,6 +68,15 @@ export function ExtensionView({ panelId, showing = true }: { panelId: string; sh
         <p>
           <strong>{view.title}</strong> needs a repository. Open a folder in a Files tab and start it
           from there.
+        </p>
+      </div>
+    );
+  } else if (view.needs === 'build' && !root) {
+    return (
+      <div className="extension-view is-empty">
+        <p>
+          <strong>{view.title}</strong> needs a Maven or Gradle project. Open one in a Files tab and
+          start it from there.
         </p>
       </div>
     );
@@ -222,7 +233,10 @@ function Frame({
         if (message.name === 'openFile' && typeof message.payload?.path === 'string' && root) {
           // The panel says which file; the app says where it opens. A panel that
           // could choose the tab could also take over the one you were reading.
-          revealFile(root, message.payload.path);
+          // And only a file of the thing it was opened on: a panel is about a
+          // repository or a project, not about the disk.
+          const wanted = normalisePath(message.payload.path);
+          if (wanted === root || wanted.startsWith(`${root}/`)) revealFile(root, wanted);
         } else if (message.name === 'notify' && typeof message.payload?.text === 'string') {
           setNotice({ text: message.payload.text, bad: message.payload.kind === 'bad' });
         } else if (message.name === 'save' && typeof message.payload?.text === 'string') {
@@ -283,10 +297,19 @@ function Frame({
         if (channel === 'helm') {
           return reply(true, await window.api.helm.call(name.slice(5), args), undefined);
         }
+        if (channel === 'build') {
+          if (!root) return reply(false, null, 'this panel has no project');
+          // The root is the panel's, whatever the panel says: a build reader
+          // pointed at a folder of the panel's choosing would read any folder —
+          // and `root`, which asks about a folder, is asked about this one.
+          const verb = name.slice(6);
+          const scoped = verb === 'root' ? { dir: root } : { ...args, root };
+          return reply(true, await window.api.build.call(verb, scoped), undefined);
+        }
         if (channel === 'kube-stream') {
           return reply(true, await stream(name.slice(5), args), undefined);
         }
-        return reply(true, await appAction(name.slice(5), args), undefined);
+        return reply(true, await appAction(name, args), undefined);
       } catch (error) {
         reply(false, null, String((error as Error)?.message ?? error));
       }
@@ -324,12 +347,54 @@ function Frame({
      * ask, because a tab it could dictate the contents of would be a tab it
      * controls rather than one it opened.
      */
-    async function appAction(verb: string, args: Record<string, unknown>) {
+    async function appAction(name: string, args: Record<string, unknown>) {
+      // `kube.shell`, `build.run`: the part after the subsystem is the verb.
+      const verb = name.slice(name.indexOf('.') + 1);
       const where = {
         context: args.context ? String(args.context) : undefined,
         namespace: args.namespace ? String(args.namespace) : undefined,
       };
       const store = useStore.getState();
+
+      /*
+       * A build goal, in a real terminal under the panel.
+       *
+       * The project root is the panel's, not the message's — the panel was
+       * opened on it, and running `mvn deploy` in some other directory is not
+       * a thing a panel gets to ask for. Everything else it names — goals,
+       * profiles, the module — goes through `buildCommand`, which refuses a
+       * word a shell would read as anything but a word.
+       */
+      if (name === 'build.run') {
+        if (!root) return { ok: false, error: 'this panel has no project' };
+        const run = buildCommand({
+          tool: args.tool === 'gradle' ? 'gradle' : 'maven',
+          root,
+          wrapper: Boolean(args.wrapper),
+          dir: args.dir ? String(args.dir) : undefined,
+          goals: Array.isArray(args.goals) ? args.goals.map(String) : [],
+          profiles: Array.isArray(args.profiles) ? args.profiles.map(String) : [],
+          skipTests: Boolean(args.skipTests),
+          offline: Boolean(args.offline),
+          extra: Array.isArray(args.extra) ? args.extra.map(String) : [],
+        });
+        /*
+         * The shell from the last run, when it is sitting at a prompt in the
+         * same directory: a build is the same thing run again, and IntelliJ
+         * reuses its Run tab for the same reason. Twenty runs in a day should
+         * not be twenty tabs of finished output. A shell still running
+         * something — the last build, a `spring-boot:run` — is left alone and
+         * a new one opens beside it.
+         */
+        const idle = idleShellUnder(panelId, run.cwd);
+        if (idle) {
+          store.runCommandIn(idle, run.command);
+          return { ok: true, sessionId: idle, command: run.command, cwd: run.cwd, reused: true };
+        }
+        const sessionId = await store.openShellNear(panelId, run.title, run.command, { ...below(panelId), cwd: run.cwd });
+        if (!sessionId) return { ok: false, error: 'the app could not open a terminal' };
+        return { ok: true, sessionId, command: run.command, cwd: run.cwd };
+      }
 
       if (verb === 'shell' || verb === 'terminal') {
         const line =
@@ -419,6 +484,32 @@ function Frame({
     const usual = profiles.find((profile) => profile.id === settings.defaultProfileId) ?? profiles[0];
     if (usual && authByProfile[usual.id]?.loggedIn !== false) return usual.id;
     return profiles.find((profile) => authByProfile[profile.id]?.loggedIn)?.id ?? usual?.id;
+  }
+
+  /**
+   * A shell of this panel's own, under it, at a prompt, in the directory the
+   * run wants — or nothing.
+   *
+   * Only the strip directly below, and only shells this panel opened (their
+   * title is the build's): a terminal somebody else put there is theirs.
+   */
+  function idleShellUnder(id: string, cwd: string): string | null {
+    const { layout, sessions } = useStore.getState();
+    const mine = leafOfTab(layout, id);
+    if (!mine) return null;
+    const parent = parentOf(layout, mine.id);
+    if (parent?.direction !== 'column') return null;
+    const at = parent.children.findIndex((child) => child.id === mine.id);
+    const under = parent.children[at + 1];
+    if (!under || under.type !== 'leaf') return null;
+    for (const tabId of [...under.tabs].reverse()) {
+      const session = sessions[tabId];
+      if (!session || session.kind !== 'shell' || session.foreground) continue;
+      if (session.cwd !== cwd) continue;
+      if (!/^(mvn|gradle) /.test(session.customTitle ?? '')) continue;
+      return tabId;
+    }
+    return null;
   }
 
   /**

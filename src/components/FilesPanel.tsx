@@ -704,6 +704,9 @@ function ExtensionButtons({ panelId }: { panelId: string }) {
   const viewIds = useStore(
     useShallow((s) => s.extensions.panels.map((view) => `${view.id}\u0000${view.title}\u0000${view.needs ?? ''}`)),
   );
+  // Asked only when something would be offered for the answer.
+  const wantsBuild = viewIds.some((packed) => packed.endsWith('\u0000build'));
+  const buildRoot = useBuildRoot(wantsBuild ? root : '');
   const openExtensionView = useStore((s) => s.openExtensionView);
   if (!viewIds.length) return null;
 
@@ -714,29 +717,84 @@ function ExtensionButtons({ panelId }: { panelId: string }) {
         // A panel that needs a repository is not offered on a folder that is
         // not one: a button whose only possible outcome is an apology.
         if (needs === 'repository' && !gitRoot) return null;
+        // Likewise a build panel on a folder with no pom and no Gradle build
+        // at or above it.
+        if (needs === 'build' && !buildRoot) return null;
         // This toolbar is the folder's. A view about something else entirely —
         // a cluster — is opened from Extensions, where it is not pretending to
         // have anything to do with what is on screen.
-        if (needs && needs !== 'repository') return null;
+        if (needs && needs !== 'repository' && needs !== 'build') return null;
+        const on = needs === 'repository' ? gitRoot : needs === 'build' ? buildRoot : root || null;
         return (
           <button
             key={id}
             className="files-tool"
-            onClick={() => openExtensionView(id, needs === 'repository' ? gitRoot : root || null)}
+            onClick={() => openExtensionView(id, on)}
             aria-label={title}
             title={title}
           >
-            <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3">
-              <path d="M2 10.5V3.2M2 3.2a1.4 1.4 0 1 0 0-.1M2 10.8a1.4 1.4 0 1 0 0 .1" />
-              <path d="M7 11.2V6.4c0-1 .8-1.8 1.8-1.8H11" />
-              <circle cx="7" cy="12" r="1.4" />
-              <circle cx="12" cy="4.6" r="1.4" />
-            </svg>
+            {needs === 'build' ? (
+              // A build: the layers of an artifact, being put together.
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
+                <path d="M7 1.8 12.4 4.5 7 7.2 1.6 4.5z" />
+                <path d="M1.6 7.2 7 9.9l5.4-2.7M1.6 9.9 7 12.6l5.4-2.7" />
+              </svg>
+            ) : (
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3">
+                <path d="M2 10.5V3.2M2 3.2a1.4 1.4 0 1 0 0-.1M2 10.8a1.4 1.4 0 1 0 0 .1" />
+                <path d="M7 11.2V6.4c0-1 .8-1.8 1.8-1.8H11" />
+                <circle cx="7" cy="12" r="1.4" />
+                <circle cx="12" cy="4.6" r="1.4" />
+              </svg>
+            )}
           </button>
         );
       })}
     </>
   );
+}
+
+/**
+ * Whether a folder is inside a Maven or Gradle project, and where that is.
+ *
+ * Asked once per folder and remembered for the window: it is a handful of
+ * stats up the directory tree, but it is asked by every folder tab on every
+ * render, and a cache is cheaper than being clever about renders. Asked again
+ * when the tree changes, because the answer changes when somebody adds a pom.
+ */
+const buildRoots = new Map<string, string | null>();
+function useBuildRoot(root: string): string | null {
+  const [found, setFound] = useState<string | null>(() => (root ? (buildRoots.get(root) ?? null) : null));
+  useEffect(() => {
+    if (!root) {
+      setFound(null);
+      return;
+    }
+    let alive = true;
+    // What was known, first, so a tab pointed at a new folder never offers
+    // the old folder's project for the length of a round trip.
+    setFound(buildRoots.get(root) ?? null);
+    const ask = () =>
+      void window.api.build.call('root', { dir: root }).then((answer) => {
+        const where = answer.ok && typeof answer.root === 'string' ? answer.root : null;
+        buildRoots.set(root, where);
+        if (alive) setFound(where);
+      });
+    // Asked again on every mount, cache or no cache: the listener below is
+    // only there while this tab is in front, and a pom that arrived while it
+    // was behind another is a pom nobody was told about.
+    ask();
+    const stop = window.api.files.onTreeChanged((change) => {
+      // `git` is not "only git": a burst is reported as its strongest kind,
+      // and a checkout that rewrites the pom arrives as one.
+      if (change.root === root && change.kind !== 'noise') ask();
+    });
+    return () => {
+      alive = false;
+      stop();
+    };
+  }, [root]);
+  return found;
 }
 
 /** Git's own tab in the content row, first, with a close of its own. */

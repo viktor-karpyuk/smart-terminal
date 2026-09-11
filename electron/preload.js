@@ -208,6 +208,11 @@ contextBridge.exposeInMainWorld('api', {
     },
   },
 
+  /** Maven and Gradle: read by the main process, run by a terminal. */
+  build: {
+    call: (name, args) => ipcRenderer.invoke('build:call', { name, args }),
+  },
+
   /** Helm: a different tool, a different door. */
   helm: {
     call: (name, args) => ipcRenderer.invoke('helm:call', { name, args }),

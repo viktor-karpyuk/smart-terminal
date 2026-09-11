@@ -37,6 +37,7 @@ const git = require('./git');
 const { layout: layoutGraph } = require('./git-graph');
 const kube = require('./kube');
 const helm = require('./helm');
+const buildTools = require('./build-tools');
 
 /**
  * What this build is. Written at package time, so the answer comes from the app
@@ -1257,6 +1258,31 @@ function registerIpc() {
     }
   });
 
+  /**
+   * Maven and Gradle, read rather than run.
+   *
+   * Reading only. Nothing here runs a build: a build runs in a real terminal
+   * the app opens under the panel, from a command line the app writes. The
+   * one thing that does spawn a process is asking Gradle what its tasks are,
+   * which is the only way to know, and is cached until a build file changes.
+   */
+  const BUILD = {
+    root: (args) => buildTools.root(args),
+    project: (args) => buildTools.project(args),
+    tasks: (args) => buildTools.gradleTasks(String(args?.root ?? ''), { force: Boolean(args?.force) }),
+    dependencies: (args) => buildTools.gradleDependencies(String(args?.root ?? ''), args),
+  };
+
+  ipcMain.handle('build:call', async (_e, { name, args } = {}) => {
+    const handler = BUILD[name];
+    if (!handler) return { ok: false, error: `No such build action: ${name}` };
+    try {
+      return await handler(args ?? {});
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  });
+
   ipcMain.handle('kube:stream-stop', (_e, id) => {
     kubeStreamOwners.delete(String(id ?? ''));
     return { ok: kubeStreams.stop(String(id ?? '')) };
@@ -2153,7 +2179,12 @@ function retireLegacyWorkspace() {
  * followed log is a process still talking to a cluster on behalf of an app that
  * is gone.
  */
-app.on('will-quit', () => kubeStreams.stopAll());
+app.on('will-quit', () => {
+  kubeStreams.stopAll();
+  // A Gradle client asked for a task list is a JVM that would otherwise
+  // outlive the app by up to three minutes.
+  buildTools.stopAll();
+});
 
 /*
  * One hole, stated rather than papered over: a `kill` from outside.
