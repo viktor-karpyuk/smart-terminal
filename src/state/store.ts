@@ -364,7 +364,7 @@ interface State {
     nearPanelId: string | null,
     title: string,
     command: string,
-    where?: { leafId?: string; side?: DropSide },
+    where?: { leafId?: string; side?: DropSide; cwd?: string },
   ): Promise<string | null>;
   /** The latest reading for each session, kept current by the monitor. */
   analysisBySession: Record<string, SessionAnalysis>;
@@ -2869,6 +2869,8 @@ export const useStore = create<State>((set, get) => ({
     const mine = nearPanelId ? leafOfTab(layout, nearPanelId) : null;
     const place = where ?? (mine ? { leafId: mine.id, side: 'bottom' as const } : {});
 
+    // Started where the caller says, when it says: a build runs in its module,
+    // and a shell that starts there is one the person can keep working in.
     const sessionId = await get().newSession({ kind: 'shell', title, ...place });
     if (!sessionId) return null;
     /*
@@ -2912,7 +2914,14 @@ export const useStore = create<State>((set, get) => ({
       viewId,
       // A tab per cluster wants the cluster's name on it. "Kubernetes" three
       // times over says nothing about which three.
-      title: view?.needs === 'kubernetes' && root ? shortContext(root) : (view?.title ?? viewId),
+      // A build tab, likewise, wants the project's name: two projects open
+      // are two tabs, and "Maven" twice says nothing.
+      title:
+        view?.needs === 'kubernetes' && root
+          ? shortContext(root)
+          : view?.needs === 'build' && root
+            ? root.slice(root.lastIndexOf('/') + 1) || root
+            : (view?.title ?? viewId),
       root,
     };
     set((prev) => {

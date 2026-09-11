@@ -101,6 +101,12 @@ export function PanelTab({
               <circle cx="7" cy="7" r="1.7" />
               <path d="M7 1.9v3.4M7 8.7v3.4M1.9 7h3.4M8.7 7h3.4" />
             </>
+          ) : view.root && view.viewId === 'mvn' ? (
+            // The layers of an artifact, for a build.
+            <>
+              <path d="M7 1.8 12.4 4.5 7 7.2 1.6 4.5z" />
+              <path d="M1.6 7.2 7 9.9l5.4-2.7M1.6 9.9 7 12.6l5.4-2.7" />
+            </>
           ) : (
             <path d="M2 5.2h4.2v4.2H2zM7.8 2.6h4.2v4.2H7.8zM7.8 8.4h4.2v4.2H7.8z" />
           )

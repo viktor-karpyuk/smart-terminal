@@ -1,0 +1,19 @@
+{
+  "id": "mvn",
+  "name": "Maven and Gradle",
+  "version": "1.0.0",
+  "author": "Smart Terminal",
+  "summary": "The build tool window: modules, lifecycle, plugins, tasks, dependencies — and a double-click that runs any of them.",
+  "description": "What IntelliJ's Maven and Gradle tool windows give you, on the folder you already have open. A Maven project is read from its poms: every module as a tree, the lifecycle under each, the plugins with the goals their own descriptors declare (read out of ~/.m2, so a plugin you have built with once lists exactly what it can do), the dependencies with the versions the parent chain manages, and the profiles as checkboxes that travel onto the command line. A Gradle build is read from its settings and build scripts for the projects and the declared dependencies, and from Gradle itself for the tasks — the way a sync does — grouped by project and by group, and remembered until a build file changes; the resolved dependency tree of any project is one click and one configuration away. Double-click a phase, a goal or a task and it runs in a real terminal under the panel, in the module it belongs to, with the wrapper when the project has one. Skip tests and offline are toggles; anything else goes in the run box. The one thing it stops to ask about is deploy and publish, because those leave the machine. Reading only, otherwise: the panel changes nothing on disk, and every command it runs is written by the app from parts the panel named.",
+  "contributes": {
+    "panels": [
+      {
+        "id": "mvn",
+        "title": "Build",
+        "summary": "Maven and Gradle projects, as a tree you can run.",
+        "needs": "build",
+        "render": "panel.html"
+      }
+    ]
+  }
+}

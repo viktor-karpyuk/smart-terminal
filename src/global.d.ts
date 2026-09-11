@@ -498,12 +498,24 @@ export interface ExtensionPanelView {
   id: string;
   title: string;
   summary: string;
-  /** What it cannot work without — `"repository"` means a folder that is one. */
+  /** What it cannot work without — `"repository"` means a folder that is one, `"build"` a Maven or Gradle project. */
   needs: string | null;
   render: string;
   from: string;
   source: string | null;
   error?: string;
+}
+
+/**
+ * What the build reader answers. Loosely typed on purpose: the shape belongs
+ * to the panel that asked, and the app only ever passes it through.
+ */
+export interface BuildResult {
+  ok: boolean;
+  error?: string;
+  tool?: 'maven' | 'gradle' | null;
+  root?: string | null;
+  [key: string]: unknown;
 }
 
 /** One table, with what it holds and roughly what it weighs. */
@@ -811,6 +823,10 @@ declare global {
       };
       helm: {
         call(name: string, args?: unknown): Promise<KubeResult>;
+      };
+      /** Maven and Gradle projects, read — never run — by the main process. */
+      build: {
+        call(name: string, args?: unknown): Promise<BuildResult>;
       };
       files: {
         list(dir: string): Promise<{ ok: boolean; entries?: DirEntry[]; error?: string }>;

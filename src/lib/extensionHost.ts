@@ -140,6 +140,23 @@ const KUBE_APP = ['shell', 'terminal', 'ask'] as const;
 const HELM_READ = ['version', 'releases', 'history', 'values', 'manifest', 'notes'] as const;
 const HELM_WRITE = ['rollback', 'uninstall'] as const;
 
+/**
+ * Maven and Gradle.
+ *
+ * Reading is the project's own files and, for Gradle, one question put to
+ * Gradle itself. There is no write verb at all: a build panel changes nothing
+ * on disk by itself. The one thing that is not a read is `run`, which opens a
+ * real terminal under the panel with the goal in it — and like `kube.shell`,
+ * the panel names the goal and the app writes the command line.
+ */
+const BUILD_READ = ['root', 'project', 'tasks', 'dependencies'] as const;
+const BUILD_APP = ['run'] as const;
+
+const BUILD_VERBS = new Map<string, Channel>([
+  ...BUILD_READ.map((name) => [name, 'build'] as [string, Channel]),
+  ...BUILD_APP.map((name) => [name, 'app'] as [string, Channel]),
+]);
+
 const HELM_VERBS = new Map<string, Channel>([
   ...HELM_READ.map((name) => [name, 'helm'] as [string, Channel]),
   ...HELM_WRITE.map((name) => [name, 'helm'] as [string, Channel]),
@@ -153,7 +170,7 @@ const KUBE_VERBS = new Map<string, Channel>([
   ...KUBE_APP.map((name) => [name, 'app'] as [string, Channel]),
 ]);
 
-export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm';
+export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'build';
 
 /**
  * Which door a call goes through, or none.
@@ -167,6 +184,7 @@ export function route(name: string): Channel | null {
   if (GIT_VERBS.has(name)) return 'git';
   if (name.startsWith('kube.')) return KUBE_VERBS.get(name.slice(5)) ?? null;
   if (name.startsWith('helm.')) return HELM_VERBS.get(name.slice(5)) ?? null;
+  if (name.startsWith('build.')) return BUILD_VERBS.get(name.slice(6)) ?? null;
   return null;
 }
 
@@ -313,7 +331,32 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
       'Everything the chart installed is deleted.'
     );
   }
+
+  /*
+   * A build is local and reversible right up to the one step that is not. The
+   * `deploy` phase, and Gradle's `publish`, copy the artifact to a repository
+   * other people resolve from — and a snapshot pushed by accident is on every
+   * colleague's next build. It sits one row below `install` in the tree, so it
+   * is one double-click away from the one everybody runs.
+   */
+  if (name === 'build.run') {
+    const goals = Array.isArray(args.goals) ? args.goals.map(String) : [];
+    if (goals.some(publishes)) {
+      return (
+        `Run ${goals.join(' ')}?\n\n` +
+        'This publishes the artifact to a remote repository, where everybody else resolves it from.'
+      );
+    }
+  }
   return null;
+}
+
+/** Whether a goal or task sends something to a remote repository. */
+function publishes(goal: string): boolean {
+  const name = goal.includes(':') ? goal.slice(goal.lastIndexOf(':') + 1) : goal;
+  if (name === 'deploy' || name === 'deploy-file' || name === 'perform') return true;
+  // Gradle: `publish`, `publishAllPublicationsToX`, … but not to mavenLocal.
+  return /^publish/i.test(name) && !/mavenlocal$/i.test(name);
 }
 
 /** " in namespace prod on cluster X" — the half of the question that is usually the answer. */
@@ -424,6 +467,89 @@ export function terminalSetup({ context, namespace }: Where): string {
   if (context) parts.push(`--context ${innerQuote(context, 'The context')}`);
   if (namespace) parts.push(`--namespace ${innerQuote(namespace, 'The namespace')}`);
   return `alias k='${parts.join(' ')}'`;
+}
+
+/**
+ * A word on a command line, quoted only when it has to be.
+ *
+ * `mvn clean install -DskipTests` reads as what it is; `'mvn' 'clean'
+ * 'install'` reads as a machine talking. So a token made of the characters a
+ * goal, a flag or a property can contain goes as it is, and anything else — a
+ * `*` in `-Dtest=Foo*`, a space in a property value — goes in single quotes,
+ * which is what a person would type.
+ */
+function word(value: string, what: string): string {
+  const text = String(value ?? '');
+  if (!text) throw new Error(`${what} is missing`);
+  if (/^[A-Za-z0-9_.:@=/,+-]+$/.test(text)) return text;
+  return shellQuote(text, what);
+}
+
+export type BuildRun = {
+  tool: 'maven' | 'gradle';
+  /** The project root: where `mvnw` or `gradlew` lives, and what a Gradle task path is relative to. */
+  root: string;
+  wrapper?: boolean;
+  /** For Maven, the module directory to run in; the root when absent. */
+  dir?: string;
+  goals: string[];
+  profiles?: string[];
+  skipTests?: boolean;
+  offline?: boolean;
+  /** Anything extra typed into the run box, already split into words. */
+  extra?: string[];
+};
+
+/**
+ * The command that runs a goal, and where it runs.
+ *
+ * Built from named parts and never from a line the panel wrote. The panel says
+ * which goals, which profiles, which module; the app says which executable
+ * runs and from which directory — and that directory is the project the panel
+ * was opened on, not one of the panel's choosing.
+ *
+ * Maven runs *in the module*, the way IntelliJ does: `cd module && mvn
+ * package` builds that module and its own children, and leaves the terminal
+ * where the person is working. Gradle runs at the root always, because a task
+ * path (`:app:build`) already says which project and the wrapper lives there.
+ */
+export function buildCommand(run: BuildRun): { command: string; cwd: string; title: string } {
+  const goals = (run.goals ?? []).map((goal) => word(goal, 'A goal'));
+  if (!goals.length) throw new Error('Nothing to run');
+  const extra = (run.extra ?? []).map((part) => word(part, 'An argument'));
+  if (!run.root) throw new Error('The project has no root');
+  // Inside the project, or not at all: the panel was opened on this root, and
+  // a module it names is one of the root's, not a directory of its own choosing.
+  if (run.dir && run.dir !== run.root && !run.dir.startsWith(`${run.root}/`)) {
+    throw new Error('That module is not inside the project');
+  }
+
+  if (run.tool === 'maven') {
+    // The wrapper lives at the root; from a module it is reached by its path.
+    const executable = run.wrapper ? shellQuote(`${run.root}/mvnw`, 'The wrapper') : 'mvn';
+    const parts = [executable];
+    if (run.offline) parts.push('-o');
+    if (run.profiles?.length) parts.push(`-P${run.profiles.map((p) => word(p, 'A profile')).join(',')}`);
+    parts.push(...goals);
+    if (run.skipTests) parts.push('-DskipTests');
+    parts.push(...extra);
+    return {
+      command: parts.join(' '),
+      cwd: run.dir || run.root,
+      title: `mvn ${goals.join(' ')}`.slice(0, 28),
+    };
+  }
+
+  const parts = [run.wrapper ? './gradlew' : 'gradle'];
+  if (run.offline) parts.push('--offline');
+  parts.push(...goals);
+  if (run.skipTests) parts.push('-x', 'test');
+  parts.push(...extra);
+  return {
+    command: parts.join(' '),
+    cwd: run.root,
+    title: `gradle ${goals.map((g) => g.slice(g.lastIndexOf(':') + 1)).join(' ')}`.slice(0, 28),
+  };
 }
 
 /**
