@@ -494,12 +494,48 @@ export interface ExtensionState {
  * at, so it ships a document that runs in a frame of its own and talks to the
  * app by message.
  */
+/** One Spring Boot run, as the panel sees it: no console, no process. */
+export interface SpringRun {
+  id: string;
+  root: string | null;
+  appId: string;
+  appName: string;
+  dir: string;
+  tool: 'maven' | 'gradle';
+  status: 'building' | 'starting' | 'up' | 'failing' | 'failed' | 'buildFailed' | 'stopping' | 'stopped' | 'exited';
+  phase: string;
+  port: number | null;
+  scheme: string;
+  contextPath: string;
+  profiles: string[];
+  reason: string;
+  done: boolean;
+  managementPort: number | null;
+  managementBasePath: string;
+  actuator: boolean;
+  debugPort: number | null;
+  debugListening: boolean;
+  debugSuspend: boolean;
+  jdk: { home: string; version: string; name: string } | null;
+  mode: 'run' | 'jar';
+  startedAt: number;
+  upAt: number | null;
+  endedAt: number | null;
+  seconds: number | null;
+  code: number | null;
+  pid: number | null;
+  steps: string[];
+  step: number;
+}
+
 export interface ExtensionPanelView {
   id: string;
   title: string;
   summary: string;
-  /** What it cannot work without — `"repository"` means a folder that is one. */
+  /** What it cannot work without — `"repository"` means a folder that is one, `"folder"` any folder. */
   needs: string | null;
+  /** The things the app pushes that this panel asked to hear: `"spring"` for the runs' console and state. */
+  listens: string[];
   render: string;
   from: string;
   source: string | null;
@@ -811,6 +847,12 @@ declare global {
       };
       helm: {
         call(name: string, args?: unknown): Promise<KubeResult>;
+      };
+      /** Spring Boot: the applications under a folder, and the ones running. */
+      spring: {
+        call(name: string, args?: unknown): Promise<{ ok: boolean; error?: string; [key: string]: unknown }>;
+        onOutput(handler: (payload: { id: string; text: string; stream: 'out' | 'err' | 'app' }) => void): () => void;
+        onState(handler: (payload: SpringRun) => void): () => void;
       };
       files: {
         list(dir: string): Promise<{ ok: boolean; entries?: DirEntry[]; error?: string }>;

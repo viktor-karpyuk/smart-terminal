@@ -9,6 +9,8 @@ import {
   readTheme,
   route,
   shortContext,
+  springShellSetup,
+  jdbCommand,
   terminalSetup,
 } from '../lib/extensionHost';
 
@@ -60,12 +62,12 @@ export function ExtensionView({ panelId, showing = true }: { panelId: string; sh
   if (view.needs === 'kubernetes') {
     // Nothing to check: a cluster is not a folder, and this panel is as valid
     // opened from nowhere as from anywhere.
-  } else if (view.needs === 'repository' && !root) {
+  } else if ((view.needs === 'repository' || view.needs === 'folder') && !root) {
     return (
       <div className="extension-view is-empty">
         <p>
-          <strong>{view.title}</strong> needs a repository. Open a folder in a Files tab and start it
-          from there.
+          <strong>{view.title}</strong> needs a {view.needs === 'folder' ? 'folder' : 'repository'}. Open a
+          folder in a Files tab and start it from there.
         </p>
       </div>
     );
@@ -283,9 +285,16 @@ function Frame({
         if (channel === 'helm') {
           return reply(true, await window.api.helm.call(name.slice(5), args), undefined);
         }
+        if (channel === 'spring') {
+          // The folder is this frame's, whatever the panel wrote: it is what
+          // the other side scopes every answer to.
+          if (!root) return reply(false, null, 'this panel has no folder');
+          return reply(true, await window.api.spring.call(name.slice(7), { ...args, root }), undefined);
+        }
         if (channel === 'kube-stream') {
           return reply(true, await stream(name.slice(5), args), undefined);
         }
+        if (name.startsWith('spring.')) return reply(true, await springAction(name.slice(7), args), undefined);
         return reply(true, await appAction(name.slice(5), args), undefined);
       } catch (error) {
         reply(false, null, String((error as Error)?.message ?? error));
@@ -324,6 +333,57 @@ function Frame({
      * ask, because a tab it could dictate the contents of would be a tab it
      * controls rather than one it opened.
      */
+    /**
+     * The same two doors, for a Spring Boot application.
+     *
+     * `shell` opens a terminal standing in the application's folder with its
+     * JDK first on the PATH; `ask` hands a Claude session the app's own account
+     * of a run — how it was started, where it stands, and the part of the
+     * console that says why. The panel names the application or the run. It
+     * does not write the command, and it does not write the briefing.
+     */
+    async function springAction(verb: string, args: Record<string, unknown>) {
+      const store = useStore.getState();
+      const inside = (dir: string) => Boolean(root) && (dir === root || dir.startsWith(`${root}/`));
+      /*
+       * A JDK the machine actually has. The panel names one; the list it is
+       * checked against is the app's own, because what goes here ends up first
+       * on the PATH of a real shell.
+       */
+      const knownJdk = async (home: unknown): Promise<string | undefined> => {
+        if (!home) return undefined;
+        const listed = await window.api.spring.call('jdks');
+        const jdks = (listed.jdks as Array<{ home: string }> | undefined) ?? [];
+        return jdks.some((jdk) => jdk.home === String(home)) ? String(home) : undefined;
+      };
+      if (verb === 'shell') {
+        const dir = String(args.dir ?? '');
+        if (!inside(dir)) return { ok: false, error: 'that folder is not under this panel’s root' };
+        const line = springShellSetup({ dir, javaHome: await knownJdk(args.javaHome) });
+        const title = `sh ${String(args.name ?? dir.split('/').pop() ?? '')}`.slice(0, 28);
+        const sessionId = await store.openShellNear(panelId, title, line, below(panelId));
+        if (!sessionId) return { ok: false, error: 'the app could not open a terminal' };
+        return { ok: true, sessionId, command: line };
+      }
+      if (verb === 'debugger') {
+        const dir = String(args.dir ?? '');
+        if (!inside(dir)) return { ok: false, error: 'that folder is not under this panel’s root' };
+        const line = jdbCommand({ dir, port: Number(args.port), javaHome: await knownJdk(args.javaHome) });
+        const title = `jdb ${String(args.name ?? '')}`.slice(0, 28);
+        const sessionId = await store.openShellNear(panelId, title, line, below(panelId));
+        if (!sessionId) return { ok: false, error: 'the app could not open a terminal' };
+        return { ok: true, sessionId, command: line };
+      }
+      // The briefing is the app's words about the run; the panel names the run and nothing else.
+      const brief = await window.api.spring.call('brief', { id: String(args.id ?? ''), root });
+      if (!brief.ok) return brief;
+      const sessionId = await claudeFor(panelId);
+      if (!sessionId) return { ok: false, error: 'the app could not open a session' };
+      store.focusSession(sessionId);
+      const handed = await window.api.analysis.handOver(sessionId, String(brief.text ?? ''));
+      return { ok: true, sessionId, delivered: handed.delivered ?? false };
+    }
+
     async function appAction(verb: string, args: Record<string, unknown>) {
       const where = {
         context: args.context ? String(args.context) : undefined,
@@ -393,7 +453,9 @@ function Frame({
       kind: 'claude',
       // Named after the cluster, not after the panel: "ask Kubernetes" says
       // nothing on a machine with four clusters in kubeconfig.
-      title: `ask ${shortContext(String(root ?? '')) || 'cluster'}`.slice(0, 28),
+      title: `ask ${
+        view.needs === 'kubernetes' ? shortContext(String(root ?? '')) || 'cluster' : String(root ?? '').split('/').pop() || 'folder'
+      }`.slice(0, 28),
       /*
        * An account that is actually signed in.
        *
@@ -472,6 +534,30 @@ function Frame({
       held.clear();
     };
   }, []);
+
+  /*
+   * What a Spring Boot application printed, and where each run stands.
+   *
+   * Every frame is told, because the runs are the app's rather than any
+   * panel's: the panel that started one may have been closed and another
+   * opened on the same folder. A panel keeps the runs it knows and ignores
+   * the rest; a panel that is not about Spring has no listener for the type.
+   */
+  useEffect(() => {
+    // Only a panel that asked. A build prints a line per write, and every
+    // frame in every window hearing each one is the wrong shape for a channel.
+    if (!view.listens?.includes('spring') || !root) return;
+    const stopOutput = window.api.spring.onOutput((payload) => tell('spring', { kind: 'output', ...payload }));
+    const stopState = window.api.spring.onState((run) => {
+      // Its own folder's runs; another folder's are another panel's news.
+      if (run.root !== root && !(typeof run.dir === 'string' && (run.dir === root || run.dir.startsWith(`${root}/`)))) return;
+      tell('spring', { kind: 'state', run });
+    });
+    return () => {
+      stopOutput();
+      stopState();
+    };
+  }, [view.listens, root]);
 
   // The working tree moved: the panel is told, and decides for itself what of
   // its picture is now wrong. The app does not guess on its behalf.

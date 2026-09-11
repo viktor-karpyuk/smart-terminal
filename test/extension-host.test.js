@@ -17,6 +17,15 @@ test('every call is routed by name, and an unknown name goes nowhere', () => {
   assert.equal(H.route('kube.follow'), 'kube-stream');
   assert.equal(H.route('kube.ask'), 'app');
   assert.equal(H.route('kube.shell'), 'app');
+  assert.equal(H.route('spring.projects'), 'spring');
+  assert.equal(H.route('spring.start'), 'spring');
+  assert.equal(H.route('spring.stop'), 'spring');
+  assert.equal(H.route('spring.actuator'), 'spring');
+  assert.equal(H.route('spring.shell'), 'app');
+  assert.equal(H.route('spring.ask'), 'app');
+  assert.equal(H.route('spring.debugger'), 'app');
+  assert.equal(H.route('spring.exec'), null, 'a Spring panel cannot run a command of its own either');
+  assert.equal(H.route('spring.'), null);
 
   assert.equal(H.route('kube.exec'), null, 'there is no verb that runs a command of the extension’s choosing');
   // Drain arrived once it could be watched: it is a stream, because the whole
@@ -181,4 +190,29 @@ test('a rebase says what it is about to rewrite; a merge is left alone', () => {
   assert.match(asked, /replayed as a new one/);
   assert.equal(H.needsConsent('merge', { ref: 'origin/main' }), null);
   assert.equal(H.needsConsent('checkout', { ref: 'main' }), null);
+});
+
+/*
+ * The terminal a Spring panel opens stands in the application's folder with
+ * its JDK first — two named parts, each one word to the shell, and nothing
+ * the panel typed.
+ */
+test('a spring shell is a cd and a JAVA_HOME, quoted', () => {
+  assert.equal(H.springShellSetup({ dir: '/w/my app' }), "cd '/w/my app'");
+  assert.equal(
+    H.springShellSetup({ dir: '/w/app', javaHome: '/jdk/17' }),
+    `cd '/w/app' && export JAVA_HOME='/jdk/17' && export PATH="$JAVA_HOME/bin:$PATH"`,
+  );
+  assert.throws(() => H.springShellSetup({ dir: "/w/it's" }), /quote/);
+  assert.throws(() => H.springShellSetup({ dir: '' }), /missing/);
+});
+
+test('the debugger terminal is jdb attached to the port the app chose, in the folder, with the sources', () => {
+  assert.equal(
+    H.jdbCommand({ dir: '/w/app', port: 5005, javaHome: '/jdk/25' }),
+    `cd '/w/app' && export JAVA_HOME='/jdk/25' && export PATH="$JAVA_HOME/bin:$PATH" && jdb -attach 5005 -sourcepath 'src/main/java:src/main/kotlin'`,
+  );
+  assert.equal(H.jdbCommand({ dir: '/w/app', port: 5006 }), `cd '/w/app' && jdb -attach 5006 -sourcepath 'src/main/java:src/main/kotlin'`);
+  assert.throws(() => H.jdbCommand({ dir: '/w/app', port: Number('5005; ls') }), /not a port/);
+  assert.throws(() => H.jdbCommand({ dir: '/w/app', port: 0 }), /not a port/);
 });
