@@ -717,13 +717,15 @@ function ExtensionButtons({ panelId }: { panelId: string }) {
         // A panel that needs a repository is not offered on a folder that is
         // not one: a button whose only possible outcome is an apology.
         if (needs === 'repository' && !gitRoot) return null;
+        // A panel about a folder needs one on screen.
+        if (needs === 'folder' && !root) return null;
         // Likewise a build panel on a folder with no pom and no Gradle build
         // at or above it.
         if (needs === 'build' && !buildRoot) return null;
         // This toolbar is the folder's. A view about something else entirely —
         // a cluster — is opened from Extensions, where it is not pretending to
         // have anything to do with what is on screen.
-        if (needs && needs !== 'repository' && needs !== 'build') return null;
+        if (needs && needs !== 'repository' && needs !== 'folder' && needs !== 'build') return null;
         const on = needs === 'repository' ? gitRoot : needs === 'build' ? buildRoot : root || null;
         return (
           <button
@@ -733,7 +735,12 @@ function ExtensionButtons({ panelId }: { panelId: string }) {
             aria-label={title}
             title={title}
           >
-            {needs === 'build' ? (
+            {needs === 'folder' ? (
+              // A folder panel runs things: a play mark.
+              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
+                <path d="M4 2.2v9.6l7.4-4.8z" />
+              </svg>
+            ) : needs === 'build' ? (
               // A build: the layers of an artifact, being put together.
               <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
                 <path d="M7 1.8 12.4 4.5 7 7.2 1.6 4.5z" />

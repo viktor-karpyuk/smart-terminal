@@ -1,0 +1,1427 @@
+<style>
+  /*
+   * The Services window of an IDE, drawn in a frame that knows nothing about
+   * Java. Everything it knows arrives through `host.call`; everything it looks
+   * like comes from the app's own tokens.
+   */
+  #app { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; min-height: 0; }
+
+  .top {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px; border-bottom: 1px solid var(--border);
+    background: var(--bg-panel); flex-wrap: wrap;
+  }
+  .top .name { font-weight: 600; }
+  .top .root { color: var(--text-faint); font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+  .spacer { flex: 1; }
+
+  .btn {
+    padding: 4px 9px; border: 1px solid var(--border); border-radius: var(--radius);
+    color: var(--text-dim); white-space: nowrap; background: transparent; font: inherit; cursor: pointer;
+  }
+  .btn:hover { color: var(--text); border-color: var(--border-strong); background: var(--bg-elevated); }
+  .btn.on { color: var(--accent); border-color: var(--accent); }
+  .btn.go { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
+  .btn.go:hover { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+  .btn.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+  .btn.bad:hover { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  .btn[disabled] { opacity: 0.4; pointer-events: none; }
+  .btn.small { padding: 2px 7px; font-size: 11px; }
+
+  .body { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 0; overflow: hidden; }
+
+  nav { border-right: 1px solid var(--border); overflow: auto; background: var(--bg-panel); }
+  nav .group { padding: 8px 10px 3px; color: var(--text-faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; }
+  nav .item {
+    display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: center;
+    padding: 6px 10px; cursor: pointer; border-left: 2px solid transparent;
+  }
+  nav .item:hover { background: var(--bg-elevated); }
+  nav .item.is-selected { background: var(--accent-soft); border-left-color: var(--accent); }
+  nav .item .label { min-width: 0; }
+  nav .item .label .n { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  nav .item .label .s { display: block; color: var(--text-faint); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  nav .item .port { color: var(--text-faint); font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; }
+  nav .empty { padding: 14px 12px; color: var(--text-dim); line-height: 1.5; }
+
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); opacity: 0.5; }
+  .dot.up { background: var(--ok); opacity: 1; }
+  .dot.busy { background: #d9a441; opacity: 1; animation: pulse 1.2s ease-in-out infinite; }
+  .dot.bad { background: var(--danger); opacity: 1; }
+  .dot.off { background: var(--text-faint); opacity: 0.7; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  main { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr); min-height: 0; overflow: hidden; }
+  .head {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 8px 12px; border-bottom: 1px solid var(--border);
+  }
+  .head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+  .tagline { color: var(--text-faint); font-size: 11px; }
+  .tag {
+    padding: 1px 6px; border-radius: 999px; font-size: 10.5px;
+    border: 1px solid var(--border); color: var(--text-dim);
+  }
+  .pill { padding: 2px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--border); color: var(--text-dim); }
+  .pill.up { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
+  .pill.busy { color: #d9a441; border-color: color-mix(in srgb, #d9a441 45%, var(--border)); }
+  .pill.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
+  .url { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--accent); cursor: pointer; }
+  .url:hover { text-decoration: underline; }
+
+  .tabs { display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
+  .tabs .tab {
+    padding: 6px 10px; cursor: pointer; color: var(--text-dim);
+    border-bottom: 2px solid transparent; margin-bottom: -1px; font-size: 12px;
+  }
+  .tabs .tab:hover { color: var(--text); }
+  .tabs .tab.is-on { color: var(--text); border-bottom-color: var(--accent); }
+  .tabs .spacer { flex: 1; }
+  .tabs .tools { display: flex; align-items: center; gap: 6px; padding: 3px 0; }
+  .tabs input { font: inherit; font-size: 11.5px; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius); padding: 2px 7px; width: 160px; }
+  .tabs input:focus { outline: none; border-color: var(--accent); }
+
+  .pane { min-height: 0; overflow: auto; position: relative; }
+
+  /* The console. */
+  .reason {
+    margin: 10px 12px 4px; padding: 9px 12px; border-radius: var(--radius); max-height: 160px; overflow: auto;
+    border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+    background: color-mix(in srgb, var(--danger) 7%, transparent);
+    white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; line-height: 1.5;
+  }
+  .reason .t { font-family: inherit; font-weight: 600; color: var(--danger); margin-bottom: 4px; font-family: system-ui, sans-serif; }
+  #console {
+    margin: 0; padding: 8px 12px 24px; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px;
+    line-height: 1.45; white-space: pre-wrap; word-break: break-all; color: var(--text);
+  }
+  #console .l { display: block; }
+  #console .err { color: color-mix(in srgb, var(--danger) 80%, var(--text)); }
+  #console .app { color: var(--text-faint); }
+  .a-b { font-weight: 600; }
+  .a-d { opacity: 0.6; }
+  .a-i { font-style: italic; }
+  .a-u { text-decoration: underline; }
+  .a-red { color: var(--danger); }
+  .a-green { color: var(--ok); }
+  .a-yellow { color: #d9a441; }
+  .a-blue { color: var(--accent); }
+  .a-magenta { color: #b48ead; }
+  .a-cyan { color: #5fb3b3; }
+  .a-white { color: var(--text); }
+  .a-black { color: var(--text-dim); }
+  .console-empty { padding: 30px 14px; color: var(--text-dim); line-height: 1.6; max-width: 560px; }
+  .console-empty code { font-family: ui-monospace, Menlo, monospace; background: var(--bg-elevated); padding: 1px 5px; border-radius: 3px; }
+
+  /* The configuration. */
+  form.config { padding: 12px 14px 24px; display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 10px 14px; align-items: start; max-width: 760px; }
+  form.config label.k { color: var(--text-dim); padding-top: 5px; font-size: 12px; }
+  form.config input[type=text], form.config select, form.config textarea {
+    font: inherit; font-size: 12px; color: var(--text); background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 5px 8px; width: 100%; box-sizing: border-box;
+  }
+  form.config input:focus, form.config select:focus, form.config textarea:focus { outline: none; border-color: var(--accent); }
+  form.config textarea { font-family: ui-monospace, Menlo, monospace; min-height: 64px; resize: vertical; }
+  form.config .hint { color: var(--text-faint); font-size: 11px; margin-top: 3px; line-height: 1.4; }
+  form.config .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+  .chip {
+    padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-dim);
+    font-size: 11.5px; cursor: pointer; background: transparent; font: inherit;
+  }
+  .chip:hover { border-color: var(--border-strong); color: var(--text); }
+  .chip.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+  form.config .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  form.config .row label { display: flex; gap: 5px; align-items: center; cursor: pointer; }
+  .saved { color: var(--text-faint); font-size: 11px; }
+  .command {
+    grid-column: 1 / -1; margin-top: 4px; padding: 8px 10px; border-radius: var(--radius);
+    background: var(--bg-elevated); font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+    color: var(--text-dim); white-space: pre-wrap; word-break: break-all; line-height: 1.5;
+  }
+
+  /* The actuator. */
+  .sub { display: flex; gap: 2px; padding: 6px 12px 0; align-items: center; flex-wrap: wrap; }
+  .sub .btn { border-color: transparent; }
+  .sub .btn.on { border-color: var(--border); background: var(--bg-elevated); color: var(--text); }
+  .sub input { font: inherit; font-size: 11.5px; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius); padding: 3px 7px; width: 180px; margin-left: auto; }
+  .sub input:focus { outline: none; border-color: var(--accent); }
+  .act { padding: 8px 12px 24px; }
+  .note {
+    margin: 12px; padding: 10px 12px; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--bg-elevated); color: var(--text-dim); line-height: 1.5;
+  }
+  .note code { font-family: ui-monospace, Menlo, monospace; }
+  table.rows { border-collapse: collapse; width: 100%; font-size: 11.5px; }
+  table.rows th { text-align: left; color: var(--text-faint); font-weight: 500; padding: 4px 8px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); }
+  table.rows td { padding: 3px 8px; border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent); vertical-align: top; font-family: ui-monospace, Menlo, monospace; word-break: break-all; }
+  table.rows td.k { color: var(--text-dim); white-space: nowrap; font-family: inherit; }
+  table.rows tr:hover td { background: var(--bg-elevated); }
+  table.rows select { font: inherit; font-size: 11px; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius); padding: 1px 4px; }
+  .health { display: grid; gap: 6px; max-width: 640px; }
+  .health .h { display: grid; grid-template-columns: 10px 160px 1fr; gap: 10px; align-items: baseline; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); }
+  .health .h .d { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--text-dim); white-space: pre-wrap; word-break: break-all; }
+  .health .h.top { background: var(--bg-elevated); font-weight: 600; }
+  .method { display: inline-block; min-width: 46px; font-weight: 600; font-size: 10.5px; color: var(--accent); }
+  .loading { color: var(--text-faint); padding: 14px 12px; }
+  .faint { color: var(--text-faint); }
+</style>
+
+<div id="app">
+  <div class="top">
+    <span class="name">Spring Boot</span>
+    <span class="root" id="root"></span>
+    <span class="spacer"></span>
+    <span id="stale" class="faint" hidden>the folder changed —</span>
+    <button class="btn small" id="refresh" title="Look at the folder again">Refresh</button>
+  </div>
+  <div class="body">
+    <nav id="nav"></nav>
+    <main id="main"></main>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var state = {
+    root: null,
+    showing: true,
+    started: false,
+    loading: false,
+    error: null,
+    stale: false,
+    /** What the folder holds. */
+    apps: [],
+    /** Their run configurations, by application folder. */
+    configs: {},
+    /** The runs the app knows about, by id. */
+    runs: {},
+    /** The console of each run, by id: lines kept here, chunks appended to the DOM as they arrive. */
+    consoles: {},
+    /** The JDKs on the machine. */
+    jdks: [],
+    selected: null,
+    tab: 'console',
+    follow: true,
+    filter: '',
+    /** Applications the person asked to restart: stop, and start again when it has stopped — with the debugger, when it had one. */
+    restarting: {},
+    actuator: { tab: 'health', data: null, error: null, loading: false, filter: '', forRun: null, cache: {}, filterTimer: null },
+    saveTimer: null,
+    savedAt: 0,
+    loadedAt: 0,
+    /** Lines waiting to go into the console, appended once per frame rather than once per chunk. */
+    queued: [],
+    frame: null,
+    /** Consoles being fetched, so two askers get one answer. */
+    fetching: {},
+    filterTimer: null,
+    /** Applications whose start was asked for and not yet answered. */
+    starting: {},
+  };
+  /** A line longer than this is a progress bar, not a line — the same cut the app makes. */
+  var MAX_LINE = 64 * 1024;
+  /** How many lines the console keeps on screen — the same as the app keeps. */
+  var CONSOLE_CAP = 5000;
+
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  /** One call to the app, with its two kinds of failure flattened into one. */
+  function call(name, args) {
+    return host.call(name, args).then(function (result) {
+      if (result && result.ok === false) throw new Error(result.error || 'it did not say why');
+      return result || {};
+    });
+  }
+
+  function say(text, bad) { host.emit('notify', { text: text, kind: bad ? 'bad' : 'ok' }); }
+
+  /* ---------------------------------------------------------------------- *
+   * Reading what the app said.
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * Colour codes into spans.
+   *
+   * Spring colours its log when told it may — the level, the logger, the
+   * thread — and the console is a great deal easier to read with the level
+   * coloured than without. Only SGR is understood: the eight colours, their
+   * bright variants, bold, dim, italic and underline. Anything else is dropped,
+   * including cursor movement, which a log never uses.
+   */
+  var ANSI_COLOURS = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
+  function ansiToHtml(text) {
+    var out = '';
+    var open = [];
+    var re = /\x1b\[([0-9;]*)m|\x1b\[[0-9;]*[A-Za-z]/g;
+    var last = 0;
+    var match;
+    function closeAll() {
+      while (open.length) { out += '</span>'; open.pop(); }
+    }
+    while ((match = re.exec(text))) {
+      out += esc(text.slice(last, match.index));
+      last = re.lastIndex;
+      if (match[1] === undefined) continue;
+      var codes = match[1] === '' ? [0] : match[1].split(';').map(Number);
+      for (var i = 0; i < codes.length; i += 1) {
+        var code = codes[i];
+        var cls = null;
+        if (code === 0) { closeAll(); continue; }
+        if (code === 1) cls = 'a-b';
+        else if (code === 2) cls = 'a-d';
+        else if (code === 3) cls = 'a-i';
+        else if (code === 4) cls = 'a-u';
+        else if (code === 39) { /* default colour: close the last colour span only */ cls = null; }
+        else if (code >= 30 && code <= 37) cls = 'a-' + ANSI_COLOURS[code - 30];
+        else if (code >= 90 && code <= 97) cls = 'a-' + ANSI_COLOURS[code - 90];
+        else if (code === 38 && codes[i + 1] === 5) { cls = 'a-' + (ANSI_COLOURS[codes[i + 2] % 8] || 'white'); i += 2; }
+        else if (code === 38 && codes[i + 1] === 2) { i += 4; }
+        if (cls) { out += '<span class="' + cls + '">'; open.push(cls); }
+      }
+    }
+    out += esc(text.slice(last));
+    closeAll();
+    return out;
+  }
+
+  /** The class of a status dot, and the words beside it. */
+  function statusClass(status) {
+    if (status === 'up') return 'up';
+    if (status === 'building' || status === 'starting' || status === 'stopping' || status === 'failing') return 'busy';
+    if (status === 'failed' || status === 'buildFailed') return 'bad';
+    return 'off';
+  }
+
+  function statusWords(run) {
+    if (!run) return 'not running';
+    switch (run.status) {
+      case 'building': return 'building — ' + run.phase;
+      case 'starting': return 'starting';
+      case 'up': return 'up on :' + run.port + (run.seconds ? ' · ' + run.seconds + 's' : '');
+      case 'failing': return 'failing';
+      case 'failed': return 'failed to start' + (run.code != null && run.code > 0 ? ' (exit ' + run.code + ')' : '');
+      case 'buildFailed': return 'build failed';
+      case 'stopping': return 'stopping';
+      case 'stopped': return 'stopped';
+      case 'exited': return 'exited' + (run.code != null && run.code >= 0 ? ' (' + run.code + ')' : '');
+      default: return run.status;
+    }
+  }
+
+  /** Whether a run is still going, in any sense. */
+  function isLive(run) { return Boolean(run) && !run.done; }
+
+  /** The latest run of an application, live or not. */
+  function runFor(app) {
+    var best = null;
+    var ids = Object.keys(state.runs);
+    for (var i = 0; i < ids.length; i += 1) {
+      var run = state.runs[ids[i]];
+      if (run.appId !== app.dir) continue;
+      if (!best || run.startedAt > best.startedAt) best = run;
+    }
+    return best;
+  }
+
+  function appById(dir) {
+    for (var i = 0; i < state.apps.length; i += 1) if (state.apps[i].dir === dir) return state.apps[i];
+    return null;
+  }
+
+  /** The configuration of an application, with every field present. */
+  function configOf(app) {
+    var c = state.configs[app.dir] || {};
+    return {
+      profiles: c.profiles || '',
+      jdk: c.jdk || '',
+      mode: c.mode === 'jar' ? 'jar' : 'run',
+      build: c.build !== false,
+      port: c.port || '',
+      jvmArgs: c.jvmArgs || '',
+      args: c.args || '',
+      env: c.env || '',
+      envFile: c.envFile || '',
+      debug: c.debug === true,
+      debugPort: c.debugPort || 5005,
+      debugSuspend: c.debugSuspend === true,
+    };
+  }
+
+
+  /** The JDK the app will pick for an application when the configuration names none. */
+  function autoJdk(app) {
+    var wanted = Number(app.javaVersion) || 0;
+    if (!wanted || !state.jdks.length) return null;
+    var exact = null, newer = null;
+    for (var i = 0; i < state.jdks.length; i += 1) {
+      var jdk = state.jdks[i];
+      var major = Number(jdk.major) || 0;
+      if (major === wanted && !exact) exact = jdk;
+      if (major > wanted && (!newer || major < Number(newer.major))) newer = jdk;
+    }
+    return exact || newer;
+  }
+
+  function jdkFor(app) {
+    var config = configOf(app);
+    if (config.jdk) {
+      for (var i = 0; i < state.jdks.length; i += 1) if (state.jdks[i].home === config.jdk) return state.jdks[i];
+    }
+    return autoJdk(app);
+  }
+
+  /** The profiles as a list, from the text field. */
+  function profileList(text) {
+    return String(text || '').split(/[\s,]+/).filter(Boolean);
+  }
+
+  /** The port an application is going to be on, before it says. */
+  function expectedPort(app) {
+    var config = configOf(app);
+    if (Number(config.port) > 0) return Number(config.port);
+    var profiles = profileList(config.profiles);
+    for (var i = profiles.length - 1; i >= 0; i -= 1) {
+      var by = app.byProfile && app.byProfile[profiles[i]];
+      if (by && by.port) return by.port;
+    }
+    return app.port || 8080;
+  }
+
+  /** The command the configuration amounts to, in words a person can check. */
+  function commandWords(app) {
+    var config = configOf(app);
+    var tool = app.tool === 'maven' ? (app.wrapper ? './mvnw' : 'mvn') : (app.wrapper ? './gradlew' : 'gradle');
+    var lines = [];
+    var profiles = profileList(config.profiles).join(',');
+    var multi = Boolean(app.module);
+    if (app.tool === 'maven') {
+      if (config.mode === 'jar') {
+        if (config.build) lines.push(tool + ' -B -q -DskipTests ' + (multi ? '-pl ' + app.module + ' -am install' : 'package'));
+        lines.push('java ' + [config.jvmArgs, '-jar target/*.jar', config.args].filter(Boolean).join(' '));
+      } else {
+        if (multi && config.build) lines.push(tool + ' -B -q -DskipTests -pl ' + app.module + ' -am install');
+        lines.push(tool + ' -B ' + (multi ? '-pl ' + app.module + ' ' : '') + 'spring-boot:run' +
+          (profiles ? ' -Dspring-boot.run.profiles=' + profiles : '') +
+          (config.jvmArgs ? ' -Dspring-boot.run.jvmArguments="' + config.jvmArgs + '"' : '') +
+          (config.args ? ' -Dspring-boot.run.arguments="' + config.args + '"' : ''));
+      }
+    } else {
+      var task = function (name) { return app.module ? app.module + ':' + name : name; };
+      if (config.mode === 'jar') {
+        if (config.build) lines.push(tool + ' -q ' + task('bootJar') + ' -x test');
+        lines.push('java ' + [config.jvmArgs, '-jar build/libs/*.jar', config.args].filter(Boolean).join(' '));
+      } else {
+        lines.push(tool + ' -q ' + task('bootRun') + (config.args ? ' --args="' + config.args + '"' : ''));
+      }
+    }
+    if (config.debug) lines.unshift('# JVM: -agentlib:jdwp=transport=dt_socket,server=y,suspend=' + (config.debugSuspend ? 'y' : 'n') + ',address=localhost:' + config.debugPort);
+    var env = [];
+    if (profiles) env.push('SPRING_PROFILES_ACTIVE=' + profiles);
+    if (config.port) env.push('SERVER_PORT=' + config.port);
+    var jdk = jdkFor(app);
+    if (jdk) env.push('JAVA_HOME=' + jdk.home);
+    return (env.length ? env.join('\n') + '\n' : '') + lines.join('\n');
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * Drawing.
+   * ---------------------------------------------------------------------- */
+
+  function draw() {
+    $('root').textContent = state.root ? state.root.split('/').pop() : '';
+    $('stale').hidden = !state.stale;
+    drawNav();
+    drawMain();
+  }
+
+  function drawNav() {
+    var nav = $('nav');
+    if (state.loading && !state.apps.length) { nav.innerHTML = '<div class="empty">Looking for Spring Boot applications…</div>'; return; }
+    if (state.error) { nav.innerHTML = '<div class="empty">' + esc(state.error) + '</div>'; return; }
+    if (!state.apps.length) {
+      nav.innerHTML = '<div class="empty">No Spring Boot application under this folder.<br><br>' +
+        'One is a Maven or Gradle module with the Spring Boot plugin, or with a class annotated ' +
+        '<code>@SpringBootApplication</code>.</div>';
+      return;
+    }
+    var html = '';
+    var groups = groupByReactor(state.apps);
+    var names = {};
+    for (var n = 0; n < state.apps.length; n += 1) names[state.apps[n].name] = (names[state.apps[n].name] || 0) + 1;
+    for (var g = 0; g < groups.length; g += 1) {
+      var group = groups[g];
+      if (groups.length > 1 || group.apps.length > 1) html += '<div class="group">' + esc(group.label) + '</div>';
+      for (var i = 0; i < group.apps.length; i += 1) {
+        var app = group.apps[i];
+        var run = runFor(app);
+        var cls = run ? statusClass(run.status) : '';
+        var port = run && run.port ? ':' + run.port : (':' + expectedPort(app));
+        html += '<div class="item' + (state.selected === app.dir ? ' is-selected' : '') + '" data-app="' + esc(app.dir) + '">' +
+          '<span class="dot ' + cls + '"></span>' +
+          '<span class="label"><span class="n">' + esc(app.name) + '</span>' +
+          '<span class="s">' + esc(run ? statusWords(run) : names[app.name] > 1 ? relativeTo(state.root, app.dir) : (app.modulePath || app.tool)) + '</span></span>' +
+          '<span class="port">' + esc(port) + '</span></div>';
+      }
+    }
+    nav.innerHTML = html;
+  }
+
+  /** Applications by the project they belong to, so a multi-module reactor reads as one thing. */
+  function groupByReactor(apps) {
+    var groups = [];
+    var byKey = {};
+    for (var i = 0; i < apps.length; i += 1) {
+      var key = apps[i].reactor || apps[i].dir;
+      if (!byKey[key]) {
+        byKey[key] = { label: relativeTo(state.root, key) || key.split('/').pop(), apps: [] };
+        groups.push(byKey[key]);
+      }
+      byKey[key].apps.push(apps[i]);
+    }
+    return groups;
+  }
+
+  function relativeTo(root, dir) {
+    if (!root || !dir) return dir;
+    if (dir === root) return root.split('/').pop();
+    if (dir.indexOf(root + '/') === 0) return dir.slice(root.length + 1);
+    return dir;
+  }
+
+  function drawMain() {
+    var main = $('main');
+    var app = state.selected ? appById(state.selected) : null;
+    if (!app) {
+      main.innerHTML = state.apps.length
+        ? '<div class="console-empty">Pick an application on the left.</div>'
+        : '';
+      return;
+    }
+    var run = runFor(app);
+    var live = isLive(run);
+
+    var tabs =
+      '<div class="tabs">' +
+        tab('console', 'Console') + tab('config', 'Run configuration') + tab('actuator', 'Actuator') +
+        '<span class="spacer"></span>' +
+        (state.tab === 'console'
+          ? '<span class="tools"><input id="filter" placeholder="filter lines" value="' + esc(state.filter) + '">' +
+            '<button class="btn small' + (state.follow ? ' on' : '') + '" id="follow" title="Keep the newest line in view">Follow</button>' +
+            '<button class="btn small" id="save"' + (run ? '' : ' disabled') + '>Save…</button>' +
+            '<button class="btn small" id="clear"' + (run && !live ? '' : ' disabled') + ' title="Forget this run and its console">Clear</button></span>'
+          : '') +
+      '</div>';
+
+    main.innerHTML = '<div id="head"></div>' + tabs + '<div id="reason"></div><div class="pane" id="pane"></div>';
+    drawHead();
+
+    if (state.tab === 'console') drawConsole(app, run);
+    else if (state.tab === 'config') drawConfig(app);
+    else drawActuator(app, run);
+
+    wireTools(app, run);
+  }
+
+  /**
+   * The head alone: name, tags, status, buttons, and the reason when it
+   * failed. Redrawn on every state change, and only this — the console
+   * underneath keeps its lines and its scroll, the form keeps the field being
+   * typed in.
+   */
+  function drawHead() {
+    var app = state.selected ? appById(state.selected) : null;
+    var headEl = $('head');
+    if (!app || !headEl) return;
+    var run = runFor(app);
+    var live = isLive(run);
+    var cls = run ? statusClass(run.status) : '';
+    var jdk = jdkFor(app);
+    var url = run && run.port && run.status === 'up' ? (run.scheme || 'http') + '://localhost:' + run.port + (run.contextPath || '') : '';
+
+    var head =
+      '<div class="head">' +
+        '<h2>' + esc(app.name) + '</h2>' +
+        '<span class="tag">' + esc(app.tool + (app.wrapper ? ' wrapper' : '')) + '</span>' +
+        (app.javaVersion ? '<span class="tag" title="' + esc(jdk ? jdk.home : 'no matching JDK found') + '">Java ' + esc(app.javaVersion) + (jdk ? ' → ' + esc(jdk.version || jdk.name) : ' — not found') + '</span>' : '') +
+        (app.module ? '<span class="tagline">' + esc(app.modulePath || app.module) + '</span>' : '') +
+        '<span class="pill ' + cls + '">' + esc(statusWords(run)) + '</span>' +
+        (url ? '<span class="url" id="url" title="Copy">' + esc(url) + '</span>' : '') +
+        (live && run.debugPort
+          ? '<span class="pill ' + (run.debugListening ? 'up' : 'busy') + '" title="' + esc(run.debugListening ? 'The JVM is listening for a debugger on localhost:' + run.debugPort + '. Attach IntelliJ with Remote JVM Debug, or jdb here.' : 'Starting with the debugger on localhost:' + run.debugPort) + '">debug :' + esc(run.debugPort) + '</span>'
+          : '') +
+        '<span class="spacer"></span>' +
+        (live
+          ? '<button class="btn bad" id="stop"' + (run.status === 'stopping' ? ' disabled' : '') + '>Stop</button>' +
+            '<button class="btn" id="restart"' + (run.status === 'stopping' ? ' disabled' : '') + '>Restart</button>' +
+            (run.debugPort ? '<button class="btn" id="jdb" title="The JDK\'s own debugger, in a terminal, attached to this JVM">jdb</button>' : '')
+          : '<button class="btn go" id="run"' + (state.starting[app.dir] ? ' disabled' : '') + '>Run</button>' +
+            '<button class="btn go" id="debug" title="Run with the JVM listening for a debugger on localhost"' + (state.starting[app.dir] ? ' disabled' : '') + '>Debug</button>') +
+        '<button class="btn" id="shell" title="A terminal in this folder, with this JDK">Shell</button>' +
+        '<button class="btn" id="ask"' + (run ? '' : ' disabled title="Run it first"') + '>Ask Claude</button>' +
+      '</div>';
+    headEl.innerHTML = head;
+
+    var reason = '';
+    if (state.tab === 'console' && run && run.reason && (run.status === 'failed' || run.status === 'buildFailed' || run.status === 'failing')) {
+      reason = '<div class="reason"><div class="t">' + esc(run.status === 'buildFailed' ? 'The build failed' : 'It did not start') + '</div>' + esc(run.reason) + '</div>';
+    }
+    var reasonEl = $('reason');
+    if (reasonEl && reasonEl.innerHTML !== reason) reasonEl.innerHTML = reason;
+
+    // The tools' state, without rebuilding the row the filter is typed into.
+    var el;
+    if ((el = $('save'))) el.disabled = !run;
+    if ((el = $('clear'))) el.disabled = !(run && !live);
+
+    wireHead(app, run);
+  }
+
+  function tab(id, label) {
+    return '<span class="tab' + (state.tab === id ? ' is-on' : '') + '" data-tab="' + id + '">' + label + '</span>';
+  }
+
+  function wireHead(app, run) {
+    var el;
+    if ((el = $('run'))) el.onclick = function () { start(app, false); };
+    if ((el = $('debug'))) el.onclick = function () { start(app, true); };
+    if ((el = $('stop'))) el.onclick = function () { stop(run); };
+    // A restart keeps the debugger if this run had one.
+    if ((el = $('restart'))) el.onclick = function () { state.restarting[app.dir] = Boolean(run.debugPort); stop(run); draw(); };
+    if ((el = $('jdb'))) el.onclick = function () { debuggerFor(app, run); };
+    if ((el = $('shell'))) el.onclick = function () { shell(app); };
+    if ((el = $('ask'))) el.onclick = function () { ask(run); };
+    if ((el = $('url'))) el.onclick = function () { host.emit('copy', { text: el.textContent }); say('Copied ' + el.textContent); };
+  }
+
+  /** The tab row and the console tools. Wired once per `drawMain`, and they read the state when clicked. */
+  function wireTools(app, run) {
+    var el;
+    var tabs = document.querySelectorAll('.tabs .tab');
+    for (var i = 0; i < tabs.length; i += 1) {
+      tabs[i].onclick = function (event) { state.tab = event.currentTarget.getAttribute('data-tab'); remember(); drawMain(); };
+    }
+    if ((el = $('filter'))) {
+      el.oninput = function () {
+        state.filter = el.value;
+        // A rebuild per keystroke is a rebuild of five thousand lines per keystroke.
+        clearTimeout(state.filterTimer);
+        state.filterTimer = setTimeout(function () { rebuildConsole(runFor(app)); }, 150);
+      };
+    }
+    if ((el = $('follow'))) el.onclick = function () { state.follow = !state.follow; remember(); el.classList.toggle('on', state.follow); if (state.follow) scrollToEnd(); };
+    if ((el = $('save'))) el.onclick = function () {
+      var current = runFor(app);
+      var held = current ? state.consoles[current.id] : null;
+      var lines = held ? held.lines : [];
+      host.emit('save', { name: app.name + '-console.log', text: lines.map(function (line) { return line.text; }).join('\n').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '') });
+    };
+    if ((el = $('clear'))) el.onclick = function () { forget(runFor(app)); };
+  }
+
+  /* ----- the console ----- */
+
+  function drawConsole(app, run) {
+    var pane = $('pane');
+    if (!run) {
+      pane.innerHTML = '<div class="console-empty">Not running. <b>Run</b> starts it' +
+        (app.module ? ' from <code>' + esc(relativeTo(state.root, app.reactor)) + '</code> with <code>-pl ' + esc(app.module) + '</code>' : '') +
+        (app.profiles && app.profiles.length ? '; the profiles it has are ' + app.profiles.map(function (p) { return '<code>' + esc(p) + '</code>'; }).join(', ') : '') +
+        '.<br><br>The console appears here, and the panel reads it: the port it takes, when it is up, and why when it is not.</div>';
+      return;
+    }
+    pane.innerHTML = '<pre id="console"></pre>';
+    rebuildConsole(run);
+  }
+
+  /** The whole console again, from what is kept: on switching runs, or on a filter. */
+  function rebuildConsole(run) {
+    var pre = $('console');
+    if (!pre || !run) return;
+    // Not another application's console: a debounced filter can land after a switch.
+    if (run.appId !== state.selected) return;
+    state.queued = [];
+    var held = state.consoles[run.id];
+    if (!held) {
+      pre.innerHTML = '<span class="l app">loading the console…</span>';
+      loadConsole(run);
+      return;
+    }
+    var filter = state.filter.toLowerCase();
+    var html = '';
+    for (var i = 0; i < held.lines.length; i += 1) {
+      var line = held.lines[i];
+      if (filter && line.text.toLowerCase().indexOf(filter) < 0) continue;
+      html += lineHtml(line);
+    }
+    pre.innerHTML = html;
+    if (state.follow) scrollToEnd();
+  }
+
+  function lineHtml(line) {
+    // What a terminal would show of a line redrawn with carriage returns: the last drawing.
+    var text = line.text;
+    var cr = text.lastIndexOf('\r');
+    if (cr >= 0) text = text.slice(cr + 1);
+    return '<span class="l' + (line.stream === 'err' ? ' err' : line.stream === 'app' ? ' app' : '') + '">' + ansiToHtml(text) + '</span>';
+  }
+
+  function scrollToEnd() {
+    var pane = $('pane');
+    if (pane) pane.scrollTop = pane.scrollHeight;
+  }
+
+  /** A run's console so far, asked of the app once — however many ask while it is on its way. */
+  function loadConsole(run) {
+    if (state.consoles[run.id]) return Promise.resolve();
+    if (state.fetching[run.id]) return state.fetching[run.id];
+    var promise = call('spring.output', { id: run.id }).then(function (result) {
+      var lines = (result.lines || []).map(function (line) { return { text: String(line.text || ''), stream: line.stream || 'out' }; });
+      // Nothing that arrived meanwhile is lost: what the app sends is what it
+      // has kept, and what it kept includes everything it sent before this answer.
+      state.consoles[run.id] = { lines: lines, rest: String(result.rest || ''), restStream: result.restStream || 'out', seq: Number(result.seq) || 0 };
+    }).catch(function (error) {
+      state.consoles[run.id] = { lines: [{ text: String(error.message || error), stream: 'err' }], rest: '', restStream: 'out' };
+    }).then(function () {
+      delete state.fetching[run.id];
+      if (state.selected === run.appId && state.tab === 'console') rebuildConsole(run);
+    });
+    state.fetching[run.id] = promise;
+    return promise;
+  }
+
+  /** A chunk arrived: kept as lines, and queued for the console if it is the one on screen. */
+  function onOutput(payload) {
+    var run = state.runs[payload.id];
+    if (!run) return;
+    var held = state.consoles[payload.id];
+    if (!held) return; // not loaded yet: it will arrive with the whole console
+    // A chunk the snapshot already had: the app numbers both, so this is exact.
+    if (typeof payload.seq === 'number') {
+      if (payload.seq <= (held.seq || 0)) return;
+      held.seq = payload.seq;
+    }
+    var text = held.rest + payload.text;
+    var parts = text.split('\n');
+    held.rest = parts.pop();
+    held.restStream = payload.stream;
+    // A line that never ends is a progress bar redrawn in place; it is cut and shown as one.
+    if (held.rest.length > MAX_LINE) {
+      parts.push(held.rest);
+      held.rest = '';
+    }
+    var fresh = [];
+    for (var i = 0; i < parts.length; i += 1) {
+      var line = { text: parts[i], stream: payload.stream };
+      held.lines.push(line);
+      fresh.push(line);
+    }
+    // Trimmed in steps: a shift of five thousand per chunk is the wrong price for a chunk.
+    if (held.lines.length > CONSOLE_CAP + 500) held.lines.splice(0, held.lines.length - CONSOLE_CAP);
+    if (state.selected !== run.appId || state.tab !== 'console' || !fresh.length) return;
+    for (var j = 0; j < fresh.length; j += 1) state.queued.push(fresh[j]);
+    if (!state.frame) state.frame = requestAnimationFrame(flushConsole);
+  }
+
+  /**
+   * What arrived since the last frame, into the console at once.
+   *
+   * One insertion and one scroll per frame rather than per chunk: a build
+   * prints a line per write, and a layout per write is what makes a console
+   * stutter. The screen keeps as many lines as the app does; the oldest go
+   * from the top as new ones arrive at the bottom, so an application left
+   * running overnight has a console the size it had at bedtime.
+   */
+  function flushConsole() {
+    state.frame = null;
+    var pre = $('console');
+    var queued = state.queued;
+    state.queued = [];
+    if (!pre || !queued.length) return;
+    var filter = state.filter.toLowerCase();
+    var html = '';
+    for (var i = 0; i < queued.length; i += 1) {
+      if (filter && queued[i].text.toLowerCase().indexOf(filter) < 0) continue;
+      html += lineHtml(queued[i]);
+    }
+    if (!html) return;
+    pre.insertAdjacentHTML('beforeend', html);
+    var over = pre.childElementCount - CONSOLE_CAP;
+    for (var k = 0; k < over; k += 1) pre.removeChild(pre.firstChild);
+    if (state.follow) scrollToEnd();
+  }
+
+  /* ----- the configuration ----- */
+
+  function drawConfig(app) {
+    var pane = $('pane');
+    var config = configOf(app);
+    var chosen = profileList(config.profiles);
+    var chips = '';
+    var known = app.profiles || [];
+    for (var i = 0; i < known.length; i += 1) {
+      chips += '<button type="button" class="chip' + (chosen.indexOf(known[i]) >= 0 ? ' on' : '') + '" data-profile="' + esc(known[i]) + '">' + esc(known[i]) + '</button>';
+    }
+    var auto = autoJdk(app);
+    var jdkOptions = '<option value="">' + esc(auto ? 'Automatic — ' + (auto.name || auto.version) + ' (' + auto.version + ')' : app.javaVersion ? 'Automatic — no JDK ' + app.javaVersion + ' found, the java on PATH' : 'The java on PATH') + '</option>';
+    for (var j = 0; j < state.jdks.length; j += 1) {
+      var jdk = state.jdks[j];
+      jdkOptions += '<option value="' + esc(jdk.home) + '"' + (config.jdk === jdk.home ? ' selected' : '') + '>' + esc((jdk.name || 'JDK') + ' ' + jdk.version + (jdk.vendor ? ' — ' + jdk.vendor : '')) + '</option>';
+    }
+    var multi = Boolean(app.module);
+    pane.innerHTML =
+      '<form class="config" id="config" onsubmit="return false">' +
+        '<label class="k">Profiles</label><div>' +
+          (chips ? '<div class="chips">' + chips + '</div>' : '') +
+          '<input type="text" name="profiles" value="' + esc(config.profiles) + '" placeholder="local, dev">' +
+          '<div class="hint">' + (known.length ? 'The ones with a file of their own are above; anything can be typed.' : 'No application-&lt;profile&gt; file was found; type what the application expects.') + '</div>' +
+        '</div>' +
+        '<label class="k">JDK</label><div><select name="jdk">' + jdkOptions + '</select>' +
+          '<div class="hint">' + (app.javaVersion ? 'The project asks for Java ' + esc(app.javaVersion) + '.' : 'The project does not say which Java it wants.') + '</div></div>' +
+        '<label class="k">How to run</label><div class="row">' +
+          '<label><input type="radio" name="mode" value="run"' + (config.mode === 'run' ? ' checked' : '') + '> ' + (app.tool === 'maven' ? 'spring-boot:run' : 'bootRun') + '</label>' +
+          '<label><input type="radio" name="mode" value="jar"' + (config.mode === 'jar' ? ' checked' : '') + '> package, then java -jar</label>' +
+          '<label' + (multi || config.mode === 'jar' ? '' : ' hidden') + '><input type="checkbox" name="build"' + (config.build ? ' checked' : '') + '> build first' + (multi ? ' (install the modules it needs)' : '') + '</label>' +
+        '</div>' +
+        '<label class="k">Port</label><div><input type="text" name="port" value="' + esc(config.port) + '" placeholder="' + esc(expectedPort(app)) + '" style="max-width:120px">' +
+          '<div class="hint">Empty runs on what the configuration says' + (app.port ? ' (' + app.port + ')' : '') + '. Set to run a second copy beside the one already on that port.</div></div>' +
+        '<label class="k">JVM options</label><div><input type="text" name="jvmArgs" value="' + esc(config.jvmArgs) + '" placeholder="-Xmx2g -Dfoo=bar"></div>' +
+        '<label class="k">Program arguments</label><div><input type="text" name="args" value="' + esc(config.args) + '" placeholder="--spring.jpa.show-sql=true"></div>' +
+        '<label class="k">Environment</label><div><textarea name="env" placeholder="DB_URL=jdbc:postgresql://localhost:5444/erp\nDB_PASSWORD=…">' + esc(config.env) + '</textarea>' +
+          '<div class="hint">One KEY=VALUE per line. Read at every start.</div></div>' +
+        '<label class="k">Environment file</label><div><input type="text" name="envFile" value="' + esc(config.envFile) + '" placeholder="local.env">' +
+          '<div class="hint">A file of KEY=VALUE lines, relative to <code>' + esc(relativeTo(state.root, app.reactor)) + '</code>. The lines above win over it.</div></div>' +
+        '<label class="k">Debugger</label><div class="row">' +
+          '<label><input type="checkbox" name="debug"' + (config.debug ? ' checked' : '') + '> always start with the debugger listening</label>' +
+          '<label>port <input type="text" name="debugPort" value="' + esc(config.debugPort) + '" style="width:70px"></label>' +
+          '<label><input type="checkbox" name="debugSuspend"' + (config.debugSuspend ? ' checked' : '') + '> wait for a debugger before running</label>' +
+          '<div class="hint" style="flex-basis:100%">On localhost only. The <b>Debug</b> button does this once; the port moves up if that one is taken. Attach IntelliJ with a Remote JVM Debug configuration, or press <b>jdb</b> once it is up.</div>' +
+        '</div>' +
+        '<div class="command" id="command"></div>' +
+        '<div></div><div class="saved" id="saved"></div>' +
+      '</form>';
+    $('command').textContent = commandWords(app);
+
+    var form = $('config');
+    var chipsEls = form.querySelectorAll('.chip');
+    for (var c = 0; c < chipsEls.length; c += 1) {
+      chipsEls[c].onclick = function (event) {
+        var name = event.currentTarget.getAttribute('data-profile');
+        var list = profileList(form.elements.profiles.value);
+        var at = list.indexOf(name);
+        if (at >= 0) list.splice(at, 1); else list.push(name);
+        form.elements.profiles.value = list.join(',');
+        onConfigChange(app, form);
+        drawConfig(app);
+      };
+    }
+    form.oninput = function () { onConfigChange(app, form, false); };
+    // A change is a finished edit — a select, a checkbox, a field left — and is kept at once.
+    form.onchange = function () { onConfigChange(app, form, true); };
+  }
+
+  /** Every keystroke is kept; the app is told a moment after the last one, or at once when the edit is finished. */
+  function onConfigChange(app, form, now) {
+    var config = {
+      profiles: form.elements.profiles.value,
+      jdk: form.elements.jdk.value,
+      mode: form.elements.mode.value,
+      build: form.elements.build.checked,
+      port: form.elements.port.value,
+      jvmArgs: form.elements.jvmArgs.value,
+      args: form.elements.args.value,
+      env: form.elements.env.value,
+      envFile: form.elements.envFile.value,
+      debug: form.elements.debug.checked,
+      debugPort: Number(form.elements.debugPort.value) || 5005,
+      debugSuspend: form.elements.debugSuspend.checked,
+    };
+    state.configs[app.dir] = config;
+    var build = form.querySelector('input[name=build]').parentNode;
+    build.hidden = !(app.module || config.mode === 'jar');
+    $('command').textContent = commandWords(app);
+    clearTimeout(state.saveTimer);
+    var save = function () {
+      call('spring.saveConfig', { app: app.dir, config: config }).then(function () {
+        var saved = $('saved');
+        if (saved) saved.textContent = 'saved';
+      }).catch(function (error) { say('The configuration could not be saved (' + error.message + '). It is used for this run but will not be remembered.', true); });
+    };
+    state.pendingSave = save;
+    if (now) { state.pendingSave = null; save(); } else state.saveTimer = setTimeout(function () { state.pendingSave = null; save(); }, 500);
+    // The sidebar's port for this application, without rebuilding the sidebar.
+    var item = document.querySelector('nav .item[data-app="' + app.dir.replace(/"/g, '&quot;') + '"] .port');
+    var current = runFor(app);
+    if (item) item.textContent = current && current.port ? ':' + current.port : ':' + expectedPort(app);
+  }
+
+  /* ----- the actuator ----- */
+
+  var ACTUATOR_TABS = [['health', 'Health'], ['info', 'Info'], ['mappings', 'Mappings'], ['beans', 'Beans'], ['env', 'Environment'], ['loggers', 'Loggers'], ['metrics', 'Metrics']];
+
+  function drawActuator(app, run) {
+    var pane = $('pane');
+    if (!run || run.status !== 'up') {
+      pane.innerHTML = '<div class="note">The actuator can be read once the application is up.' +
+        (app.actuator ? '' : ' This one does not seem to have <code>spring-boot-starter-actuator</code>; add it to read health, mappings, beans and loggers here.') + '</div>';
+      return;
+    }
+    var sub = '<div class="sub">';
+    for (var i = 0; i < ACTUATOR_TABS.length; i += 1) {
+      sub += '<button class="btn small' + (state.actuator.tab === ACTUATOR_TABS[i][0] ? ' on' : '') + '" data-act="' + ACTUATOR_TABS[i][0] + '">' + ACTUATOR_TABS[i][1] + '</button>';
+    }
+    sub += '<button class="btn small" id="act-refresh" title="Ask again">↻</button>';
+    sub += '<input id="act-filter" placeholder="filter" value="' + esc(state.actuator.filter) + '">';
+    sub += '</div>';
+    pane.innerHTML = sub + '<div class="act" id="act"></div>';
+    var buttons = pane.querySelectorAll('[data-act]');
+    for (var b = 0; b < buttons.length; b += 1) {
+      buttons[b].onclick = function (event) {
+        state.actuator.tab = event.currentTarget.getAttribute('data-act');
+        state.actuator.data = null; state.actuator.error = null; state.actuator.filter = '';
+        remember();
+        drawActuator(app, run);
+      };
+    }
+    $('act-refresh').onclick = function () { delete state.actuator.cache[run.id + '|' + state.actuator.tab]; state.actuator.data = null; drawActuator(app, run); };
+    $('act-filter').oninput = function () {
+      var value = this.value;
+      // A table of thousands of rows is not rebuilt per keystroke.
+      clearTimeout(state.actuator.filterTimer);
+      state.actuator.filterTimer = setTimeout(function () { state.actuator.filter = value; drawActuatorBody(run); }, 120);
+    };
+    if (state.actuator.data && state.actuator.forRun === run.id && !state.actuator.error) drawActuatorBody(run);
+    else loadActuator(run);
+  }
+
+  function loadActuator(run) {
+    var tabName = state.actuator.tab;
+    state.actuator.loading = true;
+    state.actuator.forRun = run.id;
+    // Read once per run and tab; a switch back does not fetch five megabytes again.
+    var cached = state.actuator.cache[run.id + '|' + tabName];
+    if (cached) {
+      state.actuator.data = cached;
+      state.actuator.error = null;
+      state.actuator.loading = false;
+      drawActuatorBody(run);
+      return;
+    }
+    var act = $('act');
+    if (act) act.innerHTML = '<div class="loading">asking /actuator/' + esc(tabName) + '…</div>';
+    call('spring.actuator', { id: run.id, endpoint: tabName }).then(function (result) {
+      if (state.actuator.tab !== tabName || state.actuator.forRun !== run.id) return;
+      state.actuator.data = result.data;
+      state.actuator.cache[run.id + '|' + tabName] = result.data;
+      state.actuator.error = null;
+      state.actuator.loading = false;
+      drawActuatorBody(run);
+    }).catch(function (error) {
+      if (state.actuator.tab !== tabName || state.actuator.forRun !== run.id) return;
+      state.actuator.error = String(error.message || error);
+      state.actuator.loading = false;
+      var el = $('act');
+      if (el) el.innerHTML = '<div class="note">' + esc(state.actuator.error) + '</div>';
+    });
+  }
+
+  function drawActuatorBody(run) {
+    var act = $('act');
+    if (!act) return;
+    var data = state.actuator.data;
+    var filter = state.actuator.filter.toLowerCase();
+    var tabName = state.actuator.tab;
+    var html = '';
+    if (tabName === 'health') html = healthHtml(data);
+    else if (tabName === 'info') html = '<pre class="d">' + esc(JSON.stringify(data, null, 2)) + '</pre>';
+    else if (tabName === 'mappings') html = mappingsHtml(data, filter);
+    else if (tabName === 'beans') html = beansHtml(data, filter);
+    else if (tabName === 'env') html = envHtml(data, filter);
+    else if (tabName === 'loggers') html = loggersHtml(data, filter);
+    else if (tabName === 'metrics') html = metricsHtml(data, filter);
+    act.innerHTML = html || '<div class="faint">nothing</div>';
+    if (tabName === 'loggers') wireLoggers(run);
+    if (tabName === 'metrics') wireMetrics(run);
+  }
+
+  function healthHtml(data) {
+    if (!data) return '';
+    var html = '<div class="health">';
+    html += healthRow('', data, true);
+    var parts = data.components || {};
+    // v2: the components sit in `details`, beside plain values that are not components.
+    if (!data.components && data.details) {
+      var keys = Object.keys(data.details);
+      for (var k = 0; k < keys.length; k += 1) if (isHealth(data.details[keys[k]])) parts[keys[k]] = data.details[keys[k]];
+    }
+    var names = Object.keys(parts).sort();
+    for (var i = 0; i < names.length; i += 1) html += healthRow(names[i], parts[names[i]], false);
+    return html + '</div>';
+  }
+
+  /** Whether a value under `details` is itself a health, as the v2 format nests them. */
+  function isHealth(value) {
+    return value && typeof value === 'object' && typeof value.status === 'string';
+  }
+
+  function healthRow(name, part, top) {
+    var status = part && part.status ? String(part.status) : '?';
+    var cls = status === 'UP' ? 'up' : status === 'DOWN' || status === 'OUT_OF_SERVICE' ? 'bad' : 'off';
+    // v3 nests under `components`; v2 nests under `details` beside the plain values. Both are listed as what they are.
+    var nested = Object.assign({}, part && part.components);
+    var plain = {};
+    var keys = part && part.details ? Object.keys(part.details) : [];
+    for (var i = 0; i < keys.length; i += 1) {
+      if (isHealth(part.details[keys[i]])) nested[keys[i]] = part.details[keys[i]];
+      else plain[keys[i]] = part.details[keys[i]];
+    }
+    var details = Object.keys(plain).length ? JSON.stringify(plain, null, 1).replace(/[{}"]/g, '').replace(/\n\s*/g, '\n').trim() : '';
+    if (!top && Object.keys(nested).length) {
+      var inner = Object.keys(nested).map(function (k) { return k + ': ' + (nested[k].status || '?'); }).join('\n');
+      details = inner + (details ? '\n' + details : '');
+    }
+    return '<div class="h' + (top ? ' top' : '') + '"><span class="dot ' + cls + '"></span><span>' + esc(top ? status : name + ' · ' + status) + '</span><span class="d">' + esc(details) + '</span></div>';
+  }
+
+  function mappingsHtml(data, filter) {
+    var rows = [];
+    var contexts = (data && data.contexts) || {};
+    Object.keys(contexts).forEach(function (ctx) {
+      var m = contexts[ctx].mappings || {};
+      var servlets = m.dispatcherServlets || {};
+      Object.keys(servlets).forEach(function (s) {
+        servlets[s].forEach(function (entry) {
+          var d = entry.details || {};
+          var c = d.requestMappingConditions || {};
+          var methods = (c.methods || []).join(',') || '*';
+          var patterns = (c.patterns || []).join(', ') || (entry.predicate || '');
+          rows.push({ method: methods, path: patterns, handler: (d.handlerMethod ? shortClass(d.handlerMethod.className) + '.' + d.handlerMethod.name : entry.handler || '') });
+        });
+      });
+      var handlers = m.dispatcherHandlers || {};
+      Object.keys(handlers).forEach(function (h) {
+        handlers[h].forEach(function (entry) {
+          var d = entry.details || {};
+          var c = d.requestMappingConditions || {};
+          rows.push({ method: (c.methods || []).join(',') || '*', path: (c.patterns || []).join(', ') || entry.predicate || '', handler: d.handlerMethod ? shortClass(d.handlerMethod.className) + '.' + d.handlerMethod.name : entry.handler || '' });
+        });
+      });
+    });
+    rows.sort(function (a, b) { return a.path < b.path ? -1 : a.path > b.path ? 1 : 0; });
+    var html = '<table class="rows"><tr><th>Method</th><th>Path</th><th>Handler</th></tr>';
+    var n = 0;
+    for (var i = 0; i < rows.length; i += 1) {
+      var r = rows[i];
+      if (filter && (r.path + ' ' + r.handler + ' ' + r.method).toLowerCase().indexOf(filter) < 0) continue;
+      n += 1;
+      html += '<tr><td><span class="method">' + esc(r.method) + '</span></td><td>' + esc(r.path) + '</td><td class="faint">' + esc(r.handler) + '</td></tr>';
+    }
+    return html + '</table><div class="faint" style="padding:6px 8px">' + n + ' of ' + rows.length + '</div>';
+  }
+
+  function shortClass(name) { return String(name || '').split('.').pop(); }
+
+  function beansHtml(data, filter) {
+    var rows = [];
+    var contexts = (data && data.contexts) || {};
+    Object.keys(contexts).forEach(function (ctx) {
+      var beans = contexts[ctx].beans || {};
+      Object.keys(beans).forEach(function (name) {
+        var b = beans[name];
+        rows.push({ name: name, type: b.type || '', scope: b.scope || '', deps: (b.dependencies || []).length });
+      });
+    });
+    rows.sort(function (a, b) { return a.name < b.name ? -1 : 1; });
+    var html = '<table class="rows"><tr><th>Bean</th><th>Type</th><th>Scope</th><th>Deps</th></tr>';
+    var n = 0;
+    for (var i = 0; i < rows.length; i += 1) {
+      var r = rows[i];
+      if (filter && (r.name + ' ' + r.type).toLowerCase().indexOf(filter) < 0) continue;
+      n += 1;
+      if (n > 800) { html += '<tr><td colspan="4" class="faint">… ' + (rows.length - 800) + ' more; filter to see them</td></tr>'; break; }
+      html += '<tr><td>' + esc(r.name) + '</td><td class="faint">' + esc(r.type) + '</td><td class="k">' + esc(r.scope) + '</td><td class="k">' + r.deps + '</td></tr>';
+    }
+    return html + '</table><div class="faint" style="padding:6px 8px">' + n + ' of ' + rows.length + '</div>';
+  }
+
+  function envHtml(data, filter) {
+    if (!data) return '';
+    var html = '';
+    var active = (data.activeProfiles || []).join(', ');
+    html += '<div class="faint" style="padding:0 8px 8px">active profiles: ' + esc(active || 'none') + '</div>';
+    var sources = data.propertySources || [];
+    // Boot 3 hides every value unless told otherwise; a page of asterisks should say why.
+    var shown = 0, hidden = 0;
+    for (var s0 = 0; s0 < sources.length; s0 += 1) {
+      var ps = sources[s0].properties || {};
+      for (var key0 in ps) {
+        if (!Object.prototype.hasOwnProperty.call(ps, key0)) continue;
+        if (ps[key0] && ps[key0].value === '******') hidden += 1; else shown += 1;
+      }
+    }
+    if (hidden && !shown) {
+      html += '<div class="note">Every value is hidden. Set <code>management.endpoint.env.show-values=always</code> (or <code>when-authorized</code>) to see them here.</div>';
+    }
+    var total = 0;
+    for (var i = 0; i < sources.length; i += 1) {
+      var props = sources[i].properties || {};
+      var keys = Object.keys(props).sort();
+      var rows = '';
+      for (var k = 0; k < keys.length; k += 1) {
+        var value = props[keys[k]] && props[keys[k]].value != null ? String(props[keys[k]].value) : '';
+        if (filter && (keys[k] + '=' + value).toLowerCase().indexOf(filter) < 0) continue;
+        total += 1;
+        if (total > 800) break;
+        rows += '<tr><td>' + esc(keys[k]) + '</td><td class="faint">' + esc(value) + '</td></tr>';
+      }
+      if (rows) html += '<table class="rows"><tr><th colspan="2">' + esc(sources[i].name) + '</th></tr>' + rows + '</table>';
+      if (total > 800) { html += '<div class="faint" style="padding:6px 8px">… more; filter to see them</div>'; break; }
+    }
+    return html;
+  }
+
+  var LEVELS = ['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'OFF'];
+  function loggersHtml(data, filter) {
+    if (!data || !data.loggers) return '';
+    var names = Object.keys(data.loggers).sort();
+    var html = '<table class="rows"><tr><th>Logger</th><th>Configured</th><th>Effective</th></tr>';
+    var n = 0;
+    for (var i = 0; i < names.length; i += 1) {
+      var name = names[i];
+      var l = data.loggers[name];
+      // Without a filter, only the ones somebody set: every package in the classpath is thousands of rows.
+      if (!filter && !l.configuredLevel && name !== 'ROOT') continue;
+      if (filter && name.toLowerCase().indexOf(filter) < 0) continue;
+      n += 1;
+      if (n > 500) { html += '<tr><td colspan="3" class="faint">… more; narrow the filter</td></tr>'; break; }
+      var options = '<option value="">(inherit)</option>';
+      for (var v = 0; v < LEVELS.length; v += 1) options += '<option' + (l.configuredLevel === LEVELS[v] ? ' selected' : '') + '>' + LEVELS[v] + '</option>';
+      html += '<tr><td>' + esc(name) + '</td><td><select data-logger="' + esc(name) + '">' + options + '</select></td><td class="k">' + esc(l.effectiveLevel || '') + '</td></tr>';
+    }
+    html += '</table>';
+    if (!filter) html += '<div class="faint" style="padding:6px 8px">Only the loggers with a level of their own. Filter to find any package and set its level.</div>';
+    return html;
+  }
+
+  function wireLoggers(run) {
+    var selects = document.querySelectorAll('select[data-logger]');
+    for (var i = 0; i < selects.length; i += 1) {
+      selects[i].onchange = function (event) {
+        var el = event.currentTarget;
+        var logger = el.getAttribute('data-logger');
+        var level = el.value || 'null';
+        call('spring.setLogLevel', { id: run.id, logger: logger, level: level }).then(function () {
+          say(logger + ' → ' + (el.value || 'inherited'));
+          // The answer is known; the three thousand loggers are not fetched again for it.
+          var data = state.actuator.data;
+          if (data && data.loggers && data.loggers[logger]) {
+            data.loggers[logger].configuredLevel = el.value || null;
+            if (el.value) data.loggers[logger].effectiveLevel = el.value;
+          }
+          drawActuatorBody(run);
+        }).catch(function (error) { say(error.message, true); });
+      };
+    }
+  }
+
+  function metricsHtml(data, filter) {
+    if (!data) return '';
+    if (data.names) {
+      var html = '<table class="rows"><tr><th>Metric</th></tr>';
+      var names = data.names.slice().sort();
+      for (var i = 0; i < names.length; i += 1) {
+        if (filter && names[i].toLowerCase().indexOf(filter) < 0) continue;
+        html += '<tr><td><span class="url" data-metric="' + esc(names[i]) + '">' + esc(names[i]) + '</span></td></tr>';
+      }
+      return html + '</table>';
+    }
+    var out = '<div style="padding:0 8px 8px"><span class="url" id="metrics-back">← all metrics</span></div>';
+    out += '<table class="rows"><tr><th colspan="2">' + esc(data.name) + (data.description ? ' — ' + esc(data.description) : '') + '</th></tr>';
+    (data.measurements || []).forEach(function (m) {
+      out += '<tr><td class="k">' + esc(m.statistic) + '</td><td>' + esc(m.value) + (data.baseUnit ? ' ' + esc(data.baseUnit) : '') + '</td></tr>';
+    });
+    (data.availableTags || []).forEach(function (t) {
+      out += '<tr><td class="k">' + esc(t.tag) + '</td><td class="faint">' + esc((t.values || []).join(', ')) + '</td></tr>';
+    });
+    return out + '</table>';
+  }
+
+  function wireMetrics(run) {
+    var links = document.querySelectorAll('[data-metric]');
+    for (var i = 0; i < links.length; i += 1) {
+      links[i].onclick = function (event) {
+        var name = event.currentTarget.getAttribute('data-metric');
+        var act = $('act');
+        if (act) act.innerHTML = '<div class="loading">asking for ' + esc(name) + '…</div>';
+        call('spring.actuator', { id: run.id, endpoint: 'metrics', name: name }).then(function (result) {
+          if (state.actuator.tab !== 'metrics' || state.actuator.forRun !== run.id) return;
+          state.actuator.data = result.data;
+          drawActuatorBody(run);
+        }).catch(function (error) { say(error.message, true); });
+      };
+    }
+    var back = $('metrics-back');
+    if (back) back.onclick = function () { state.actuator.data = null; loadActuator(run); };
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * Doing things.
+   * ---------------------------------------------------------------------- */
+
+  function start(app, debug) {
+    var config = configOf(app);
+    var old = runFor(app);
+    // Onto its console — when it is the application on screen. A restart that
+    // lands while another application is being looked at does not take the screen.
+    if (state.selected === app.dir) {
+      state.tab = 'console';
+      state.follow = true;
+      state.filter = '';
+      remember();
+    }
+    state.starting[app.dir] = true;
+    call('spring.start', { app: { dir: app.dir }, config: config, debug: Boolean(debug) }).then(function (result) {
+      delete state.starting[app.dir];
+      var run = result.run;
+      state.runs[run.id] = run;
+      // The previous run of the same application is history now; its console goes with it.
+      if (old && old.done && old.id !== run.id) {
+        delete state.runs[old.id];
+        delete state.consoles[old.id];
+        call('spring.forget', { id: old.id }).catch(function () { /* it was already gone */ });
+      }
+      draw();
+    }).catch(function (error) {
+      delete state.starting[app.dir];
+      say(error.message, true);
+      draw();
+    });
+    draw();
+  }
+
+  function stop(run) {
+    if (!run) return;
+    call('spring.stop', { id: run.id }).catch(function (error) {
+      // A stop that did not happen is not a restart waiting to happen.
+      delete state.restarting[run.appId];
+      say(error.message, true);
+    });
+  }
+
+  /** Drop a run from this panel, whether or not the app still had it. */
+  function dropRun(id) {
+    delete state.runs[id];
+    delete state.consoles[id];
+    delete state.fetching[id];
+  }
+
+  function forget(run) {
+    if (!run) return;
+    call('spring.forget', { id: run.id }).then(function () {
+      dropRun(run.id);
+      draw();
+    }).catch(function (error) {
+      // Forgotten elsewhere already: gone is what was asked for.
+      dropRun(run.id);
+      say(error.message, true);
+      draw();
+    });
+  }
+
+  function debuggerFor(app, run) {
+    var jdk = jdkFor(app);
+    call('spring.debugger', { dir: app.dir, name: app.name, port: run.debugPort, javaHome: jdk ? jdk.home : undefined })
+      .catch(function (error) { say(error.message, true); });
+  }
+
+  function shell(app) {
+    var jdk = jdkFor(app);
+    call('spring.shell', { dir: app.dir, name: app.name, javaHome: jdk ? jdk.home : undefined })
+      .catch(function (error) { say(error.message, true); });
+  }
+
+  function ask(run) {
+    if (!run) return;
+    call('spring.ask', { id: run.id }).then(function (result) {
+      if (result && result.delivered === false) say('The briefing is waiting for Claude to start; it lands when the session is at its prompt.');
+    }).catch(function (error) { say(error.message, true); });
+  }
+
+  /** Where the run stands changed. */
+  function onState(run) {
+    if (!run || !run.id) return;
+    if (!belongsHere(run)) return;
+    if (run.forgotten) {
+      if (!state.runs[run.id]) return;
+      dropRun(run.id);
+      draw();
+      return;
+    }
+    var before = state.runs[run.id];
+    state.runs[run.id] = run;
+    // Its console is fetched when it is looked at, not for every run that exists.
+    if (!before && state.selected === run.appId && state.tab === 'console') loadConsole(run);
+    // A restart: the stop landed, so the start follows.
+    if (run.done && run.appId in state.restarting) {
+      var withDebugger = state.restarting[run.appId];
+      delete state.restarting[run.appId];
+      var app = appById(run.appId);
+      if (app) { start(app, withDebugger); return; }
+    }
+    if (state.selected === run.appId) {
+      // A run this panel already shows: the head and the sidebar change, the
+      // pane keeps its lines, its scroll and the field being typed in.
+      var wasUp = before && before.status === 'up';
+      var isUp = run.status === 'up';
+      if (!before || (state.tab === 'actuator' && wasUp !== isUp)) { draw(); return; }
+      if (state.tab === 'console' && !state.consoles[run.id]) loadConsole(run);
+      drawHead();
+      drawNav();
+      return;
+    }
+    drawNav();
+  }
+
+  /** Whether a run is one of ours: under this folder. */
+  function belongsHere(run) {
+    if (!state.root) return false;
+    if (run.root === state.root) return true;
+    return typeof run.dir === 'string' && (run.dir === state.root || run.dir.indexOf(state.root + '/') === 0);
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * Loading.
+   * ---------------------------------------------------------------------- */
+
+  function load() {
+    // An edit still waiting to be saved goes first, or the answer would overwrite it.
+    if (state.saveTimer) {
+      clearTimeout(state.saveTimer);
+      state.saveTimer = null;
+      if (state.pendingSave) state.pendingSave();
+    }
+    state.loading = true;
+    state.stale = false;
+    state.error = null;
+    // No redraw while there is something on screen: a refresh should not take the console away to bring it back.
+    if (!state.apps.length) draw();
+    return Promise.all([
+      call('spring.projects'),
+      call('spring.configs'),
+      call('spring.runs'),
+      call('spring.jdks').catch(function () { return { jdks: [] }; }),
+    ]).then(function (results) {
+      state.apps = results[0].apps || [];
+      state.configs = results[1].configs || {};
+      state.jdks = results[3].jdks || [];
+      var runs = results[2].runs || [];
+      // What the app has is what there is: a run forgotten elsewhere goes, and one started elsewhere arrives.
+      var known = {};
+      for (var i = 0; i < runs.length; i += 1) {
+        known[runs[i].id] = true;
+        state.runs[runs[i].id] = runs[i];
+      }
+      Object.keys(state.runs).forEach(function (id) { if (!known[id]) dropRun(id); });
+      // A run whose application the folder no longer shows still needs a row, or it could not be stopped from here.
+      var dirs = {};
+      for (var a = 0; a < state.apps.length; a += 1) dirs[state.apps[a].dir] = true;
+      for (var r = 0; r < runs.length; r += 1) {
+        if (dirs[runs[r].appId]) continue;
+        dirs[runs[r].appId] = true;
+        state.apps.push({ id: runs[r].appId, dir: runs[r].appId, name: runs[r].appName, tool: runs[r].tool, reactor: runs[r].appId, module: '', modulePath: '', profiles: [], byProfile: {}, port: runs[r].port, actuator: runs[r].actuator, javaVersion: '', orphan: true });
+      }
+      if (results[0].truncated) say('Some modules were too large to read to the end; an application in them may be missing. Refresh to look again.', true);
+      if (!state.selected || !appById(state.selected)) {
+        state.selected = state.apps.length ? preferredApp().dir : null;
+      }
+      state.loading = false;
+      state.loadedAt = Date.now();
+      draw();
+    }).catch(function (error) {
+      state.loading = false;
+      state.loadedAt = Date.now();
+      state.error = String(error.message || error);
+      draw();
+    });
+  }
+
+  /** The one to show first: a running one, else the first with a port, else the first. */
+  function preferredApp() {
+    for (var i = 0; i < state.apps.length; i += 1) if (isLive(runFor(state.apps[i]))) return state.apps[i];
+    for (var j = 0; j < state.apps.length; j += 1) if (state.apps[j].port) return state.apps[j];
+    return state.apps[0];
+  }
+
+  function remember() {
+    host.emit('remember', {
+      selected: state.selected,
+      tab: state.tab,
+      follow: state.follow,
+      actuatorTab: state.actuator.tab,
+    });
+  }
+
+  function resume(saved) {
+    if (!saved) return;
+    if (saved.selected) state.selected = saved.selected;
+    if (saved.tab) state.tab = saved.tab;
+    if (typeof saved.follow === 'boolean') state.follow = saved.follow;
+    if (saved.actuatorTab) state.actuator.tab = saved.actuatorTab;
+  }
+
+  $('nav').addEventListener('click', function (event) {
+    var item = event.target.closest('.item');
+    if (!item) return;
+    state.selected = item.getAttribute('data-app');
+    state.filter = '';
+    clearTimeout(state.filterTimer);
+    state.actuator.data = null;
+    remember();
+    draw();
+  });
+
+  $('refresh').onclick = function () { load(); };
+
+  host.on('spring', function (payload) {
+    if (!payload) return;
+    if (payload.kind === 'output') onOutput(payload);
+    else if (payload.kind === 'state') onState(payload.run);
+  });
+
+  /*
+   * The folder changed. Not re-read on its own: a build writes thousands of
+   * files into `target`, and re-reading twenty poms on every one of them would
+   * be the panel fighting the build. Said, and left to a click.
+   */
+  host.on('changed', function () {
+    // The watcher says the folder changed as it starts watching it; that is not news.
+    if (state.loading || Date.now() - state.loadedAt < 3000) return;
+    // Neither is a build writing into `target`: while anything here runs, the folder is expected to move.
+    var ids = Object.keys(state.runs);
+    for (var i = 0; i < ids.length; i += 1) if (!state.runs[ids[i]].done) return;
+    state.stale = true;
+    $('stale').hidden = false;
+  });
+
+  host.on('showing', function (payload) {
+    state.showing = !payload || payload.showing !== false;
+    // Not before the folder is known: `context` brings it, and loads.
+    if (state.showing && !state.started && state.root) { state.started = true; load(); }
+  });
+
+  host.on('context', function (payload) {
+    if (payload && payload.root) state.root = payload.root;
+    if (payload && payload.showing === false) state.showing = false;
+    if (payload) resume(payload.resume);
+    if (state.showing) { state.started = true; load(); }
+  });
+
+  draw();
+  host.ready();
+})();
+</script>

@@ -208,6 +208,25 @@ contextBridge.exposeInMainWorld('api', {
     },
   },
 
+  /**
+   * Spring Boot. One named call, and two things the app pushes: what a running
+   * application printed, and where each run stands. Both go to every window;
+   * a panel keeps what is under its own folder.
+   */
+  spring: {
+    call: (name, args) => ipcRenderer.invoke('spring:call', { name, args }),
+    onOutput: (fn) => {
+      const handler = (_e, payload) => fn(payload);
+      ipcRenderer.on('spring:output', handler);
+      return () => ipcRenderer.removeListener('spring:output', handler);
+    },
+    onState: (fn) => {
+      const handler = (_e, payload) => fn(payload);
+      ipcRenderer.on('spring:state', handler);
+      return () => ipcRenderer.removeListener('spring:state', handler);
+    },
+  },
+
   /** Maven and Gradle: read by the main process, run by a terminal. */
   build: {
     call: (name, args) => ipcRenderer.invoke('build:call', { name, args }),

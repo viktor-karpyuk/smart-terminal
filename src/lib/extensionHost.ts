@@ -162,6 +162,25 @@ const HELM_VERBS = new Map<string, Channel>([
   ...HELM_WRITE.map((name) => [name, 'helm'] as [string, Channel]),
 ]);
 
+/**
+ * Spring Boot, which is the app's own machine rather than a cluster.
+ *
+ * Reading is the folder and the running things. Starting and stopping change
+ * nothing that is not the person's own process, so neither stops to ask — an
+ * IDE does not ask before Run, and this is that button. `shell` and `ask` are
+ * the same two doors into the app as the cluster's, and take the same shape:
+ * the panel names an application or a run, the app writes the words.
+ */
+const SPRING_READ = ['projects', 'jdks', 'configs', 'runs', 'output', 'actuator', 'brief'] as const;
+const SPRING_WRITE = ['saveConfig', 'start', 'stop', 'forget', 'setLogLevel'] as const;
+const SPRING_APP = ['shell', 'ask', 'debugger'] as const;
+
+const SPRING_VERBS = new Map<string, Channel>([
+  ...SPRING_READ.map((name) => [name, 'spring'] as [string, Channel]),
+  ...SPRING_WRITE.map((name) => [name, 'spring'] as [string, Channel]),
+  ...SPRING_APP.map((name) => [name, 'app'] as [string, Channel]),
+]);
+
 const GIT_VERBS = new Set<string>([...READ_VERBS, ...WRITE_VERBS]);
 const KUBE_VERBS = new Map<string, Channel>([
   ...KUBE_READ.map((name) => [name, 'kube'] as [string, Channel]),
@@ -170,7 +189,7 @@ const KUBE_VERBS = new Map<string, Channel>([
   ...KUBE_APP.map((name) => [name, 'app'] as [string, Channel]),
 ]);
 
-export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'build';
+export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build';
 
 /**
  * Which door a call goes through, or none.
@@ -184,6 +203,7 @@ export function route(name: string): Channel | null {
   if (GIT_VERBS.has(name)) return 'git';
   if (name.startsWith('kube.')) return KUBE_VERBS.get(name.slice(5)) ?? null;
   if (name.startsWith('helm.')) return HELM_VERBS.get(name.slice(5)) ?? null;
+  if (name.startsWith('spring.')) return SPRING_VERBS.get(name.slice(7)) ?? null;
   if (name.startsWith('build.')) return BUILD_VERBS.get(name.slice(6)) ?? null;
   return null;
 }
@@ -485,6 +505,40 @@ export function terminalSetup({ context, namespace }: Where): string {
   if (context) parts.push(`--context ${innerQuote(context, 'The context')}`);
   if (namespace) parts.push(`--namespace ${innerQuote(namespace, 'The namespace')}`);
   return `alias k='${parts.join(' ')}'`;
+}
+
+/**
+ * A terminal already standing in an application's folder, with its JDK first
+ * on the PATH — so `mvn`, `./mvnw` and `java` in it mean what the panel meant.
+ *
+ * Built from two named parts, both quoted as one word each. The folder came
+ * from the app's own discovery and the JDK from the machine's own list; the
+ * panel chose between them and wrote neither.
+ */
+export function springShellSetup({ dir, javaHome }: { dir: string; javaHome?: string }): string {
+  const parts = [`cd ${shellQuote(dir, 'The folder')}`];
+  if (javaHome) {
+    const home = shellQuote(javaHome, 'The JDK');
+    parts.push(`export JAVA_HOME=${home}`, `export PATH="$JAVA_HOME/bin:$PATH"`);
+  }
+  return parts.join(' && ');
+}
+
+/**
+ * A terminal running the JDK's own debugger, attached to a run.
+ *
+ * `jdb` is not an IDE, and it is not meant to be: it is the debugger that is
+ * already installed wherever Java is, in a real terminal, with breakpoints,
+ * stepping and locals — and a Claude session can drive the same command. The
+ * port came from the app, which chose it; the folder from the app's own
+ * discovery. Both are checked here before they touch a command line.
+ */
+export function jdbCommand({ dir, port, javaHome }: { dir: string; port: number; javaHome?: string }): string {
+  const number = Number(port);
+  if (!Number.isInteger(number) || number < 1 || number > 65535) throw new Error('The debug port is not a port');
+  const parts = [springShellSetup({ dir, javaHome })];
+  parts.push(`jdb -attach ${number} -sourcepath ${shellQuote('src/main/java:src/main/kotlin', 'The source path')}`);
+  return parts.join(' && ');
 }
 
 /**

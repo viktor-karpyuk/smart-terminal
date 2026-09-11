@@ -84,6 +84,20 @@ test('a panel is read as a whole document, and never from outside its folder', (
   assert.ok(graph, 'the git graph panel was not found');
   assert.equal(graph.error, undefined, graph.error);
   assert.ok(graph.source.includes('host.ready()'), 'the panel does not talk to the app');
+  // Every shipped panel, not only the first: each one is read whole and says it is up.
+  for (const panel of panels) {
+    assert.equal(panel.error, undefined, `${panel.id}: ${panel.error}`);
+    assert.ok(panel.source.includes('host.ready()'), `${panel.id} does not talk to the app`);
+  }
+  const boot = panels.find((panel) => panel.id === 'spring-boot');
+  assert.ok(boot, 'the Spring Boot panel was not found');
+  assert.equal(boot.needs, 'folder');
+  assert.deepEqual(boot.listens, ['spring'], 'it asked to hear about the runs, and only that');
+  // A panel may only ask for what the app knows how to push.
+  const asking = panelViews([
+    { id: 'x', status: 'installed', enabled: true, dir: __dirname, contributes: { panels: [{ id: 'p', render: 'a.html', listens: ['spring', 'clipboard', 'keys'] }] } },
+  ]);
+  assert.deepEqual(asking[0].listens, ['spring']);
 
   // The containment check is the one thing here that is a security property
   // rather than a convenience, so it is tested rather than trusted.
