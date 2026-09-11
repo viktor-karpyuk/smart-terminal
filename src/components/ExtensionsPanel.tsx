@@ -208,16 +208,18 @@ function Detail({ row }: { row: ExtensionRow }) {
                     {panel.summary ||
                       (panel.needs === 'repository'
                         ? 'Works on a repository.'
-                        : panel.needs === 'kubernetes'
-                          ? 'Works on a Kubernetes cluster.'
-                          : panel.needs === 'build'
-                            ? 'Works on a Maven or Gradle project.'
+                        : panel.needs === 'folder'
+                          ? 'Works on a folder.'
+                          : panel.needs === 'kubernetes'
+                            ? 'Works on a Kubernetes cluster.'
+                            : panel.needs === 'build'
+                              ? 'Works on a Maven or Gradle project.'
                             : '')}
                   </small>
                 </div>
                 {/* A view that is about a folder is opened from that folder, so
                     it knows which one. Anything else opens from here. */}
-                {panel.needs === 'repository' || panel.needs === 'build' ? (
+                {panel.needs === 'repository' || panel.needs === 'folder' || panel.needs === 'build' ? (
                   <span className="extension-panel-note">from a folder</span>
                 ) : (
                   <button

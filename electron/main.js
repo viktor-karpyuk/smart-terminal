@@ -37,6 +37,7 @@ const git = require('./git');
 const { layout: layoutGraph } = require('./git-graph');
 const kube = require('./kube');
 const helm = require('./helm');
+const spring = require('./spring');
 const buildTools = require('./build-tools');
 
 /**
@@ -180,6 +181,25 @@ const repos = new RepoWatcher({ emit: (root, kind) => send('tree:changed', { roo
  */
 const kubeStreams = new kube.Streams();
 const kubeStreamOwners = new Map();
+
+/**
+ * The Spring Boot applications this app started.
+ *
+ * Owned by the app rather than by a window: closing the tab that started one,
+ * or the window, does not stop it — reopening the panel finds it running with
+ * everything it printed. Quitting the app does stop them all, because a JVM
+ * nobody can see is a port taken for no reason. Every window is told every
+ * change; a panel keeps the runs that are under its own folder.
+ */
+const springRuns = new spring.Runs({
+  onOutput: (payload) => send('spring:output', payload),
+  onState: (payload) => send('spring:state', payload),
+  scratch: path.join(app.getPath('userData'), 'spring-boot'),
+});
+let springConfigs = null;
+/** What each folder was last found to hold, so a start does not walk the folder again. */
+const springProjects = new Map();
+const SPRING_PROJECTS_TTL = 60 * 1000;
 
 /** App session ids whose processes this launch started, so quitting can close their rows. */
 const liveSessions = new Set();
@@ -1231,6 +1251,133 @@ function registerIpc() {
   });
 
   /**
+   * Spring Boot: the applications under a folder, and running them.
+   *
+   * The same door as the others — a table of names — and the same rule: the
+   * panel names an application it was told about and a configuration it filled
+   * in, and the argv is assembled in `spring.js` from named parts. Reading the
+   * actuator is loopback-only and from a fixed list of endpoints.
+   */
+  const configsFile = () => {
+    if (!springConfigs) springConfigs = new spring.Configs(path.join(app.getPath('userData'), 'spring-boot.json'));
+    return springConfigs;
+  };
+  /*
+   * Every call names the folder the panel was opened on, and the renderer —
+   * not the panel — is what puts it there. A run, an application or a
+   * configuration outside that folder is not this panel's to see or touch.
+   */
+  const rootOf = (args) => {
+    const root = String(args?.root ?? '');
+    if (!root || !path.isAbsolute(root)) throw new Error('A folder is needed');
+    return root;
+  };
+  const under = (dir, root) => dir === root || dir.startsWith(`${root}${path.sep}`);
+  const runOr = (id, root) => {
+    const run = springRuns.get(String(id ?? ''));
+    if (!run || !spring.underRoot(run, root)) throw new Error('That run is not known — it may have been forgotten');
+    return run;
+  };
+  /** The applications under a folder, as last found — walked again when that is more than a minute old. */
+  const projectsIn = async (root, { fresh = false } = {}) => {
+    const held = springProjects.get(root);
+    if (!fresh && held && Date.now() - held.at < SPRING_PROJECTS_TTL) return held.value;
+    const value = await spring.projects(root);
+    springProjects.set(root, { at: Date.now(), value });
+    return value;
+  };
+  const SPRING = {
+    projects: async (args = {}) => projectsIn(rootOf(args), { fresh: true }),
+    jdks: () => spring.jdks(),
+    configs: (args = {}) => ({ ok: true, configs: configsFile().forRoot(rootOf(args)) }),
+    saveConfig: (args = {}) => {
+      const root = rootOf(args);
+      const dir = String(args.app ?? '');
+      if (!dir || !under(dir, root)) throw new Error('That application is not under this folder');
+      return { ok: true, config: configsFile().save(dir, args.config ?? {}) };
+    },
+    runs: (args = {}) => ({ ok: true, runs: springRuns.list(rootOf(args)) }),
+    output: (args = {}) => {
+      const run = runOr(args.id, rootOf(args));
+      return { ok: true, ...springRuns.output(run.id) };
+    },
+    start: async (args = {}) => {
+      const root = rootOf(args);
+      /*
+       * The application is what this side found under the folder, looked up by
+       * its dir — never the object the panel sent. A panel is untrusted by
+       * design, and an object it could shape is an executable it could choose.
+       */
+      const dir = String(args.app?.dir ?? '');
+      if (!dir || !under(dir, root)) throw new Error('That application is not under this folder');
+      let application = (await projectsIn(root)).apps.find((candidate) => candidate.dir === dir);
+      if (!application) application = (await projectsIn(root, { fresh: true })).apps.find((candidate) => candidate.dir === dir);
+      if (!application) throw new Error('That application is no longer under this folder');
+      // The JDK is chosen here, from the machine's own list, by the version the
+      // project asks for — or the one the configuration names.
+      const list = (await spring.jdks()).jdks;
+      const config = args.config && typeof args.config === 'object' ? args.config : {};
+      const named = config.jdk ? list.find((candidate) => candidate.home === String(config.jdk)) : null;
+      const chosen = named ?? spring.chooseJdk(list, application.javaVersion);
+      const id = randomUUID();
+      const started = await springRuns.start({ id, root, app: application, config, jdk: chosen, debug: args.debug === true });
+      return { ok: true, run: started };
+    },
+    stop: (args = {}) => springRuns.stop(runOr(args.id, rootOf(args)).id),
+    forget: (args = {}) => {
+      const root = rootOf(args);
+      const run = springRuns.get(String(args.id ?? ''));
+      // Already gone — forgotten from another panel — is the state asked for.
+      if (!run) return { ok: true };
+      if (!spring.underRoot(run, root)) throw new Error('That run is not known — it may have been forgotten');
+      const gone = spring.summary(run);
+      const result = springRuns.forget(run.id);
+      // Every panel drops it, not only the one that asked.
+      if (result.ok) send('spring:state', { ...gone, forgotten: true });
+      return result;
+    },
+    /*
+     * Read on a port the application itself printed, and only while it is up.
+     * A port from the configuration is a number somebody wrote in a file, and
+     * a file in a folder is not a reason to send a request to a port.
+     */
+    readable: (run) => {
+      const s = spring.summary(run);
+      if (s.status !== 'up' || !s.portFromLog) throw new Error('The actuator can be read once the application is up');
+      return s;
+    },
+    actuator: async (args = {}) => {
+      const run = runOr(args.id, rootOf(args));
+      const url = spring.actuatorUrl(SPRING.readable(run), String(args.endpoint ?? ''), args.name ? String(args.name) : '');
+      return spring.fetchJson(url);
+    },
+    setLogLevel: async (args = {}) => {
+      const run = runOr(args.id, rootOf(args));
+      const summary = SPRING.readable(run);
+      const wanted = String(args.level ?? '').toUpperCase();
+      if (wanted !== 'NULL' && !spring.LEVELS.has(wanted)) throw new Error(`"${args.level}" is not a log level`);
+      const url = spring.actuatorUrl(summary, 'loggers', String(args.logger ?? ''));
+      return spring.fetchJson(url, { method: 'POST', body: { configuredLevel: wanted === 'NULL' ? null : wanted } });
+    },
+    brief: (args = {}) => {
+      const run = runOr(args.id, rootOf(args));
+      const held = springRuns.output(run.id);
+      const text = held.lines.map((line) => line.text).join('\n') + (held.rest ? `\n${held.rest}` : '');
+      return spring.brief(run, text);
+    },
+  };
+
+  ipcMain.handle('spring:call', async (_e, { name, args } = {}) => {
+    const handler = name === 'readable' ? null : SPRING[name];
+    if (!handler) return { ok: false, error: `No such Spring Boot action: ${name}` };
+    try {
+      return await handler(args ?? {});
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  });
+
+  /**
    * Helm, which is a different tool answering a different question.
    *
    * Its own channel rather than a corner of the Kubernetes one: a release is
@@ -1666,13 +1813,19 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   else createWindow();
 
   app.on('activate', () => {
+    // Not on the way out: the database is closed and a window would open onto nothing.
+    if (isQuitting) return;
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
 app.on('window-all-closed', () => {
   ptys?.killAll();
-  if (process.platform !== 'darwin') app.quit();
+  // Every window was closed on purpose; there is nobody left to ask.
+  if (process.platform !== 'darwin') {
+    quitConfirmed = true;
+    app.quit();
+  }
 });
 
 /**
@@ -2100,8 +2253,13 @@ function runningIn(windowId = null) {
  * when there is something to lose. The wording says how much, and what survives:
  * the conversations are saved, which is the part people actually worry about.
  */
-async function confirmClosing(parent, { total, claude }, scope) {
-  const sessions = `${total} session${total === 1 ? '' : 's'}`;
+async function confirmClosing(parent, { total, claude, spring: apps = 0 }, scope) {
+  const sessions =
+    total && apps
+      ? `${total} session${total === 1 ? '' : 's'} and ${apps} Spring Boot application${apps === 1 ? '' : 's'}`
+      : apps
+        ? `${apps} Spring Boot application${apps === 1 ? '' : 's'}`
+        : `${total} session${total === 1 ? '' : 's'}`;
   const kept =
     claude > 0
       ? `\n\nThe ${claude === total ? '' : `${claude} `}Claude conversation${claude === 1 ? '' : 's'} ${claude === 1 ? 'is' : 'are'} saved — you can continue ${claude === 1 ? 'it' : 'them'} later from History.`
@@ -2179,7 +2337,17 @@ function retireLegacyWorkspace() {
  * followed log is a process still talking to a cluster on behalf of an app that
  * is gone.
  */
-app.on('will-quit', () => kubeStreams.stopAll());
+/*
+ * The applications are stopped and given a moment to go before the app does.
+ * A quit that returned while the JVMs were still shutting down would leave
+ * them running with nothing on screen to show it.
+ */
+let springStopped = false;
+app.on('will-quit', () => {
+  kubeStreams.stopAll();
+  // Whatever is still going — a run that began after the stop — gets its signal on the way out.
+  if (!springStopped) springRuns.stopAll({ grace: 0 });
+});
 
 /*
  * One hole, stated rather than papered over: a `kill` from outside.
@@ -2195,7 +2363,9 @@ app.on('will-quit', () => kubeStreams.stopAll());
 app.on('before-quit', (event) => {
   if (!quitConfirmed) {
     const running = runningIn();
-    if (running.total) {
+    // A Spring Boot application is running work too: quitting stops it.
+    running.spring = springRuns.liveCount;
+    if (running.total || running.spring) {
       event.preventDefault();
       confirmClosing(BrowserWindow.getFocusedWindow(), running, 'app').then((confirmed) => {
         if (!confirmed) return;
@@ -2207,6 +2377,23 @@ app.on('before-quit', (event) => {
       return;
     }
   }
+
+  /*
+   * The applications first, and the rest of the quit only once they are gone.
+   * Done here, with the database still open and the windows still up, rather
+   * than from `will-quit`: a quit cancelled there and started again would run
+   * this handler a second time against a database already closed.
+   */
+  if (!springStopped && springRuns.liveCount) {
+    event.preventDefault();
+    springRuns.stopAll().then(() => {
+      springStopped = true;
+      setImmediate(() => app.quit());
+    });
+    return;
+  }
+  // A quit that is already under way: nothing here is done twice.
+  if (isQuitting) return;
 
   isQuitting = true;
   // Re-assert every window still on screen as open. Relying on the close handler

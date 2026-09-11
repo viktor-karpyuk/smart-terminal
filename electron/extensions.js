@@ -206,9 +206,14 @@ const PANEL_NEEDS = [
   'repository',
   /** A cluster in kubeconfig. Nothing about the folder, so it opens from anywhere. */
   'kubernetes',
+  /** A folder, any folder: the one a Files tab is on, whether or not it is a repository. */
+  'folder',
   /** A Maven or Gradle project: a folder with a pom.xml or a Gradle build at or above it. */
   'build',
 ];
+
+/** The things the app pushes that a panel may ask to hear about, beyond its own subject. */
+const PANEL_LISTENS = ['spring'];
 
 function panelViews(rows) {
   const panels = [];
@@ -221,6 +226,9 @@ function panelViews(rows) {
         title: String(panel.title ?? panel.id),
         summary: String(panel.summary ?? ''),
         needs: panel.needs ? String(panel.needs) : null,
+        // Only the names the app knows: a panel is told about what it asked
+        // for, and a stream it never asked for is a stream it never gets.
+        listens: Array.isArray(panel.listens) ? panel.listens.map(String).filter((name) => PANEL_LISTENS.includes(name)) : [],
         render: String(panel.render),
         from: row.id,
         dir: row.dir ?? null,
@@ -327,6 +335,7 @@ function withSources(rules) {
 }
 
 module.exports = {
+  PANEL_LISTENS,
   readManifest,
   discover,
   gallery,

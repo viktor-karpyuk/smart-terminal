@@ -1,0 +1,20 @@
+{
+  "id": "spring-boot",
+  "name": "Spring Boot",
+  "version": "1.0.0",
+  "author": "Smart Terminal",
+  "summary": "Run the Spring Boot applications in a folder the way an IDE does: profile, JDK, arguments, console, actuator.",
+  "description": "Every Spring Boot application under the folder, found from the build files — a single Maven or Gradle project, or the runnable modules of a multi-module one, with the libraries left out because starting a library is not a thing. Each one can be started with a profile, a JDK chosen to match what the project asks for, JVM options, program arguments and an environment, and stopped, and started again. The console is in the panel, in colour, and the panel reads it: it says which port the application took, how long it took to start, and — when it did not start — the one paragraph Spring's failure analyzer wrote about why, on top, instead of leaving it four screens up a stack trace. Once the application is up its actuator is here too: health, the request mappings, the beans, the environment, and the loggers, whose level can be changed while it runs. Two buttons make it more than a launcher. Shell opens a real terminal standing in the application's folder with its JDK on the PATH. Ask Claude opens a session that has already been handed how the application was started, where it stands, and the part of the console that explains it. A running application belongs to the app, not to the tab: close the panel and it keeps running, open it again and it is there with everything it printed. Quitting Smart Terminal stops them all.",
+  "contributes": {
+    "panels": [
+      {
+        "id": "spring-boot",
+        "title": "Spring Boot",
+        "summary": "Run, stop and watch the Spring Boot applications in this folder.",
+        "needs": "folder",
+        "listens": ["spring"],
+        "render": "panel.html"
+      }
+    ]
+  }
+}
