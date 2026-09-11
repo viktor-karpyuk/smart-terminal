@@ -261,8 +261,9 @@ async function cachedMainClass(dir, buildFile, options) {
 function classNameOf(text, fileName) {
   const pkg = /^\s*package\s+([\w.]+)\s*;?/m.exec(text);
   const name = fileName.replace(/\.(java|kt)$/, '');
-  // A Kotlin `fun main` file compiles to `<Name>Kt`.
-  const kotlinTopLevel = /\.kt$/.test(fileName) && /^\s*fun\s+main\s*\(/m.test(text) && !/^\s*(?:object|class)\s+\w+/m.test(text);
+  // A Kotlin file with a top-level `fun main` runs as `<File>Kt`, whatever
+  // classes the file also declares — the Initializr template is exactly that.
+  const kotlinTopLevel = /\.kt$/.test(fileName) && /^fun\s+main\s*\(/m.test(text);
   return `${pkg ? `${pkg[1]}.` : ''}${name}${kotlinTopLevel ? 'Kt' : ''}`;
 }
 
@@ -351,13 +352,25 @@ function defaultDocument(text) {
 /** The dotted keys in a .properties file. */
 function flattenProperties(text) {
   const out = {};
-  for (const line of String(text || '').split('\n')) {
+  // A line ending in a lone backslash continues on the next.
+  const joined = String(text || '').replace(/\r\n?/g, '\n').replace(/(?<!\\)\\\n\s*/g, '');
+  for (const line of joined.split('\n')) {
     if (!line.trim() || /^\s*[#!]/.test(line)) continue;
-    const at = line.search(/[=:]/);
+    const at = line.search(/(?<!\\)[=:\s]/);
     if (at < 0) continue;
-    out[line.slice(0, at).trim()] = unplaceholder(line.slice(at + 1).trim());
+    const key = line.slice(0, at).trim().replace(/\\([=:\s])/g, '$1');
+    const value = line.slice(at + 1).replace(/^\s*[=:]?\s*/, '').trim();
+    out[key] = unplaceholder(unescapeProperties(value));
   }
   return out;
+}
+
+/** `\uXXXX`, `\n`, `\t` and `\\`, as java.util.Properties reads them. */
+function unescapeProperties(value) {
+  return String(value).replace(/\\u([0-9a-fA-F]{4})|\\(.)/g, (_m, hex, ch) => {
+    if (hex) return String.fromCharCode(parseInt(hex, 16));
+    return ch === 'n' ? '\n' : ch === 't' ? '\t' : ch === 'r' ? '\r' : ch;
+  });
 }
 
 /** The flat keys of a config file, whichever kind it is. */
@@ -385,6 +398,8 @@ function readConfig(flat) {
     managementPort: managementPort ? Number(managementPort) || null : null,
     contextPath: pick(flat, 'server.servlet.context-path', 'spring.webflux.base-path') || '',
     managementBasePath: pick(flat, 'management.endpoints.web.base-path') || '',
+    /** Applies only when the management server has a port of its own. */
+    managementServerBasePath: pick(flat, 'management.server.base-path') || '',
     activeProfiles: pick(flat, 'spring.profiles.active'),
     applicationName: pick(flat, 'spring.application.name'),
   };
@@ -410,10 +425,12 @@ async function readModuleConfig(moduleDir) {
   } catch {
     /* no resources folder: fine, defaults apply */
   }
-  const base = { port: null, managementPort: null, contextPath: '', managementBasePath: '', activeProfiles: '', applicationName: '' };
+  const base = { port: null, managementPort: null, contextPath: '', managementBasePath: '', managementServerBasePath: '', activeProfiles: '', applicationName: '' };
   const profiles = [];
   const byProfile = {};
-  for (const name of names.sort()) {
+  // YAML first, then properties: at the same location Spring lets .properties win, and a later read here overrides.
+  const ordered = names.sort((a, b) => (/\.properties$/.test(a) ? 1 : 0) - (/\.properties$/.test(b) ? 1 : 0) || a.localeCompare(b));
+  for (const name of ordered) {
     let text;
     try {
       text = await fsp.readFile(path.join(dir, name), 'utf8');
@@ -831,8 +848,12 @@ function parseEnvLines(text) {
     const key = line.slice(0, at).trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
     const value = line.slice(at + 1).trim();
-    const quoted = /^(['"])(.*?)\1\s*(?:#.*)?$/.exec(value);
-    out[key] = quoted ? quoted[2] : value.replace(/\s+#.*$/, '');
+    // Double quotes read `\"`, `\\` and `\n` as a shell would; single quotes read nothing.
+    const double = /^"((?:[^"\\]|\\.)*)"\s*(?:#.*)?$/.exec(value);
+    const single = /^'([^']*)'\s*(?:#.*)?$/.exec(value);
+    if (double) out[key] = double[1].replace(/\\(["\\n$`])/g, (_m, ch) => (ch === 'n' ? '\n' : ch));
+    else if (single) out[key] = single[1];
+    else out[key] = value.replace(/\s+#.*$/, '');
   }
   return out;
 }
@@ -920,6 +941,15 @@ const GRADLE_INIT = `allprojects {
 `;
 const GRADLE_SEP = '\u001f';
 
+/*
+ * One thing to know about stopping a Gradle run: with the daemon on — the
+ * default — the application JVM is a child of the daemon, not of the
+ * `gradlew` this started, so it is not in the group `stop` signals. Stopping
+ * works because the daemon cancels the build when its client goes away and
+ * takes the JVM with it. A JVM the daemon cannot take down would stay; that
+ * has not been seen, but `--no-daemon` would put it in the group at the cost
+ * of a cold Gradle on every start.
+ */
 function plan(app, rawConfig, { jdk = null, debugPort = null, gradleInit = null } = {}) {
   const config = normalizeConfig(rawConfig);
   const steps = [];
@@ -1541,7 +1571,12 @@ function underRoot(run, root) {
 
 function signalGroup(child, signal) {
   try {
-    if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal);
+    if (process.platform === 'win32') {
+      // No process groups: `mvn.cmd` is a script whose `java` is a grandchild, so the whole tree is asked to go.
+      execFile('taskkill', ['/pid', String(child.pid), '/T', signal === 'SIGKILL' ? '/F' : '/T'], { windowsHide: true }, () => {});
+      return;
+    }
+    if (child.pid) process.kill(-child.pid, signal);
     else child.kill(signal);
   } catch {
     try {
@@ -1600,7 +1635,11 @@ function summary(run) {
     scheme: run.scheme,
     contextPath: run.contextPath,
     managementPort: run.managementPort || run.app.managementPort || null,
-    managementBasePath: run.app.managementBasePath || '/actuator',
+    // On its own port the management server has a base path of its own, under which the endpoints' base path sits.
+    managementBasePath:
+      (run.managementPort || run.app.managementPort) && run.app.managementServerBasePath
+        ? `${String(run.app.managementServerBasePath).replace(/\/$/, '')}${run.app.managementBasePath || '/actuator'}`
+        : run.app.managementBasePath || '/actuator',
     actuator: Boolean(run.app.actuator),
     profiles: run.profiles,
     debugPort: run.debugPort ?? null,
@@ -1885,7 +1924,7 @@ function statusWords(s) {
     case 'stopped':
       return 'stopped';
     case 'exited':
-      return `exited with code ${s.code}`;
+      return s.code == null ? 'exited' : `exited with code ${s.code}`;
     default:
       return s.status;
   }
@@ -1929,6 +1968,7 @@ module.exports = {
   flattenProperties,
   flattenConfig,
   readConfig,
+  unescapeProperties,
   profileOf,
   majorOf,
   parseJavaHomeList,

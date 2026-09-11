@@ -256,6 +256,9 @@ electron/
   menu.js         accelerators (defined here so they fire while xterm has focus)
   restore.js      which sessions a window brings back after a restart
   store.js        atomic JSON files under userData
+  extensions.js   what an extension is, and which are installed
+  kube.js         Kubernetes, through kubectl; helm.js for Helm
+  spring.js       Spring Boot applications: found, run, debugged, read
 src/
   state/layout.ts    the split tree: split, drop, prune, resize, collapse
   state/store.ts     zustand store: sessions, layout, settings, pty plumbing

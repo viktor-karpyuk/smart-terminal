@@ -86,7 +86,9 @@ test('a gradle build says whether it is boot, and which java', () => {
 
 test('the main class is the package plus the file, and a Kotlin main file gets Kt', () => {
   assert.equal(spring.classNameOf('package com.ks.erp;\n\n@SpringBootApplication\npublic class KsErpApp {}', 'KsErpApp.java'), 'com.ks.erp.KsErpApp');
-  assert.equal(spring.classNameOf('package com.acme\n\n@SpringBootApplication\nclass App\n\nfun main(args: Array<String>) {}', 'App.kt'), 'com.acme.App');
+  // The Initializr template: a class and a top-level main in one file run as the file's Kt class.
+  assert.equal(spring.classNameOf('package com.acme\n\n@SpringBootApplication\nclass App\n\nfun main(args: Array<String>) {}', 'App.kt'), 'com.acme.AppKt');
+  assert.equal(spring.classNameOf('package com.acme\n\n@SpringBootApplication\nobject App { @JvmStatic fun main(args: Array<String>) {} }', 'App.kt'), 'com.acme.App');
   assert.equal(spring.classNameOf('package com.acme\n\nfun main(args: Array<String>) { runApplication<App>() }', 'Main.kt'), 'com.acme.MainKt');
   assert.equal(spring.classNameOf('public class Bare {}', 'Bare.java'), 'Bare');
 });
@@ -137,6 +139,7 @@ server:
     managementPort: 9090,
     contextPath: '/api',
     managementBasePath: '/manage',
+    managementServerBasePath: '',
     activeProfiles: 'local',
     applicationName: 'ks-erp',
   });
@@ -186,6 +189,11 @@ test('gradle with a version catalog, a jvmToolchain and the old mainClassName is
 
 test('a .properties file is read the same way, and a placeholder with no default is nothing', () => {
   const flat = spring.flattenProperties('server.port=3000\n# a comment\nspring.application.name=krello\nserver.servlet.context-path=${CTX}\n');
+  const odd = spring.flattenProperties('spring.profiles.active=dev,\\\n    local\nname value\ngreeting=caf\\u00e9\\tx\nspaced\\ key=1\n');
+  assert.equal(odd['spring.profiles.active'], 'dev,local', 'a continuation line');
+  assert.equal(odd.name, 'value', 'a space separator');
+  assert.equal(odd.greeting, 'café\tx', 'unicode and tab escapes');
+  assert.equal(odd['spaced key'], '1', 'an escaped space in a key');
   assert.equal(spring.readConfig(flat).port, 3000);
   assert.equal(spring.readConfig(flat).applicationName, 'krello');
   assert.equal(spring.readConfig(flat).contextPath, '');
@@ -205,6 +213,11 @@ test('a module is read from its folder: profiles from the file names, port from 
   const read = await spring.readModuleConfig(dir);
   assert.equal(read.port, 8222);
   assert.deepEqual(read.profiles, ['k8s', 'local']);
+  // .properties beside .yml: the properties file wins, as it does in Spring.
+  fs.writeFileSync(path.join(resources, 'application.properties'), 'server.port=7000\nmanagement.server.port=9090\nmanagement.server.base-path=/mgmt\n');
+  const both = await spring.readModuleConfig(dir);
+  assert.equal(both.port, 7000);
+  assert.equal(both.managementServerBasePath, '/mgmt');
   assert.equal(read.byProfile.k8s.port, 8080);
   assert.equal(read.byProfile.local.port, undefined);
 });
@@ -423,11 +436,13 @@ test('the pieces of a configuration are read leniently', () => {
   assert.deepEqual(spring.splitArgs(`-Dfoo="a b" --x='c d' e\\ f "g \\"h\\" i"`), ['-Dfoo=a b', '--x=c d', 'e f', 'g "h" i']);
   assert.deepEqual(spring.splitArgs(''), []);
   assert.equal(spring.profileList(' local,  dev prod '), 'local,dev,prod');
-  assert.deepEqual(spring.parseEnvLines('# infra\nexport DB_URL=jdbc:x\nDB_PASSWORD="p a ss"\nBAD LINE\nEMPTY=\nQUOTED=\'x\'  # trailing'), {
+  assert.deepEqual(spring.parseEnvLines('# infra\nexport DB_URL=jdbc:x\nDB_PASSWORD="p a ss"\nBAD LINE\nEMPTY=\nQUOTED=\'x\'  # trailing\nESC="a \\"b\\" c"\nSINGLE=\'no \\"escapes\'\n'), {
     DB_URL: 'jdbc:x',
     DB_PASSWORD: 'p a ss',
     EMPTY: '',
     QUOTED: 'x',
+    ESC: 'a "b" c',
+    SINGLE: 'no \\"escapes',
   });
   const normal = spring.normalizeConfig({ profiles: ' local ', mode: 'weird', build: 'yes', port: '8223', jvmArgs: null, debugPort: 'x' });
   assert.equal(normal.debug, false);
@@ -852,6 +867,12 @@ test('the briefing says how it was started and where it stands, and quotes the f
   assert.match(debugged, /jdb -attach 5005 -sourcepath \/w\/app\/src\/main\/java/);
   assert.match(spring.brief({ ...run, status: 'up', reason: '', seconds: 3.2 }, 'INFO fine', { question: 'why slow?' }).text, /why slow\?$/);
   assert.equal(spring.statusWords({ status: 'up', port: 80, seconds: 2 }), 'up on port 80, started in 2s');
+  assert.equal(spring.statusWords({ status: 'exited', code: null }), 'exited');
+  assert.equal(spring.statusWords({ status: 'exited', code: 0 }), 'exited with code 0');
+  // A management server on its own port has a base path of its own, under which the endpoints sit.
+  const managed = spring.summary({ ...run, app: { ...run.app, managementPort: 9090, managementServerBasePath: '/mgmt', managementBasePath: '/actuator' }, managementPort: 9090 });
+  assert.equal(managed.managementBasePath, '/mgmt/actuator');
+  assert.equal(spring.actuatorUrl(managed, 'health'), 'http://127.0.0.1:9090/mgmt/actuator/health');
 });
 
 test('configurations are kept per application folder, under a root', () => {

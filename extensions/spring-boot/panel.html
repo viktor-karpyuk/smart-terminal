@@ -920,18 +920,36 @@
     if (!data) return '';
     var html = '<div class="health">';
     html += healthRow('', data, true);
-    var parts = data.components || data.details || {};
+    var parts = data.components || {};
+    // v2: the components sit in `details`, beside plain values that are not components.
+    if (!data.components && data.details) {
+      var keys = Object.keys(data.details);
+      for (var k = 0; k < keys.length; k += 1) if (isHealth(data.details[keys[k]])) parts[keys[k]] = data.details[keys[k]];
+    }
     var names = Object.keys(parts).sort();
     for (var i = 0; i < names.length; i += 1) html += healthRow(names[i], parts[names[i]], false);
     return html + '</div>';
   }
 
+  /** Whether a value under `details` is itself a health, as the v2 format nests them. */
+  function isHealth(value) {
+    return value && typeof value === 'object' && typeof value.status === 'string';
+  }
+
   function healthRow(name, part, top) {
     var status = part && part.status ? String(part.status) : '?';
     var cls = status === 'UP' ? 'up' : status === 'DOWN' || status === 'OUT_OF_SERVICE' ? 'bad' : 'off';
-    var details = part && part.details ? JSON.stringify(part.details, null, 1).replace(/[{}"]/g, '').replace(/\n\s*/g, '\n').trim() : '';
-    if (!top && part && part.components) {
-      var inner = Object.keys(part.components).map(function (k) { return k + ': ' + (part.components[k].status || '?'); }).join('\n');
+    // v3 nests under `components`; v2 nests under `details` beside the plain values. Both are listed as what they are.
+    var nested = (part && part.components) || {};
+    var plain = {};
+    var keys = part && part.details ? Object.keys(part.details) : [];
+    for (var i = 0; i < keys.length; i += 1) {
+      if (isHealth(part.details[keys[i]])) nested[keys[i]] = part.details[keys[i]];
+      else plain[keys[i]] = part.details[keys[i]];
+    }
+    var details = Object.keys(plain).length ? JSON.stringify(plain, null, 1).replace(/[{}"]/g, '').replace(/\n\s*/g, '\n').trim() : '';
+    if (!top && Object.keys(nested).length) {
+      var inner = Object.keys(nested).map(function (k) { return k + ': ' + (nested[k].status || '?'); }).join('\n');
       details = inner + (details ? '\n' + details : '');
     }
     return '<div class="h' + (top ? ' top' : '') + '"><span class="dot ' + cls + '"></span><span>' + esc(top ? status : name + ' · ' + status) + '</span><span class="d">' + esc(details) + '</span></div>';
@@ -1004,6 +1022,18 @@
     var active = (data.activeProfiles || []).join(', ');
     html += '<div class="faint" style="padding:0 8px 8px">active profiles: ' + esc(active || 'none') + '</div>';
     var sources = data.propertySources || [];
+    // Boot 3 hides every value unless told otherwise; a page of asterisks should say why.
+    var shown = 0, hidden = 0;
+    for (var s0 = 0; s0 < sources.length; s0 += 1) {
+      var ps = sources[s0].properties || {};
+      for (var key0 in ps) {
+        if (!Object.prototype.hasOwnProperty.call(ps, key0)) continue;
+        if (ps[key0] && ps[key0].value === '******') hidden += 1; else shown += 1;
+      }
+    }
+    if (hidden && !shown) {
+      html += '<div class="note">Every value is hidden. Set <code>management.endpoint.env.show-values=always</code> (or <code>when-authorized</code>) to see them here.</div>';
+    }
     for (var i = 0; i < sources.length; i += 1) {
       var props = sources[i].properties || {};
       var keys = Object.keys(props).sort();
