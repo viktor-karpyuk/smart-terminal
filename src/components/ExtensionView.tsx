@@ -3,6 +3,7 @@ import { useStore } from '../state/store';
 import { leafOfTab, parentOf } from '../state/layout';
 import type { ExtensionPanelView } from '../global';
 import {
+  buildCommand,
   execCommand,
   needsConsent,
   panelDocument,
@@ -68,6 +69,15 @@ export function ExtensionView({ panelId, showing = true }: { panelId: string; sh
         <p>
           <strong>{view.title}</strong> needs a {view.needs === 'folder' ? 'folder' : 'repository'}. Open a
           folder in a Files tab and start it from there.
+        </p>
+      </div>
+    );
+  } else if (view.needs === 'build' && !root) {
+    return (
+      <div className="extension-view is-empty">
+        <p>
+          <strong>{view.title}</strong> needs a Maven or Gradle project. Open one in a Files tab and
+          start it from there.
         </p>
       </div>
     );
@@ -291,11 +301,17 @@ function Frame({
           if (!root) return reply(false, null, 'this panel has no folder');
           return reply(true, await window.api.spring.call(name.slice(7), { ...args, root }), undefined);
         }
+        if (channel === 'build') {
+          if (!root) return reply(false, null, 'this panel has no project');
+          // The root is the panel's, whatever the panel says: a build reader
+          // pointed at a folder of the panel's choosing would read any folder.
+          return reply(true, await window.api.build.call(name.slice(6), { ...args, root }), undefined);
+        }
         if (channel === 'kube-stream') {
           return reply(true, await stream(name.slice(5), args), undefined);
         }
         if (name.startsWith('spring.')) return reply(true, await springAction(name.slice(7), args), undefined);
-        return reply(true, await appAction(name.slice(5), args), undefined);
+        return reply(true, await appAction(name, args), undefined);
       } catch (error) {
         reply(false, null, String((error as Error)?.message ?? error));
       }
@@ -384,12 +400,41 @@ function Frame({
       return { ok: true, sessionId, delivered: handed.delivered ?? false };
     }
 
-    async function appAction(verb: string, args: Record<string, unknown>) {
+    async function appAction(name: string, args: Record<string, unknown>) {
+      // `kube.shell`, `build.run`: the part after the subsystem is the verb.
+      const verb = name.slice(name.indexOf('.') + 1);
       const where = {
         context: args.context ? String(args.context) : undefined,
         namespace: args.namespace ? String(args.namespace) : undefined,
       };
       const store = useStore.getState();
+
+      /*
+       * A build goal, in a real terminal under the panel.
+       *
+       * The project root is the panel's, not the message's — the panel was
+       * opened on it, and running `mvn deploy` in some other directory is not
+       * a thing a panel gets to ask for. Everything else it names — goals,
+       * profiles, the module — goes through `buildCommand`, which refuses a
+       * word a shell would read as anything but a word.
+       */
+      if (name === 'build.run') {
+        if (!root) return { ok: false, error: 'this panel has no project' };
+        const run = buildCommand({
+          tool: args.tool === 'gradle' ? 'gradle' : 'maven',
+          root,
+          wrapper: Boolean(args.wrapper),
+          dir: args.dir ? String(args.dir) : undefined,
+          goals: Array.isArray(args.goals) ? args.goals.map(String) : [],
+          profiles: Array.isArray(args.profiles) ? args.profiles.map(String) : [],
+          skipTests: Boolean(args.skipTests),
+          offline: Boolean(args.offline),
+          extra: Array.isArray(args.extra) ? args.extra.map(String) : [],
+        });
+        const sessionId = await store.openShellNear(panelId, run.title, run.command, { ...below(panelId), cwd: run.cwd });
+        if (!sessionId) return { ok: false, error: 'the app could not open a terminal' };
+        return { ok: true, sessionId, command: run.command, cwd: run.cwd };
+      }
 
       if (verb === 'shell' || verb === 'terminal') {
         const line =

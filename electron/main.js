@@ -38,6 +38,7 @@ const { layout: layoutGraph } = require('./git-graph');
 const kube = require('./kube');
 const helm = require('./helm');
 const spring = require('./spring');
+const buildTools = require('./build-tools');
 
 /**
  * What this build is. Written at package time, so the answer comes from the app
@@ -1375,6 +1376,31 @@ function registerIpc() {
   ipcMain.handle('helm:call', async (_e, { name, args } = {}) => {
     const handler = HELM[name];
     if (!handler) return { ok: false, error: `No such Helm action: ${name}` };
+    try {
+      return await handler(args ?? {});
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  });
+
+  /**
+   * Maven and Gradle, read rather than run.
+   *
+   * Reading only. Nothing here runs a build: a build runs in a real terminal
+   * the app opens under the panel, from a command line the app writes. The
+   * one thing that does spawn a process is asking Gradle what its tasks are,
+   * which is the only way to know, and is cached until a build file changes.
+   */
+  const BUILD = {
+    root: (args) => buildTools.root(args),
+    project: (args) => buildTools.project(args),
+    tasks: (args) => buildTools.gradleTasks(String(args?.root ?? ''), { force: Boolean(args?.force) }),
+    dependencies: (args) => buildTools.gradleDependencies(String(args?.root ?? ''), args),
+  };
+
+  ipcMain.handle('build:call', async (_e, { name, args } = {}) => {
+    const handler = BUILD[name];
+    if (!handler) return { ok: false, error: `No such build action: ${name}` };
     try {
       return await handler(args ?? {});
     } catch (error) {

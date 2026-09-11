@@ -364,7 +364,7 @@ interface State {
     nearPanelId: string | null,
     title: string,
     command: string,
-    where?: { leafId?: string; side?: DropSide },
+    where?: { leafId?: string; side?: DropSide; cwd?: string },
   ): Promise<string | null>;
   /** The latest reading for each session, kept current by the monitor. */
   analysisBySession: Record<string, SessionAnalysis>;
@@ -447,6 +447,8 @@ interface State {
   setGitView(panelId: string, view: GitView): void;
   patchPanel(panelId: string, patch: Partial<FilePanel>): void;
   refreshRepo(root: string, what?: 'status' | 'graph' | 'refs' | 'all'): Promise<void>;
+  /** Point a folder at the repository it is in, and keep its status current. */
+  followFolderGit(panelId: string): Promise<void>;
   gitDo(root: string, name: string, args?: unknown, label?: string): Promise<GitResult>;
   focusPanel(leafId: string, panelId: string): void;
   loadDir(path: string): Promise<void>;
@@ -1004,6 +1006,7 @@ export const useStore = create<State>((set, get) => ({
       if (!panel) continue;
       if (panel.gitRoot) get().refreshRepo(panel.gitRoot, 'all');
       if (panel.root) followTree(panel.id, panel.root);
+      if (panel.root) void get().followFolderGit(panel.id).catch(() => {});
       for (const dir of panel.expanded) get().loadDir(dir);
       if (panel.active) get().openFile(panel.id, panel.active);
       for (const file of panel.open) if (file !== panel.active) get().openFile(panel.id, file);
@@ -1695,6 +1698,7 @@ export const useStore = create<State>((set, get) => ({
     if (root) {
       get().loadDir(root);
       followTree(panelId, root);
+      void get().followFolderGit(panelId).catch(() => {});
     }
     schedulePersist(get);
     return panelId;
@@ -1788,6 +1792,7 @@ export const useStore = create<State>((set, get) => ({
     const shell = asFilePanel(panel)?.terminalId;
     if (shell) get().closeSession(shell);
     followTree(panelId, null);
+    followTree(`${panelId}:git`, null);
     // Its buffers are not closed with it: another panel may be showing the same
     // file, and an unsaved edit must never be discarded by closing a view of it.
     set((prev) => {
@@ -1812,6 +1817,45 @@ export const useStore = create<State>((set, get) => ({
   focusPanel(leafId, panelId) {
     set((state) => ({ layout: setActiveTab(state.layout, leafId, panelId), activeLeafId: leafId }));
     schedulePersist(get);
+  },
+
+  /**
+   * Find the repository a folder is in, and start following it.
+   *
+   * Done when the folder opens rather than when Git does. The tab is the thing
+   * that has to say there is something to commit, and it has to be right before
+   * anybody has clicked anything — a badge that only appears once you have
+   * already gone looking is a badge that never told you anything.
+   *
+   * It costs one `rev-parse` per folder, once, and a status read the repository
+   * watcher then keeps current.
+   */
+  async followFolderGit(panelId) {
+    const panel = filesPanel(get(), panelId);
+    if (!panel?.root) return;
+
+    let gitRoot = panel.gitRoot;
+    if (!gitRoot) {
+      const found = await window.api.git.call('root', panel.root);
+      gitRoot = typeof found?.value === 'string' ? found.value : null;
+      // Still here? The folder may have been closed or pointed somewhere else
+      // while `rev-parse` was running, and answering for the old one would be
+      // worse than not answering.
+      const now = filesPanel(get(), panelId);
+      if (!now || now.root !== panel.root) return;
+      get().patchPanel(panelId, { gitRoot });
+    }
+    if (!gitRoot) return;
+
+    /*
+     * The folder's own tree is already watched, and that is not enough: a commit
+     * made in a terminal writes to `.git` and touches nothing under the folder
+     * at all. When the folder *is* the repository the one watcher covers both;
+     * when it is a directory inside one, the repository gets its own — under a
+     * key of its own, so closing the panel releases exactly the two it took.
+     */
+    followTree(`${panelId}:git`, gitRoot === panel.root ? null : gitRoot);
+    get().refreshRepo(gitRoot, 'status');
   },
 
   /**
@@ -1990,6 +2034,9 @@ export const useStore = create<State>((set, get) => ({
     });
     get().loadDir(root);
     followTree(panelId, root);
+    // A different folder is a different repository, or none.
+    get().patchPanel(panelId, { gitRoot: null });
+    void get().followFolderGit(panelId).catch(() => {});
     schedulePersist(get);
   },
 
@@ -2822,6 +2869,8 @@ export const useStore = create<State>((set, get) => ({
     const mine = nearPanelId ? leafOfTab(layout, nearPanelId) : null;
     const place = where ?? (mine ? { leafId: mine.id, side: 'bottom' as const } : {});
 
+    // Started where the caller says, when it says: a build runs in its module,
+    // and a shell that starts there is one the person can keep working in.
     const sessionId = await get().newSession({ kind: 'shell', title, ...place });
     if (!sessionId) return null;
     /*
@@ -2865,7 +2914,14 @@ export const useStore = create<State>((set, get) => ({
       viewId,
       // A tab per cluster wants the cluster's name on it. "Kubernetes" three
       // times over says nothing about which three.
-      title: view?.needs === 'kubernetes' && root ? shortContext(root) : (view?.title ?? viewId),
+      // A build tab, likewise, wants the project's name: two projects open
+      // are two tabs, and "Maven" twice says nothing.
+      title:
+        view?.needs === 'kubernetes' && root
+          ? shortContext(root)
+          : view?.needs === 'build' && root
+            ? root.slice(root.lastIndexOf('/') + 1) || root
+            : (view?.title ?? viewId),
       root,
     };
     set((prev) => {

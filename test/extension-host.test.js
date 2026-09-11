@@ -216,3 +216,75 @@ test('the debugger terminal is jdb attached to the port the app chose, in the fo
   assert.throws(() => H.jdbCommand({ dir: '/w/app', port: Number('5005; ls') }), /not a port/);
   assert.throws(() => H.jdbCommand({ dir: '/w/app', port: 0 }), /not a port/);
 });
+
+/*
+ * Maven and Gradle. Reading is free; the one thing that is not a read opens a
+ * terminal, and the command in it is written here from named parts.
+ */
+test('the build verbs route to the reader, and run goes to the app', () => {
+  assert.equal(H.route('build.root'), 'build');
+  assert.equal(H.route('build.project'), 'build');
+  assert.equal(H.route('build.tasks'), 'build');
+  assert.equal(H.route('build.dependencies'), 'build');
+  assert.equal(H.route('build.run'), 'app');
+  assert.equal(H.route('build.exec'), null, 'there is no verb that runs a line of the panel’s choosing');
+  assert.equal(H.route('build.write'), null, 'a build panel changes nothing on disk');
+  assert.equal(H.route('build.'), null);
+});
+
+test('buildCommand writes the Maven line in the module, with the wrapper when there is one', () => {
+  const run = H.buildCommand({
+    tool: 'maven',
+    root: '/p/shop',
+    wrapper: true,
+    dir: '/p/shop/core',
+    goals: ['clean', 'install'],
+    profiles: ['dev', 'fast'],
+    skipTests: true,
+    offline: true,
+    extra: ['-Dtest=Foo*', '-X'],
+  });
+  assert.equal(run.command, "'/p/shop/mvnw' -o -Pdev,fast clean install -DskipTests '-Dtest=Foo*' -X");
+  assert.equal(run.cwd, '/p/shop/core', 'in the module, the way IntelliJ runs it');
+  assert.equal(run.title, 'mvn clean install');
+
+  const plain = H.buildCommand({ tool: 'maven', root: '/p/shop', goals: ['compiler:compile'] });
+  assert.equal(plain.command, 'mvn compiler:compile');
+  assert.equal(plain.cwd, '/p/shop');
+});
+
+test('buildCommand writes the Gradle line at the root, with task paths as given', () => {
+  const run = H.buildCommand({
+    tool: 'gradle',
+    root: '/p/shop',
+    wrapper: true,
+    goals: [':app:build'],
+    skipTests: true,
+    offline: true,
+  });
+  assert.equal(run.command, './gradlew --offline :app:build -x test');
+  assert.equal(run.cwd, '/p/shop');
+  assert.equal(run.title, 'gradle build');
+  assert.equal(H.buildCommand({ tool: 'gradle', root: '/p/shop', goals: ['test'] }).command, 'gradle test');
+});
+
+test('buildCommand refuses a word a shell would read as anything else, and a module outside the project', () => {
+  assert.throws(() => H.buildCommand({ tool: 'maven', root: '/p', goals: ["install'; rm -rf ~"] }), /quote/);
+  assert.throws(() => H.buildCommand({ tool: 'maven', root: '/p', goals: [] }), /Nothing to run/);
+  assert.throws(() => H.buildCommand({ tool: 'maven', root: '/p', dir: '/etc', goals: ['install'] }), /not inside/);
+  assert.throws(() => H.buildCommand({ tool: 'maven', root: '/p', dir: '/pwned', goals: ['install'] }), /not inside/);
+  // A space or a dollar is quoted, not refused: `-Dexec.args="a b"` is a real thing to type.
+  const spaced = H.buildCommand({ tool: 'maven', root: '/p', goals: ['exec:java'], extra: ['-Dexec.args=a b'] });
+  assert.equal(spaced.command, "mvn exec:java '-Dexec.args=a b'");
+});
+
+test('deploying and publishing stop to ask; everything else in a build runs', () => {
+  assert.match(H.needsConsent('build.run', { goals: ['clean', 'deploy'] }), /publishes the artifact/);
+  assert.match(H.needsConsent('build.run', { goals: ['release:perform'] }), /publishes/);
+  assert.match(H.needsConsent('build.run', { goals: [':lib:publish'] }), /publishes/);
+  assert.match(H.needsConsent('build.run', { goals: ['publishAllPublicationsToGitHubRepository'] }), /publishes/);
+  assert.equal(H.needsConsent('build.run', { goals: ['publishToMavenLocal'] }), null, 'local is local');
+  assert.equal(H.needsConsent('build.run', { goals: ['clean', 'install'] }), null);
+  assert.equal(H.needsConsent('build.run', { goals: ['spring-boot:run'] }), null);
+  assert.equal(H.needsConsent('build.project', {}), null);
+});

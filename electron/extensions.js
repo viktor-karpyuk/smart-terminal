@@ -208,6 +208,8 @@ const PANEL_NEEDS = [
   'kubernetes',
   /** A folder, any folder: the one a Files tab is on, whether or not it is a repository. */
   'folder',
+  /** A Maven or Gradle project: a folder with a pom.xml or a Gradle build at or above it. */
+  'build',
 ];
 
 /** The things the app pushes that a panel may ask to hear about, beyond its own subject. */
