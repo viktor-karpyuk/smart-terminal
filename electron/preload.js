@@ -20,6 +20,25 @@ contextBridge.exposeInMainWorld('api', {
   reopenWindow: () => ipcRenderer.send('window:reopen'),
   version: () => ipcRenderer.invoke('app:version'),
 
+  /**
+   * Which version is out there, and taking it.
+   *
+   * Every call answers with the whole state rather than with what it did, and
+   * the same state arrives on `onState` whenever anything moves it — a download
+   * has progress, and progress is not something a reply can carry.
+   */
+  updates: {
+    state: () => ipcRenderer.invoke('updates:state'),
+    check: (force = false) => ipcRenderer.invoke('updates:check', { force }),
+    download: () => ipcRenderer.invoke('updates:download'),
+    install: () => ipcRenderer.invoke('updates:install'),
+    skip: () => ipcRenderer.invoke('updates:skip'),
+    configure: (options) => ipcRenderer.invoke('updates:configure', options),
+    cancel: () => ipcRenderer.send('updates:cancel'),
+    openLog: () => ipcRenderer.send('updates:open-log'),
+    onState: (handler) => on('updates:state', handler),
+  },
+
   pty: {
     create: (options) => ipcRenderer.invoke('pty:create', options),
     write: (id, data) => ipcRenderer.send('pty:write', { id, data }),

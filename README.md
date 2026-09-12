@@ -229,6 +229,33 @@ build line. The same details are in the macOS About panel. Each `npm run dist` s
 `electron/build-info.json` with the version, an incrementing build number and a timestamp,
 so two builds of the same version are still tellable apart.
 
+## Updates
+
+The app knows which version it is and asks GitHub which ones exist. When there is a newer
+one the sidebar footer says so, quietly — an update is never urgent enough to take the
+screen away from a session — and **Smart Terminal → Check for Updates…** opens the panel
+with the release notes in it.
+
+Taking the update downloads the file for this machine, checks it against the SHA-256 GitHub
+recorded for it, and replaces the installed app:
+
+- **macOS** — the disk image is mounted, the app is copied in *beside* the installed one and
+  moved over it in a single step, the quarantine flag is cleared, and it relaunches. A
+  failure halfway leaves a working app rather than none.
+- **Linux, AppImage** — the one file is replaced and relaunched.
+- **Linux, `.deb`** — the package manager owns it, so the download is verified and handed
+  over rather than installed.
+
+Nothing is replaced while the app is running: the swap is done by a small script that waits
+for this process to exit. The install therefore *is* the quit, which means the usual
+confirmation appears when sessions are live — and keeping them cancels the update too. The
+script gives up after five minutes and touches nothing.
+
+Auto-checking, pre-releases, and skipping a version are all in the same panel. A skipped
+version stays skipped until something newer than it is published.
+
+The checks are unauthenticated GETs against the public releases API; nothing is sent.
+
 ## Persistence
 
 `~/Library/Application Support/Smart Terminal/` holds `profiles.json`, `workspace.json`
@@ -257,6 +284,7 @@ electron/
   restore.js      which sessions a window brings back after a restart
   store.js        atomic JSON files under userData
   extensions.js   what an extension is, and which are installed
+  updates.js      which version is published, and replacing this one with it
   kube.js         Kubernetes, through kubectl; helm.js for Helm
   spring.js       Spring Boot applications: found, run, debugged, read
 src/
@@ -280,6 +308,28 @@ and notarises:
 ```bash
 APPLE_TEAM_ID=XXXXXXXXXX APPLE_ID=you@example.com \
   APPLE_APP_SPECIFIC_PASSWORD=abcd-efgh-ijkl-mnop npm run dist
+```
+
+`npm run dist` builds all three packages — DMG, AppImage and `.deb` — from one stamp, so a
+release is one build and not three that happen to share a version. Linux is built inside a
+container, since `node-pty` is native and a Mac cannot compile a Linux binary.
+
+Then publish it, which is what makes running copies aware of it:
+
+```bash
+npm run release          # tags, uploads all three, publishes; --draft and --pre too
+```
+
+A version that is tagged but never released is a version nobody is offered — the app reads
+the releases API, not the tags. `npm run release` refuses to publish a partial set for the
+same reason: a release with only the DMG leaves every Linux copy with an update it cannot
+take.
+
+To rehearse the whole sequence — offer, download, verify, swap — without cutting a release,
+start the app claiming to be older than it is:
+
+```bash
+SMART_TERMINAL_UPDATE_AS_VERSION=0.1.0 npm start
 ```
 
 ## Working on it

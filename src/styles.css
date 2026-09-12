@@ -754,6 +754,108 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .build-line:hover { opacity: 0.85; }
 .build-line em { font-style: normal; }
 
+/*
+ * A newer version, above the build line and in the same breath as it.
+ *
+ * Deliberately quiet. An update is never the most important thing on this
+ * screen — a session mid-task always is — so this reads at a glance and is
+ * ignorable for as long as somebody wants to ignore it.
+ */
+.build-update {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 4px 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font-size: 10.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.build-update:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.build-update-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.build-update + .build-line { margin-top: 6px; border-top: 0; }
+
+/* ------------------------------------------------------------------ updates */
+
+.update-body { display: grid; gap: 16px; }
+.form-section h3.update-headline {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 4px;
+  /* A sentence, not a section label — the surrounding rule sets it in small
+     caps, which is right for "APPEARANCE" and shouting for this. */
+  font-size: 13.5px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--text);
+}
+.form-section h3.update-headline.is-error { color: var(--danger); }
+.update-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.update-running { margin: 0 0 10px; font-size: 11.5px; color: var(--text-dim); }
+.update-quiet { margin: 8px 0 0; font-size: 11.5px; color: var(--text-faint); line-height: 1.5; }
+.update-error {
+  margin: 0 0 10px;
+  padding: 7px 9px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.update-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.update-progress { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.update-progress .meter { flex: 1; }
+
+/*
+ * The notes, given room to be read. They are the only part of this panel that
+ * is prose, and the decision they inform — replace the app now, or later — is
+ * worth the scrolling.
+ */
+.update-notes { max-height: 320px; overflow-y: auto; font-size: 12px; line-height: 1.6; }
+.update-notes h3 { margin: 0 0 8px; }
+.update-notes h4 { margin: 14px 0 4px; font-size: 12.5px; }
+.update-notes h5 { margin: 12px 0 4px; font-size: 12px; color: var(--text-dim); }
+.update-notes p { margin: 0 0 8px; }
+.update-notes ul,
+.update-notes ol { margin: 0 0 8px; padding-left: 18px; }
+.update-notes li { margin-bottom: 4px; }
+.update-notes code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-input);
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+.update-notes pre {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  background: var(--bg-input);
+  overflow-x: auto;
+  font-size: 11px;
+}
+.update-notes a { color: var(--accent); }
+.update-settings { display: grid; gap: 8px; }
+
 /* What is about to be closed, when it is more than one thing. */
 .confirm-list {
   margin: 10px 0 0;

@@ -39,6 +39,7 @@ const kube = require('./kube');
 const helm = require('./helm');
 const spring = require('./spring');
 const buildTools = require('./build-tools');
+const { Updates, repoSlug } = require('./updates');
 
 /**
  * What this build is. Written at package time, so the answer comes from the app
@@ -58,6 +59,13 @@ const buildInfo = (() => {
     };
   }
 })();
+
+/**
+ * Which version is out there, and taking it.
+ *
+ * Created once the app is ready, because it needs `net` and the userData path.
+ */
+let updates = null;
 
 /**
  * A scheme of its own for the views extensions bring.
@@ -1621,6 +1629,22 @@ function registerIpc() {
     createWindow(found.id, found.bounds);
   });
   ipcMain.handle('app:version', () => buildInfo);
+
+  /*
+   * Updates. Every one of these answers with the whole state rather than with
+   * the result of the one thing it did, so the panel never has to reconcile a
+   * reply against a broadcast that arrived first.
+   */
+  ipcMain.handle('updates:state', () => updates?.snapshot() ?? null);
+  ipcMain.handle('updates:check', (_e, options) => updates?.check(options ?? {}) ?? null);
+  ipcMain.handle('updates:download', () => updates?.download() ?? null);
+  ipcMain.handle('updates:install', () => updates?.install() ?? null);
+  ipcMain.handle('updates:skip', () => updates?.skip() ?? null);
+  ipcMain.handle('updates:configure', (_e, options) => updates?.configure(options ?? {}) ?? null);
+  ipcMain.on('updates:cancel', () => updates?.cancel());
+  ipcMain.on('updates:open-log', () => {
+    if (updates) shell.openPath(updates.logPath());
+  });
   ipcMain.handle('system:homedir', () => os.homedir());
   ipcMain.handle('system:paths', () => ({ home: os.homedir(), accountsRoot: accountsRoot() }));
   ipcMain.handle('system:pick-directory', async (event, startIn) => {
@@ -1800,6 +1824,34 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   // Saved conversations whose session row is gone are dead weight from a crash.
   const orphans = context.sweepOrphans(db.allSessionIds());
   if (orphans) console.log(`[db] removed ${orphans} orphaned conversation copies`);
+
+  /*
+   * What is published, against what is running.
+   *
+   * The version it compares against can be overridden from the environment,
+   * which is the only way to rehearse the whole sequence — offer, download,
+   * verify, swap — without cutting a release first. It is read once, here, and
+   * nothing else in the app knows about it.
+   */
+  updates = new Updates({
+    current: {
+      version: process.env.SMART_TERMINAL_UPDATE_AS_VERSION || buildInfo.version,
+      build: buildInfo.build ?? null,
+    },
+    slug: process.env.SMART_TERMINAL_UPDATE_REPO || repoSlug(require('../package.json').repository?.url),
+    dir: path.join(app.getPath('userData'), 'updates'),
+    electron: { app, net, shell },
+    settings: new JsonStore('updates.json', { auto: true, skipped: null, prereleases: false, checkedAt: null }),
+  });
+  updates.on('state', (state) => send('updates:state', state));
+  /*
+   * The install is the quit. The script is already running and waiting on this
+   * process, so `app.quit()` is what lets it start — and the confirmation a
+   * quit puts up when sessions are live is the confirmation this needs too,
+   * rather than a second one of its own.
+   */
+  updates.on('quit-for-install', () => app.quit());
+  updates.start();
 
   registerIpc();
   buildMenu(sendToFocused, () => createWindow(), () => {
@@ -2372,7 +2424,13 @@ app.on('before-quit', (event) => {
     if (running.total || running.spring) {
       event.preventDefault();
       confirmClosing(BrowserWindow.getFocusedWindow(), running, 'app').then((confirmed) => {
-        if (!confirmed) return;
+        if (!confirmed) {
+          // An install asked for this quit and the quit was refused, so the
+          // install is not happening. The script waiting outside works that out
+          // for itself and leaves; the panel has to be told.
+          updates?.quitCancelled();
+          return;
+        }
         quitConfirmed = true;
         // Quitting again from inside a cancelled quit is ignored; letting the
         // current sequence unwind first makes the second one take.

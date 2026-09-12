@@ -255,3 +255,57 @@ unsigned build as before. The entitlements in `resources/entitlements.mac.plist`
 there for a reason, listed in the file: the hardened runtime switches off precisely what
 Electron and a terminal need — JIT, inherited environments, and a native module (`node-pty`)
 that lives unpacked outside the asar.
+
+## Updating, and why it is not electron-updater
+
+`electron-updater` drives Squirrel.Mac on macOS, and Squirrel refuses to apply an update to
+an application it cannot verify a code signature for. The builds here are unsigned — see
+above for what fixing that costs — so the usual machinery is not an option, and pretending
+otherwise would mean an update path that silently does nothing.
+
+So `electron/updates.js` does the job the way the release notes already tell people to do it
+by hand, and the way `scripts/reinstall-locally.sh` already does it from a terminal:
+
+1. **Check.** An unauthenticated GET against `/repos/<slug>/releases`. Drafts are never
+   offered, pre-releases only to somebody who asked, and a tag that cannot be read as a
+   version is skipped rather than guessed at.
+2. **Pick the file.** By extension and by the architecture *in the name*, never by
+   predicting the name — electron-builder writes the product name into it and GitHub
+   replaces the spaces with dots. Two builds of a kind with nothing saying which machine
+   they are for is a release this declines to choose from: installing an Intel build over an
+   Apple-silicon one is a working app replaced by one that limps, with no way back from
+   inside it.
+3. **Download and verify.** Streamed, hashed as it arrives, checked against the SHA-256
+   GitHub recorded for the asset. A file that does not match is deleted rather than kept —
+   left there, the next check would find it, trust its size, and offer to install it.
+4. **Swap, from outside.** A process cannot replace its own bundle, so a small script is
+   written with the paths already in it, spawned detached, and the app quits. The script
+   waits on the app's pid, mounts the image, copies the new build in beside the old one and
+   moves it over in one step.
+
+Three things about that last step are load-bearing:
+
+- **The install is the quit.** `app.quit()` is what lets the script proceed, so the
+  confirmation a quit already puts up when sessions are live is the confirmation the update
+  uses — there is no second dialog, and keeping the sessions cancels the update.
+- **A cancelled quit has to be harmless.** The script finds the app still running, gives up
+  after five minutes and touches nothing; the panel is put back to "ready" from
+  `before-quit`.
+- **Copy, then remove, then move.** Deleting first leaves a window in which a failed copy
+  means no application at all. `test/updates.test.js` asserts that order, because it is the
+  kind of thing a later edit reorders without noticing.
+
+Release notes are parsed into blocks and spans (`src/lib/releaseNotes.ts`) and drawn as React
+elements. They are never turned into HTML. They arrive over the network, they are shown in a
+window that holds `window.api`, and they are written in a web form — three reasons that a
+`dangerouslySetInnerHTML` here would be the worst one in the codebase.
+
+### Rehearsing it
+
+```bash
+SMART_TERMINAL_UPDATE_AS_VERSION=0.1.0 npm start   # everything published looks newer
+SMART_TERMINAL_UPDATE_REPO=owner/repo npm start    # check somewhere else entirely
+```
+
+The first is read once, at startup, and nothing else in the app knows about it. It is the
+only way to exercise offer → download → verify → swap without cutting a release first.

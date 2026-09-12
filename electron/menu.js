@@ -17,6 +17,8 @@ function buildMenu(send, newWindow, reopenWindow = () => {}) {
             label: app.name,
             submenu: [
               { role: 'about' },
+              // Where macOS has put it in every app since the App Store existed.
+              { label: 'Check for Updates…', click: action('updates') },
               { type: 'separator' },
               { label: 'Accounts…', accelerator: 'Cmd+,', click: action('profiles') },
               { label: 'Usage limits…', accelerator: 'Cmd+U', click: action('usage') },
@@ -119,6 +121,9 @@ function buildMenu(send, newWindow, reopenWindow = () => {}) {
     {
       role: 'help',
       submenu: [
+        // On Linux and Windows there is no application menu to put it in, and
+        // Help is where those platforms look for it.
+        ...(isMac ? [] : [{ label: 'Check for Updates…', click: action('updates') }, { type: 'separator' }]),
         {
           label: 'Claude Code Docs',
           click: () => shell.openExternal('https://docs.claude.com/en/docs/claude-code/overview'),

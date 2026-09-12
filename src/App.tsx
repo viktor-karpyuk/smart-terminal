@@ -11,6 +11,7 @@ import { SessionContextMenu } from './components/SessionContextMenu';
 import { TerminalMenu, TerminalNotice } from './components/TerminalMenu';
 import { UsagePanel } from './components/UsagePanel';
 import { AppearancePanel } from './components/AppearancePanel';
+import { UpdatePanel } from './components/UpdatePanel';
 import { HistoryPanel } from './components/HistoryPanel';
 import { CloseConfirm } from './components/CloseConfirm';
 import { MinimizedDock } from './components/MinimizedDock';
@@ -24,6 +25,7 @@ export function App() {
   const usagePanelOpen = useStore((s) => s.usagePanelOpen);
   const historyOpen = useStore((s) => s.historyOpen);
   const appearanceOpen = useStore((s) => s.appearanceOpen);
+  const updatePanelOpen = useStore((s) => s.updatePanelOpen);
 
   useEffect(() => {
     useStore.getState().init();
@@ -76,6 +78,7 @@ export function App() {
       {usagePanelOpen && <UsagePanel />}
       {historyOpen && <HistoryPanel />}
       {appearanceOpen && <AppearancePanel />}
+      {updatePanelOpen && <UpdatePanel />}
       <CloseConfirm />
     </div>
   );
@@ -161,6 +164,9 @@ function handleMenuAction(id: string) {
       break;
     case 'history':
       store.setHistoryOpen(true);
+      break;
+    case 'updates':
+      store.setUpdatePanelOpen(true);
       break;
     case 'restart':
       if (sessionId) store.restartSession(sessionId);
