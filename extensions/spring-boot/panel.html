@@ -340,7 +340,7 @@
     return {
       profiles: c.profiles || '',
       jdk: c.jdk || '',
-      mode: c.mode === 'jar' ? 'jar' : 'run',
+      mode: c.mode === 'jar' || c.mode === 'run' ? c.mode : 'exec',
       build: c.build !== false,
       port: c.port || '',
       jvmArgs: c.jvmArgs || '',
@@ -400,8 +400,13 @@
     var lines = [];
     var profiles = profileList(config.profiles).join(',');
     var multi = Boolean(app.module);
+    var mode = config.mode === 'exec' && !app.mainClass ? 'run' : config.mode;
+    var javaLine = 'java ' + [config.jvmArgs, '-cp <classpath> ' + app.mainClass, config.args].filter(Boolean).join(' ');
     if (app.tool === 'maven') {
-      if (config.mode === 'jar') {
+      if (mode === 'exec') {
+        if (config.build) lines.push(tool + ' -q -DskipTests ' + (multi ? '-pl ' + app.module + ' -am ' : '') + 'compile dependency:build-classpath');
+        lines.push(javaLine);
+      } else if (mode === 'jar') {
         if (config.build) lines.push(tool + ' -B -q -DskipTests ' + (multi ? '-pl ' + app.module + ' -am install' : 'package'));
         lines.push('java ' + [config.jvmArgs, '-jar target/*.jar', config.args].filter(Boolean).join(' '));
       } else {
@@ -413,7 +418,10 @@
       }
     } else {
       var task = function (name) { return app.module ? app.module + ':' + name : name; };
-      if (config.mode === 'jar') {
+      if (mode === 'exec') {
+        if (config.build) lines.push(tool + ' -q ' + task('classes'));
+        lines.push(javaLine);
+      } else if (mode === 'jar') {
         if (config.build) lines.push(tool + ' -q ' + task('bootJar') + ' -x test');
         lines.push('java ' + [config.jvmArgs, '-jar build/libs/*.jar', config.args].filter(Boolean).join(' '));
       } else {
@@ -428,6 +436,7 @@
     if (jdk) env.push('JAVA_HOME=' + jdk.home);
     return (env.length ? env.join('\n') + '\n' : '') + lines.join('\n');
   }
+
 
   /* ---------------------------------------------------------------------- *
    * Drawing.
@@ -630,7 +639,9 @@
     var pane = $('pane');
     if (!run) {
       pane.innerHTML = '<div class="console-empty">Not running. <b>Run</b> starts it' +
-        (app.module ? ' from <code>' + esc(relativeTo(state.root, app.reactor)) + '</code> with <code>-pl ' + esc(app.module) + '</code>' : '') +
+        (app.mainClass && configOf(app).mode === 'exec'
+          ? ' the way the IDE does: compile' + (app.module ? ' <code>' + esc(app.module) + '</code> and what it needs' : '') + ', then <code>java ' + esc(app.mainClass.split('.').pop()) + '</code>'
+          : app.module ? ' from <code>' + esc(relativeTo(state.root, app.reactor)) + '</code> with <code>-pl ' + esc(app.module) + '</code>' : '') +
         (app.profiles && app.profiles.length ? '; the profiles it has are ' + app.profiles.map(function (p) { return '<code>' + esc(p) + '</code>'; }).join(', ') : '') +
         '.<br><br>The console appears here, and the panel reads it: the port it takes, when it is up, and why when it is not.</div>';
       return;
@@ -784,9 +795,10 @@
         '<label class="k">JDK</label><div><select name="jdk">' + jdkOptions + '</select>' +
           '<div class="hint">' + (app.javaVersion ? 'The project asks for Java ' + esc(app.javaVersion) + '.' : 'The project does not say which Java it wants.') + '</div></div>' +
         '<label class="k">How to run</label><div class="row">' +
+          '<label' + (app.mainClass ? '' : ' hidden') + '><input type="radio" name="mode" value="exec"' + (config.mode === 'exec' ? ' checked' : '') + '> compile, then java ' + esc((app.mainClass || '').split('.').pop()) + ' — like the IDE</label>' +
           '<label><input type="radio" name="mode" value="run"' + (config.mode === 'run' ? ' checked' : '') + '> ' + (app.tool === 'maven' ? 'spring-boot:run' : 'bootRun') + '</label>' +
           '<label><input type="radio" name="mode" value="jar"' + (config.mode === 'jar' ? ' checked' : '') + '> package, then java -jar</label>' +
-          '<label' + (multi || config.mode === 'jar' ? '' : ' hidden') + '><input type="checkbox" name="build"' + (config.build ? ' checked' : '') + '> build first' + (multi ? ' (install the modules it needs)' : '') + '</label>' +
+          '<label' + (multi || config.mode !== 'run' ? '' : ' hidden') + '><input type="checkbox" name="build"' + (config.build ? ' checked' : '') + '> ' + (config.mode === 'exec' ? 'compile first' : 'build first') + (multi && config.mode !== 'exec' ? ' (install the modules it needs)' : '') + '</label>' +
         '</div>' +
         '<label class="k">Port</label><div><input type="text" name="port" value="' + esc(config.port) + '" placeholder="' + esc(expectedPort(app)) + '" style="max-width:120px">' +
           '<div class="hint">Empty runs on what the configuration says' + (app.port ? ' (' + app.port + ')' : '') + '. Set to run a second copy beside the one already on that port.</div></div>' +
@@ -843,7 +855,7 @@
     };
     state.configs[app.dir] = config;
     var build = form.querySelector('input[name=build]').parentNode;
-    build.hidden = !(app.module || config.mode === 'jar');
+    build.hidden = !(app.module || config.mode !== 'run');
     $('command').textContent = commandWords(app);
     clearTimeout(state.saveTimer);
     var save = function () {

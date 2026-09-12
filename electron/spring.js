@@ -853,7 +853,8 @@ function normalizeConfig(config) {
     /** A JDK home, or '' for the `java` on PATH. */
     jdk: field(c.jdk).trim(),
     /** `run` is the build tool's own run goal; `jar` packages first and runs `java -jar`. */
-    mode: c.mode === 'jar' ? 'jar' : 'run',
+    /** `exec` compiles and runs the main class the way an IDE does; `run` is the build tool's own run goal; `jar` packages first. */
+    mode: c.mode === 'jar' || c.mode === 'run' ? c.mode : 'exec',
     /** Whether a multi-module project is built before running. */
     build: c.build !== false,
     /** A port to run on instead of the configured one. */
@@ -1013,6 +1014,16 @@ const GRADLE_INIT = `allprojects {
     def extra = System.getProperty('smartterminal.jvmArgs')
     if (extra) { jvmArgs(extra.split('\\u001f').findAll { it }) }
   }
+  // The runtime classpath of the main source set, written to a file, so the
+  // application can be run with java directly, the way an IDE runs it.
+  tasks.register('smartTerminalClasspath') {
+    doLast {
+      def file = System.getProperty('smartterminal.classpathFile')
+      if (file && project.hasProperty('sourceSets')) {
+        new File(file).text = project.sourceSets.main.runtimeClasspath.asPath
+      }
+    }
+  }
 }
 `;
 const GRADLE_SEP = '\u001f';
@@ -1042,17 +1053,48 @@ function plan(app, rawConfig, { jdk = null, debugPort = null, gradleInit = null 
   if (debugging) jvm.unshift(jdwpOption(debugAt, config.debugSuspend));
   const args = splitArgs(config.args);
 
+  // `exec` needs a main class; an application whose class was not found is run the way its tool runs it.
+  const mode = config.mode === 'exec' && !app.mainClass ? 'run' : config.mode;
+  const classpathFile = path.join(app.dir, app.tool === 'maven' ? 'target' : 'build', 'smart-terminal.classpath');
+  // Tests are skipped on the way to a run, and so is the coverage check that
+  // fails without them — an IDE's Run does neither.
+  const skip = ['-DskipTests', '-Djacoco.skip=true'];
+
   if (app.tool === 'maven') {
     const mvn = wrapperOrTool('mvn', 'mvnw');
     const select = multi ? ['-pl', app.module] : [];
     // Batch mode, for output that does not redraw itself — and colour anyway, because a console can show it.
     const batch = ['-B', '-Dstyle.color=always'];
-    if (config.mode === 'jar') {
+    if (mode === 'exec') {
+      /*
+       * The way an IDE runs it: compile what the module needs, ask Maven for
+       * the runtime classpath, run the main class with `java`. No packaging,
+       * no install, no plugin between the JVM and the console; the sibling
+       * modules are their `target/classes`, freshly compiled, not whatever was
+       * installed last week.
+       */
+      if (config.build) {
+        steps.push({
+          label: multi ? `mvn compile -pl ${app.module} -am` : 'mvn compile',
+          cmd: mvn,
+          args: [...batch, '-q', ...skip, ...select, ...(multi ? ['-am'] : []), 'compile', 'dependency:build-classpath', `-Dmdep.outputFile=${classpathFile}`, '-Dmdep.includeScope=runtime'],
+          cwd: app.reactor,
+        });
+      }
+      steps.push({
+        label: `java ${app.mainClass.split('.').pop()}`,
+        cmd: 'java',
+        args: [...jvm, '-cp', '__CLASSPATH__', app.mainClass, ...args],
+        cwd: app.dir,
+        classpath: classpathFile,
+        classes: [path.join(app.dir, 'target', 'classes')],
+      });
+    } else if (mode === 'jar') {
       if (config.build) {
         steps.push({
           label: multi ? `mvn install -pl ${app.module} -am` : 'mvn package',
           cmd: mvn,
-          args: [...batch, '-q', '-DskipTests', ...select, ...(multi ? ['-am', 'install'] : ['package'])],
+          args: [...batch, '-q', ...skip, ...select, ...(multi ? ['-am', 'install'] : ['package'])],
           cwd: app.reactor,
         });
       }
@@ -1062,7 +1104,7 @@ function plan(app, rawConfig, { jdk = null, debugPort = null, gradleInit = null 
         steps.push({
           label: `mvn install -pl ${app.module} -am`,
           cmd: mvn,
-          args: [...batch, '-q', '-DskipTests', ...select, '-am', 'install'],
+          args: [...batch, '-q', ...skip, ...select, '-am', 'install'],
           cwd: app.reactor,
         });
       }
@@ -1075,7 +1117,25 @@ function plan(app, rawConfig, { jdk = null, debugPort = null, gradleInit = null 
   } else {
     const gradle = wrapperOrTool('gradle', 'gradlew');
     const task = (name) => (app.module ? `${app.module}:${name}` : name);
-    if (config.mode === 'jar') {
+    if (mode === 'exec' && gradleInit) {
+      if (config.build) {
+        steps.push({
+          label: `gradle classes`,
+          cmd: gradle,
+          args: ['-q', '--init-script', gradleInit, `-Dsmartterminal.classpathFile=${classpathFile}`, task('classes'), task('smartTerminalClasspath')],
+          cwd: app.reactor,
+        });
+      }
+      // Gradle's runtime classpath already holds the project's own output.
+      steps.push({
+        label: `java ${app.mainClass.split('.').pop()}`,
+        cmd: 'java',
+        args: [...jvm, '-cp', '__CLASSPATH__', app.mainClass, ...args],
+        cwd: app.dir,
+        classpath: classpathFile,
+        classes: [],
+      });
+    } else if (mode === 'jar') {
       if (config.build) {
         steps.push({ label: 'gradle bootJar', cmd: gradle, args: ['-q', task('bootJar'), '-x', 'test'], cwd: app.reactor });
       }
@@ -1450,6 +1510,21 @@ class Runs {
     this.#say(run, `\x1b[2m$ ${step.label}\x1b[0m\n`, 'app');
 
     let args = step.args;
+    if (step.classpath) {
+      const listed = await fsp.readFile(step.classpath, 'utf8').catch(() => null);
+      if (run.stopping) {
+        this.#finish(run, null, 'stopped');
+        return;
+      }
+      if (listed == null) {
+        run.reason = 'The classpath has not been worked out yet. Turn on "compile first" in the run configuration, or compile the project once.';
+        this.#say(run, `${run.reason}\n`, 'err');
+        this.#finish(run, 1, 'failed');
+        return;
+      }
+      const classpath = [...step.classes, ...listed.trim().split(path.delimiter)].filter(Boolean).join(path.delimiter);
+      args = step.args.map((arg) => (arg === '__CLASSPATH__' ? classpath : arg));
+    }
     if (step.jar) {
       const jar = await findJar(run.app);
       if (run.stopping) {
