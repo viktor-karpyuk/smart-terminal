@@ -22,8 +22,11 @@
  *     replace its own bundle while it is running, so the last thing the app
  *     does is hand a small script to the system and quit. If the quit is
  *     cancelled — and it is, whenever sessions are live and somebody says keep
- *     them — the script waits, finds the app still running, and touches
- *     nothing.
+ *     them — the app leaves a marker saying so, and the script reads it and
+ *     goes. Waiting for the timeout instead would not be enough: a quit refused
+ *     at four o'clock and a quit for unrelated reasons four minutes later look
+ *     identical from out there, and the second one would install an update that
+ *     had already been declined.
  *   - **The old build is never deleted before the new one is in place.** The
  *     copy goes in beside it and is moved over it, so a failure halfway leaves
  *     a working app rather than none.
@@ -207,22 +210,43 @@ const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 /**
  * The part every install script starts with: wait for the app to be gone.
  *
- * Five minutes, because a quit with live sessions puts up a confirmation and
- * somebody may be reading it. Past that the honest conclusion is that the quit
- * was cancelled, and the script leaves without having touched anything — the
- * user is still running the old version, which is exactly what they chose.
+ * Two ways this ends without installing anything, and both matter.
+ *
+ * **The app was told to stop.** Somebody with live sessions who answers "keep
+ * working" has said no to the update as well, and the app drops a file to say
+ * so. Waiting on the process id alone is not enough to notice that: a quit that
+ * was refused at four o'clock and a quit for entirely unrelated reasons at four
+ * minutes past look identical from out here, and the second one would install
+ * an update that had already been declined. So the marker is checked every
+ * second of the wait, and once more at the end of it.
+ *
+ * **Nobody quit at all.** Five minutes, because a quit with live sessions puts
+ * up a confirmation and somebody may be reading it. Past that the honest
+ * conclusion is that it is not happening, and the script leaves without having
+ * touched anything.
  */
-function waitForExit(pid) {
+function waitForExit(pid, cancel) {
   return `
+CANCEL=${shellQuote(cancel)}
+called_off() { [ -f "$CANCEL" ]; }
+
 say "waiting for the app (pid ${pid}) to quit"
 waited=0
 while kill -0 ${pid} 2>/dev/null; do
+  if called_off; then
+    fail "stopped: the update was called off — nothing was touched"
+  fi
   waited=$((waited+1))
   if [ "$waited" -gt 300 ]; then
     fail "stopped: the app is still running after five minutes — the quit was probably cancelled, and nothing was touched"
   fi
   sleep 1
 done
+# Checked again on the way out: the app can be told to stop and then quit for
+# its own reasons a moment later, and the marker is the thing that outlives it.
+if called_off; then
+  fail "stopped: the update was called off — nothing was touched"
+fi
 say "it quit"
 sleep 1
 `;
@@ -247,7 +271,7 @@ cleanup() { :; }
  * hidden name and is moved over it in one step, so the window in which there is
  * no application at all is a rename rather than a download.
  */
-function macScript({ dmg, dest, pid, log }) {
+function macScript({ dmg, dest, pid, log, cancel }) {
   return `${scriptHead(log)}
 DMG=${shellQuote(dmg)}
 DEST=${shellQuote(dest)}
@@ -259,7 +283,7 @@ cleanup() {
   rmdir "$MOUNT" 2>/dev/null
   :
 }
-${waitForExit(pid)}
+${waitForExit(pid, cancel)}
 say "opening the installer"
 hdiutil attach "$DMG" -nobrowse -readonly -noverify -mountpoint "$MOUNT" -quiet ||
   fail "stopped: could not open the downloaded installer — nothing was touched"
@@ -291,11 +315,11 @@ say "relaunched"
  * mounted filesystem, and replacing the file underneath it is how you get a
  * half-read binary.
  */
-function appImageScript({ file, dest, pid, log }) {
+function appImageScript({ file, dest, pid, log, cancel }) {
   return `${scriptHead(log)}
 NEW=${shellQuote(file)}
 DEST=${shellQuote(dest)}
-${waitForExit(pid)}
+${waitForExit(pid, cancel)}
 say "putting the new build in place"
 cp "$NEW" "$DEST.new" || fail "stopped: could not write beside $DEST — the installed one is untouched"
 chmod +x "$DEST.new" || { rm -f "$DEST.new"; fail "stopped: could not make the new build runnable — the installed one is untouched"; }
@@ -342,6 +366,10 @@ class Updates extends EventEmitter {
     this.first = null;
     this.timer = null;
     this.aborter = null;
+    /** The install script, while one is waiting for this process to end. */
+    this.installer = null;
+    /** The last file whose hash was checked, and what it looked like then. */
+    this.verified = null;
 
     const stored = settings?.get?.() ?? {};
     this.state = {
@@ -588,20 +616,48 @@ class Updates extends EventEmitter {
     return path.join(this.dir, `${release.version}-${release.asset.name}`);
   }
 
-  /** A previous download of this exact file, if it survived and still checks out. */
+  /**
+   * A previous download of this exact file, if it survived and still checks out.
+   *
+   * Hashed once per run rather than once per check. `check()` runs every six
+   * hours and again whenever the panel is opened, and re-reading 128 MB through
+   * SHA-256 each time is real disk and real CPU for a file that only changes
+   * when this code writes it. So the reading is remembered with the size and
+   * modification time it was taken at, and anything that disagrees with those —
+   * including a launch, which starts with no memory at all — is read again.
+   */
   async #alreadyHave(release) {
     const file = this.#downloadPath(release);
     try {
       const stat = await fsp.stat(file);
       if (release.asset.size && stat.size !== release.asset.size) return null;
-      if (release.asset.digest) {
+      if (release.asset.digest && !this.#remembersVerifying(file, stat, release.asset.digest)) {
         const seen = await hashFile(file);
-        if (`sha256:${seen}` !== release.asset.digest) return null;
+        if (`sha256:${seen}` !== release.asset.digest) {
+          this.verified = null;
+          return null;
+        }
+        this.#rememberVerifying(file, stat, release.asset.digest);
       }
       return file;
     } catch {
       return null;
     }
+  }
+
+  #remembersVerifying(file, stat, digest) {
+    const known = this.verified;
+    return Boolean(
+      known &&
+        known.file === file &&
+        known.size === stat.size &&
+        known.mtimeMs === stat.mtimeMs &&
+        known.digest === digest,
+    );
+  }
+
+  #rememberVerifying(file, stat, digest) {
+    this.verified = { file, size: stat.size, mtimeMs: stat.mtimeMs, digest };
   }
 
   /**
@@ -631,6 +687,9 @@ class Updates extends EventEmitter {
     this.aborter = new AbortController();
     this.#set({ phase: 'downloading', error: null, progress: { received: 0, total: release.asset.size } });
 
+    /** Held out here so a failure anywhere below can still close it. */
+    let out = null;
+
     try {
       await fsp.mkdir(this.dir, { recursive: true });
       await fsp.rm(part, { force: true });
@@ -643,25 +702,48 @@ class Updates extends EventEmitter {
 
       const total = Number(response.headers.get('content-length')) || release.asset.size;
       const hash = crypto.createHash('sha256');
-      const out = fs.createWriteStream(part);
+      out = fs.createWriteStream(part);
       const reader = response.body.getReader();
       let received = 0;
       let announced = 0;
 
+      /*
+       * A write stream that fails has to be *listened* to.
+       *
+       * Nothing here catches an `'error'` on a Writable: it is an event, not a
+       * rejected promise, and an `'error'` with no listener is how Node ends a
+       * process. That would take the main process down — every window, every
+       * session — because a 128 MB download filled a disk. Worse, the wait for
+       * `'drain'` below would never return on a stream that has already failed,
+       * so the download would hang instead of reporting anything.
+       *
+       * So the failure is turned into a promise that everything which can block
+       * races against. The extra `catch` is only there to keep an unobserved
+       * rejection from being reported as one while the download is still going.
+       */
+      const broke = new Promise((_, reject) => {
+        out.once('error', (error) => reject(error));
+      });
+      broke.catch(() => {});
+
       for (;;) {
-        const { done, value } = await reader.read();
+        const { done, value } = await Promise.race([reader.read(), broke]);
         if (done) break;
         hash.update(value);
         received += value.length;
         if (!out.write(Buffer.from(value))) {
-          await new Promise((resolve) => out.once('drain', resolve));
+          await Promise.race([new Promise((resolve) => out.once('drain', resolve)), broke]);
         }
         if (Date.now() - announced > PROGRESS_EVERY) {
           announced = Date.now();
           this.#set({ progress: { received, total } });
         }
       }
-      await new Promise((resolve, reject) => out.end((error) => (error ? reject(error) : resolve())));
+      await Promise.race([
+        new Promise((resolve, reject) => out.end((error) => (error ? reject(error) : resolve()))),
+        broke,
+      ]);
+      out = null;
 
       const digest = `sha256:${hash.digest('hex')}`;
       if (release.asset.digest && digest !== release.asset.digest) {
@@ -674,9 +756,20 @@ class Updates extends EventEmitter {
       }
 
       await fsp.rename(part, target);
+      // Just hashed, byte by byte, on the way in — so the next check has no
+      // reason to read it all over again.
+      if (release.asset.digest) {
+        await fsp.stat(target).then(
+          (stat) => this.#rememberVerifying(target, stat, release.asset.digest),
+          () => {},
+        );
+      }
       await this.#sweep(target);
       this.#set({ phase: 'ready', file: target, progress: { received, total } });
     } catch (error) {
+      // Closed before the part file is removed: a stream still holding it open
+      // is a file that comes back.
+      out?.destroy();
       await fsp.rm(part, { force: true }).catch(() => {});
       const cancelled = error?.name === 'AbortError';
       this.#set({
@@ -739,17 +832,21 @@ class Updates extends EventEmitter {
 
     const log = path.join(this.dir, 'install.log');
     const script = path.join(this.dir, 'install.sh');
+    const cancel = this.#cancelMarker();
     const body =
       how.kind === 'dmg'
-        ? macScript({ dmg: this.state.file, dest: how.target, pid: process.pid, log })
-        : appImageScript({ file: this.state.file, dest: how.target, pid: process.pid, log });
+        ? macScript({ dmg: this.state.file, dest: how.target, pid: process.pid, log, cancel })
+        : appImageScript({ file: this.state.file, dest: how.target, pid: process.pid, log, cancel });
 
     try {
       await fsp.mkdir(this.dir, { recursive: true });
+      // A marker left over from a previous attempt that was called off would
+      // stop this one before it began.
+      await fsp.rm(cancel, { force: true });
       await fsp.writeFile(script, body, { mode: 0o700 });
       await fsp.writeFile(log, `${new Date().toISOString()} installing ${this.state.release?.version}\n`);
-      const child = spawn('/bin/sh', [script], { detached: true, stdio: 'ignore' });
-      child.unref();
+      this.installer = spawn('/bin/sh', [script], { detached: true, stdio: 'ignore' });
+      this.installer.unref();
     } catch (error) {
       this.#set({ phase: 'error', error: describeError(error) });
       return this.snapshot();
@@ -762,17 +859,49 @@ class Updates extends EventEmitter {
     return this.snapshot();
   }
 
+  /** Where the script looks to find out that it is not wanted after all. */
+  #cancelMarker() {
+    return path.join(this.dir, 'install.cancelled');
+  }
+
   /**
    * The quit the install asked for did not happen.
    *
    * Which is a perfectly good answer — somebody looked at twenty-eight live
    * sessions and decided not now. The downloaded file is still good and still
    * there, so this goes back to being an update waiting to be installed rather
-   * than an error. The script outside works the same thing out on its own: it
-   * finds the app still running, gives up, and touches nothing.
+   * than an error.
+   *
+   * The script outside has to be *told*, though, and this is the part that is
+   * easy to get wrong. Left to itself it only knows how to wait for this
+   * process to end — and a quit refused at four o'clock and a quit for entirely
+   * unrelated reasons four minutes later look the same from out there. Somebody
+   * who declined an update, finished what they were doing and then quit would
+   * come back to an application replaced against their answer.
+   *
+   * So two things happen, in the order that matters. The marker is written
+   * first and synchronously: it is the one that survives this process being
+   * killed, crashing, or quitting a second later. Then the script is asked to
+   * go, which is the tidy ending rather than the safe one.
    */
   quitCancelled() {
     if (this.state.phase !== 'installing') return this.snapshot();
+    try {
+      fs.mkdirSync(this.dir, { recursive: true });
+      fs.writeFileSync(this.#cancelMarker(), `${new Date().toISOString()}\n`);
+    } catch {
+      /* The five-minute timeout is what is left, and it is still a refusal. */
+    }
+    if (this.installer?.pid) {
+      try {
+        // Detached, so it leads its own process group; the negative pid takes
+        // the `sleep` it is sitting in along with the shell.
+        process.kill(-this.installer.pid, 'SIGTERM');
+      } catch {
+        /* Already gone, or never ours to signal. The marker still stands. */
+      }
+      this.installer = null;
+    }
     this.#set({ phase: this.state.file ? 'ready' : 'available', error: null });
     return this.snapshot();
   }

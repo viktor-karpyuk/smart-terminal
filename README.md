@@ -249,7 +249,8 @@ recorded for it, and replaces the installed app:
 Nothing is replaced while the app is running: the swap is done by a small script that waits
 for this process to exit. The install therefore *is* the quit, which means the usual
 confirmation appears when sessions are live — and keeping them cancels the update too. The
-script gives up after five minutes and touches nothing.
+app says so on its way back, and the script reads that and leaves; failing everything else
+it gives up after five minutes. Either way the installed app is untouched.
 
 Auto-checking, pre-releases, and skipping a version are all in the same panel. A skipped
 version stays skipped until something newer than it is published.

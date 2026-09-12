@@ -240,6 +240,7 @@ test('the macOS script waits, stages beside, and only then replaces', () => {
     dest: '/Applications/Smart Terminal.app',
     pid: 4242,
     log: '/u/updates/install.log',
+    cancel: '/u/updates/install.cancelled',
   });
 
   assert.match(script, /kill -0 4242/, 'it waits for the app to be gone');
@@ -259,6 +260,7 @@ test('the AppImage script replaces one file and relaunches it', () => {
     dest: '/home/v/Apps/SmartTerminal.AppImage',
     pid: 99,
     log: '/u/updates/install.log',
+    cancel: '/u/updates/install.cancelled',
   });
   assert.match(script, /kill -0 99/);
   assert.match(script, /chmod \+x "\$DEST\.new"/, 'an AppImage that is not executable is not an app');
@@ -271,10 +273,41 @@ test('the AppImage script replaces one file and relaunches it', () => {
  * has to work that out on its own — nothing is left to tell it.
  */
 test('a quit that never happened leaves the installed app alone', () => {
-  const script = macScript({ dmg: '/a.dmg', dest: '/Applications/X.app', pid: 1, log: '/l' });
+  const script = macScript({ dmg: '/a.dmg', dest: '/Applications/X.app', pid: 1, log: '/l', cancel: '/c' });
   assert.match(script, /waited.*-gt 300|[-]gt 300/s, 'it gives up rather than waiting for ever');
   assert.match(script, /still running after five minutes/);
   assert.match(script, /nothing was touched/);
+});
+
+/*
+ * The hole the timeout alone leaves open, and the reason the marker exists.
+ *
+ * Waiting on the process id cannot tell a refused quit from a quit four minutes
+ * later for entirely unrelated reasons — and installing on the second one would
+ * replace the application against an answer somebody already gave. So the script
+ * is told, and it looks: every second of the wait, and once more after it, since
+ * the app can decline and then quit a moment afterwards.
+ */
+test('an update called off is not installed by the next quit that happens to come', () => {
+  const script = macScript({ dmg: '/a.dmg', dest: '/Applications/X.app', pid: 7, log: '/l', cancel: '/u/cancelled' });
+  assert.match(script, /CANCEL='\/u\/cancelled'/, 'the marker it watches for is named in the script');
+  assert.match(script, /called_off\(\) \{ \[ -f "\$CANCEL" \]; \}/);
+
+  const inLoop = /while kill -0 7[\s\S]*?\ndone/.exec(script)[0];
+  assert.match(inLoop, /if called_off; then/, 'checked while it waits');
+
+  const afterLoop = script.slice(script.indexOf('\ndone') + 5, script.indexOf('say "it quit"'));
+  assert.match(afterLoop, /if called_off; then/, 'and again once the app is gone');
+
+  // Both endings say the same thing about the app, which is the only promise
+  // that matters here.
+  assert.match(script, /the update was called off — nothing was touched/);
+});
+
+test('the AppImage script can be called off the same way', () => {
+  const script = appImageScript({ file: '/n', dest: '/d', pid: 7, log: '/l', cancel: '/u/cancelled' });
+  assert.match(script, /CANCEL='\/u\/cancelled'/);
+  assert.match(script, /the update was called off/);
 });
 
 // ---------------------------------------------------------------- the install log

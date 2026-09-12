@@ -277,7 +277,15 @@ by hand, and the way `scripts/reinstall-locally.sh` already does it from a termi
    inside it.
 3. **Download and verify.** Streamed, hashed as it arrives, checked against the SHA-256
    GitHub recorded for the asset. A file that does not match is deleted rather than kept —
-   left there, the next check would find it, trust its size, and offer to install it.
+   left there, the next check would find it, trust its size, and offer to install it. The
+   reading is remembered with the file's size and modification time, so a check every six
+   hours does not mean re-reading 128 MB every six hours; anything that disagrees with
+   either, a fresh launch included, is hashed again.
+
+   The write stream has its own `'error'` listener and everything that can block races
+   against it. An `'error'` on a Writable is an event and not a rejected promise, so with no
+   listener a full disk during a 128 MB download would take down the main process — every
+   window, every session — and the wait for `'drain'` would hang rather than report.
 4. **Swap, from outside.** A process cannot replace its own bundle, so a small script is
    written with the paths already in it, spawned detached, and the app quits. The script
    waits on the app's pid, mounts the image, copies the new build in beside the old one and
@@ -288,9 +296,14 @@ Three things about that last step are load-bearing:
 - **The install is the quit.** `app.quit()` is what lets the script proceed, so the
   confirmation a quit already puts up when sessions are live is the confirmation the update
   uses — there is no second dialog, and keeping the sessions cancels the update.
-- **A cancelled quit has to be harmless.** The script finds the app still running, gives up
-  after five minutes and touches nothing; the panel is put back to "ready" from
-  `before-quit`.
+- **A cancelled quit has to be harmless, and the timeout alone does not make it so.** The
+  script cannot tell a refused quit from a quit four minutes later for entirely unrelated
+  reasons, and installing on the second one would replace the app against an answer somebody
+  already gave. So `quitCancelled()` — called from `before-quit` — writes a marker file
+  *synchronously* before signalling the script, because the marker is what survives this
+  process being killed or quitting a moment later. The script checks it every second of its
+  wait and once more after it, and the five-minute timeout is what is left if all of that
+  fails.
 - **Copy, then remove, then move.** Deleting first leaves a window in which a failed copy
   means no application at all. `test/updates.test.js` asserts that order, because it is the
   kind of thing a later edit reorders without noticing.
