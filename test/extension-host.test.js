@@ -355,3 +355,30 @@ test('normalisePath folds dots and doubled slashes', () => {
   assert.equal(H.normalisePath('/../x'), '/x');
   assert.equal(H.normalisePath('/'), '/');
 });
+
+/*
+ * The Code Reviewer's door. Its writing mostly does not ask — a review is a
+ * draft, a fix is written in a workshop — and the five that cannot be taken back
+ * do, naming the PR and the branch.
+ */
+test('the reviewer routes by name, and asks only before what cannot be undone', () => {
+  assert.equal(H.route('review.pr'), 'review');
+  assert.equal(H.route('review.review'), 'review');
+  assert.equal(H.route('review.merge'), 'review');
+  assert.equal(H.route('review.shell'), 'app');
+  assert.equal(H.route('review.ask'), 'app');
+  assert.equal(H.route('review.constructor'), null);
+  assert.equal(H.route('review.__proto__'), null);
+  assert.equal(H.route('review.exec'), null);
+
+  for (const quiet of ['review.review', 'review.publishFinding', 'review.fix', 'review.giveBack', 'review.approve', 'review.saveRepo']) {
+    assert.equal(H.needsConsent(quiet, { prId: 7 }), null, `${quiet} should not stop to ask`);
+  }
+  const merge = H.needsConsent('review.merge', { prId: 7, repoName: 'App', target: 'main', strategy: 'SQUASH', skipping: ['2 finding(s) not published'] });
+  assert.match(merge, /Merge pull request #7 of App into main \(squash\)\?/);
+  assert.match(merge, /• 2 finding\(s\) not published/);
+  assert.match(H.needsConsent('review.push', { count: 2, branch: 'feature' }), /Push 2 commit\(s\) to origin\/feature\?[\s\S]*never forced/);
+  assert.match(H.needsConsent('review.decline', { prId: 7 }), /Decline pull request #7/);
+  assert.match(H.needsConsent('review.deleteRepo', { repoName: 'App' }), /Stop reviewing App/);
+  assert.match(H.needsConsent('review.discardWorkshop', { prId: 7 }), /commits are gone unless they were handed back/);
+});

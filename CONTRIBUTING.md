@@ -212,6 +212,53 @@ repeated on a timer rather than trusted the first time.
 
 ---
 
+## Code Reviewer
+
+The `code-review` extension is a port of AI Code Reviewer, a Kotlin desktop app that reviews
+pull requests by running the person's own `claude -p`. The rules came across rule for rule —
+each of them cost that app a real mistake — and the comments in `electron/review-*.js` say
+which. What it keeps, and what a change must not break:
+
+- **No API key, ever.** Every run is the local CLI on a Smart Terminal account
+  (`review-claude.js`), spawned without a shell, prompt on stdin, **each permission pattern
+  its own argument** — joined with commas, `Bash(git diff *)` is split by the CLI and the
+  review runs blind to the diff without saying so. An account out of room is rested and the
+  next one takes the run; a session is never resumed across accounts.
+- **A review is read-only, and one that used no tool is failed.** The model sometimes answers
+  "I cannot access the diff" without trying, with no permission denial to show for it.
+- **Nothing is published by itself.** Findings are drafts. The only automatic publication is
+  an answer to a reply, for a repository whose reply mode is AUTO.
+- **Fixes are written in a workshop** — a `git clone --local` under
+  `userData/code-review/fixes` — never in the person's clone, with `git push` and
+  `git commit` denied to the model. The tool commits; a clean tree means nothing was fixed.
+  A written fix closes its finding and says so in the thread, from a template that always
+  says the commit is not on the branch yet.
+- **One database.** Its tables live in `smart-terminal.db`, prefixed `cr_`, with their own
+  forward-only migration list and a guard against a newer schema. The columns are the
+  original app's, name for name, which is what makes `review-import.js` a copy.
+- **Tokens** are encrypted with Electron's `safeStorage`; the store refuses to keep one in the
+  clear, and no view the panel receives carries it.
+- **The panel cannot reach the network.** Everything goes through `review:call`, a fixed verb
+  table in `review-service.js`; `extensionHost.ts` routes `review.*` and asks before the five
+  things that cannot be undone — merge, decline, push, deleting a repository, discarding a
+  workshop.
+
+Two deliberate departures from the original: the sweep drafts answers to replies even when no
+repository reviews automatically, and it reads the thread of every open PR with published
+comments each cycle, so a reply is noticed without opening the PR. And a GitHub PR is read with
+its state and stances, which the original never mapped.
+
+Not ported: the Constructor (spec-driven implementation), statistics, Jira and the stories
+board, the database-engine choice, and the MCP bus the Constructor's tasks used.
+
+Testing it by hand needs no real review: import an AI Code Reviewer history into an isolated
+instance and every screen has data. `test/review-engine.test.js` drives the whole thing — a
+review, publishing, a reply, verification, a fix, handing it back and pushing — on real git
+repositories with a fake forge and a fake CLI. It needs `node:sqlite` (Node 22+) and skips
+itself on an older Node.
+
+---
+
 ## Tests
 
 ```bash

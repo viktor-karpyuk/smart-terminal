@@ -2,7 +2,8 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { app, BrowserWindow, ipcMain, dialog, protocol, shell, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, shell, net, Notification, safeStorage } = require('electron');
+const { DatabaseSync } = require('node:sqlite');
 const { createHash, randomUUID } = require('node:crypto');
 
 const { PtyManager, claudeLaunchLine } = require('./pty-manager');
@@ -39,6 +40,8 @@ const kube = require('./kube');
 const helm = require('./helm');
 const spring = require('./spring');
 const buildTools = require('./build-tools');
+const { ReviewService } = require('./review-service');
+const { resolvedPath } = require('./cli-env');
 
 /**
  * What this build is. Written at package time, so the answer comes from the app
@@ -162,6 +165,14 @@ const sessionByPty = new Map();
 let recordByDefault = true;
 let context = null;
 let db = null;
+/**
+ * The Code Reviewer extension's engine: reviews, fixes and the automatic sweep.
+ *
+ * App-owned rather than window-owned, like the Spring Boot runs: a review keeps
+ * going when the tab that started it closes, and every window's panel hears
+ * about it. Its tables live in this app's own database.
+ */
+let reviewService = null;
 let monitor = null;
 /**
  * Watches the working trees the app has open, so the Git panel is current
@@ -206,6 +217,47 @@ const liveSessions = new Set();
 const usageCache = new Map();
 const usageInFlight = new Map();
 const USAGE_TTL = 5 * 60 * 1000;
+
+/**
+ * The reviewer's dependencies on the app, in one place: the database handle,
+ * tokens encrypted by the OS keychain through safeStorage, the accounts,
+ * notifications and a folder picker. Nothing else of Electron reaches it.
+ */
+function createReviewService() {
+  const secrets = {
+    encrypt: (text) => {
+      // A token stored in the clear is worse than a token not stored: refuse, and say why.
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('This system offers no encrypted storage, so the token cannot be kept safely.');
+      return safeStorage.encryptString(text).toString('base64');
+    },
+    decrypt: (cipher) => safeStorage.decryptString(Buffer.from(cipher, 'base64')),
+  };
+  try {
+    return new ReviewService({
+      db: db.db,
+      secrets,
+      fetch: (url, init) => net.fetch(url, init),
+      profiles,
+      resolvePath: (profileShell) => resolvedPath(profileShell || process.env.SHELL || '/bin/zsh'),
+      notify: (title, body) => {
+        if (Notification.isSupported()) new Notification({ title, body }).show();
+      },
+      emit: (event) => send('review:event', event),
+      dataDir: app.getPath('userData'),
+      pickFolder: async () => {
+        const owner = BrowserWindow.getFocusedWindow() ?? undefined;
+        const picked = await dialog.showOpenDialog(owner, { properties: ['openDirectory'] });
+        return picked.canceled ? null : picked.filePaths[0] ?? null;
+      },
+      openExternal: (url) => shell.openExternal(url),
+      DatabaseSync,
+    });
+  } catch (error) {
+    // The rest of the app does not depend on the reviewer; a reviewer that cannot start says so and stays out of the way.
+    console.error('[code-review] could not start:', error);
+    return null;
+  }
+}
 
 /** Broadcast to every window; session events can concern any of them. */
 function send(channel, payload) {
@@ -1367,6 +1419,15 @@ function registerIpc() {
     },
   };
 
+  /**
+   * Code Reviewer. One door, a table of verbs on the other side of it; the
+   * panel names repositories, PRs and findings, never paths or commands.
+   */
+  ipcMain.handle('review:call', async (_e, { name, args } = {}) => {
+    if (!reviewService) return { ok: false, error: 'The Code Reviewer is not running.' };
+    return reviewService.call(String(name ?? ''), args ?? {});
+  });
+
   ipcMain.handle('spring:call', async (_e, { name, args } = {}) => {
     const handler = name === 'readable' ? null : SPRING[name];
     if (!handler) return { ok: false, error: `No such Spring Boot action: ${name}` };
@@ -1683,6 +1744,7 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   const crashed = db.closeStaleSessions();
   if (crashed.length) console.log(`[db] closed ${crashed.length} session(s) left open by a previous run`);
   db.prune();
+  reviewService = createReviewService();
 
   workspace = new JsonStore('workspace.json', { layout: null, sessions: [], settings: {} });
   migrateWorkspaceIntoDb();
@@ -1811,6 +1873,8 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   const previous = db.openWindows();
   if (previous.length) previous.forEach(({ id, bounds }) => createWindow(id, bounds));
   else createWindow();
+  // After the windows: a review resumed from a previous launch must have somewhere to be seen.
+  reviewService?.start();
 
   app.on('activate', () => {
     // Not on the way out: the database is closed and a window would open onto nothing.
@@ -2346,6 +2410,8 @@ function retireLegacyWorkspace() {
 let springStopped = false;
 app.on('will-quit', () => {
   kubeStreams.stopAll();
+  // A `claude -p` nobody can see would go on spending on the person's account.
+  reviewService?.stop();
   // A Gradle client asked for a task list is a JVM that would otherwise
   // outlive the app by up to three minutes.
   buildTools.stopAll();

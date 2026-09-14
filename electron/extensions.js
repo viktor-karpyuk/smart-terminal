@@ -213,7 +213,7 @@ const PANEL_NEEDS = [
 ];
 
 /** The things the app pushes that a panel may ask to hear about, beyond its own subject. */
-const PANEL_LISTENS = ['spring'];
+const PANEL_LISTENS = ['spring', 'review'];
 
 function panelViews(rows) {
   const panels = [];

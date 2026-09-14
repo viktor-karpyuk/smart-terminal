@@ -1,0 +1,1671 @@
+<style>
+  /*
+   * Code Reviewer, drawn in a frame that cannot reach the network or the disk.
+   * Everything it knows arrives through `host.call('review.*')`; everything it
+   * looks like comes from the app's tokens.
+   */
+  #app { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; min-height: 0; }
+  .top { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--bg-panel); flex-wrap: wrap; }
+  .top .brand { font-weight: 600; margin-right: 6px; }
+  .tab { padding: 4px 10px; border-radius: var(--radius); color: var(--text-dim); cursor: pointer; border: 1px solid transparent; background: none; font: inherit; }
+  .tab:hover { color: var(--text); background: var(--bg-elevated); }
+  .tab.on { color: var(--text); border-color: var(--border); background: var(--bg-elevated); }
+  .spacer { flex: 1; }
+  .faint { color: var(--text-faint); }
+  .dim { color: var(--text-dim); }
+  .mono { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+  .ok { color: var(--ok); }
+  .bad { color: var(--danger); }
+  .warn { color: #d9a441; }
+  main#main { overflow: auto; min-height: 0; }
+  .page { padding: 12px 14px 40px; max-width: 1280px; }
+  h2 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+  h3 { margin: 14px 0 6px; font-size: 12.5px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+
+  .btn { padding: 4px 9px; border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-dim); white-space: nowrap; background: transparent; font: inherit; cursor: pointer; }
+  .btn:hover { color: var(--text); border-color: var(--border-strong); background: var(--bg-elevated); }
+  .btn.primary { color: var(--accent); border-color: var(--accent); }
+  .btn.primary:hover { background: var(--accent-soft); }
+  .btn.go { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
+  .btn.go:hover { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+  .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+  .btn.danger:hover { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  .btn[disabled] { opacity: 0.4; pointer-events: none; }
+  .btn.small { padding: 2px 7px; font-size: 11px; }
+  .link { color: var(--accent); cursor: pointer; text-decoration: none; background: none; border: 0; font: inherit; padding: 0; }
+  .link:hover { text-decoration: underline; }
+  .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .stack > * + * { margin-top: 8px; }
+
+  input[type=text], input[type=password], input[type=number], textarea, select {
+    background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 5px 7px; font: inherit; min-width: 0;
+  }
+  textarea { width: 100%; box-sizing: border-box; resize: vertical; font-family: ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1.45; }
+  input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+  label.check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+
+  .card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); padding: 10px 12px; }
+  .card + .card { margin-top: 8px; }
+  .card.hi { border-color: var(--accent); }
+  .card.bad { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); }
+  .grid-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 10px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin-bottom: 12px; }
+  .stat { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; cursor: pointer; background: var(--bg-panel); }
+  .stat:hover { border-color: var(--border-strong); }
+  .stat.on { border-color: var(--accent); background: var(--accent-soft); }
+  .stat .n { font-size: 20px; font-weight: 600; }
+  .stat .l { color: var(--text-dim); font-size: 11px; }
+
+  .chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); font-size: 10.5px; color: var(--text-dim); white-space: nowrap; }
+  .chip.click { cursor: pointer; }
+  .chip.click:hover { border-color: var(--border-strong); color: var(--text); }
+  .chip.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .chip.mine { border-color: color-mix(in srgb, #d9a441 60%, var(--border)); color: #d9a441; }
+  .chip.okc { border-color: color-mix(in srgb, var(--ok) 60%, var(--border)); color: var(--ok); }
+  .chip.badc { border-color: color-mix(in srgb, var(--danger) 60%, var(--border)); color: var(--danger); }
+  .chip.accent { border-color: var(--accent); color: var(--accent); }
+  .sev { display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; }
+  .sev.blocker { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--danger); }
+  .sev.major { background: color-mix(in srgb, #d9a441 22%, transparent); color: #d9a441; }
+  .sev.minor { background: var(--bg-elevated); color: var(--text-dim); }
+
+  table.list { width: 100%; border-collapse: collapse; }
+  table.list th { text-align: left; font-weight: 500; color: var(--text-faint); font-size: 11px; padding: 4px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.list td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.list tr.click { cursor: pointer; }
+  table.list tr.click:hover td { background: var(--bg-elevated); }
+  table.list tr.closed td { opacity: 0.6; }
+  .title-cell { min-width: 260px; }
+  .title-cell .t { font-weight: 500; }
+  .title-cell .s { color: var(--text-faint); font-size: 11px; margin-top: 2px; }
+
+  .bar { height: 6px; border-radius: 3px; background: var(--bg-elevated); overflow: hidden; display: flex; }
+  .bar > span { display: block; height: 100%; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); }
+  .dot.busy { background: #d9a441; animation: pulse 1.2s ease-in-out infinite; }
+  .dot.okd { background: var(--ok); }
+  .dot.badd { background: var(--danger); }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  .run { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; background: var(--bg-panel); }
+  .run + .run { margin-top: 6px; }
+  .run .lines { margin-top: 6px; max-height: 150px; overflow: auto; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
+
+  .prhead { padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
+  .prhead h2 { font-size: 16px; margin: 4px 0; }
+  .banner { padding: 7px 10px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-elevated); margin: 8px 0; white-space: pre-wrap; }
+  .banner.bad { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); background: color-mix(in srgb, var(--danger) 8%, var(--bg-panel)); }
+  .banner.warn { border-color: color-mix(in srgb, #d9a441 50%, var(--border)); background: color-mix(in srgb, #d9a441 8%, var(--bg-panel)); }
+  .banner.ok { border-color: color-mix(in srgb, var(--ok) 50%, var(--border)); background: color-mix(in srgb, var(--ok) 8%, var(--bg-panel)); }
+  .subtabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); padding: 0 14px; background: var(--bg-panel); position: sticky; top: 0; z-index: 2; }
+  .subtabs .tab { border-radius: 0; border: 0; border-bottom: 2px solid transparent; padding: 7px 10px; }
+  .subtabs .tab.on { border-bottom-color: var(--accent); background: none; }
+  .count { display: inline-block; min-width: 14px; padding: 0 4px; border-radius: 7px; background: var(--bg-elevated); font-size: 10px; text-align: center; margin-left: 3px; color: var(--text-dim); }
+
+  .finding { border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 11px; background: var(--bg-panel); }
+  .finding + .finding { margin-top: 8px; }
+  .finding.settled { opacity: 0.72; }
+  .finding .ftitle { font-weight: 600; margin: 4px 0; }
+  .finding .meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 11px; }
+  .md { line-height: 1.5; word-break: break-word; }
+  .md p { margin: 4px 0; }
+  .md pre { background: var(--bg-elevated); padding: 6px 8px; border-radius: var(--radius); overflow: auto; font-size: 11.5px; }
+  .md code { background: var(--bg-elevated); padding: 0 3px; border-radius: 3px; font-size: 11.5px; }
+  .md pre code { background: none; padding: 0; }
+  .md blockquote { margin: 4px 0; padding-left: 8px; border-left: 3px solid var(--border-strong); color: var(--text-dim); }
+  .md ul, .md ol { margin: 4px 0; padding-left: 20px; }
+  .md h1, .md h2, .md h3, .md h4 { font-size: 13px; margin: 6px 0; text-transform: none; letter-spacing: 0; color: var(--text); }
+  .suggestion { margin-top: 6px; border-left: 3px solid var(--accent); padding-left: 8px; }
+  .entries { margin-top: 6px; border-left: 2px solid var(--border); padding-left: 10px; }
+  .entry { margin: 6px 0; }
+  .entry .who { font-size: 11px; color: var(--text-faint); }
+  .entry.ours .who { color: var(--accent); }
+
+  .split { display: grid; grid-template-columns: 290px minmax(0, 1fr); min-height: 0; height: calc(100vh - 150px); }
+  .split aside { border-right: 1px solid var(--border); overflow: auto; background: var(--bg-panel); }
+  .split section { overflow: auto; }
+  aside .item { padding: 5px 10px; cursor: pointer; display: flex; gap: 6px; align-items: baseline; border-left: 2px solid transparent; }
+  aside .item:hover { background: var(--bg-elevated); }
+  aside .item.on { background: var(--accent-soft); border-left-color: var(--accent); }
+  aside .item .p { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+  aside .group { padding: 8px 10px 3px; color: var(--text-faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .added { color: var(--git-new, var(--ok)); }
+  .removed { color: var(--danger); }
+
+  table.diff { border-collapse: collapse; width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+  table.diff td { padding: 0 6px; white-space: pre-wrap; word-break: break-all; vertical-align: top; }
+  table.diff td.n { width: 1%; min-width: 34px; text-align: right; color: var(--text-faint); user-select: none; cursor: pointer; white-space: nowrap; }
+  table.diff td.n:hover { color: var(--accent); }
+  table.diff tr.ADDED td.c { background: color-mix(in srgb, var(--ok) 12%, transparent); }
+  table.diff tr.REMOVED td.c { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+  table.diff tr.HUNK td { color: var(--accent); background: var(--bg-elevated); padding: 2px 6px; }
+  table.diff tr.META td { color: var(--text-faint); }
+  table.diff tr.anchor td { padding: 4px 8px 6px 60px; background: var(--bg-panel); font-family: inherit; font-size: 12px; white-space: normal; }
+  table.diff tr.focus td.c { outline: 1px solid var(--accent); }
+
+  .form { max-width: 760px; }
+  .field { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 10px; align-items: start; margin: 8px 0; }
+  .field > label { padding-top: 5px; color: var(--text-dim); }
+  .field .help { color: var(--text-faint); font-size: 11px; margin-top: 3px; line-height: 1.4; }
+  .field input[type=text], .field input[type=password], .field select { width: 100%; box-sizing: border-box; }
+  .radio { display: grid; gap: 4px; }
+  .radio label { display: flex; gap: 6px; align-items: baseline; cursor: pointer; }
+  .section { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 6px; }
+  .empty { padding: 30px 12px; color: var(--text-dim); text-align: center; line-height: 1.6; }
+  .loading { color: var(--text-faint); padding: 18px 14px; }
+  .readiness { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+  .readiness .bar { width: 160px; }
+  .timeline .day { margin-top: 12px; font-weight: 600; color: var(--text-dim); font-size: 11.5px; }
+  .timeline .ev { display: grid; grid-template-columns: 60px 110px minmax(0, 1fr); gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+</style>
+
+<div id="app">
+  <div class="top" id="top"></div>
+  <main id="main"><div class="loading">Loading…</div></main>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var state = {
+    started: false,
+    showing: true,
+    view: 'dashboard',
+    repoId: null,
+    prId: null,
+    prTab: 'review',
+    overview: null,
+    dashboard: null,
+    dashFilter: { flags: [], mode: 'ALL', mine: false, authors: [], text: '' },
+    repos: null,
+    prList: null,
+    prStates: ['OPEN'],
+    prSort: 'OLDEST',
+    pr: null,
+    prError: null,
+    activity: {},
+    auto: null,
+    form: null,
+    formTest: null,
+    formGuidelines: null,
+    settings: null,
+    globalGuidelines: null,
+    importInfo: null,
+    importReport: null,
+    importPick: {},
+    code: { files: null, file: null, lines: null, error: null, focusLine: null, noteAt: null, loading: false },
+    commits: { data: null, sha: null, files: null, file: null, lines: null, error: null },
+    edits: {},
+    busy: {},
+    confirmRerun: null,
+    decline: null,
+    merge: null,
+    historyAuthor: '',
+    depths: null,
+    reviewProfile: { depth: 'AUTO', kind: 'AUTO', model: '' },
+    reloadTimer: null,
+    pendingReload: false,
+  };
+
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(value) {
+    return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function call(name, args) {
+    return host.call('review.' + name, args || {}).then(function (result) {
+      if (result && result.ok === false) throw new Error(result.error || 'it did not say why');
+      return result || {};
+    });
+  }
+  function say(text, bad) { host.emit('notify', { text: String(text).slice(0, 400), kind: bad ? 'bad' : 'ok' }); }
+  function fail(error) { say(error && error.message ? error.message : String(error), true); }
+
+  /** Runs an action once at a time per key, drawing its button as busy meanwhile. */
+  function act(key, promise, done) {
+    if (state.busy[key]) return;
+    state.busy[key] = true;
+    draw();
+    return Promise.resolve()
+      .then(promise)
+      .then(function (result) { if (done) done(result); })
+      .catch(function (error) {
+        if (!/the person said no/.test(String(error && error.message))) fail(error);
+      })
+      .then(function () { delete state.busy[key]; draw(); });
+  }
+  function busyAttr(key) { return state.busy[key] ? ' disabled' : ''; }
+
+  function remember() {
+    host.emit('remember', { view: state.view, repoId: state.repoId, prId: state.prId, prTab: state.prTab, prSort: state.prSort, dashFilter: state.dashFilter });
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Formatting
+   * ------------------------------------------------------------------ */
+
+  function money(value) {
+    var n = Number(value || 0);
+    return n < 0.01 ? '$0.00' : '$' + n.toFixed(2);
+  }
+  function tokens(n) {
+    n = Number(n || 0);
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return Math.round(n / 1e3) + 'k';
+    return String(n);
+  }
+  function when(iso) {
+    if (!iso) return '';
+    var t = Date.parse(String(iso).replace(' ', 'T'));
+    if (!isFinite(t)) return String(iso);
+    var s = Math.round((Date.now() - t) / 1000);
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.round(s / 60) + ' min ago';
+    if (s < 86400) return Math.round(s / 3600) + ' h ago';
+    return Math.round(s / 86400) + ' d ago';
+  }
+  function day(iso) { return String(iso || '').slice(0, 10); }
+  function ageMark(days) {
+    if (days == null) return '';
+    if (days >= 90) return '▲▲▲';
+    if (days >= 14) return '▲▲';
+    if (days >= 7) return '▲';
+    if (days >= 3) return '•';
+    return '';
+  }
+  function anchor(file, line) { return esc(file) + (line ? ':' + line : ''); }
+  function sha7(sha) { return esc(String(sha || '').slice(0, 7)); }
+
+  /**
+   * A small Markdown: enough for review comments. Everything is escaped first,
+   * so nothing a model or a colleague wrote becomes markup. Links are shown as
+   * text; only GitHub and Bitbucket ones open, and through the app.
+   */
+  function md(text) {
+    var source = String(text == null ? '' : text).replace(/\r\n/g, '\n');
+    var blocks = [];
+    source = source.replace(/```[^\n]*\n([\s\S]*?)```/g, function (_m, code) {
+      blocks.push('<pre><code>' + esc(code.replace(/\n$/, '')) + '</code></pre>');
+      return ' ' + (blocks.length - 1) + ' ';
+    });
+    function inline(line) {
+      var out = esc(line);
+      out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+      out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      out = out.replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,:;]|$)/g, '$1<em>$2</em>');
+      out = out.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,:;]|$)/g, '$1<em>$2</em>');
+      out = out.replace(/\[([^\]]+)\]\((https:\/\/(?:github\.com|bitbucket\.org)\/[^)\s]+)\)/g, '<button class="link" data-act="open-url" data-url="$2">$1</button>');
+      return out;
+    }
+    var html = [];
+    var list = null;
+    var paragraph = [];
+    function flush() {
+      if (paragraph.length) { html.push('<p>' + paragraph.map(inline).join('<br>') + '</p>'); paragraph = []; }
+      if (list) { html.push('<' + list.tag + '>' + list.items.map(function (item) { return '<li>' + inline(item) + '</li>'; }).join('') + '</' + list.tag + '>'); list = null; }
+    }
+    source.split('\n').forEach(function (line) {
+      var block = /^ (\d+) $/.exec(line.trim());
+      if (block) { flush(); html.push(blocks[Number(block[1])]); return; }
+      if (!line.trim()) { flush(); return; }
+      var heading = /^(#{1,4})\s+(.*)$/.exec(line);
+      if (heading) { flush(); html.push('<h4>' + inline(heading[2]) + '</h4>'); return; }
+      var quote = /^>\s?(.*)$/.exec(line);
+      if (quote) { flush(); html.push('<blockquote>' + inline(quote[1]) + '</blockquote>'); return; }
+      var bullet = /^\s*[-*•]\s+(.*)$/.exec(line);
+      var numbered = /^\s*\d+[.)]\s+(.*)$/.exec(line);
+      if (bullet || numbered) {
+        if (paragraph.length) { html.push('<p>' + paragraph.map(inline).join('<br>') + '</p>'); paragraph = []; }
+        var tag = bullet ? 'ul' : 'ol';
+        if (!list || list.tag !== tag) { if (list) flush(); list = { tag: tag, items: [] }; }
+        list.items.push((bullet || numbered)[1]);
+        return;
+      }
+      if (list) { list.items[list.items.length - 1] += ' ' + line.trim(); return; }
+      paragraph.push(line);
+    });
+    flush();
+    return '<div class="md">' + html.join('').replace(/ (\d+) /g, function (_m, i) { return blocks[Number(i)]; }) + '</div>';
+  }
+
+  var FLAG_LABELS = {
+    REVIEWING: 'Reviewing', FIXING: 'Fixing', UNREVIEWED: 'Not reviewed', STALE: 'New commits', TO_PUBLISH: 'To publish',
+    PARTIAL: 'Partly published', AWAITING_THEM: 'Waiting on them', REPLIED: 'Replied', TO_VERIFY: 'To verify',
+    APPROVED: 'Approved', CHANGES_REQUESTED: 'Changes requested', DRAFT: 'Draft', MERGED: 'Merged', DECLINED: 'Declined'
+  };
+  var MINE = { UNREVIEWED: 1, STALE: 1, TO_PUBLISH: 1, PARTIAL: 1, REPLIED: 1, TO_VERIFY: 1 };
+  function flagChip(flag) {
+    var cls = MINE[flag] ? 'mine' : flag === 'APPROVED' || flag === 'MERGED' ? 'okc' : flag === 'CHANGES_REQUESTED' || flag === 'DECLINED' ? 'badc' : flag === 'REVIEWING' || flag === 'FIXING' ? 'accent' : '';
+    return '<span class="chip ' + cls + '">' + (flag === 'REVIEWING' || flag === 'FIXING' ? '<span class="dot busy"></span>' : '') + esc(FLAG_LABELS[flag] || flag) + '</span>';
+  }
+  var CATEGORY_LABELS = { FUNCTIONAL: 'functional', BUG: 'bug', DESIGN: 'design', CONVENTION: 'convention' };
+  var RESOLUTION_LABELS = { RESOLVED: ['Resolved', 'okc'], PARTIAL: ['Partly fixed', 'mine'], UNRESOLVED: ['Not resolved', 'badc'], WONT_FIX: ["Won't fix", 'okc'] };
+  var THREAD_LABELS = {
+    NEEDS_ANSWER: ['They replied', 'badc'], DRAFT_READY: ['Answer drafted', 'accent'], NOT_FIXED: ['Not fixed', 'badc'],
+    UNPUBLISHED: ['Not published', ''], UNVERIFIED: ['Not verified', 'mine'], OK: ['Closed', 'okc']
+  };
+
+  /* ------------------------------------------------------------------ *
+   * Loading
+   * ------------------------------------------------------------------ */
+
+  function loadOverview() {
+    return call('overview').then(function (result) {
+      state.overview = result;
+      state.auto = result.auto;
+      state.activity = {};
+      (result.activity || []).forEach(function (run) { state.activity[run.key] = run; });
+      if (!state.depths) return call('depths').then(function (d) { state.depths = d; });
+    });
+  }
+
+  function load() {
+    var view = state.view;
+    var promise;
+    if (view === 'dashboard') promise = call('dashboard').then(function (r) { state.dashboard = r; state.auto = r.auto; });
+    else if (view === 'repos') promise = call('repos').then(function (r) { state.repos = r.repos; });
+    else if (view === 'prs') promise = call('prs', { repoId: state.repoId, states: state.prStates }).then(function (r) { state.prList = r; });
+    else if (view === 'pr') promise = loadPrView();
+    else if (view === 'settings') promise = Promise.all([call('guidelines', { repoId: null }), call('usage')]).then(function (r) { state.globalGuidelines = r[0].guidelines; state.usage = r[1].usage; });
+    else if (view === 'import') promise = call('importInspect').then(function (r) { state.importInfo = r; });
+    else promise = Promise.resolve();
+    return promise.then(draw, function (error) {
+      if (view === 'pr') state.prError = error.message; else fail(error);
+      draw();
+    });
+  }
+
+  function loadPrView() {
+    return call('pr', { repoId: state.repoId, prId: state.prId }).then(function (r) {
+      state.pr = r;
+      state.prError = null;
+      if (state.prTab === 'code' && !state.code.files) loadFiles();
+      if (state.prTab === 'commits' && !state.commits.data) loadCommits();
+    });
+  }
+
+  /** Something about this PR changed on the other side: read it again, but not under someone's typing. */
+  function scheduleReload() {
+    clearTimeout(state.reloadTimer);
+    state.reloadTimer = setTimeout(function () {
+      var active = document.activeElement;
+      if (active && (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && active.type !== 'checkbox'))) {
+        state.pendingReload = true;
+        return;
+      }
+      load();
+    }, 350);
+  }
+  document.addEventListener('focusout', function () {
+    if (!state.pendingReload) return;
+    setTimeout(function () {
+      var active = document.activeElement;
+      if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT')) return;
+      state.pendingReload = false;
+      load();
+    }, 150);
+  });
+
+  function go(view, fields) {
+    state.view = view;
+    Object.keys(fields || {}).forEach(function (key) { state[key] = fields[key]; });
+    if (view !== 'pr') { state.pr = null; state.prError = null; }
+    if (view === 'pr') {
+      state.code = { files: null, file: null, lines: null, error: null, focusLine: null, noteAt: null };
+      state.commits = { data: null, sha: null, files: null, file: null, lines: null, error: null };
+      state.confirmRerun = null; state.decline = null; state.merge = null;
+    }
+    remember();
+    draw();
+    $('main').scrollTop = 0;
+    load();
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Drawing
+   * ------------------------------------------------------------------ */
+
+  function runningList() {
+    return Object.keys(state.activity).map(function (key) { return state.activity[key]; });
+  }
+
+  function drawTop() {
+    var runs = runningList();
+    var auto = state.auto;
+    var autoText = !state.overview ? '' : !(state.overview.settings && state.overview.settings.autoEnabled)
+      ? 'automatic off'
+      : auto && auto.running ? 'sweeping…' : auto && auto.lastRunAt ? 'last sweep ' + when(auto.lastRunAt) : 'automatic on';
+    var tabs = [['dashboard', 'Dashboard'], ['repos', 'Repositories'], ['settings', 'Settings']];
+    var html = '<span class="brand">Code Reviewer</span>';
+    tabs.forEach(function (tab) {
+      var on = state.view === tab[0] || (tab[0] === 'repos' && (state.view === 'prs' || state.view === 'repoForm' || state.view === 'import'));
+      html += '<button class="tab' + (on ? ' on' : '') + '" data-act="nav" data-view="' + tab[0] + '">' + tab[1] + '</button>';
+    });
+    html += '<span class="spacer"></span>';
+    if (runs.length) html += '<span class="chip accent" title="Runs in progress"><span class="dot busy"></span>' + runs.length + ' running</span>';
+    html += '<span class="faint" title="' + esc(auto && auto.lastMessage || '') + '">' + esc(autoText) + '</span>';
+    html += '<button class="btn small" data-act="refresh-all"' + busyAttr('refresh-all') + '>Refresh</button>';
+    $('top').innerHTML = html;
+  }
+
+  function draw() {
+    if (!state.started) return;
+    drawTop();
+    var main = $('main');
+    var scroll = main.scrollTop;
+    var html;
+    try {
+      if (state.view === 'dashboard') html = drawDashboard();
+      else if (state.view === 'repos') html = drawRepos();
+      else if (state.view === 'repoForm') html = drawRepoForm();
+      else if (state.view === 'prs') html = drawPrList();
+      else if (state.view === 'pr') html = drawPr();
+      else if (state.view === 'settings') html = drawSettings();
+      else if (state.view === 'import') html = drawImport();
+      else html = '';
+    } catch (error) {
+      html = '<div class="page"><div class="banner bad">This view could not be drawn: ' + esc(error && error.stack || error) + '</div></div>';
+    }
+    var focus = document.activeElement && document.activeElement.getAttribute && document.activeElement.getAttribute('data-edit');
+    var caret = focus && document.activeElement.selectionStart;
+    main.innerHTML = html;
+    main.scrollTop = scroll;
+    if (focus) {
+      var again = main.querySelector('[data-edit="' + focus + '"]');
+      if (again) { again.focus(); try { again.setSelectionRange(caret, caret); } catch (e) { /* not a text field */ } }
+    }
+  }
+
+  function edit(key, fallback) {
+    return Object.prototype.hasOwnProperty.call(state.edits, key) ? state.edits[key] : fallback == null ? '' : fallback;
+  }
+
+  function drawRuns(runs, withTitle) {
+    if (!runs.length) return '';
+    return runs.map(function (run) {
+      var label = { review: 'Review', verify: 'Verification', final: 'Final pass', reply: 'Reply', fix: 'Fix' }[run.kind] || run.kind;
+      return '<div class="run"><div class="row"><span class="dot busy"></span><strong>' + esc(label) + '</strong>' +
+        (withTitle ? ' <span class="dim">' + esc(run.repoName) + ' #' + esc(run.prId) + ' · ' + esc(run.title) + '</span>' : ' <span class="dim">' + esc(run.title) + '</span>') +
+        (run.auto ? ' <span class="chip">automatic</span>' : '') +
+        (run.depth ? ' <span class="chip">' + esc(run.depth.toLowerCase()) + '</span>' : '') +
+        (run.model ? ' <span class="chip">' + esc(run.model) + '</span>' : '') +
+        '<span class="spacer"></span><span class="faint">' + esc(when(new Date(run.startedAt).toISOString())) + '</span>' +
+        (withTitle ? ' <button class="btn small" data-act="open-pr" data-repo="' + esc(run.repoId) + '" data-pr="' + esc(run.prId) + '">Open</button>' : '') +
+        ' <button class="btn small danger" data-act="cancel-run" data-key="' + esc(run.key) + '">Cancel</button></div>' +
+        '<div class="lines">' + esc((run.lines || []).slice(-14).join('\n')) + '</div></div>';
+    }).join('');
+  }
+
+  // ---- dashboard --------------------------------------------------------
+
+  function drawDashboard() {
+    var d = state.dashboard;
+    if (!state.overview || !d) return '<div class="loading">Loading the board…</div>';
+    if (!state.overview.repos.length) {
+      return '<div class="page"><div class="empty"><h2>No repositories yet</h2>Add a repository with its local clone and a token, or bring your AI Code Reviewer history across.<div class="row" style="justify-content:center;margin-top:12px">' +
+        '<button class="btn primary" data-act="repo-new">Add repository</button> <button class="btn" data-act="nav" data-view="import">Import from AI Code Reviewer</button></div></div></div>';
+    }
+    var f = state.dashFilter;
+    var stats = [
+      ['REVIEWING', d.stats.running, 'In progress'], ['', d.stats.open, 'Open PRs'], ['TO_PUBLISH', d.stats.toPublish, 'Ready to publish'],
+      ['REPLIED', d.stats.replied, 'Replied to you'], ['TO_VERIFY', d.stats.toVerify, 'To verify'], ['UNREVIEWED', d.rows.filter(function (r) { return r.flags.indexOf('UNREVIEWED') >= 0; }).length, 'Not reviewed']
+    ];
+    var html = '<div class="page">';
+    html += '<div class="stats">' + stats.map(function (s) {
+      var on = s[0] && f.flags.indexOf(s[0]) >= 0;
+      return '<div class="stat' + (on ? ' on' : '') + '" data-act="dash-flag" data-flag="' + s[0] + '"><div class="n">' + s[1] + '</div><div class="l">' + s[2] + '</div></div>';
+    }).join('') + '</div>';
+
+    var runs = runningList();
+    if (runs.length) html += '<h3>Running now</h3>' + drawRuns(runs, true);
+
+    var authors = {};
+    d.rows.forEach(function (row) { authors[row.pr.author] = (authors[row.pr.author] || 0) + 1; });
+    html += '<div class="row" style="margin:12px 0 6px">';
+    html += '<input type="text" placeholder="Search title, author, repository, #number" data-bind="dash-text" data-edit="dash-text" value="' + esc(f.text) + '" style="width:260px">';
+    html += '<span class="chip click' + (f.mine ? ' on' : '') + '" data-act="dash-mine" title="PRs waiting on something only you can do">Mine</span>';
+    ['UNREVIEWED', 'STALE', 'TO_PUBLISH', 'REPLIED', 'TO_VERIFY', 'AWAITING_THEM', 'APPROVED', 'CHANGES_REQUESTED', 'DRAFT'].forEach(function (flag) {
+      html += '<span class="chip click' + (f.flags.indexOf(flag) >= 0 ? ' on' : '') + '" data-act="dash-flag" data-flag="' + flag + '">' + FLAG_LABELS[flag] + '</span>';
+    });
+    if (f.flags.length > 1) html += '<button class="btn small" data-act="dash-mode">' + (f.mode === 'ALL' ? 'All of them' : 'Any of them') + '</button>';
+    html += '</div>';
+    var authorNames = Object.keys(authors).sort();
+    if (authorNames.length > 1) {
+      html += '<div class="row" style="margin-bottom:8px"><span class="faint">Authors</span>' + authorNames.map(function (name) {
+        return '<span class="chip click' + (f.authors.indexOf(name) >= 0 ? ' on' : '') + '" data-act="dash-author" data-author="' + esc(name) + '">' + esc(name) + ' ' + authors[name] + '</span>';
+      }).join('') + '</div>';
+    }
+    var text = f.text.trim().toLowerCase();
+    var rows = d.rows.filter(function (row) {
+      if (f.mine && !row.mine) return false;
+      if (f.authors.length && f.authors.indexOf(row.pr.author) < 0) return false;
+      if (f.flags.length) {
+        var has = f.flags.map(function (flag) { return flag === 'TO_PUBLISH' ? row.flags.indexOf('TO_PUBLISH') >= 0 || row.flags.indexOf('PARTIAL') >= 0 : row.flags.indexOf(flag) >= 0; });
+        if (f.mode === 'ALL' ? has.indexOf(false) >= 0 : has.indexOf(true) < 0) return false;
+      }
+      if (text) {
+        var hay = (row.pr.title + ' ' + row.pr.author + ' ' + row.repoName + ' #' + row.pr.id).toLowerCase();
+        if (hay.indexOf(text) < 0) return false;
+      }
+      return true;
+    });
+    html += drawPrTable(rows, true);
+
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin-top:10px">';
+    html += '<div><h3>Recent reviews</h3>' + (d.recent.length ? '<table class="list">' + d.recent.map(function (item) {
+      return '<tr class="click" data-act="open-pr" data-repo="' + esc(item.repoId) + '" data-pr="' + item.prId + '"><td class="faint">' + esc(when(item.at)) + '</td><td>' + esc(item.repoName) + ' #' + item.prId + ' <span class="dim">' + esc(item.title) + '</span></td><td>' + statusChip(item.status) + (item.trigger === 'AUTO' ? ' <span class="chip">auto</span>' : '') + '</td><td class="faint">' + money(item.costUsd) + '</td></tr>';
+    }).join('') + '</table>' : '<div class="faint">Nothing yet.</div>') + '</div>';
+    html += '<div><h3>Usage</h3>' + drawUsage(d.usage) + '</div>';
+    html += '</div></div>';
+    return html;
+  }
+
+  function statusChip(status) {
+    var cls = status === 'DONE' ? 'okc' : status === 'FAILED' ? 'badc' : status === 'RUNNING' ? 'accent' : '';
+    var label = { DONE: 'done', FAILED: 'failed', RUNNING: 'running', CANCELLED: 'cancelled' }[status] || String(status || '').toLowerCase();
+    return '<span class="chip ' + cls + '">' + esc(label) + '</span>';
+  }
+
+  function drawUsage(usage) {
+    if (!usage) return '';
+    function block(title, list) {
+      var total = list.reduce(function (acc, row) { acc.runs += row.runs; acc.billable += row.billable; acc.cache += row.cache; acc.cost += row.costUsd; return acc; }, { runs: 0, billable: 0, cache: 0, cost: 0 });
+      return '<div class="card"><div class="row"><strong>' + title + '</strong><span class="spacer"></span><span>' + money(total.cost) + '</span></div>' +
+        '<div class="faint">' + total.runs + ' run(s) · ' + tokens(total.billable) + ' tokens in+out · ' + tokens(total.cache) + ' cache</div>' +
+        (list.length ? '<div class="dim" style="margin-top:4px">' + list.map(function (row) { return esc(row.kind) + ' ' + row.runs + ' · ' + money(row.costUsd); }).join(' — ') + '</div>' : '') + '</div>';
+    }
+    return block('Last 5 hours', usage.fiveHours || []) + block('Last 7 days', usage.week || []) +
+      '<div class="faint" style="margin-top:4px">API-price equivalent, not a charge: with a subscription what is consumed is tokens.</div>';
+  }
+
+  function drawPrTable(rows, withRepo) {
+    if (!rows.length) return '<div class="empty">No pull requests match.</div>';
+    var html = '<table class="list"><tr>' + (withRepo ? '<th>Repository</th>' : '') + '<th>Pull request</th><th>Age</th><th>Waiting for</th><th>Findings</th><th>Cost</th></tr>';
+    rows.forEach(function (row) {
+      var pr = row.pr;
+      var closed = pr.state !== 'OPEN';
+      html += '<tr class="click' + (closed ? ' closed' : '') + '" data-act="open-pr" data-repo="' + esc(row.repoId) + '" data-pr="' + pr.id + '">' +
+        (withRepo ? '<td class="dim">' + esc(row.repoName) + '</td>' : '') +
+        '<td class="title-cell"><div class="t">#' + pr.id + ' ' + esc(pr.title) + '</div><div class="s">' + esc(pr.author) + ' · ' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch) +
+        (row.pendingReturn ? ' · <span class="warn">' + row.pendingReturn + ' fix(es) to hand back</span>' : '') + '</div></td>' +
+        '<td class="faint" title="' + esc(pr.createdOn) + '">' + (row.ageDays != null ? row.ageDays + 'd ' : '') + '<span class="' + (row.ageDays >= 14 ? 'bad' : row.ageDays >= 7 ? 'warn' : '') + '">' + ageMark(row.ageDays) + '</span></td>' +
+        '<td><div class="row">' + row.flags.map(flagChip).join('') + '</div></td>' +
+        '<td class="faint">' + (row.findings.total ? row.findings.published + '/' + row.findings.total + (row.findings.unresolved ? ' <span class="warn">· ' + row.findings.unresolved + ' open</span>' : '') : '') + '</td>' +
+        '<td class="faint">' + (row.costUsd ? money(row.costUsd) : '') + '</td></tr>';
+    });
+    return html + '</table>';
+  }
+
+  // ---- repositories -------------------------------------------------------
+
+  function drawRepos() {
+    if (!state.repos) return '<div class="loading">Loading repositories…</div>';
+    var html = '<div class="page"><div class="row" style="margin-bottom:10px"><h2 style="margin:0">Repositories</h2><span class="spacer"></span>' +
+      '<button class="btn" data-act="nav" data-view="import">Import from AI Code Reviewer</button> <button class="btn primary" data-act="repo-new">Add repository</button></div>';
+    if (!state.repos.length) return html + '<div class="empty">No repositories yet.</div></div>';
+    var visible = state.repos.filter(function (repo) { return !repo.hidden; });
+    var hidden = state.repos.filter(function (repo) { return repo.hidden; });
+    html += '<div class="grid-cards">' + visible.map(repoCard).join('') + '</div>';
+    if (hidden.length) html += '<h3>Hidden</h3><div class="grid-cards">' + hidden.map(repoCard).join('') + '</div>';
+    return html + '</div>';
+  }
+
+  function repoCard(repo) {
+    var debt = repo.debt.pendingReplies + repo.debt.unverified + repo.debt.unpublished;
+    var total = Math.max(debt, 1);
+    return '<div class="card"><div class="row"><strong>' + esc(repo.name) + '</strong><span class="chip">' + (repo.provider === 'GITHUB' ? 'GitHub' : 'Bitbucket') + '</span>' +
+      (repo.autoReview ? '<span class="chip accent">automatic</span>' : '') + '<span class="spacer"></span>' +
+      '<button class="btn small" data-act="repo-edit" data-repo="' + esc(repo.id) + '">Edit</button></div>' +
+      '<div class="faint mono" style="margin:3px 0">' + esc(repo.owner + '/' + repo.slug) + '</div>' +
+      '<div class="faint mono" title="' + esc(repo.localPath) + '">' + (repo.cloneOk ? '' : '<span class="bad">no clone at </span>') + esc(repo.localPath) + '</div>' +
+      (!repo.hasToken ? '<div class="bad" style="margin-top:4px">No token: public repositories only, and nothing can be published.</div>' : repo.tokenUnreadable ? '<div class="bad" style="margin-top:4px">The token cannot be read on this machine. Enter it again.</div>' : '') +
+      '<div class="row" style="margin-top:8px"><span>' + repo.open + ' open</span><span class="faint">· ' + repo.reviewed + ' reviewed</span>' +
+      (repo.reviewed ? '<span class="faint">· ' + repo.findingsPerPr.toFixed(1) + ' findings/PR · ' + money(repo.costPerPr) + '/PR</span>' : '') + '</div>' +
+      (debt ? '<div style="margin-top:6px" title="' + repo.debt.pendingReplies + ' replies · ' + repo.debt.unverified + ' unverified · ' + repo.debt.unpublished + ' unpublished"><div class="bar">' +
+        '<span style="width:' + (repo.debt.pendingReplies / total * 100) + '%;background:var(--danger)"></span>' +
+        '<span style="width:' + (repo.debt.unverified / total * 100) + '%;background:#d9a441"></span>' +
+        '<span style="width:' + (repo.debt.unpublished / total * 100) + '%;background:var(--accent)"></span></div>' +
+        '<div class="faint" style="font-size:11px;margin-top:2px">' + repo.debt.pendingReplies + ' to answer · ' + repo.debt.unverified + ' to verify · ' + repo.debt.unpublished + ' to publish</div></div>' : '') +
+      (repo.oldestDays != null ? '<div class="' + (repo.oldestDays > 14 ? 'bad' : 'faint') + '" style="margin-top:4px">Oldest open PR: ' + repo.oldestDays + ' days</div>' : '') +
+      '<div class="row" style="margin-top:8px"><button class="btn small primary" data-act="open-prs" data-repo="' + esc(repo.id) + '">Pull requests</button>' +
+      '<button class="btn small" data-act="repo-hide" data-repo="' + esc(repo.id) + '" data-hidden="' + (repo.hidden ? '0' : '1') + '">' + (repo.hidden ? 'Show' : 'Hide') + '</button>' +
+      '<span class="spacer"></span><span class="faint">' + (repo.fetchedAt ? 'read ' + esc(when(repo.fetchedAt)) : 'never read') + '</span></div></div>';
+  }
+
+  function blankForm() {
+    return { id: null, name: '', provider: 'BITBUCKET', owner: '', slug: '', localPath: '', token: '', projectKind: '', defaultDepth: '', defaultModel: '', autoReview: false, skipDrafts: true, skipTitles: 'DO NOT MERGE,WIP', skipAuthors: '', onlyTargets: '', replyMode: 'DRAFT', fixMode: 'MANUAL', hasToken: false };
+  }
+
+  function drawRepoForm() {
+    var f = state.form;
+    if (!f) return '<div class="loading">Loading…</div>';
+    var editing = Boolean(f.id);
+    var depths = state.depths ? state.depths.depths : [];
+    var kinds = state.depths ? state.depths.kinds : [];
+    function input(field, type, placeholder, disabled) {
+      return '<input type="' + type + '" data-form="' + field + '" data-edit="form-' + field + '" value="' + esc(f[field]) + '" placeholder="' + esc(placeholder || '') + '"' + (disabled ? ' disabled' : '') + '>';
+    }
+    function select(field, options) {
+      return '<select data-form="' + field + '">' + options.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (String(f[field] || '') === o[0] ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select>';
+    }
+    function radio(field, options) {
+      return '<div class="radio">' + options.map(function (o) {
+        return '<label><input type="radio" name="' + field + '" data-form="' + field + '" value="' + o[0] + '"' + (f[field] === o[0] ? ' checked' : '') + '><span><strong>' + esc(o[1]) + '</strong> <span class="faint">' + esc(o[2]) + '</span></span></label>';
+      }).join('') + '</div>';
+    }
+    var html = '<div class="page form"><div class="row"><button class="btn small" data-act="nav" data-view="repos">← Repositories</button><h2 style="margin:0 0 0 6px">' + (editing ? 'Edit ' + esc(f.name) : 'Add a repository') + '</h2></div>';
+    html += '<div class="field"><label>Local clone</label><div><div class="row">' + input('localPath', 'text', '/path/to/the/clone') +
+      ' <button class="btn" data-act="form-pick">Choose…</button> <button class="btn" data-act="form-detect"' + busyAttr('form-detect') + '>Read remote</button></div>' +
+      '<div class="help">Reviews read this working copy and never write to it. Its <span class="mono">origin</span> has to fetch without a password prompt — for Bitbucket that means SSH.</div></div></div>';
+    html += '<div class="field"><label>Name</label><div>' + input('name', 'text', 'How it is called in the app') + '</div></div>';
+    html += '<div class="field"><label>Provider</label><div>' + (editing ? '<span>' + (f.provider === 'GITHUB' ? 'GitHub' : 'Bitbucket') + '</span>' : select('provider', [['BITBUCKET', 'Bitbucket'], ['GITHUB', 'GitHub']])) + '</div></div>';
+    html += '<div class="field"><label>' + (f.provider === 'BITBUCKET' ? 'Workspace' : 'Owner') + '</label><div>' + input('owner', 'text', '', editing) + '</div></div>';
+    html += '<div class="field"><label>Repository slug</label><div>' + input('slug', 'text', '', editing) + (editing ? '<div class="help">Provider, owner and slug are fixed once created: the history belongs to that repository.</div>' : '') + '</div></div>';
+    html += '<div class="field"><label>Token</label><div>' + input('token', 'password', editing && f.hasToken ? 'Leave blank to keep the stored token' : '') +
+      '<div class="help">' + (f.provider === 'BITBUCKET'
+        ? 'An Atlassian API token, sent as Bearer. Reading needs <span class="mono">read:pullrequest:bitbucket</span>; publishing, approving and merging need write.'
+        : 'A personal access token with pull request read and write on this repository.') +
+      ' Kept encrypted by the system keychain.</div><div class="row" style="margin-top:6px"><button class="btn" data-act="form-test"' + busyAttr('form-test') + '>Test</button>' +
+      (state.formTest ? (state.formTest.ok ? '<span class="ok">' + state.formTest.count + ' open PR(s)</span> <span class="faint">' + esc((state.formTest.sample || []).slice(0, 3).join(' · ')) + '</span>' : '<span class="bad">' + esc(state.formTest.error) + '</span>') : '') + '</div></div></div>';
+
+    html += '<div class="section"><h3>Review profile</h3>';
+    html += '<div class="field"><label>Depth</label><div>' + select('defaultDepth', [['', 'Automatic — sized from the diff']].concat(depths.map(function (d) { return [d.id, d.label + ' — ' + d.blurb]; }))) + '</div></div>';
+    html += '<div class="field"><label>Project kind</label><div>' + select('projectKind', [['', 'Automatic — from the files touched']].concat(kinds.map(function (k) { return [k.id, k.label]; }))) + '</div></div>';
+    html += '<div class="field"><label>Model</label><div><input type="text" list="models" data-form="defaultModel" data-edit="form-defaultModel" value="' + esc(f.defaultModel) + '" placeholder="Automatic — the depth\'s model"><datalist id="models"><option value="haiku"><option value="sonnet"><option value="opus"><option value="fable"></datalist></div></div></div>';
+
+    html += '<div class="section"><h3>Automatic review</h3><label class="check"><input type="checkbox" data-form="autoReview"' + (f.autoReview ? ' checked' : '') + '> Review new commits on open PRs on their own</label>' +
+      '<div class="help faint" style="margin:4px 0 0 22px">Capped per cycle in Settings. A PR is reviewed once per commit, and nothing it finds is published without you.</div>';
+    if (f.autoReview) {
+      html += '<div class="field"><label>Skip drafts</label><div><label class="check"><input type="checkbox" data-form="skipDrafts"' + (f.skipDrafts ? ' checked' : '') + '> Draft PRs are not reviewed automatically</label></div></div>';
+      html += '<div class="field"><label>Skip titles containing</label><div>' + input('skipTitles', 'text', 'DO NOT MERGE,WIP') + '<div class="help">Comma separated, any case.</div></div></div>';
+      html += '<div class="field"><label>Skip authors</label><div>' + input('skipAuthors', 'text', 'dependabot,renovate') + '</div></div>';
+      html += '<div class="field"><label>Only targets</label><div>' + input('onlyTargets', 'text', 'main,develop') + '<div class="help">Empty reviews PRs into any branch.</div></div></div>';
+    }
+    html += '</div>';
+
+    html += '<div class="section"><h3>When someone answers a comment</h3>' + radio('replyMode', [['OFF', 'Only detect', 'the reply shows up; nothing is drafted'], ['DRAFT', 'Draft it and tell me', 'an answer is written for you to check and publish'], ['AUTO', 'Answer automatically', 'the drafted answer is published without asking']]);
+    if (f.replyMode === 'AUTO') html += '<div class="banner bad">Automatic answers are published on the PR in your name without you reading them first.</div>';
+    html += '</div>';
+    html += '<div class="section"><h3>Fixing findings</h3>' + radio('fixMode', [['OFF', 'Off', 'no fix button'], ['MANUAL', 'On request', 'a fix starts when you press Fix'], ['AUTO', 'After every review', 'every open finding is fixed as soon as a review ends']]);
+    if (f.fixMode === 'AUTO') html += '<div class="banner bad">Every finished review will spend a run per open finding. Commits stay in the workshop until you hand them back; nothing is pushed.</div>';
+    html += '<div class="help faint">A fix is written and committed in a separate copy of the repository, never in your clone.</div></div>';
+
+    if (editing) {
+      html += '<div class="section"><h3>Conventions for this repository</h3>' + drawGuidelines(state.formGuidelines, f.id) + '</div>';
+    }
+    html += '<div class="row" style="margin-top:18px"><button class="btn primary" data-act="form-save"' + busyAttr('form-save') + '>' + (editing ? 'Save' : 'Add repository') + '</button><button class="btn" data-act="nav" data-view="repos">Cancel</button>' +
+      (editing ? '<span class="spacer"></span><button class="btn danger" data-act="repo-delete"' + busyAttr('repo-delete') + '>Delete repository…</button>' : '') + '</div></div>';
+    return html;
+  }
+
+  function drawGuidelines(list, repoId) {
+    if (!list) return '<div class="faint">Loading…</div>';
+    var scope = repoId || 'global';
+    var html = '<div class="help faint" style="margin-bottom:6px">Decisions already taken, given to every review so they are not reported as problems. ' + (repoId ? 'This repository\'s rules win over the global ones.' : 'Global: every repository.') + '</div>';
+    list.forEach(function (doc) {
+      var key = 'guide-' + doc.id;
+      var open = state.edits[key + '-open'];
+      html += '<div class="card"><div class="row"><label class="check"><input type="checkbox" data-act="guide-toggle" data-id="' + esc(doc.id) + '"' + (doc.enabled ? ' checked' : '') + '></label><strong>' + esc(doc.name) + '</strong>' +
+        (doc.source === 'CLAUDE_MD' ? '<span class="chip">CLAUDE.md</span>' : '') + (doc.stale ? '<span class="chip mine">file changed</span>' : '') +
+        '<span class="faint">' + Math.round(doc.content.length / 100) / 10 + 'k chars</span><span class="spacer"></span>' +
+        '<button class="btn small" data-act="guide-open" data-id="' + esc(doc.id) + '">' + (open ? 'Close' : 'Edit') + '</button>' +
+        '<button class="btn small danger" data-act="guide-delete" data-id="' + esc(doc.id) + '" data-scope="' + esc(scope) + '">Delete</button></div>' +
+        (open ? '<textarea rows="12" data-edit="' + key + '" style="margin-top:6px">' + esc(edit(key, doc.content)) + '</textarea><div class="row" style="margin-top:4px"><button class="btn small primary" data-act="guide-save" data-id="' + esc(doc.id) + '" data-scope="' + esc(scope) + '">Save</button></div>' : '') + '</div>';
+    });
+    var newKey = 'guide-new-' + scope;
+    html += '<div class="card"><div class="row"><input type="text" placeholder="Name, e.g. Architecture" data-edit="' + newKey + '-name" value="' + esc(edit(newKey + '-name')) + '" style="flex:1"></div>' +
+      '<textarea rows="5" placeholder="Paste or write the conventions" data-edit="' + newKey + '" style="margin-top:6px">' + esc(edit(newKey)) + '</textarea>' +
+      '<div class="row" style="margin-top:4px"><button class="btn small primary" data-act="guide-add" data-scope="' + esc(scope) + '">Add</button>' +
+      (repoId ? '<button class="btn small" data-act="guide-claude" data-repo="' + esc(repoId) + '">Import CLAUDE.md files</button>' : '') + '</div></div>';
+    return html;
+  }
+
+  // ---- PR list ---------------------------------------------------------------
+
+  function drawPrList() {
+    var list = state.prList;
+    if (!list) return '<div class="loading">Loading pull requests…</div>';
+    var rows = list.rows.slice();
+    var by = {
+      OLDEST: function (a, b) { return String(a.pr.createdOn).localeCompare(String(b.pr.createdOn)); },
+      NEWEST: function (a, b) { return String(b.pr.createdOn).localeCompare(String(a.pr.createdOn)); },
+      STALE: function (a, b) { return String(a.pr.updatedOn).localeCompare(String(b.pr.updatedOn)); },
+      ACTIVE: function (a, b) { return String(b.pr.updatedOn).localeCompare(String(a.pr.updatedOn)); }
+    }[state.prSort];
+    rows.sort(by);
+    var html = '<div class="page"><div class="row" style="margin-bottom:8px"><button class="btn small" data-act="nav" data-view="repos">← Repositories</button><h2 style="margin:0 6px">' + esc(list.repo.name) + '</h2>' +
+      '<span class="faint mono">' + esc(list.repo.owner + '/' + list.repo.slug) + '</span><span class="spacer"></span>' +
+      '<span class="faint">' + (list.fetchedAt ? 'read ' + esc(when(list.fetchedAt)) : '') + '</span>' +
+      '<button class="btn small" data-act="prs-refresh"' + busyAttr('prs-refresh') + '>Refresh</button>' +
+      '<button class="btn small" data-act="repo-edit" data-repo="' + esc(list.repo.id) + '">Edit</button></div>';
+    html += '<div class="row" style="margin-bottom:8px">';
+    ['OPEN', 'MERGED', 'DECLINED'].forEach(function (s) {
+      html += '<span class="chip click' + (state.prStates.indexOf(s) >= 0 ? ' on' : '') + '" data-act="prs-state" data-state="' + s + '">' + s.toLowerCase() + '</span>';
+    });
+    html += '<button class="btn small" data-act="prs-history"' + busyAttr('prs-history') + ' title="Merged and declined PRs are only fetched when asked for">Search history</button>';
+    html += '<span class="spacer"></span><span class="faint">Sort</span><select data-bind="prs-sort">' + [['OLDEST', 'Oldest first'], ['NEWEST', 'Newest first'], ['STALE', 'Quiet longest'], ['ACTIVE', 'Recently active']].map(function (o) {
+      return '<option value="' + o[0] + '"' + (state.prSort === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
+    }).join('') + '</select></div>';
+    if (!list.fetchedAt && !rows.length) html += '<div class="empty">This repository has not been read yet. <button class="btn primary" data-act="prs-refresh">Read pull requests</button></div>';
+    else html += drawPrTable(rows, false);
+    return html + '</div>';
+  }
+
+  // ---- one PR ------------------------------------------------------------------
+
+  function drawPr() {
+    var v = state.pr;
+    if (state.prError && !v) return '<div class="page"><button class="btn small" data-act="back">← Back</button><div class="banner bad">' + esc(state.prError) + '</div><button class="btn" data-act="pr-load">Load from the forge</button></div>';
+    if (!v) return '<div class="loading">Loading the pull request…</div>';
+    var pr = v.pr;
+    var repo = v.repo;
+    if (!pr) {
+      return '<div class="page"><button class="btn small" data-act="back">← Back</button><div class="empty">PR #' + esc(state.prId) + ' is not loaded yet.<br><button class="btn primary" data-act="pr-load"' + busyAttr('pr-load') + '>Load from ' + (repo.provider === 'GITHUB' ? 'GitHub' : 'Bitbucket') + '</button></div></div>';
+    }
+    var open = pr.state === 'OPEN';
+    var runs = v.running || [];
+    var html = '<div class="prhead"><div class="row"><button class="btn small" data-act="back">← ' + esc(repo.name) + '</button>' +
+      '<span class="chip ' + (open ? 'okc' : pr.state === 'MERGED' ? 'accent' : 'badc') + '">' + esc(pr.state.toLowerCase()) + '</span>' +
+      (pr.isDraft ? '<span class="chip">draft</span>' : '') +
+      '<span class="spacer"></span>' +
+      (pr.url ? '<button class="btn small" data-act="open-url" data-url="' + esc(pr.url) + '">Open on ' + (repo.provider === 'GITHUB' ? 'GitHub' : 'Bitbucket') + '</button>' : '') +
+      '<button class="btn small" data-act="shell" data-where="clone">Terminal</button>' +
+      '<button class="btn small" data-act="ask">Ask Claude</button>' +
+      '<button class="btn small" data-act="pr-load"' + busyAttr('pr-load') + '>Reload</button></div>' +
+      '<h2>#' + pr.id + ' ' + esc(pr.title) + '</h2>' +
+      '<div class="faint">' + esc(pr.author) + ' · <span class="mono">' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch) + '</span> · head <span class="mono">' + sha7(pr.headSha) + '</span>' +
+      (pr.createdOn ? ' · opened ' + esc(when(pr.createdOn)) : '') + (pr.updatedOn ? ' · updated ' + esc(when(pr.updatedOn)) : '') +
+      (v.approvals.length ? ' · ' + v.approvals.map(function (a) { return esc(a.who) + (a.state === 'APPROVED' ? ' ✓' : ' ✗'); }).join(', ') : '') + '</div>';
+    if (!open) html += '<div class="banner">This pull request is ' + esc(pr.state.toLowerCase()) + '. Nothing here can be published or merged any more.</div>';
+    if (open) html += drawActions(v);
+    html += '</div>';
+    var counts = {
+      review: (v.findings || []).filter(function (f) { return !f.publishedId && !f.dismissedAt && !f.closedAt; }).length,
+      conversation: v.threads.filter(function (t) { return t.state === 'NEEDS_ANSWER' || t.state === 'DRAFT_READY'; }).length,
+      commits: 0
+    };
+    html += '<div class="subtabs">' + [['review', 'Review'], ['code', 'Code'], ['commits', 'Commits'], ['conversation', 'Conversation'], ['history', 'History']].map(function (t) {
+      return '<button class="tab' + (state.prTab === t[0] ? ' on' : '') + '" data-act="pr-tab" data-tab="' + t[0] + '">' + t[1] + (counts[t[0]] ? '<span class="count">' + counts[t[0]] + '</span>' : '') + '</button>';
+    }).join('') + (runs.length ? '<span class="spacer"></span><span class="chip accent" style="align-self:center"><span class="dot busy"></span>' + runs.length + ' running</span>' : '') + '</div>';
+    if (state.prTab === 'review') html += drawReviewTab(v);
+    else if (state.prTab === 'code') html += drawCodeTab(v);
+    else if (state.prTab === 'commits') html += drawCommitsTab(v);
+    else if (state.prTab === 'conversation') html += drawConversationTab(v);
+    else html += drawHistoryTab(v);
+    return html;
+  }
+
+  function drawActions(v) {
+    var ours = v.approvals.filter(function (a) { return a.byUs; })[0];
+    var publishedLive = (v.done ? v.findings : []).some(function (f) { return f.publishedId && !f.dismissedAt; });
+    var html = '<div class="row" style="margin-top:8px">';
+    if (publishedLive) html += '<button class="btn" data-act="verify"' + busyAttr('verify') + ' title="Judge each published comment against the new code and the answers">Verify</button>';
+    if (ours && ours.state === 'APPROVED') html += '<button class="btn" data-act="stance" data-stance="unapprove"' + busyAttr('stance') + '>Withdraw approval</button>';
+    else html += '<button class="btn go" data-act="stance" data-stance="approve"' + busyAttr('stance') + '>Approve</button>';
+    if (ours && ours.state === 'CHANGES_REQUESTED') html += '<button class="btn" data-act="stance" data-stance="undoRequestChanges"' + busyAttr('stance') + '>Withdraw change request</button>';
+    else html += '<button class="btn" data-act="stance" data-stance="requestChanges"' + busyAttr('stance') + '>Request changes</button>';
+    html += '<button class="btn" data-act="final-pass"' + busyAttr('final-pass') + (v.done ? '' : ' disabled') + ' title="The last look before merging: is there anything that must not go in?">Final pass</button>';
+    html += '<button class="btn" data-act="decline-open">Decline…</button>';
+    html += '<button class="btn ' + (v.mergeBlocker ? '' : 'primary') + '" data-act="merge-open">' + (v.mergeBlocker ? 'Merge anyway…' : 'Merge…') + '</button>';
+    html += '<span class="faint" style="margin-left:6px">' + (v.mergeBlocker ? esc(v.mergeBlocker) : '<span class="ok">Ready to merge</span>') + '</span></div>';
+    var r = v.readiness;
+    if (r) {
+      html += '<div class="readiness"><div class="bar"><span style="width:' + r.percent + '%;background:' + (r.percent === 100 ? 'var(--ok)' : r.percent > 60 ? 'var(--accent)' : '#d9a441') + '"></span></div><strong>' + r.percent + '%</strong>' +
+        '<span class="faint">' + r.items.filter(function (i) { return !i.done; }).sort(function (a, b) { return b.weight - a.weight; }).slice(0, 4).map(function (i) { return esc(i.label) + (i.detail ? ' (' + esc(i.detail) + ')' : ''); }).join(' · ') + '</span></div>';
+    }
+    if (state.decline) {
+      html += '<div class="card" style="margin-top:8px"><strong>Decline #' + v.pr.id + '</strong><div class="faint">The reason is posted as a comment first; then the PR is closed.</div>' +
+        '<textarea rows="3" data-edit="decline-reason" style="margin-top:6px">' + esc(edit('decline-reason')) + '</textarea><div class="row" style="margin-top:6px"><button class="btn danger" data-act="decline"' + busyAttr('decline') + '>Decline</button><button class="btn" data-act="decline-close">Cancel</button></div></div>';
+    }
+    if (state.merge) {
+      var strategy = edit('merge-strategy', v.settings.mergeStrategy || 'MERGE_COMMIT');
+      html += '<div class="card" style="margin-top:8px"><strong>Merge #' + v.pr.id + ' into ' + esc(v.pr.targetBranch) + '</strong>' +
+        (v.mergeBlocker ? '<div class="banner warn">Merging with something still pending: ' + esc(v.mergeBlocker) + '</div>' : '') +
+        '<div class="row" style="margin-top:6px"><span class="faint">Strategy</span><select data-edit-select="merge-strategy">' + [['MERGE_COMMIT', 'Merge commit'], ['SQUASH', 'Squash'], ['FAST_FORWARD', v.repo.provider === 'GITHUB' ? 'Rebase' : 'Fast forward']].map(function (o) {
+          return '<option value="' + o[0] + '"' + (strategy === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
+        }).join('') + '</select>' + (v.repo.provider === 'BITBUCKET' ? '<label class="check"><input type="checkbox" data-edit-check="merge-close"' + (edit('merge-close', true) ? ' checked' : '') + '> Close the source branch</label>' : '') + '</div>' +
+        '<textarea rows="4" data-edit="merge-message" style="margin-top:6px">' + esc(edit('merge-message', 'Merged in ' + v.pr.sourceBranch + ' (pull request #' + v.pr.id + ')\n\n' + v.pr.title)) + '</textarea>' +
+        '<div class="row" style="margin-top:6px"><button class="btn primary" data-act="merge"' + busyAttr('merge') + '>Merge</button><button class="btn" data-act="merge-close">Cancel</button></div></div>';
+    }
+    return html;
+  }
+
+  function findingCard(f, v) {
+    var settled = Boolean(f.publishedId || f.dismissedAt || f.closedAt);
+    var fix = (v.fixes || []).filter(function (x) { return x.findingId === f.id; })[0];
+    var fixing = (v.running || []).some(function (run) { return run.kind === 'fix' && run.findingId === f.id; });
+    var fixOn = v.repo.fixMode !== 'OFF' && v.pr.state === 'OPEN';
+    var res = f.resolution ? RESOLUTION_LABELS[f.resolution] : null;
+    var html = '<div class="finding' + (f.dismissedAt || f.closedAt ? ' settled' : '') + '"><div class="meta"><span class="sev ' + esc(f.severity) + '">' + esc(f.severity) + '</span>' +
+      (f.category ? '<span class="chip">' + esc(CATEGORY_LABELS[f.category] || f.category) + '</span>' : '') +
+      (f.askedBy ? '<span class="chip accent">asked by ' + esc(f.askedBy) + '</span>' : '') +
+      (f.filePath ? '<button class="link mono" data-act="jump" data-file="' + esc(f.filePath) + '" data-line="' + (f.lineNo || '') + '">' + anchor(f.filePath, f.lineNo) + '</button>' : '') +
+      '<span class="spacer"></span>' +
+      (f.publishedId ? '<span class="chip okc">published</span>' : '') + (f.dismissedAt ? '<span class="chip">dismissed</span>' : '') + (f.closedAt && !f.dismissedAt ? '<span class="chip okc">closed</span>' : '') +
+      (res ? '<span class="chip ' + res[1] + '" title="' + esc(f.resolutionNote || '') + '">' + res[0] + '</span>' : f.publishedId && !f.closedAt && !f.dismissedAt ? '<span class="chip mine">not verified</span>' : '') +
+      '</div><div class="ftitle">' + esc(f.title) + '</div>';
+    var editing = state.edits['finding-open-' + f.id];
+    if (editing) {
+      html += '<input type="text" data-edit="finding-title-' + f.id + '" value="' + esc(edit('finding-title-' + f.id, f.title)) + '" style="width:100%;box-sizing:border-box">' +
+        '<textarea rows="5" data-edit="finding-body-' + f.id + '" style="margin-top:4px">' + esc(edit('finding-body-' + f.id, f.body)) + '</textarea>' +
+        '<div class="faint" style="margin-top:4px">How it could be fixed</div><textarea rows="3" data-edit="finding-sugg-' + f.id + '">' + esc(edit('finding-sugg-' + f.id, f.suggestion || '')) + '</textarea>' +
+        '<div class="row" style="margin-top:4px"><button class="btn small primary" data-act="finding-save" data-id="' + esc(f.id) + '">Save</button><button class="btn small" data-act="finding-edit" data-id="' + esc(f.id) + '">Cancel</button></div>';
+    } else {
+      html += md(f.body);
+      if (f.suggestion) html += '<div class="suggestion"><div class="faint">How it could be fixed</div>' + md(f.suggestion) + '</div>';
+    }
+    if (f.resolutionNote) html += '<div class="faint" style="margin-top:4px">' + esc(f.resolutionNote) + '</div>';
+    if (f.publishError) html += '<div class="banner bad">Publishing failed: ' + esc(f.publishError) + '</div>';
+    html += '<div class="row" style="margin-top:6px">';
+    if (v.pr.state === 'OPEN' && !settled) {
+      html += '<button class="btn small primary" data-act="publish-finding" data-id="' + esc(f.id) + '"' + busyAttr('publish-' + f.id) + '>' + (f.publishError ? 'Retry publish' : 'Publish') + '</button>';
+      html += '<button class="btn small" data-act="dismiss" data-id="' + esc(f.id) + '" data-on="1">Dismiss</button>';
+      if (!editing) html += '<button class="btn small" data-act="finding-edit" data-id="' + esc(f.id) + '">Edit</button>';
+    }
+    if (f.dismissedAt) html += '<button class="btn small" data-act="dismiss" data-id="' + esc(f.id) + '" data-on="0">Undo dismiss</button>';
+    if (f.publishedUrl) html += '<button class="btn small" data-act="open-url" data-url="' + esc(f.publishedUrl) + '">View on PR</button>';
+    if (fixOn) {
+      if (fixing) html += '<span class="chip accent"><span class="dot busy"></span>fixing</span>';
+      else if (fix && fix.state === 'COMMITTED') {
+        html += '<span class="chip okc">✔ ' + sha7(fix.sha) + (fix.returnedAt ? ' handed back' : ' in workshop') + '</span>';
+        if (!fix.replyId) html += '<button class="btn small" data-act="retry-fix-reply" data-id="' + esc(fix.id) + '"' + busyAttr('fixreply-' + fix.id) + ' title="' + esc(fix.replyError || '') + '">Answer the thread</button>';
+      } else if (fix && fix.state === 'NOTHING' && !f.closedAt) {
+        html += '<span class="chip" title="' + esc(fix.summary || '') + '">nothing to change</span><button class="btn small" data-act="fix" data-id="' + esc(f.id) + '">Try again</button>';
+      } else if (fix && fix.state === 'FAILED' && !f.closedAt) {
+        html += '<span class="chip badc" title="' + esc(fix.error || '') + '">fix failed</span><button class="btn small" data-act="fix" data-id="' + esc(f.id) + '">Retry fix</button>';
+      } else if (!f.closedAt && !f.dismissedAt && f.resolution !== 'RESOLVED') {
+        html += '<button class="btn small go" data-act="fix" data-id="' + esc(f.id) + '">Fix</button>';
+      }
+    }
+    html += '<span class="spacer"></span><button class="btn small" data-act="ask" data-finding="' + esc(f.id) + '">Ask Claude</button></div>';
+    if (fix && fix.state === 'NOTHING' && fix.summary) html += '<div class="faint" style="margin-top:4px">Fix: ' + esc(fix.summary) + '</div>';
+    if (fix && fix.state === 'FAILED' && fix.error) html += '<div class="faint bad" style="margin-top:4px">Fix: ' + esc(fix.error.slice(0, 300)) + '</div>';
+    return html + '</div>';
+  }
+
+  function drawReviewTab(v) {
+    var review = v.review;
+    var open = v.pr.state === 'OPEN';
+    var runs = (v.running || []).filter(function (run) { return run.kind !== 'fix' && run.kind !== 'reply'; });
+    var reviewing = runs.some(function (run) { return run.kind === 'review'; });
+    var html = '<div class="page">';
+    if (open) {
+      var p = state.reviewProfile;
+      var depths = state.depths ? state.depths.depths : [];
+      var kinds = state.depths ? state.depths.kinds : [];
+      html += '<div class="row"><span class="faint">Depth</span>' + [{ id: 'AUTO', label: 'Auto' }].concat(depths).map(function (d) {
+        return '<span class="chip click' + (p.depth === d.id ? ' on' : '') + '" data-act="profile" data-field="depth" data-value="' + d.id + '" title="' + esc(d.blurb || 'Sized from the diff') + '">' + esc(d.label) + (d.model ? ' · ' + d.model : '') + '</span>';
+      }).join('') + '<span class="faint" style="margin-left:8px">Kind</span>' + [{ id: 'AUTO', label: 'Auto' }].concat(kinds).map(function (k) {
+        return '<span class="chip click' + (p.kind === k.id ? ' on' : '') + '" data-act="profile" data-field="kind" data-value="' + k.id + '">' + esc(k.label) + '</span>';
+      }).join('') + '</div>';
+      html += '<div class="row" style="margin-top:8px"><button class="btn primary" data-act="run-review"' + (reviewing || state.busy.review ? ' disabled' : '') + '>' + (v.done ? 'Review again' : 'Review') + '</button>' +
+        (v.done ? '<button class="btn" data-act="run-review" data-full="1"' + (reviewing ? ' disabled' : '') + ' title="The whole branch, not only what arrived since the last review">Review everything again</button>' : '') +
+        '<span class="faint">' + (v.repo.defaultDepth || v.repo.projectKind || v.repo.defaultModel ? 'Repository profile: ' + esc([v.repo.defaultDepth, v.repo.projectKind, v.repo.defaultModel].filter(Boolean).join(' · ')) : '') + '</span></div>';
+      if (state.confirmRerun) {
+        var c = state.confirmRerun;
+        html += '<div class="banner warn">This commit was already reviewed ' + esc(when(c.createdAt)) + ': ' + c.findings + ' finding(s), ' + money(c.costUsd) + '. Nothing new arrived since, so another review looks at the same code again.' +
+          '<div class="row" style="margin-top:6px"><button class="btn small primary" data-act="run-review" data-confirmed="1">Review it again</button><button class="btn small" data-act="rerun-cancel">Cancel</button></div></div>';
+      }
+    }
+    if (runs.length) html += '<div style="margin-top:10px">' + drawRuns(runs, false) + '</div>';
+
+    if (review) {
+      html += '<div class="card" style="margin-top:12px"><div class="row">' + statusChip(review.status) + '<strong>Review of ' + sha7(review.headSha) + '</strong>' +
+        (review.sinceSha ? '<span class="chip">only what is new since ' + sha7(review.sinceSha) + '</span>' : '') +
+        (review.trigger === 'AUTO' ? '<span class="chip">automatic</span>' : '') +
+        (review.depth ? '<span class="chip">' + esc(review.depth.toLowerCase()) + '</span>' : '') + (review.model ? '<span class="chip">' + esc(review.model) + '</span>' : '') +
+        '<span class="spacer"></span><span class="faint">' + esc(when(review.finishedAt || review.createdAt)) + (review.costUsd ? ' · ' + money(review.costUsd) : '') + (review.tokensIn ? ' · ' + tokens((review.tokensIn || 0) + (review.tokensOut || 0)) + ' tokens' : '') + '</span></div>' +
+        (review.planReason ? '<div class="faint" style="margin-top:3px">' + esc(review.planReason) + '</div>' : '') +
+        (review.status === 'FAILED' || review.status === 'CANCELLED' ? '<div class="banner bad">' + esc(review.error || 'It did not finish.') + '</div>' : '') +
+        (review.deniedTools ? '<div class="banner warn">Ran with tools denied: ' + esc(review.deniedTools) + '</div>' : '') + '</div>';
+      if (v.done && v.done.id !== review.id) html += '<div class="faint" style="margin-top:4px">Showing the latest attempt; the findings below are from the last finished review, ' + esc(when(v.done.finishedAt)) + '.</div>';
+    } else if (!runs.length) {
+      html += '<div class="empty">Not reviewed yet.</div>';
+    }
+    var done = v.done;
+    if (done && done.resolutionSummary) {
+      html += '<div class="card" style="margin-top:8px"><div class="row"><strong>Verification</strong><span class="faint">against ' + sha7(done.resolutionHead) + ' · ' + esc(when(done.resolutionAt)) + '</span></div>' + md(done.resolutionSummary) + '</div>';
+    }
+    if (done && done.finalPassSummary) {
+      html += '<div class="card ' + (done.finalPassBlockers ? 'bad' : '') + '" style="margin-top:8px"><div class="row"><strong>Final pass</strong>' + (done.finalPassBlockers ? '<span class="chip badc">' + done.finalPassBlockers + ' blocker(s)</span>' : '<span class="chip okc">nothing blocks</span>') +
+        '<span class="faint">on ' + sha7(done.finalPassHead) + (v.finalPassDone ? '' : ' — the PR moved since') + '</span></div>' + md(done.finalPassSummary) + '</div>';
+    }
+
+    if (v.foreign && v.foreign.length && open) {
+      html += '<h3>Requests from others</h3>' + v.foreign.map(function (req) {
+        return '<div class="finding"><div class="meta"><strong>' + esc(req.author) + '</strong>' + (req.filePath ? '<button class="link mono" data-act="jump" data-file="' + esc(req.filePath) + '" data-line="' + (req.lineNo || '') + '">' + anchor(req.filePath, req.lineNo) + '</button>' : '') +
+          '<span class="faint">' + esc(when(req.at)) + '</span>' + (req.needsAnswer ? '<span class="chip mine">unanswered</span>' : '') + '<span class="spacer"></span>' +
+          (req.adoptedFindingId ? '<span class="chip accent">adopted</span>' : v.repo.fixMode !== 'OFF' && v.done ? '<button class="btn small go" data-act="adopt" data-comment="' + esc(req.commentId) + '"' + busyAttr('adopt-' + req.commentId) + ' title="Take it on as a finding and fix it; the answer goes in their thread">Fix</button>' : '') + '</div>' +
+          md(req.body) + (req.entries.length ? '<div class="entries">' + req.entries.map(entryHtml).join('') + '</div>' : '') + '</div>';
+      }).join('');
+    }
+
+    var findings = v.findings || [];
+    if (done || findings.length) {
+      var waiting = findings.filter(function (f) { return !f.publishedId && !f.dismissedAt && !f.closedAt; });
+      var notes = (v.notes || []).filter(function (n) { return !n.publishedId; });
+      var fixable = findings.filter(function (f) { return !f.closedAt && !f.dismissedAt && f.resolution !== 'RESOLVED'; });
+      html += '<div class="row" style="margin-top:14px"><h3 style="margin:0">Findings</h3><span class="faint">' + findings.length + ' · ' + findings.filter(function (f) { return f.publishedId; }).length + ' published</span><span class="spacer"></span>';
+      if (open && (waiting.length || notes.length)) html += '<button class="btn small primary" data-act="publish-all"' + busyAttr('publish-all') + '>Publish ' + (waiting.length + notes.length) + ' inline</button>';
+      if (open && v.repo.fixMode !== 'OFF' && fixable.length > 1) html += '<button class="btn small go" data-act="fix-all"' + busyAttr('fix-all') + '>Fix all ' + fixable.length + '</button>';
+      html += '</div>';
+      html += findings.length ? findings.map(function (f) { return findingCard(f, v); }).join('') : '<div class="faint">No findings.</div>';
+    }
+
+    var ws = v.workshop;
+    if (ws && (ws.exists || (v.fixes || []).length)) {
+      html += '<h3>Fix workshop</h3><div class="card"><div class="faint mono">' + esc(ws.dir) + '</div>' +
+        '<div class="row" style="margin-top:6px">' + (ws.pendingReturn ? '<strong>' + ws.pendingReturn + ' fix(es) to hand back</strong><button class="btn small primary" data-act="give-back"' + busyAttr('give-back') + ' title="Push the workshop commits into your clone, on ' + esc(v.pr.sourceBranch) + '">Hand back to the clone</button>' : '<span class="faint">Nothing waiting to be handed back.</span>') +
+        (ws.exists ? '<button class="btn small" data-act="shell" data-where="workshop">Terminal in the workshop</button><button class="btn small danger" data-act="discard-workshop"' + busyAttr('discard') + '>Discard workshop…</button>' : '') + '</div>' +
+        ((v.fixes || []).length ? '<table class="list" style="margin-top:6px">' + v.fixes.slice(0, 20).map(function (fix) {
+          var finding = findings.filter(function (f) { return f.id === fix.findingId; })[0];
+          return '<tr><td>' + statusChip(fix.state === 'COMMITTED' ? 'DONE' : fix.state) + '</td><td>' + esc(finding ? finding.title : fix.findingId) + (fix.summary ? '<div class="faint">' + esc(fix.summary.slice(0, 200)) + '</div>' : '') + (fix.error ? '<div class="bad">' + esc(fix.error.slice(0, 200)) + '</div>' : '') + '</td>' +
+            '<td class="mono">' + sha7(fix.sha) + '</td><td class="faint">' + (fix.returnedAt ? 'handed back' : fix.state === 'COMMITTED' ? 'in workshop' : '') + (fix.replyUrl ? ' · answered' : fix.replyError ? ' · <span class="bad">not answered</span>' : '') + '</td><td class="faint">' + esc(when(fix.createdAt)) + '</td></tr>';
+        }).join('') + '</table>' : '') + '</div>';
+    }
+
+    if (done && done.body != null) {
+      var key = 'body-' + done.id;
+      html += '<h3>General comment</h3><div class="card"><textarea rows="10" data-edit="' + key + '">' + esc(edit(key, done.body)) + '</textarea><div class="row" style="margin-top:6px">' +
+        (open ? '<button class="btn small primary" data-act="publish-review" data-id="' + esc(done.id) + '"' + busyAttr('publish-review') + '>' + (done.publishedUrl ? 'Publish again' : 'Publish comment') + '</button>' : '') +
+        '<button class="btn small" data-act="save-body" data-id="' + esc(done.id) + '">Save draft</button>' +
+        (done.publishedUrl ? '<button class="btn small" data-act="open-url" data-url="' + esc(done.publishedUrl) + '">View published</button>' : '') + '</div></div>';
+    }
+    return html + '</div>';
+  }
+
+  function entryHtml(entry) {
+    return '<div class="entry' + (entry.ours ? ' ours' : '') + '"><div class="who">' + esc(entry.author) + (entry.ours ? ' (us)' : '') + ' · ' + esc(when(entry.at)) + '</div>' + md(entry.body) + '</div>';
+  }
+
+  // ---- code ----------------------------------------------------------------------
+
+  function loadFiles(fetch) {
+    state.code.loading = true;
+    return call('files', { repoId: state.repoId, prId: state.prId, fetch: Boolean(fetch) }).then(function (r) {
+      state.code.files = r.files;
+      state.code.error = null;
+      state.code.loading = false;
+      if (!state.code.file && r.files.length) return openFile(r.files[0].path);
+      draw();
+    }, function (error) { state.code.error = error.message; state.code.loading = false; draw(); });
+  }
+
+  function openFile(path, line) {
+    state.code.file = path;
+    state.code.focusLine = line || null;
+    state.code.lines = null;
+    state.code.noteAt = null;
+    draw();
+    return call('diff', { repoId: state.repoId, prId: state.prId, file: path }).then(function (r) {
+      if (state.code.file !== path) return;
+      state.code.lines = r.lines;
+      draw();
+      if (line) {
+        var row = document.querySelector('tr[data-new="' + line + '"]');
+        if (row) row.scrollIntoView({ block: 'center' });
+      }
+    }, fail);
+  }
+
+  function drawCodeTab(v) {
+    var c = state.code;
+    if (c.error) return '<div class="page"><div class="banner bad">' + esc(c.error) + '</div><button class="btn" data-act="code-fetch">Fetch and try again</button></div>';
+    if (!c.files) return '<div class="loading">Reading the diff…</div>';
+    var findings = (v.findings || []).filter(function (f) { return f.filePath; });
+    var comments = v.comments || [];
+    var byFile = {};
+    findings.forEach(function (f) { byFile[f.filePath] = byFile[f.filePath] || { f: 0, sev: 'minor', c: 0 }; byFile[f.filePath].f++; if (f.severity === 'blocker' || (f.severity === 'major' && byFile[f.filePath].sev !== 'blocker')) byFile[f.filePath].sev = f.severity; });
+    comments.forEach(function (cm) { if (cm.inlinePath) { byFile[cm.inlinePath] = byFile[cm.inlinePath] || { f: 0, sev: 'minor', c: 0 }; byFile[cm.inlinePath].c++; } });
+    var html = '<div class="split"><aside><div class="row" style="padding:6px 10px"><span class="faint">' + c.files.length + ' files</span><span class="spacer"></span><button class="btn small" data-act="code-fetch">Fetch</button></div>';
+    html += '<div class="group">Files</div>' + c.files.map(function (file) {
+      var info = byFile[file.path];
+      return '<div class="item' + (c.file === file.path ? ' on' : '') + '" data-act="file" data-file="' + esc(file.path) + '"><span class="p mono" title="' + esc(file.path) + '">' + esc(file.path) + '</span>' +
+        (info && info.f ? '<span class="sev ' + info.sev + '">' + info.f + '</span>' : '') + (info && info.c ? '<span class="faint">💬' + info.c + '</span>' : '') +
+        '<span class="added mono">+' + file.added + '</span><span class="removed mono">−' + file.deleted + '</span></div>';
+    }).join('');
+    if (findings.length) {
+      html += '<div class="group">Findings</div>' + findings.map(function (f) {
+        return '<div class="item" data-act="jump" data-file="' + esc(f.filePath) + '" data-line="' + (f.lineNo || '') + '"><span class="sev ' + esc(f.severity) + '">' + esc(f.severity[0]) + '</span><span class="p" style="direction:ltr" title="' + esc(f.title) + '">' + esc(f.title) + '</span></div>';
+      }).join('');
+    }
+    html += '</aside><section>';
+    if (!c.file) html += '<div class="empty">No file chosen.</div>';
+    else if (!c.lines) html += '<div class="loading">Loading ' + esc(c.file) + '…</div>';
+    else html += drawDiff(v, c.file, c.lines);
+    return html + '</section></div>';
+  }
+
+  function drawDiff(v, file, lines) {
+    var findings = (v.findings || []).filter(function (f) { return f.filePath === file; });
+    var notes = (v.notes || []).filter(function (n) { return n.filePath === file; });
+    var threads = (v.comments || []).filter(function (cm) { return cm.inlinePath === file && !cm.parentId && !cm.deleted; });
+    var replies = {};
+    (v.comments || []).forEach(function (cm) { if (cm.parentId) { (replies[cm.parentId] = replies[cm.parentId] || []).push(cm); } });
+    var at = function (list, key) { var m = {}; list.forEach(function (x) { var n = x[key]; if (n) (m[n] = m[n] || []).push(x); }); return m; };
+    var fByLine = at(findings, 'lineNo');
+    var nByLine = at(notes, 'lineNo');
+    var tByLine = at(threads, 'inlineLine');
+    var shown = {};
+    lines.forEach(function (l) { if (l.newNo) shown[l.newNo] = true; });
+    var outside = findings.filter(function (f) { return !f.lineNo || !shown[f.lineNo]; });
+    var outsideThreads = threads.filter(function (t) { return !t.inlineLine || !shown[t.inlineLine]; });
+    var html = '<div style="padding:6px 10px;border-bottom:1px solid var(--border)" class="row"><strong class="mono">' + esc(file) + '</strong><span class="spacer"></span><span class="faint">Click a line number to leave a note</span>' +
+      '<button class="btn small" data-act="note-file" data-file="' + esc(file) + '">Note on the file</button></div>';
+    if (outside.length || outsideThreads.length) {
+      html += '<div style="padding:6px 10px">' + outside.map(function (f) { return anchorBlock(f, 'finding', v); }).join('') + outsideThreads.map(function (t) { return threadBlock(t, replies); }).join('') + '</div>';
+    }
+    if (state.code.noteAt && state.code.noteAt.line == null) html += '<div style="padding:6px 10px">' + noteForm(file, null) + '</div>';
+    html += '<table class="diff">';
+    lines.forEach(function (l) {
+      var focus = state.code.focusLine && l.newNo === state.code.focusLine;
+      if (l.kind === 'HUNK' || l.kind === 'META') {
+        if (l.kind === 'META' && !l.text) return;
+        html += '<tr class="' + l.kind + '"><td colspan="3">' + esc(l.text) + '</td></tr>';
+        return;
+      }
+      html += '<tr class="' + l.kind + (focus ? ' focus' : '') + '"' + (l.newNo ? ' data-new="' + l.newNo + '"' : '') + '><td class="n" ' + (l.newNo ? 'data-act="note-line" data-file="' + esc(file) + '" data-line="' + l.newNo + '"' : '') + '>' + (l.oldNo || '') + '</td>' +
+        '<td class="n" ' + (l.newNo ? 'data-act="note-line" data-file="' + esc(file) + '" data-line="' + l.newNo + '"' : '') + '>' + (l.newNo || '') + '</td><td class="c">' + esc(l.text) + '</td></tr>';
+      if (l.newNo) {
+        var blocks = (fByLine[l.newNo] || []).map(function (f) { return anchorBlock(f, 'finding', v); })
+          .concat((nByLine[l.newNo] || []).map(function (n) { return anchorBlock(n, 'note', v); }))
+          .concat((tByLine[l.newNo] || []).filter(function (t) { return !findings.some(function (f) { return f.publishedId === t.commentId; }); }).map(function (t) { return threadBlock(t, replies); }));
+        if (state.code.noteAt && state.code.noteAt.line === l.newNo) blocks.push(noteForm(file, l.newNo));
+        if (blocks.length) html += '<tr class="anchor"><td colspan="3">' + blocks.join('') + '</td></tr>';
+      }
+    });
+    return html + '</table>';
+  }
+
+  function anchorBlock(item, kind, v) {
+    if (kind === 'finding') {
+      return '<div class="finding"><div class="meta"><span class="sev ' + esc(item.severity) + '">' + esc(item.severity) + '</span><strong>' + esc(item.title) + '</strong><span class="spacer"></span>' +
+        (item.publishedId ? '<span class="chip okc">published</span>' : item.dismissedAt ? '<span class="chip">dismissed</span>' : v.pr.state === 'OPEN' ? '<button class="btn small primary" data-act="publish-finding" data-id="' + esc(item.id) + '">Publish</button>' : '') + '</div>' + md(item.body) + '</div>';
+    }
+    var key = 'note-' + item.id;
+    return '<div class="finding"><div class="meta"><span class="chip">note</span>' + (item.publishedId ? '<span class="chip okc">published</span>' : '') + '<span class="spacer"></span>' +
+      (!item.publishedId ? '<button class="btn small primary" data-act="publish-note" data-id="' + esc(item.id) + '"' + busyAttr('note-' + item.id) + '>Publish</button><button class="btn small danger" data-act="delete-note" data-id="' + esc(item.id) + '">Delete</button>' : '') + '</div>' +
+      (item.publishedId ? md(item.body) : '<textarea rows="3" data-edit="' + key + '" data-note="' + esc(item.id) + '">' + esc(edit(key, item.body)) + '</textarea>') + '</div>';
+  }
+
+  function threadBlock(comment, replies) {
+    var chain = replies[comment.commentId] || [];
+    return '<div class="finding"><div class="entry' + (comment.ours ? ' ours' : '') + '"><div class="who">' + esc(comment.author) + (comment.ours ? ' (us)' : '') + ' · ' + esc(when(comment.createdOn)) + '</div>' + md(comment.body) + '</div>' +
+      (chain.length ? '<div class="entries">' + chain.map(function (r) { return entryHtml({ author: r.author, body: r.body, ours: r.ours, at: r.createdOn }); }).join('') + '</div>' : '') + '</div>';
+  }
+
+  function noteForm(file, line) {
+    var key = 'newnote-' + file + '-' + (line || 'file');
+    return '<div class="finding"><div class="faint">New note on ' + anchor(file, line) + ' — kept here until published</div><textarea rows="3" data-edit="' + esc(key) + '">' + esc(edit(key)) + '</textarea>' +
+      '<div class="row" style="margin-top:4px"><button class="btn small primary" data-act="add-note" data-file="' + esc(file) + '" data-line="' + (line || '') + '">Save note</button><button class="btn small" data-act="note-cancel">Cancel</button></div></div>';
+  }
+
+  // ---- commits ----------------------------------------------------------------------
+
+  function loadCommits() {
+    return call('commits', { repoId: state.repoId, prId: state.prId }).then(function (r) { state.commits.data = r; state.commits.error = null; draw(); }, function (error) { state.commits.error = error.message; draw(); });
+  }
+
+  function drawCommitsTab(v) {
+    var c = state.commits;
+    if (c.error) return '<div class="page"><div class="banner bad">' + esc(c.error) + '</div></div>';
+    if (!c.data) return '<div class="loading">Reading commits…</div>';
+    var d = c.data;
+    var html = '<div class="split"><aside>';
+    if (d.local.length) {
+      html += '<div class="group">In your clone, not on origin</div><div style="padding:4px 10px"><button class="btn small primary" data-act="push"' + busyAttr('push') + '>Push to origin/' + esc(d.branch) + '</button></div>' +
+        d.local.map(function (commit) { return commitItem(commit, true); }).join('');
+    }
+    html += '<div class="group">The pull request · ' + d.commits.length + '</div>';
+    d.commits.forEach(function (commit, index) {
+      if (d.sinceReview !== null && index === d.sinceReview) html += '<div class="group" style="color:var(--accent)">↑ ' + index + ' since the review</div>';
+      html += commitItem(commit, false);
+    });
+    html += '</aside><section>';
+    if (!c.sha) html += '<div class="empty">Choose a commit.</div>';
+    else {
+      var commit = d.local.concat(d.commits).filter(function (x) { return x.sha === c.sha; })[0];
+      html += '<div style="padding:8px 12px;border-bottom:1px solid var(--border)"><strong>' + esc(commit ? commit.subject : '') + '</strong><div class="faint mono">' + esc(c.sha) + ' · ' + esc(commit ? commit.author + ' · ' + commit.date : '') + '</div>' +
+        (commit && commit.body ? '<div class="md" style="white-space:pre-wrap;margin-top:4px">' + esc(commit.body) + '</div>' : '') + '</div>';
+      if (!c.files) html += '<div class="loading">Loading…</div>';
+      else {
+        html += '<div style="padding:6px 12px" class="row">' + c.files.map(function (file) {
+          return '<span class="chip click' + (c.file === file.path ? ' on' : '') + '" data-act="commit-file" data-file="' + esc(file.path) + '">' + esc(file.path.split('/').pop()) + ' <span class="added">+' + file.added + '</span> <span class="removed">−' + file.deleted + '</span></span>';
+        }).join('') + '</div>';
+        if (c.file && c.lines) html += '<table class="diff">' + c.lines.map(function (l) {
+          if (l.kind === 'META' && !l.text) return '';
+          if (l.kind === 'HUNK' || l.kind === 'META') return '<tr class="' + l.kind + '"><td colspan="3">' + esc(l.text) + '</td></tr>';
+          return '<tr class="' + l.kind + '"><td class="n">' + (l.oldNo || '') + '</td><td class="n">' + (l.newNo || '') + '</td><td class="c">' + esc(l.text) + '</td></tr>';
+        }).join('') + '</table>';
+      }
+    }
+    return html + '</section></div>';
+  }
+
+  function commitItem(commit, local) {
+    return '<div class="item' + (state.commits.sha === commit.sha ? ' on' : '') + '" data-act="commit" data-sha="' + esc(commit.sha) + '"><span class="mono ' + (local ? 'warn' : 'faint') + '">' + sha7(commit.sha) + '</span><span class="p" style="direction:ltr" title="' + esc(commit.subject) + '">' + esc(commit.subject) + '</span></div>';
+  }
+
+  // ---- conversation ------------------------------------------------------------------
+
+  function drawConversationTab(v) {
+    var threads = v.threads;
+    var open = v.pr.state === 'OPEN';
+    var pendingReplies = (v.replies || []).filter(function (r) { return r.status !== 'PUBLISHED' && !r.dismissedAt; });
+    var html = '<div class="page"><div class="row"><h3 style="margin:0">Threads</h3><span class="faint">' + threads.filter(function (t) { return t.state !== 'OK'; }).length + ' open of ' + threads.length + '</span><span class="spacer"></span>';
+    if (open && pendingReplies.length) html += '<button class="btn small" data-act="draft-all"' + busyAttr('draft-all') + '>Draft all answers</button><button class="btn small" data-act="dismiss-all-replies">Dismiss all replies</button>';
+    html += '</div>';
+    if (!threads.length) html += '<div class="empty">No findings, so no threads yet.</div>';
+    threads.forEach(function (t) {
+      var label = THREAD_LABELS[t.state] || [t.state, ''];
+      var draft = t.draft;
+      html += '<div class="finding' + (t.state === 'OK' ? ' settled' : '') + '"><div class="meta"><span class="chip ' + label[1] + '">' + label[0] + '</span><span class="sev ' + esc(t.severity) + '">' + esc(t.severity) + '</span>' +
+        (t.filePath ? '<button class="link mono" data-act="jump" data-file="' + esc(t.filePath) + '" data-line="' + (t.lineNo || '') + '">' + anchor(t.filePath, t.lineNo) + '</button>' : '') +
+        (t.askedBy ? '<span class="chip accent">asked by ' + esc(t.askedBy) + '</span>' : '') + '<span class="spacer"></span>' +
+        (t.waitingDays != null ? '<span class="faint">waiting ' + t.waitingDays + 'd</span>' : '') + '</div>' +
+        '<div class="ftitle">' + esc(t.title) + '</div>' + md(t.question) +
+        (t.resolutionNote ? '<div class="faint">Verdict: ' + esc(t.resolutionNote) + '</div>' : '') +
+        (t.entries.length ? '<div class="entries">' + t.entries.map(entryHtml).join('') + '</div>' : '');
+      if (draft && draft.status !== 'PUBLISHED' && !draft.dismissedAt && open) {
+        var key = 'reply-' + draft.id;
+        var drafting = (v.running || []).some(function (run) { return run.kind === 'reply' && run.title.indexOf(draft.theirAuthor) >= 0; }) || state.busy['draft-' + draft.id];
+        html += '<div class="card" style="margin-top:6px"><div class="row"><strong>Answer to ' + esc(draft.theirAuthor) + '</strong>' + (draft.status === 'FAILED' ? '<span class="chip badc" title="' + esc(draft.error || '') + '">drafting failed</span>' : '') + '<span class="spacer"></span>' +
+          (drafting ? '<span class="chip accent"><span class="dot busy"></span>drafting</span>' : '<button class="btn small" data-act="draft-reply" data-id="' + esc(draft.id) + '">' + (draft.body ? 'Draft again' : 'Draft with Claude') + '</button>') + '</div>' +
+          '<textarea rows="4" data-edit="' + key + '" placeholder="Write the answer, or let Claude draft it from the code">' + esc(edit(key, draft.body || '')) + '</textarea>' +
+          '<div class="row" style="margin-top:4px"><button class="btn small primary" data-act="publish-reply" data-id="' + esc(draft.id) + '"' + busyAttr('reply-' + draft.id) + '>Publish answer</button>' +
+          '<button class="btn small" data-act="save-reply" data-id="' + esc(draft.id) + '">Save</button><button class="btn small" data-act="dismiss-reply" data-id="' + esc(draft.id) + '">Dismiss</button></div></div>';
+      }
+      html += '<div class="row" style="margin-top:6px">';
+      if (open && t.state !== 'OK' && t.findingId) html += '<button class="btn small" data-act="close-thread" data-id="' + esc(t.findingId) + '" data-on="1" title="Settled in conversation: it waits for no change in the code">Close thread</button>';
+      if (t.state === 'OK' && t.findingId) html += '<button class="btn small" data-act="close-thread" data-id="' + esc(t.findingId) + '" data-on="0">Reopen</button>';
+      if (open && t.waitingDays != null && t.waitingDays >= (v.followUpDays || 3) && !draft) {
+        var fkey = 'follow-' + t.findingId;
+        if (state.edits[fkey] == null) html += '<button class="btn small" data-act="follow-open" data-id="' + esc(t.findingId) + '">Remind</button>';
+      }
+      if (t.publishedUrl) html += '<button class="btn small" data-act="open-url" data-url="' + esc(t.publishedUrl) + '">View on PR</button>';
+      html += '</div>';
+      var fk = 'follow-' + t.findingId;
+      if (state.edits[fk] != null) {
+        html += '<div class="card" style="margin-top:6px"><div class="faint">A reminder in the thread. Never sent on its own.</div><textarea rows="3" data-edit="' + fk + '">' + esc(state.edits[fk]) + '</textarea>' +
+          '<div class="row" style="margin-top:4px"><button class="btn small primary" data-act="follow-send" data-id="' + esc(t.findingId) + '"' + busyAttr('follow-' + t.findingId) + '>Send reminder</button><button class="btn small" data-act="follow-cancel" data-id="' + esc(t.findingId) + '">Cancel</button></div></div>';
+      }
+      html += '</div>';
+    });
+    return html + '</div>';
+  }
+
+  // ---- history ----------------------------------------------------------------------
+
+  function drawHistoryTab(v) {
+    var events = [];
+    (v.reviews || []).forEach(function (r) { events.push({ at: r.createdAt, who: r.trigger === 'AUTO' ? 'automatic' : 'you', kind: 'review', text: 'Review ' + (r.status || '').toLowerCase() + (r.sinceSha ? ' (incremental)' : '') + (r.costUsd ? ' · ' + money(r.costUsd) : '') + (r.error ? ' — ' + r.error.slice(0, 160) : '') }); });
+    (v.publications || []).forEach(function (p) { events.push({ at: p.publishedAt, who: 'you', kind: 'published', text: 'General comment published' }); });
+    (v.comments || []).forEach(function (cm) { events.push({ at: cm.createdOn, who: cm.author, kind: cm.ours ? 'our comment' : cm.parentId ? 'reply' : 'comment', text: (cm.inlinePath ? cm.inlinePath + (cm.inlineLine ? ':' + cm.inlineLine : '') + ' — ' : '') + String(cm.body).replace(/\s+/g, ' ').slice(0, 220) }); });
+    (v.notes || []).forEach(function (n) { events.push({ at: n.createdAt, who: 'you', kind: 'note', text: n.filePath + ' — ' + String(n.body).slice(0, 160) }); });
+    (v.fixes || []).forEach(function (f) { events.push({ at: f.createdAt, who: 'fix', kind: 'fix ' + String(f.state).toLowerCase(), text: (f.sha ? f.sha.slice(0, 7) + ' ' : '') + (f.summary || f.error || '').slice(0, 200) }); });
+    var authors = {};
+    events.forEach(function (e) { authors[e.who] = true; });
+    events = events.filter(function (e) { return e.at && (!state.historyAuthor || e.who === state.historyAuthor); }).sort(function (a, b) { return String(b.at).localeCompare(String(a.at)); });
+    var html = '<div class="page timeline"><div class="row"><span class="faint">Author</span><select data-bind="history-author"><option value="">Everyone</option>' + Object.keys(authors).sort().map(function (a) {
+      return '<option' + (state.historyAuthor === a ? ' selected' : '') + '>' + esc(a) + '</option>';
+    }).join('') + '</select></div>';
+    var current = '';
+    events.forEach(function (e) {
+      var d = day(e.at);
+      if (d !== current) { current = d; html += '<div class="day">' + esc(d) + '</div>'; }
+      html += '<div class="ev"><span class="faint mono">' + esc(String(e.at).slice(11, 16)) + '</span><span class="dim">' + esc(e.who) + ' · ' + esc(e.kind) + '</span><span>' + esc(e.text) + '</span></div>';
+    });
+    if (!events.length) html += '<div class="empty">Nothing happened here yet.</div>';
+    return html + '</div>';
+  }
+
+  // ---- settings & import ----------------------------------------------------------------
+
+  function drawSettings() {
+    var o = state.overview;
+    if (!o) return '<div class="loading">Loading…</div>';
+    var s = state.settings || o.settings;
+    function val(field) { return s[field]; }
+    var html = '<div class="page form"><h2>Settings</h2>';
+    html += '<div class="field"><label>Claude account</label><div><select data-setting="profileId"><option value="">The default account</option>' + o.accounts.map(function (a) {
+      return '<option value="' + esc(a.id) + '"' + (val('profileId') === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>';
+    }).join('') + '</select><div class="help">Runs use this account first. When it hits its limit or is signed out, the next account is used, starting with its fallback.</div></div></div>';
+    html += '<div class="field"><label>Review language</label><div><input type="text" data-setting="language" data-edit="set-language" value="' + esc(val('language')) + '"><div class="help">The language findings, answers and summaries are written in, e.g. español or English.</div></div></div>';
+    html += '<div class="field"><label>Your name on the forge</label><div><input type="text" data-setting="me" data-edit="set-me" value="' + esc(val('me')) + '"><div class="help">So your own comments are not listed as requests from others.</div></div></div>';
+    html += '<div class="field"><label>Notifications</label><div><label class="check"><input type="checkbox" data-setting="notify"' + (val('notify') ? ' checked' : '') + '> Tell me when a review is ready, someone replies, or a fix is written</label></div></div>';
+    html += '<div class="section"><h3>Automatic mode</h3><div class="field"><label>Sweep</label><div><label class="check"><input type="checkbox" data-setting="autoEnabled"' + (val('autoEnabled') ? ' checked' : '') + '> Review, verify and draft on their own, for the repositories that ask for it</label></div></div>';
+    html += '<div class="field"><label>Every</label><div class="row"><input type="number" min="1" data-setting="autoInterval" value="' + esc(val('autoInterval')) + '" style="width:80px"> minutes</div></div>';
+    html += '<div class="field"><label>At most per cycle</label><div class="row"><input type="number" min="1" data-setting="autoMax" value="' + esc(val('autoMax')) + '" style="width:80px"> reviews and verifications<div class="help" style="width:100%">The spending cap of each sweep. Answers are drafted within the same cap, counted apart.</div></div></div>';
+    html += '<div class="field"><label>Remind after</label><div class="row"><input type="number" min="1" data-setting="followUpDays" value="' + esc(val('followUpDays')) + '" style="width:80px"> days without an answer</div></div>';
+    var auto = state.auto || o.auto;
+    html += '<div class="row"><button class="btn" data-act="auto-now">Sweep now</button><span class="faint">' + esc(auto && auto.lastMessage ? (auto.lastRunAt ? when(auto.lastRunAt) + ': ' : '') + auto.lastMessage : 'No sweep yet.') + '</span></div></div>';
+    html += '<div class="section"><h3>Global conventions</h3>' + drawGuidelines(state.globalGuidelines, null) + '</div>';
+    html += '<div class="section"><h3>Usage</h3>' + drawUsage(state.usage) + '</div>';
+    html += '<div class="section"><h3>History</h3><button class="btn" data-act="nav" data-view="import">Import from AI Code Reviewer</button></div>';
+    return html + '</div>';
+  }
+
+  function drawImport() {
+    var info = state.importInfo;
+    var html = '<div class="page form"><div class="row"><button class="btn small" data-act="nav" data-view="repos">← Repositories</button><h2 style="margin:0 6px">Import from AI Code Reviewer</h2></div>';
+    if (!info) return html + '<div class="loading">Looking for its database…</div></div>';
+    if (!info.found) return html + '<div class="banner">No AI Code Reviewer database at <span class="mono">' + esc(info.dbFile) + '</span>.</div></div>';
+    html += '<p class="dim">Repositories come across with their tokens, reviews, findings, threads, replies, fixes, approvals and conventions. Automatic modes arrive switched off. Nothing in AI Code Reviewer is changed, and importing twice adds nothing the second time.</p>';
+    html += '<div class="faint mono">' + esc(info.dbFile) + '</div>';
+    if (!info.keyFound) html += '<div class="banner warn">Its master key was not found, so tokens cannot be read: they have to be entered again.</div>';
+    html += '<div class="faint" style="margin:6px 0">' + info.counts.reviews + ' reviews · ' + info.counts.findings + ' findings · ' + info.counts.replies + ' replies · ' + info.counts.fixes + ' fixes · ' + info.counts.guidelines + ' conventions</div>';
+    html += '<table class="list"><tr><th></th><th>Repository</th><th>Clone</th><th>Token</th></tr>' + info.repos.map(function (repo) {
+      var picked = state.importPick[repo.id] !== false && !repo.localOnly;
+      return '<tr><td><input type="checkbox" data-act="import-pick" data-id="' + esc(repo.id) + '"' + (picked ? ' checked' : '') + (repo.localOnly ? ' disabled' : '') + '></td><td><strong>' + esc(repo.name) + '</strong><div class="faint mono">' + esc(repo.provider + ' · ' + repo.owner + '/' + repo.slug) + '</div>' + (repo.localOnly ? '<div class="faint">A local folder with no forge: not imported.</div>' : '') + '</td><td class="faint mono">' + esc(repo.localPath) + '</td><td>' + (repo.hasToken ? '✓' : '') + '</td></tr>';
+    }).join('') + '</table>';
+    html += '<div class="row" style="margin-top:10px"><button class="btn primary" data-act="import-run"' + busyAttr('import') + '>Import selected</button></div>';
+    var r = state.importReport;
+    if (r) {
+      html += '<div class="banner ok">Imported ' + r.repos + ' repositor' + (r.repos === 1 ? 'y' : 'ies') + ', ' + (r.rows.cr_review || 0) + ' reviews, ' + (r.rows.cr_finding || 0) + ' findings, ' + (r.rows.cr_reply_draft || 0) + ' replies, ' + (r.rows.cr_finding_fix || 0) + ' fixes' + (r.prefs ? ', ' + r.prefs + ' settings' : '') + '.' +
+        (r.skippedRepos.length ? '\nSkipped: ' + r.skippedRepos.join('; ') : '') + (r.tokensUnreadable.length ? '\nTokens to enter again: ' + r.tokensUnreadable.join(', ') : '') + '</div>';
+    }
+    return html + '</div>';
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Actions
+   * ------------------------------------------------------------------ */
+
+  function openPr(repoId, prId) {
+    go('pr', { repoId: repoId, prId: Number(prId), prTab: state.view === 'pr' && state.repoId === repoId && state.prId === Number(prId) ? state.prTab : 'review', backTo: state.view === 'pr' ? state.backTo : state.view });
+  }
+
+  function editRepo(repoId) {
+    state.formTest = null;
+    state.formGuidelines = null;
+    if (!repoId) { state.form = blankForm(); go('repoForm'); return; }
+    call('repo', { repoId: repoId }).then(function (r) {
+      var repo = r.repo;
+      state.form = {
+        id: repo.id, name: repo.name, provider: repo.provider, owner: repo.owner, slug: repo.slug, localPath: repo.localPath, token: '',
+        projectKind: repo.projectKind || '', defaultDepth: repo.defaultDepth || '', defaultModel: repo.defaultModel || '', autoReview: repo.autoReview,
+        skipDrafts: repo.skipDrafts, skipTitles: repo.skipTitles, skipAuthors: repo.skipAuthors, onlyTargets: repo.onlyTargets,
+        replyMode: repo.replyMode, fixMode: repo.fixMode, hasToken: repo.hasToken
+      };
+      go('repoForm');
+      return loadFormGuidelines();
+    }).catch(fail);
+  }
+
+  function loadFormGuidelines() {
+    if (!state.form || !state.form.id) return Promise.resolve();
+    return call('guidelines', { repoId: state.form.id }).then(function (r) { state.formGuidelines = r.guidelines; draw(); });
+  }
+  function reloadGuidelines(scope) {
+    if (scope === 'global') return call('guidelines', { repoId: null }).then(function (r) { state.globalGuidelines = r.guidelines; draw(); });
+    return loadFormGuidelines();
+  }
+
+  function formPayload() {
+    var f = state.form;
+    return {
+      id: f.id || undefined, name: f.name, provider: f.provider, owner: f.owner, slug: f.slug, localPath: f.localPath, token: f.token,
+      projectKind: f.projectKind || null, defaultDepth: f.defaultDepth || null, defaultModel: f.defaultModel || '', autoReview: f.autoReview,
+      skipDrafts: f.skipDrafts, skipTitles: f.skipTitles, skipAuthors: f.skipAuthors, onlyTargets: f.onlyTargets, replyMode: f.replyMode, fixMode: f.fixMode
+    };
+  }
+
+  function prArgs(extra) {
+    var args = { repoId: state.repoId, prId: state.prId };
+    Object.keys(extra || {}).forEach(function (key) { args[key] = extra[key]; });
+    return args;
+  }
+
+  function runReview(el) {
+    var full = el.getAttribute('data-full') === '1';
+    var confirmed = el.getAttribute('data-confirmed') === '1';
+    var p = state.reviewProfile;
+    var start = function () {
+      state.confirmRerun = null;
+      act('review', function () {
+        return call('review', prArgs({ depth: p.depth === 'AUTO' ? undefined : p.depth, kind: p.kind === 'AUTO' ? undefined : p.kind, forceFull: full }));
+      }, function () { say('Review finished.'); });
+    };
+    if (full || confirmed) return start();
+    call('rerunCheck', prArgs()).then(function (r) {
+      if (r.existing) { state.confirmRerun = r.existing; draw(); } else start();
+    }).catch(fail);
+  }
+
+  var actions = {
+    nav: function (el) {
+      var view = el.getAttribute('data-view');
+      if (view === 'import') { state.importReport = null; state.importPick = {}; }
+      go(view);
+    },
+    back: function () {
+      if (state.backTo === 'dashboard') go('dashboard'); else go('prs', { repoId: state.repoId });
+    },
+    'refresh-all': function () { act('refresh-all', function () { return call('refreshAll'); }, function (r) { if (r.errors && r.errors.length) say(r.errors.join('\n'), true); load(); }); },
+    'open-pr': function (el) { openPr(el.getAttribute('data-repo'), el.getAttribute('data-pr')); },
+    'open-prs': function (el) { go('prs', { repoId: el.getAttribute('data-repo'), prStates: ['OPEN'] }); },
+    'open-url': function (el) { call('openUrl', { url: el.getAttribute('data-url') }).catch(fail); },
+    'cancel-run': function (el) { call('cancelRun', { key: el.getAttribute('data-key') }).catch(fail); },
+    'dash-flag': function (el) {
+      var flag = el.getAttribute('data-flag');
+      var flags = state.dashFilter.flags;
+      if (!flag) { state.dashFilter.flags = []; }
+      else if (flags.indexOf(flag) >= 0) flags.splice(flags.indexOf(flag), 1); else flags.push(flag);
+      remember(); draw();
+    },
+    'dash-mine': function () { state.dashFilter.mine = !state.dashFilter.mine; remember(); draw(); },
+    'dash-mode': function () { state.dashFilter.mode = state.dashFilter.mode === 'ALL' ? 'ANY' : 'ALL'; remember(); draw(); },
+    'dash-author': function (el) {
+      var name = el.getAttribute('data-author');
+      var list = state.dashFilter.authors;
+      if (list.indexOf(name) >= 0) list.splice(list.indexOf(name), 1); else list.push(name);
+      remember(); draw();
+    },
+    'repo-new': function () { editRepo(null); },
+    'repo-edit': function (el) { editRepo(el.getAttribute('data-repo')); },
+    'repo-hide': function (el) { call('hideRepo', { repoId: el.getAttribute('data-repo'), hidden: el.getAttribute('data-hidden') === '1' }).then(load, fail); },
+    'repo-delete': function () {
+      var f = state.form;
+      act('repo-delete', function () { return call('deleteRepo', { repoId: f.id, repoName: f.name }); }, function () { say('Repository removed.'); go('repos'); });
+    },
+    'form-pick': function () {
+      call('pickFolder').then(function (r) {
+        if (!r.path) return;
+        state.form.localPath = r.path;
+        draw();
+        actions['form-detect']();
+      }).catch(fail);
+    },
+    'form-detect': function () {
+      act('form-detect', function () { return call('detectRemote', { localPath: state.form.localPath }); }, function (r) {
+        var f = state.form;
+        if (!f.id && r.provider) { f.provider = r.provider; f.owner = r.owner; f.slug = r.slug; }
+        if (!f.name) f.name = r.slug || r.name;
+        if (!r.provider) say('The remote is not on GitHub or Bitbucket: ' + (r.url || 'no origin'), true);
+        else if (r.provider === 'BITBUCKET' && !r.ssh) say('This clone fetches from Bitbucket over HTTPS, which no longer authenticates. Switch origin to SSH.', true);
+      });
+    },
+    'form-test': function () {
+      state.formTest = null;
+      act('form-test', function () { return host.call('review.testRepo', { repo: formPayload() }); }, function (r) { state.formTest = r; });
+    },
+    'form-save': function () {
+      act('form-save', function () { return call('saveRepo', { repo: formPayload() }); }, function (r) {
+        say(state.form.id ? 'Saved.' : 'Repository added.');
+        if (!state.form.id) go('prs', { repoId: r.repo.id, prStates: ['OPEN'] }); else go('repos');
+      });
+    },
+    'guide-toggle': function (el) {
+      var id = el.getAttribute('data-id');
+      var list = (state.formGuidelines || []).concat(state.globalGuidelines || []);
+      var doc = list.filter(function (d) { return d.id === id; })[0];
+      if (!doc) return;
+      call('saveGuideline', { guideline: Object.assign({}, doc, { enabled: el.checked }) }).then(function () { return reloadGuidelines(doc.repoId ? 'repo' : 'global'); }).catch(fail);
+    },
+    'guide-open': function (el) { var k = 'guide-' + el.getAttribute('data-id') + '-open'; state.edits[k] = !state.edits[k]; draw(); },
+    'guide-save': function (el) {
+      var id = el.getAttribute('data-id');
+      var list = (state.formGuidelines || []).concat(state.globalGuidelines || []);
+      var doc = list.filter(function (d) { return d.id === id; })[0];
+      call('saveGuideline', { guideline: Object.assign({}, doc, { content: edit('guide-' + id, doc.content), source: doc.source === 'CLAUDE_MD' ? 'TYPED' : doc.source, linkedPath: null, linkedHash: null }) })
+        .then(function () { delete state.edits['guide-' + id]; delete state.edits['guide-' + id + '-open']; return reloadGuidelines(el.getAttribute('data-scope') === 'global' ? 'global' : 'repo'); })
+        .then(function () { say('Saved.'); }).catch(fail);
+    },
+    'guide-delete': function (el) {
+      call('deleteGuideline', { id: el.getAttribute('data-id') }).then(function () { return reloadGuidelines(el.getAttribute('data-scope') === 'global' ? 'global' : 'repo'); }).catch(fail);
+    },
+    'guide-add': function (el) {
+      var scope = el.getAttribute('data-scope');
+      var key = 'guide-new-' + scope;
+      call('saveGuideline', { guideline: { repoId: scope === 'global' ? null : scope, name: edit(key + '-name'), content: edit(key) } })
+        .then(function () { delete state.edits[key]; delete state.edits[key + '-name']; return reloadGuidelines(scope === 'global' ? 'global' : 'repo'); }).catch(fail);
+    },
+    'guide-claude': function (el) {
+      call('importClaudeMd', { repoId: el.getAttribute('data-repo') }).then(function (r) { say(r.found ? 'Found ' + r.found + ' CLAUDE.md file(s), ' + r.added + ' new.' : 'No CLAUDE.md in the clone.'); return loadFormGuidelines(); }).catch(fail);
+    },
+    'prs-refresh': function () { act('prs-refresh', function () { return call('refreshPrs', { repoId: state.repoId }); }, load); },
+    'prs-history': function () {
+      act('prs-history', function () { return call('searchHistory', { repoId: state.repoId }); }, function (r) {
+        say(r.found + ' closed PR(s) found.');
+        if (state.prStates.indexOf('MERGED') < 0) state.prStates.push('MERGED');
+        if (state.prStates.indexOf('DECLINED') < 0) state.prStates.push('DECLINED');
+        load();
+      });
+    },
+    'prs-state': function (el) {
+      var s = el.getAttribute('data-state');
+      var list = state.prStates;
+      if (list.indexOf(s) >= 0) { if (list.length > 1) list.splice(list.indexOf(s), 1); } else list.push(s);
+      load();
+    },
+    'pr-load': function () { act('pr-load', function () { return call('loadPr', prArgs()); }, function (r) { if (r.commentsError) say('The thread could not be read: ' + r.commentsError, true); load(); }); },
+    'pr-tab': function (el) {
+      state.prTab = el.getAttribute('data-tab');
+      remember();
+      if (state.prTab === 'code' && !state.code.files) loadFiles();
+      if (state.prTab === 'commits' && !state.commits.data) loadCommits();
+      draw();
+    },
+    profile: function (el) { state.reviewProfile[el.getAttribute('data-field')] = el.getAttribute('data-value'); draw(); },
+    'run-review': runReview,
+    'rerun-cancel': function () { state.confirmRerun = null; draw(); },
+    verify: function () { act('verify', function () { return call('verify', prArgs()); }, function (r) { say(r.mergeable ? 'Verified: every comment was addressed.' : 'Verified.'); }); },
+    'final-pass': function () { act('final-pass', function () { return call('finalPass', prArgs()); }, function (r) { say(r.blockers ? r.blockers + ' blocker(s) found.' : 'Nothing blocks the merge.', r.blockers > 0); }); },
+    stance: function (el) { act('stance', function () { return call(el.getAttribute('data-stance'), prArgs()); }, load); },
+    'decline-open': function () { state.decline = true; state.merge = null; draw(); },
+    'decline-close': function () { state.decline = null; draw(); },
+    decline: function () {
+      act('decline', function () { return call('decline', prArgs({ reason: edit('decline-reason'), repoName: state.pr.repo.name })); }, function () { state.decline = null; delete state.edits['decline-reason']; say('Declined.'); load(); });
+    },
+    'merge-open': function () { state.merge = true; state.decline = null; draw(); },
+    'merge-close': function () { state.merge = null; draw(); },
+    merge: function () {
+      var v = state.pr;
+      act('merge', function () {
+        return call('merge', prArgs({
+          message: edit('merge-message', 'Merged in ' + v.pr.sourceBranch + ' (pull request #' + v.pr.id + ')\n\n' + v.pr.title),
+          strategy: edit('merge-strategy', v.settings.mergeStrategy || 'MERGE_COMMIT'),
+          closeSourceBranch: edit('merge-close', true),
+          repoName: v.repo.name, target: v.pr.targetBranch, skipping: v.mergeBlocker ? [v.mergeBlocker] : []
+        }));
+      }, function () { state.merge = null; say('Merged.'); load(); });
+    },
+    'publish-finding': function (el) { var id = el.getAttribute('data-id'); act('publish-' + id, function () { return call('publishFinding', { findingId: id }); }); },
+    'publish-all': function () { act('publish-all', function () { return call('publishAll', prArgs()); }, function (r) { if (r.errors && r.errors.length) say(r.published + ' published; failed: ' + r.errors.join('; '), true); else say(r.published + ' published.'); }); },
+    dismiss: function (el) { call('dismissFinding', { findingId: el.getAttribute('data-id'), dismissed: el.getAttribute('data-on') === '1' }).catch(fail); },
+    'finding-edit': function (el) { var k = 'finding-open-' + el.getAttribute('data-id'); state.edits[k] = !state.edits[k]; draw(); },
+    'finding-save': function (el) {
+      var id = el.getAttribute('data-id');
+      var f = state.pr.findings.filter(function (x) { return x.id === id; })[0];
+      call('editFinding', { findingId: id, title: edit('finding-title-' + id, f.title), body: edit('finding-body-' + id, f.body), suggestion: edit('finding-sugg-' + id, f.suggestion || '') })
+        .then(function () { ['open', 'title', 'body', 'sugg'].forEach(function (p) { delete state.edits['finding-' + p + '-' + id]; }); }).catch(fail);
+    },
+    fix: function (el) { var id = el.getAttribute('data-id'); call('fix', { findingId: id }).then(function (r) { say(r.fix && r.fix.sha ? 'Fix committed in the workshop: ' + r.fix.sha.slice(0, 7) : 'The fix changed nothing: ' + (r.fix && r.fix.summary || '')); }, fail); },
+    'fix-all': function () { act('fix-all', function () { return call('fixAll', prArgs()); }, function (r) { say(r.committed + ' fix(es) committed.' + (r.errors.length ? ' ' + r.errors.length + ' failed.' : ''), r.errors.length > 0); }); },
+    'retry-fix-reply': function (el) { var id = el.getAttribute('data-id'); act('fixreply-' + id, function () { return call('retryFixReply', { fixId: id }); }); },
+    'give-back': function () { act('give-back', function () { return call('giveBack', prArgs()); }, function (r) { say(r.count + ' fix(es) handed back to your clone.'); }); },
+    'discard-workshop': function () { act('discard', function () { return call('discardWorkshop', prArgs({ repoName: state.pr.repo.name })); }, function () { say('Workshop discarded.'); }); },
+    push: function () {
+      var d = state.commits.data;
+      act('push', function () { return call('push', prArgs({ branch: d.branch, count: d.local.length })); }, function () { say('Pushed.'); state.commits.data = null; loadCommits(); });
+    },
+    adopt: function (el) {
+      var id = el.getAttribute('data-comment');
+      act('adopt-' + id, function () { return call('adopt', prArgs({ commentId: id })).then(function (r) { return call('fix', { findingId: r.finding.id }); }); }, function (r) { say(r.fix && r.fix.sha ? 'Fix committed; the answer went in their thread.' : 'The fix changed nothing.'); });
+    },
+    'publish-review': function (el) {
+      var id = el.getAttribute('data-id');
+      act('publish-review', function () { return call('publishReview', { reviewId: id, body: edit('body-' + id, state.pr.done.body) }); }, function () { delete state.edits['body-' + id]; say('Published.'); });
+    },
+    'save-body': function (el) { var id = el.getAttribute('data-id'); call('saveReviewBody', { reviewId: id, body: edit('body-' + id, state.pr.done.body) }).then(function () { delete state.edits['body-' + id]; say('Saved.'); load(); }, fail); },
+    jump: function (el) {
+      var file = el.getAttribute('data-file');
+      var line = Number(el.getAttribute('data-line')) || null;
+      state.prTab = 'code';
+      remember();
+      if (!state.code.files) { loadFiles().then(function () { openFile(file, line); }); draw(); } else openFile(file, line);
+    },
+    file: function (el) { openFile(el.getAttribute('data-file')); },
+    'code-fetch': function () { state.code.files = null; state.code.file = null; draw(); loadFiles(true); },
+    'note-line': function (el) { state.code.noteAt = { line: Number(el.getAttribute('data-line')) }; draw(); },
+    'note-file': function () { state.code.noteAt = { line: null }; draw(); },
+    'note-cancel': function () { state.code.noteAt = null; draw(); },
+    'add-note': function (el) {
+      var file = el.getAttribute('data-file');
+      var line = Number(el.getAttribute('data-line')) || null;
+      var key = 'newnote-' + file + '-' + (line || 'file');
+      call('addNote', prArgs({ file: file, line: line, body: edit(key) })).then(function () { delete state.edits[key]; state.code.noteAt = null; }).catch(fail);
+    },
+    'publish-note': function (el) {
+      var id = el.getAttribute('data-id');
+      var body = state.edits['note-' + id];
+      act('note-' + id, function () { return (body != null ? call('updateNote', { noteId: id, body: body }) : Promise.resolve()).then(function () { return call('publishNote', { noteId: id }); }); }, function () { delete state.edits['note-' + id]; });
+    },
+    'delete-note': function (el) { call('deleteNote', { noteId: el.getAttribute('data-id') }).catch(fail); },
+    commit: function (el) {
+      var sha = el.getAttribute('data-sha');
+      state.commits.sha = sha; state.commits.files = null; state.commits.file = null; state.commits.lines = null; draw();
+      call('commitFiles', { repoId: state.repoId, sha: sha }).then(function (r) {
+        if (state.commits.sha !== sha) return;
+        state.commits.files = r.files; draw();
+        if (r.files.length) actions['commit-file']({ getAttribute: function () { return r.files[0].path; } });
+      }, fail);
+    },
+    'commit-file': function (el) {
+      var file = el.getAttribute('data-file');
+      var sha = state.commits.sha;
+      state.commits.file = file; state.commits.lines = null; draw();
+      call('commitDiff', { repoId: state.repoId, sha: sha, file: file }).then(function (r) { if (state.commits.file === file) { state.commits.lines = r.lines; draw(); } }, fail);
+    },
+    'draft-reply': function (el) { var id = el.getAttribute('data-id'); delete state.edits['reply-' + id]; act('draft-' + id, function () { return call('draftReply', { replyId: id }); }); },
+    'draft-all': function () { act('draft-all', function () { return call('draftAll', prArgs()); }, function (r) { say(r.drafted + ' drafted' + (r.failed ? ', ' + r.failed + ' failed' : '') + '.', r.failed > 0); }); },
+    'save-reply': function (el) { var id = el.getAttribute('data-id'); call('saveReplyDraft', { replyId: id, body: edit('reply-' + id) }).then(function () { delete state.edits['reply-' + id]; say('Saved.'); }, fail); },
+    'publish-reply': function (el) {
+      var id = el.getAttribute('data-id');
+      var draft = (state.pr.replies || []).filter(function (r) { return r.id === id; })[0];
+      act('reply-' + id, function () { return call('publishReply', { replyId: id, body: edit('reply-' + id, draft && draft.body) }); }, function () { delete state.edits['reply-' + id]; say('Answer published.'); });
+    },
+    'dismiss-reply': function (el) { call('dismissReply', { replyId: el.getAttribute('data-id') }).catch(fail); },
+    'dismiss-all-replies': function () { call('dismissAllReplies', prArgs()).catch(fail); },
+    'close-thread': function (el) { call('closeFinding', { findingId: el.getAttribute('data-id'), closed: el.getAttribute('data-on') === '1' }).catch(fail); },
+    'follow-open': function (el) {
+      var id = el.getAttribute('data-id');
+      call('followUpText', { findingId: id }).then(function (r) { state.edits['follow-' + id] = r.text; draw(); }, fail);
+    },
+    'follow-cancel': function (el) { delete state.edits['follow-' + el.getAttribute('data-id')]; draw(); },
+    'follow-send': function (el) {
+      var id = el.getAttribute('data-id');
+      act('follow-' + id, function () { return call('followUp', { findingId: id, body: state.edits['follow-' + id] }); }, function () { delete state.edits['follow-' + id]; say('Reminder sent.'); });
+    },
+    shell: function (el) { host.call('review.shell', prArgs({ where: el.getAttribute('data-where') })).catch(fail); },
+    ask: function (el) { host.call('review.ask', prArgs({ findingId: el.getAttribute('data-finding') || undefined })).catch(fail); },
+    'auto-now': function () { call('autoRunNow').then(function () { say('Sweeping.'); }, fail); },
+    'import-pick': function (el) { state.importPick[el.getAttribute('data-id')] = el.checked; },
+    'import-run': function () {
+      var ids = state.importInfo.repos.filter(function (repo) { return state.importPick[repo.id] !== false && !repo.localOnly; }).map(function (repo) { return repo.id; });
+      if (!ids.length) return say('Nothing selected.', true);
+      act('import', function () { return call('importRun', { repoIds: ids }); }, function (r) { state.importReport = r.report; loadOverview().then(draw); });
+    }
+  };
+
+  document.addEventListener('click', function (event) {
+    var el = event.target.closest('[data-act]');
+    if (!el || el.hasAttribute('disabled')) return;
+    var name = el.getAttribute('data-act');
+    if (el.tagName === 'INPUT' && el.type === 'checkbox' && name !== 'guide-toggle' && name !== 'import-pick') return;
+    var handler = actions[name];
+    if (!handler) return;
+    if (el.tagName !== 'INPUT') event.preventDefault();
+    handler(el);
+  });
+
+  document.addEventListener('input', function (event) {
+    var el = event.target;
+    var key = el.getAttribute('data-edit');
+    if (key) state.edits[key] = el.value;
+    var formField = el.getAttribute('data-form');
+    if (formField && state.form && el.type !== 'radio' && el.type !== 'checkbox') state.form[formField] = el.value;
+    if (el.getAttribute('data-bind') === 'dash-text') { state.dashFilter.text = el.value; draw(); }
+  });
+
+  document.addEventListener('change', function (event) {
+    var el = event.target;
+    var formField = el.getAttribute('data-form');
+    if (formField && state.form) {
+      if (el.type === 'checkbox') state.form[formField] = el.checked;
+      else state.form[formField] = el.value;
+      if (el.type === 'radio' || el.type === 'checkbox' || el.tagName === 'SELECT') draw();
+    }
+    var setting = el.getAttribute('data-setting');
+    if (setting) {
+      var value = el.type === 'checkbox' ? el.checked : el.value;
+      var patch = {};
+      patch[setting] = value;
+      call('saveSettings', { settings: patch }).then(function (r) { state.settings = r.settings; if (state.overview) state.overview.settings = r.settings; delete state.edits['set-' + setting]; say('Saved.'); draw(); }, fail);
+    }
+    if (el.getAttribute('data-edit-select')) { state.edits[el.getAttribute('data-edit-select')] = el.value; }
+    if (el.getAttribute('data-edit-check')) { state.edits[el.getAttribute('data-edit-check')] = el.checked; }
+    if (el.getAttribute('data-bind') === 'prs-sort') { state.prSort = el.value; remember(); draw(); }
+    if (el.getAttribute('data-bind') === 'history-author') { state.historyAuthor = el.value; draw(); }
+  });
+
+  /* ------------------------------------------------------------------ *
+   * What the app tells the panel
+   * ------------------------------------------------------------------ */
+
+  var activityTimer = null;
+  host.on('review', function (event) {
+    if (!event) return;
+    if (event.type === 'activity') {
+      var run = event.run;
+      if (run.done) delete state.activity[run.key]; else state.activity[run.key] = run;
+      if (state.view === 'pr' && state.pr && run.repoId === state.repoId && run.prId === state.prId) {
+        state.pr.running = runningList().filter(function (r) { return r.repoId === state.repoId && r.prId === state.prId; });
+      }
+      if (state.view === 'dashboard' && state.dashboard) state.dashboard.stats.running = runningList().length;
+      if (!activityTimer) activityTimer = setTimeout(function () { activityTimer = null; draw(); }, 250);
+      if (run.done) scheduleReload();
+      return;
+    }
+    if (event.type === 'changed') {
+      if (state.view === 'pr') { if (event.repoId === state.repoId && (event.prId == null || event.prId === state.prId)) scheduleReload(); }
+      else if (state.view === 'prs') { if (event.repoId === state.repoId) scheduleReload(); }
+      else if (state.view === 'dashboard' || state.view === 'repos') scheduleReload();
+      return;
+    }
+    if (event.type === 'auto') { state.auto = event.status; drawTop(); if (state.view === 'dashboard' && !event.status.running) scheduleReload(); return; }
+    if (event.type === 'repos' || event.type === 'settings') { loadOverview().then(function () { if (state.view !== 'repoForm') scheduleReload(); else draw(); }); }
+  });
+
+  host.on('showing', function (payload) {
+    state.showing = !payload || payload.showing !== false;
+    if (state.showing && !state.started) start();
+  });
+
+  host.on('context', function (payload) {
+    var saved = payload && payload.resume;
+    if (saved) {
+      if (saved.view && saved.view !== 'repoForm' && saved.view !== 'import') state.view = saved.view;
+      if (saved.repoId) state.repoId = saved.repoId;
+      if (saved.prId) state.prId = saved.prId;
+      if (saved.prTab) state.prTab = saved.prTab;
+      if (saved.prSort) state.prSort = saved.prSort;
+      if (saved.dashFilter) state.dashFilter = saved.dashFilter;
+    }
+    if (payload && payload.showing === false) state.showing = false;
+    if (state.showing) start();
+  });
+
+  function start() {
+    if (state.started) return;
+    state.started = true;
+    if ((state.view === 'pr' || state.view === 'prs') && !state.repoId) state.view = 'dashboard';
+    loadOverview().then(function () { draw(); return load(); }).catch(function (error) {
+      $('main').innerHTML = '<div class="page"><div class="banner bad">The Code Reviewer did not answer: ' + esc(error.message) + '</div></div>';
+    });
+  }
+
+  host.ready();
+})();
+</script>

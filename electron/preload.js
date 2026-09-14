@@ -227,6 +227,19 @@ contextBridge.exposeInMainWorld('api', {
     },
   },
 
+  /**
+   * Code Reviewer: one call for every verb, and one event stream — work in
+   * progress, and "something about this PR changed, read it again".
+   */
+  review: {
+    call: (name, args) => ipcRenderer.invoke('review:call', { name, args }),
+    onEvent: (fn) => {
+      const handler = (_e, payload) => fn(payload);
+      ipcRenderer.on('review:event', handler);
+      return () => ipcRenderer.removeListener('review:event', handler);
+    },
+  },
+
   /** Maven and Gradle: read by the main process, run by a terminal. */
   build: {
     call: (name, args) => ipcRenderer.invoke('build:call', { name, args }),
