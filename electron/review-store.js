@@ -130,6 +130,11 @@ const MIGRATIONS = [
      scope TEXT NOT NULL, number INTEGER NOT NULL, token TEXT, repo_id TEXT, pr_id INTEGER, label TEXT,
      filename TEXT, created_at TEXT NOT NULL, PRIMARY KEY (scope, number)
    )`,
+
+  // 3 — why a repository could not be read, kept where it is shown; and a reserved number as it was handed out.
+  `ALTER TABLE cr_pr_meta ADD COLUMN error TEXT;
+   ALTER TABLE cr_pr_meta ADD COLUMN error_at TEXT;
+   ALTER TABLE cr_migration_slot ADD COLUMN code TEXT`,
 ];
 
 const now = () => new Date().toISOString();
@@ -559,6 +564,17 @@ class ReviewStore {
       fetchedAt === undefined ? current.fetched_at ?? null : fetchedAt,
       sweptAt === undefined ? current.swept_at ?? null : sweptAt,
     );
+  }
+
+  /**
+   * Why the last read of a repository failed, or null once one worked. Kept on
+   * the repository rather than thrown at whoever pressed Refresh: a toast that
+   * truncates an HTTP body and goes away tells nobody which repository, or what
+   * to do about it.
+   */
+  setReadError(repoId, message) {
+    if (!this.prMeta(repoId)) this.setPrMeta(repoId, {});
+    this.run('UPDATE cr_pr_meta SET error = ?, error_at = ? WHERE repo_id = ?', message ? String(message).slice(0, 2000) : null, message ? new Date().toISOString() : null, repoId);
   }
 
   // --- approvals ------------------------------------------------------------

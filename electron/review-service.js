@@ -104,7 +104,16 @@ class ReviewService {
       auto: { ...this.auto.status },
       activity: this.engine.activity.list(),
       repos: this.store.repos().map((repo) => this.publicRepo(repo)),
+      // The names our own comments were posted under: what "your name on the forge" almost certainly is.
+      meSuggestions: this.store.all('SELECT author, COUNT(*) AS n FROM cr_pr_comment WHERE is_ours = 1 GROUP BY author ORDER BY n DESC LIMIT 3').map((row) => row.author),
     };
+  }
+
+  /** The last failed read of a repository, in words a person can act on, with the raw text kept for whoever needs it. */
+  readError(repoId) {
+    const meta = this.store.prMeta(repoId);
+    if (!meta?.error) return null;
+    return { message: rules.readableError(meta.error), detail: meta.error, at: meta.error_at };
   }
 
   factsKey(repoId, prId) {
@@ -172,6 +181,7 @@ class ReviewService {
         toVerify: count('TO_VERIFY'),
       },
       recent: this.store.recentActivity(20),
+      readErrors: repos.map((repo) => ({ repoId: repo.id, repoName: repo.name, ...this.readError(repo.id) })).filter((entry) => entry.message),
       usage: this.store.usageSummary(),
       auto: { ...this.auto.status },
       activity: this.engine.activity.list(),
@@ -210,6 +220,7 @@ class ReviewService {
         debt: { pendingReplies, unverified, unpublished },
         oldestDays: oldest,
         fetchedAt: this.store.prMeta(repo.id)?.fetched_at ?? null,
+        readError: this.readError(repo.id),
       };
     });
   }
@@ -217,7 +228,7 @@ class ReviewService {
   prRows(repoId, states = ['OPEN']) {
     const repo = this.engine.requireRepo(repoId);
     const rows = this.rows(this.store.prs(repoId, { states }), new Map([[repo.id, repo]]), this.store.boardFacts(repoId));
-    return { repo: this.publicRepo(repo), rows, fetchedAt: this.store.prMeta(repoId)?.fetched_at ?? null };
+    return { repo: this.publicRepo(repo), rows, fetchedAt: this.store.prMeta(repoId)?.fetched_at ?? null, readError: this.readError(repoId) };
   }
 
   /** Everything one PR's screen shows, in one answer. */
@@ -258,6 +269,7 @@ class ReviewService {
       readiness: rules.readiness({ pr, review: done, threads, findings: doneFindings, finalPassDone, finalPassBlockers: finalPassDone ? done.finalPassBlockers ?? 0 : 0 }),
       finalPassDone,
       mergeBlocker: rules.mergeBlocker(counts),
+      nextStep: rules.nextStep({ pr, review: done, findings: doneFindings, notes, threads, running, finalPassDone, finalPassBlockers: done?.finalPassBlockers ?? 0, mergeBlocker: rules.mergeBlocker(counts) }),
       running,
       settings,
       followUpDays: settings.followUpDays,
@@ -497,16 +509,23 @@ class ReviewService {
 
       // pull requests
       refreshPrs: async (args) => ({ ok: true, ...(await e.refreshPrs(str(args.repoId, 'A repository'), { force: args.force !== false, notifyNew: false })) }),
+      /** Every repository at once, four at a time: one after another, fourteen repositories took most of a minute. */
       refreshAll: async () => {
-        const errors = [];
-        for (const repo of s.store.repos({ withHidden: false })) {
-          try {
-            await e.refreshPrs(repo.id, { force: true });
-          } catch (error) {
-            errors.push(`${repo.name}: ${String(error?.message ?? error).slice(0, 160)}`);
+        const repos = s.store.repos({ withHidden: false });
+        const failed = [];
+        let next = 0;
+        const worker = async () => {
+          while (next < repos.length) {
+            const repo = repos[next++];
+            try {
+              await e.refreshPrs(repo.id, { force: true });
+            } catch (error) {
+              failed.push({ repoId: repo.id, repoName: repo.name, message: rules.readableError(String(error?.message ?? error)) });
+            }
           }
-        }
-        return { ok: true, errors };
+        };
+        await Promise.all(Array.from({ length: Math.min(4, repos.length) }, worker));
+        return { ok: true, read: repos.length - failed.length, failed };
       },
       searchHistory: async (args) => ({ ok: true, found: await e.searchHistory(str(args.repoId, 'A repository')) }),
       loadPr: async (args) => ({ ok: true, ...(await e.loadPr(str(args.repoId, 'A repository'), num(args.prId))) }),

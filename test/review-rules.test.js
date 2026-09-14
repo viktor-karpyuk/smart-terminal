@@ -286,3 +286,38 @@ test('prompts carry the range, the depth and the rules, and schemas are strict a
   assert.match(thread, /OTROS COMENTARIOS DEL HILO[\s\S]*pm: loose/);
   assert.match(P.fixPrompt({ finding: { filePath: 'a.ts', lineNo: 1, severity: 'major', title: 't', body: 'b', askedBy: 'Ana' }, prTitle: 'T', branch: 'feat', language: 'es' }), /Lo pidió: Ana[\s\S]*No hagas commit ni push/);
 });
+
+test('a failed read is said in words a person can act on', () => {
+  assert.match(R.readableError('[billing-ms · vkarp/billing-ms] HTTP 404 — {"type":"error"}'), /^Not found: the repository does not exist, or the token cannot see it\.$/);
+  assert.match(R.readableError('[x] HTTP 401 after 10 attempts — nope'), /rate-limits, so retry before replacing the token/);
+  assert.match(R.readableError('[x] HTTP 403 — API rate limit exceeded'), /Rate limited/);
+  assert.match(R.readableError('[x] HTTP 403 — forbidden'), /not allowed/);
+  assert.match(R.readableError('[x] HTTP 502 — bad gateway'), /HTTP 502\)\. Usually temporary/);
+  assert.match(R.readableError('[x] fetch failed'), /Could not reach/);
+  assert.equal(R.readableError('[repo] something odd\nstack'), 'something odd');
+});
+
+test('the next step on a PR, in the order people are waiting', () => {
+  const pr = { state: 'OPEN', headSha: 'h2' };
+  const review = { headSha: 'h2' };
+  const step = (extra) => R.nextStep({ pr, review, ...extra });
+  assert.equal(R.nextStep({ pr: null }).action, 'load');
+  assert.equal(R.nextStep({ pr: { state: 'MERGED' } }).kind, 'done');
+  assert.equal(step({ running: [{ kind: 'review' }] }).kind, 'wait');
+  assert.equal(R.nextStep({ pr, review: null }).action, 'run-review');
+  assert.equal(step({ findings: [{ id: 'a' }, { id: 'b', askedBy: 'Ana' }], notes: [{}] }).title, 'Publish 2 findings', 'an adopted request is not ours to publish');
+  assert.equal(step({ findings: [{ publishedId: 'c' }], threads: [{ state: 'DRAFT_READY' }] }).action, 'tab-conversation');
+  assert.equal(R.nextStep({ pr, review: { headSha: 'h1' }, findings: [{ publishedId: 'c' }] }).action, 'verify');
+  assert.equal(R.nextStep({ pr, review: { headSha: 'h1' }, findings: [] }).title, 'Review what is new');
+  assert.equal(step({ findings: [{ publishedId: 'c' }] }).title, 'Waiting for the author');
+  assert.equal(step({ findings: [{ publishedId: 'c', resolution: 'RESOLVED' }] }).action, 'final-pass');
+  assert.equal(step({ finalPassDone: true, finalPassBlockers: 2 }).kind, 'warn');
+  assert.equal(step({ finalPassDone: true, mergeBlocker: 'x' }).title, 'Almost ready to merge');
+  assert.equal(step({ finalPassDone: true }).title, 'Ready to merge');
+});
+
+test('a forge time with its zone trimmed off is UTC', () => {
+  const now = new Date('2026-09-14T17:30:00Z');
+  assert.equal(R.daysBetween('2026-09-10 17:40', now), 3, 'not shifted by the local zone');
+  assert.equal(R.daysBetween('2026-09-11T17:30:00Z', now), 3);
+});

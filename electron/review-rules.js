@@ -651,7 +651,9 @@ function childrenOf(comments) {
 }
 
 function daysBetween(from, today) {
-  const start = Date.parse(String(from).replace(' ', 'T'));
+  // "2026-09-14 14:20", as the forge rows are stored, is UTC with its zone trimmed off.
+  const text = String(from);
+  const start = Date.parse(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(text) ? `${text.replace(' ', 'T')}Z` : text.replace(' ', 'T'));
   if (!Number.isFinite(start)) return null;
   return Math.max(0, Math.floor((today.getTime() - start) / 86400000));
 }
@@ -956,10 +958,10 @@ function parseDiff(raw) {
 /** `git log` records split on the unit and record separators. */
 function parseLog(text) {
   return String(text ?? '')
-    .split('')
+    .split('\u001e')
     .map((record) => record.replace(/^[\n\r ]+|[\n\r ]+$/g, ''))
     .filter(Boolean)
-    .map((record) => record.split(''))
+    .map((record) => record.split('\u001f'))
     .filter((fields) => fields.length >= 4)
     .map((fields) => ({ sha: fields[0], author: fields[1], date: fields[2], subject: fields[3], body: (fields[4] ?? '').trim() }));
 }
@@ -975,6 +977,52 @@ function slug(name) {
       .replace(/^-+|-+$/g, '')
       .slice(0, 60) || 'repo'
   );
+}
+
+/**
+ * A forge or git failure, in words a person can act on. The raw text — status,
+ * body, the long 401 explanation — stays available as the detail; this is the
+ * one line that goes on a card.
+ */
+function readableError(message) {
+  const text = String(message ?? '');
+  const status = /HTTP (\d{3})/.exec(text)?.[1];
+  if (status === '404') return 'Not found: the repository does not exist, or the token cannot see it.';
+  if (status === '401') return 'Authentication failed. Bitbucket also answers 401 when it rate-limits, so retry before replacing the token.';
+  if (status === '403') return /rate limit/i.test(text) ? 'Rate limited by the provider. Try again in a few minutes.' : 'The token is not allowed to do that.';
+  if (status === '429') return 'Rate limited by the provider. Try again in a few minutes.';
+  if (status && status.startsWith('5')) return `The provider failed (HTTP ${status}). Usually temporary.`;
+  if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT|fetch failed|network|timeout/i.test(text)) return 'Could not reach the provider. Check the connection.';
+  return text.replace(/^\[[^\]]*\]\s*/, '').split('\n')[0].slice(0, 200) || 'It failed without saying why.';
+}
+
+/**
+ * The one thing to do next on a PR, so a person does not have to read the
+ * readiness list and the merge gate and work it out. In order of who is waiting:
+ * a review that is running, a PR nobody reviewed, new commits, findings not yet
+ * published, answers owed, verdicts owed, the author's turn, the final pass, and
+ * then the merge.
+ */
+function nextStep({ pr, review, findings = [], notes = [], threads = [], running = [], finalPassDone = false, finalPassBlockers = 0, mergeBlocker = null }) {
+  if (!pr) return { kind: 'act', action: 'load', title: 'Load the pull request', detail: 'It is not in the local copy yet.' };
+  if (pr.state && pr.state !== 'OPEN') return { kind: 'done', title: `This pull request is ${String(pr.state).toLowerCase()}`, detail: 'Nothing is waiting here.' };
+  const busy = running.find((run) => run.kind === 'review' || run.kind === 'verify' || run.kind === 'final');
+  if (busy) return { kind: 'wait', title: { review: 'A review is running', verify: 'Verifying the comments', final: 'The final pass is running' }[busy.kind], detail: 'This page updates when it ends.' };
+  if (!review) return { kind: 'act', action: 'run-review', title: 'Review this pull request', detail: 'Nobody has reviewed it yet.' };
+  const own = findings.filter((finding) => !finding.askedBy);
+  const unpublished = own.filter((finding) => !settled(finding)).length + notes.filter((note) => !note.publishedId).length;
+  const newCode = Boolean(review.headSha && pr.headSha && review.headSha !== pr.headSha);
+  if (unpublished) return { kind: 'act', action: 'publish-all', title: `Publish ${unpublished} finding${unpublished === 1 ? '' : 's'}`, detail: 'Or dismiss the ones that should not go out. The author sees nothing until then.' };
+  const answers = threads.filter((thread) => thread.state === 'NEEDS_ANSWER' || thread.state === 'DRAFT_READY').length;
+  if (answers) return { kind: 'act', action: 'tab-conversation', title: `Answer ${answers} repl${answers === 1 ? 'y' : 'ies'}`, detail: 'Someone answered your comments.' };
+  const pending = own.filter(needsVerdict).length;
+  if (newCode && pending) return { kind: 'act', action: 'verify', title: 'Verify the new commits', detail: `${pending} published comment${pending === 1 ? '' : 's'} may be addressed by them.` };
+  if (newCode) return { kind: 'act', action: 'run-review', title: 'Review what is new', detail: 'Commits arrived since the last review.' };
+  if (pending) return { kind: 'wait', title: 'Waiting for the author', detail: `${pending} published comment${pending === 1 ? ' is' : 's are'} open and no new commits arrived.` };
+  if (finalPassBlockers > 0 && finalPassDone) return { kind: 'warn', action: 'final-pass', title: `The final pass found ${finalPassBlockers} blocker${finalPassBlockers === 1 ? '' : 's'}`, detail: 'Read them before merging, or run it again after the fix.' };
+  if (!finalPassDone) return { kind: 'act', action: 'final-pass', title: 'Run the final pass', detail: 'The last look before merging, on this exact commit.' };
+  if (mergeBlocker) return { kind: 'warn', action: 'merge-open', title: 'Almost ready to merge', detail: mergeBlocker };
+  return { kind: 'act', action: 'merge-open', title: 'Ready to merge', detail: 'Everything is published, answered and verified.' };
 }
 
 /** Age urgency marks, as the PR list shows them. */
@@ -1042,4 +1090,6 @@ module.exports = {
   slug,
   ageMark,
   daysBetween,
+  readableError,
+  nextStep,
 };

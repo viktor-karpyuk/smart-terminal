@@ -169,7 +169,15 @@ class ReviewEngine {
     const firstSweep = !meta?.fetched_at;
     const cachedRows = this.store.prs(repoId, { states: ['OPEN'] });
     const needBody = cachedRows.some((pr) => !pr.createdOn);
-    const result = await this.forge.of(repo).listOpen({ etag: needBody ? null : meta?.etag });
+    let result;
+    try {
+      result = await this.forge.of(repo).listOpen({ etag: needBody ? null : meta?.etag });
+    } catch (error) {
+      this.store.setReadError(repoId, String(error?.message ?? error));
+      this.changed(repoId);
+      throw error;
+    }
+    this.store.setReadError(repoId, null);
     const stamp = new Date().toISOString();
     if (result.notModified) {
       this.store.setPrMeta(repoId, { fetchedAt: stamp });

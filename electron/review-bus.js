@@ -391,7 +391,7 @@ class ReviewBus {
       const start = Math.max(floor, reserved);
       const out = [];
       for (let i = 1; i <= count; i++) {
-        this.store.run('INSERT INTO cr_migration_slot (scope, number, token, repo_id, pr_id, label, created_at) VALUES (?,?,?,?,?,?,?)', scopeKey, start + i, member.token, repo.id, member.prId, member.label, now());
+        this.store.run('INSERT INTO cr_migration_slot (scope, number, token, repo_id, pr_id, label, created_at, code) VALUES (?,?,?,?,?,?,?,?)', scopeKey, start + i, member.token, repo.id, member.prId, member.label, now(), migrationLabel(start + i, width));
         out.push(start + i);
       }
       return out;
@@ -401,7 +401,7 @@ class ReviewBus {
   }
 
   reservations(repoId = null) {
-    return this.store.all(`SELECT * FROM cr_migration_slot ${repoId ? 'WHERE repo_id = ?' : ''} ORDER BY created_at DESC LIMIT 100`, ...(repoId ? [repoId] : [])).map((row) => ({ repoId: row.repo_id, number: row.number, prId: row.pr_id, label: row.label, at: row.created_at }));
+    return this.store.all(`SELECT * FROM cr_migration_slot ${repoId ? 'WHERE repo_id = ?' : ''} ORDER BY created_at DESC LIMIT 100`, ...(repoId ? [repoId] : [])).map((row) => ({ repoId: row.repo_id, number: row.number, code: row.code ?? `V${row.number}`, prId: row.pr_id, label: row.label, at: row.created_at }));
   }
 
   // --- the tools, in words ---------------------------------------------------------------------
