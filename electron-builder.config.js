@@ -61,7 +61,7 @@ module.exports = {
   // Claude CLI spawns it as a plain-node child, and plain node cannot read an asar.
   // Unpacked because a plain `node` runs it: a hook is a child of Claude, not of
   // Electron, and it cannot read a file inside an asar.
-  asarUnpack: ['**/node_modules/node-pty/**', 'electron/group-mcp.js', 'plugin/**'],
+  asarUnpack: ['**/node_modules/node-pty/**', 'electron/group-mcp.js', 'electron/review-bus-mcp.js', 'plugin/**'],
   mac: {
     target: [
       { target: 'dmg', arch: ['arm64'] },

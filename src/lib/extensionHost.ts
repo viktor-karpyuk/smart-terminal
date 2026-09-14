@@ -195,7 +195,7 @@ const SPRING_VERBS = new Map<string, Channel>([
 const REVIEW_READ = [
   'overview', 'dashboard', 'repos', 'repo', 'prs', 'pr', 'files', 'diff', 'commits', 'commitFiles', 'commitDiff',
   'guidelines', 'usage', 'activity', 'importInspect', 'models', 'depths', 'rerunCheck', 'followUpText', 'brief', 'paths',
-  'detectRemote',
+  'detectRemote', 'bus',
 ] as const;
 const REVIEW_WRITE = [
   'pickFolder', 'saveRepo', 'testRepo', 'deleteRepo', 'hideRepo', 'saveSettings', 'saveGuideline', 'deleteGuideline',

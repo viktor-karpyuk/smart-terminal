@@ -5,6 +5,7 @@ const path = require('node:path');
 const rules = require('./review-rules');
 const prompts = require('./review-prompts');
 const { describeEvent } = require('./review-engine');
+const { busSection, TOOL_NAMES } = require('./review-bus');
 
 /**
  * Code Reviewer: fixing a finding, in a workshop, never in anybody's clone.
@@ -29,7 +30,7 @@ const { describeEvent } = require('./review-engine');
  */
 
 class FixEngine {
-  constructor({ store, forge, git, claude, engine, root, notify = () => {}, emit = () => {} }) {
+  constructor({ store, forge, git, claude, engine, root, notify = () => {}, emit = () => {}, bus = null, busServer = () => null }) {
     this.store = store;
     this.forge = forge;
     this.git = git;
@@ -38,6 +39,8 @@ class FixEngine {
     this.root = root;
     this.notify = notify;
     this.emit = emit;
+    this.bus = bus;
+    this.busServer = busServer;
     /** One queue per PR: fixes of one PR share a workshop and run in turn; different PRs run side by side. */
     this.queues = new Map();
   }
@@ -103,14 +106,17 @@ class FixEngine {
     });
     const fixId = this.store.startFix({ findingId: finding.id, reviewId: finding.reviewId, repoId: repo.id, prId: pr.id, branch: pr.sourceBranch, workspace: dir });
     const language = this.engine.language();
+    const label = `Fix #${pr.id}: ${finding.title}`.slice(0, 80);
+    const attached = this.attach({ repo, pr, dir, label });
     try {
       const before = await this.git.head(dir);
       const result = await this.claude.run({
         kind: 'fix',
         cwd: dir,
-        prompt: prompts.fixPrompt({ finding, prTitle: pr.title, branch: pr.sourceBranch, language, guidelines: prompts.guidelinesSection(this.store.guidelinesForReview(repo.id)) }),
+        prompt: prompts.fixPrompt({ finding, prTitle: pr.title, branch: pr.sourceBranch, language, guidelines: prompts.guidelinesSection(this.store.guidelinesForReview(repo.id)), bus: attached?.section ?? '' }),
         model: repo.defaultModel || rules.DEPTHS.INTERMEDIATE.model,
-        allowedTools: rules.FIX_TOOLS,
+        mcpConfig: attached?.config,
+        allowedTools: attached ? [...rules.FIX_TOOLS, ...attached.tools] : rules.FIX_TOOLS,
         disallowedTools: rules.FIX_DENIED,
         schema: prompts.FIX_SCHEMA,
         timeout: 30 * 60 * 1000,
@@ -133,6 +139,7 @@ class FixEngine {
         this.store.setResolution(finding.id, 'RESOLVED', rules.fixResolutionNote(commit, outcome.summary));
         this.store.closeFinding(finding.id, true);
         activity.line(key, `Committed ${commit.slice(0, 7)} in the workshop.`);
+        await this.recordTouch({ repo, pr, dir, commit, before, label, log: (text) => activity.line(key, text) });
         await this.answer(repo, pr, finding, fixId, commit, outcome.summary, (text) => activity.line(key, text));
         this.notify(`Fix ready in ${repo.name}`, `${finding.title.slice(0, 80)} — commit ${commit.slice(0, 7)} in the workshop.`);
       } else {
@@ -143,7 +150,57 @@ class FixEngine {
       const row = this.store.fix(fixId);
       if (row?.state === 'RUNNING') this.store.fixFailed(fixId, String(error?.message ?? error));
       throw error;
+    } finally {
+      // Leaving releases its claims: a fix that is over holds nothing up.
+      if (attached) this.bus.close(attached.token);
     }
+  }
+
+  /**
+   * Put this run on the bus: a token of the app's making, an MCP config naming
+   * the bus server with that token in its environment, the tools allowed by
+   * name, and the prompt section — with whatever was already left for this PR
+   * folded in and marked read, so it is not read twice. Without the socket (the
+   * app has not opened it, or this is a test) the fix runs alone, as before.
+   */
+  attach({ repo, pr, dir, label }) {
+    const server = this.bus ? this.busServer() : null;
+    if (!server) return null;
+    const token = this.bus.openFix({ repoId: repo.id, prId: pr.id, label, branch: pr.sourceBranch, workDir: dir });
+    const member = this.bus.member(token);
+    const pending = this.bus.inbox(member);
+    if (pending.length) this.bus.markRead(member, pending[pending.length - 1]);
+    const config = {
+      mcpServers: {
+        'code-review': { command: server.command, args: [server.script], env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: server.socketPath, SMART_TERMINAL_BUS_TOKEN: token } },
+      },
+    };
+    return { token, config, tools: TOOL_NAMES.map((name) => `mcp__code-review__${name}`), section: busSection(pending) };
+  }
+
+  /**
+   * What a committed fix changed, remembered against its PR's branch — and if
+   * another open PR's branch changes the same files, everyone writing in the
+   * repository is told now, not at the merge.
+   */
+  async recordTouch({ repo, pr, dir, commit, before, label, log }) {
+    if (!this.bus) return;
+    const range = before && before !== commit ? `${before}..${commit}` : `${commit}~1..${commit}`;
+    const changed = await this.git.run(dir, ['diff', '--name-only', range]);
+    const files = changed.ok ? changed.stdout.split('\n').map((line) => line.trim()).filter(Boolean) : [];
+    if (!files.length) return;
+    this.bus.touch({ repoId: repo.id, prId: pr.id, branch: pr.sourceBranch, label, paths: files });
+    const { hits } = await this.bus.whoTouched({ repoId: repo.id, prId: pr.id }, files);
+    if (!hits.length) return;
+    const lines = hits.map((hit) => `${hit.branch ?? 'another branch'}${hit.prId ? ` (PR #${hit.prId})` : ''}: ${hit.paths.join(', ')}`);
+    this.bus.post({
+      scopeName: 'REPO',
+      from: { repoId: repo.id, prId: pr.id, token: null, label: 'the tool' },
+      kind: 'warning',
+      subject: `${files.length} file(s) changed by a fix on ${pr.sourceBranch}`,
+      body: `A fix for PR #${pr.id} (${pr.sourceBranch}) changed files that other open branches also change — they will meet at the merge:\n${lines.join('\n')}`,
+    });
+    log(`Other branches change the same files: ${lines.join('; ')}`);
   }
 
   async notice(repo, pr, finding, summary, sha) {

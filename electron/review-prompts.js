@@ -506,7 +506,7 @@ Tono de par, no de auditor. Nada de condescendencia ni de disculpas de más.`;
  * not that it fails to fix the thing but that it reorders imports and renames on
  * the way, leaving a diff nobody can review at a glance.
  */
-function fixPrompt({ finding, prTitle, branch, language, guidelines = '' }) {
+function fixPrompt({ finding, prTitle, branch, language, guidelines = '', bus = '' }) {
   const lines = [
     'Sos el mismo revisor que encontró este problema. Ahora te toca arreglarlo.',
     '',
@@ -539,6 +539,7 @@ function fixPrompt({ finding, prTitle, branch, language, guidelines = '' }) {
     '  motivo. Un archivo tocado a medias es peor que uno sin tocar.',
   );
   if (guidelines.trim()) lines.push('', 'CONVENCIONES DEL EQUIPO (el arreglo tiene que respetarlas)', guidelines);
+  if (bus.trim()) lines.push('', bus);
   lines.push(
     '',
     'RESPUESTA',

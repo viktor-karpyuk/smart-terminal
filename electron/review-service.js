@@ -12,6 +12,7 @@ const { ReviewEngine } = require('./review-engine');
 const { FixEngine } = require('./review-fix');
 const { AutoReviewer } = require('./review-auto');
 const importer = require('./review-import');
+const { ReviewBus } = require('./review-bus');
 
 /**
  * Code Reviewer: the one door the panel knocks on.
@@ -29,7 +30,7 @@ const importer = require('./review-import');
 const GUIDELINE_MAX = 60000;
 
 class ReviewService {
-  constructor({ db, secrets, fetch, profiles, resolvePath, notify, emit, dataDir, pickFolder, openExternal, DatabaseSync, importSource }) {
+  constructor({ db, secrets, fetch, profiles, resolvePath, notify, emit, dataDir, pickFolder, openExternal, DatabaseSync, importSource, busServer }) {
     this.emitRaw = emit ?? (() => {});
     this.store = new ReviewStore(db, secrets);
     this.profiles = profiles ?? { list: () => [] };
@@ -51,7 +52,9 @@ class ReviewService {
       onUsage: (entry) => this.store.recordUsage(entry),
     });
     this.engine = new ReviewEngine({ store: this.store, forge: this.forge, git: this.git, claude: this.claude, notify: notifier, emit: emitter });
-    this.fixer = new FixEngine({ store: this.store, forge: this.forge, git: this.git, claude: this.claude, engine: this.engine, root: path.join(dataDir, 'code-review', 'fixes'), notify: notifier, emit: emitter });
+    const workshops = path.join(dataDir, 'code-review', 'fixes');
+    this.bus = new ReviewBus({ store: this.store, git: this.git, workshopRoot: workshops, emit: emitter });
+    this.fixer = new FixEngine({ store: this.store, forge: this.forge, git: this.git, claude: this.claude, engine: this.engine, root: workshops, notify: notifier, emit: emitter, bus: this.bus, busServer: busServer ?? (() => null) });
     this.engine.onFinished = (repo, pr, review) => {
       if (repo.fixMode === 'AUTO') void this.fixer.autoFix(repo, pr, review).catch(() => {});
     };
@@ -60,6 +63,7 @@ class ReviewService {
 
   /** Called once the app is up: runs left behind by a previous process are failed and queued, and the sweep starts. */
   start() {
+    this.bus.sweep();
     this.store.orphanedRuns();
     this.store.orphanedFixes();
     this.auto.start();
@@ -430,6 +434,7 @@ class ReviewService {
       },
       guidelines: (args) => ({ ok: true, guidelines: s.guidelines(args.repoId) }),
       usage: () => ({ ok: true, usage: s.store.usageSummary() }),
+      bus: () => ({ ok: true, ...s.bus.overview() }),
       activity: () => ({ ok: true, activity: e.activity.list() }),
       importInspect: () => ({ ok: true, ...importer.inspect({ DatabaseSync: s.DatabaseSync, source: s.importSource }) }),
       models: () => ({ ok: true, models: ['haiku', 'sonnet', 'opus', 'fable'] }),

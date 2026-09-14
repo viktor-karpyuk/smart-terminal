@@ -369,6 +369,7 @@
     else if (view === 'pr') promise = loadPrView();
     else if (view === 'settings') promise = Promise.all([call('guidelines', { repoId: null }), call('usage')]).then(function (r) { state.globalGuidelines = r[0].guidelines; state.usage = r[1].usage; });
     else if (view === 'import') promise = call('importInspect').then(function (r) { state.importInfo = r; });
+    else if (view === 'bus') promise = call('bus').then(function (r) { state.bus = r; });
     else promise = Promise.resolve();
     return promise.then(draw, function (error) {
       if (view === 'pr') state.prError = error.message; else fail(error);
@@ -436,7 +437,7 @@
     var autoText = !state.overview ? '' : !(state.overview.settings && state.overview.settings.autoEnabled)
       ? 'automatic off'
       : auto && auto.running ? 'sweeping…' : auto && auto.lastRunAt ? 'last sweep ' + when(auto.lastRunAt) : 'automatic on';
-    var tabs = [['dashboard', 'Dashboard'], ['repos', 'Repositories'], ['settings', 'Settings']];
+    var tabs = [['dashboard', 'Dashboard'], ['repos', 'Repositories'], ['bus', 'Coordination'], ['settings', 'Settings']];
     var html = '<span class="brand">Code Reviewer</span>';
     tabs.forEach(function (tab) {
       var on = state.view === tab[0] || (tab[0] === 'repos' && (state.view === 'prs' || state.view === 'repoForm' || state.view === 'import'));
@@ -463,6 +464,7 @@
       else if (state.view === 'pr') html = drawPr();
       else if (state.view === 'settings') html = drawSettings();
       else if (state.view === 'import') html = drawImport();
+      else if (state.view === 'bus') html = drawBus();
       else html = '';
     } catch (error) {
       html = '<div class="page"><div class="banner bad">This view could not be drawn: ' + esc(error && error.stack || error) + '</div></div>';
@@ -1246,6 +1248,37 @@
     return html + '</div>';
   }
 
+  /**
+   * The bus, read-only: who is writing where right now, what each has claimed,
+   * the migration numbers handed out, and what was said. The fixes and the
+   * sessions talk to each other through their own tools; this is where a person
+   * sees it.
+   */
+  function drawBus() {
+    var b = state.bus;
+    if (!b) return '<div class="loading">Loading…</div>';
+    var html = '<div class="page"><h2>Coordination</h2><p class="dim" style="margin-top:0">The fixes the reviewer writes and your Claude sessions share a bus: they see who else is writing in the same repository, claim files before editing them, leave each other messages and take migration numbers that nobody else will be given. Sessions join the first time they use a tool.</p>';
+    html += '<h3>Writing now</h3>';
+    if (!b.members.length) html += '<div class="faint">Nobody is on the bus right now.</div>';
+    else html += '<table class="list"><tr><th>Who</th><th>Where</th><th>Claimed</th><th>Since</th></tr>' + b.members.map(function (m) {
+      return '<tr><td><span class="chip ' + (m.kind === 'fix' ? 'accent' : '') + '">' + esc(m.kind) + '</span> ' + esc(m.label) + '</td><td>' + esc(m.where) + (m.branch ? ' <span class="faint mono">' + esc(m.branch) + '</span>' : '') + '</td>' +
+        '<td class="mono" style="font-size:11px">' + (m.claims.length ? m.claims.map(esc).join('<br>') : '<span class="faint">—</span>') + '</td><td class="faint">' + esc(when(m.startedAt)) + '</td></tr>';
+    }).join('') + '</table>';
+    if (b.reservations.length) {
+      html += '<h3>Migration numbers handed out</h3><table class="list"><tr><th>Number</th><th>Repository</th><th>To</th><th>When</th></tr>' + b.reservations.slice(0, 30).map(function (r) {
+        return '<tr><td class="mono">' + esc(r.number) + '</td><td>' + esc(r.repoName || '') + (r.prId ? ' #' + r.prId : '') + '</td><td>' + esc(r.label || '') + '</td><td class="faint">' + esc(when(r.at)) + '</td></tr>';
+      }).join('') + '</table>';
+    }
+    html += '<h3>Messages</h3>';
+    if (!b.messages.length) html += '<div class="faint">Nothing said yet.</div>';
+    b.messages.forEach(function (m) {
+      html += '<div class="finding"><div class="meta"><span class="chip ' + (m.kind === 'warning' ? 'mine' : m.kind === 'question' ? 'accent' : '') + '">' + esc(m.kind) + '</span><strong>' + esc(m.fromLabel) + '</strong>' +
+        '<span class="faint">to ' + esc(m.scope === 'ALL' ? 'everyone' : m.scope === 'REPO' ? (m.repoName || 'the repository') : (m.repoName || '') + (m.prId ? ' #' + m.prId : '')) + '</span>' +
+        (m.subject ? '<span class="dim">· ' + esc(m.subject) + '</span>' : '') + '<span class="spacer"></span><span class="faint">' + esc(when(m.at)) + '</span></div>' + md(m.body) + '</div>';
+    });
+    return html + '</div>';
+  }
+
   function drawImport() {
     var info = state.importInfo;
     var html = '<div class="page form"><div class="row"><button class="btn small" data-act="nav" data-view="repos">← Repositories</button><h2 style="margin:0 6px">Import from AI Code Reviewer</h2></div>';
@@ -1634,6 +1667,7 @@
       else if (state.view === 'dashboard' || state.view === 'repos') scheduleReload();
       return;
     }
+    if (event.type === 'bus') { if (state.view === 'bus') scheduleReload(); return; }
     if (event.type === 'auto') { state.auto = event.status; drawTop(); if (state.view === 'dashboard' && !event.status.running) scheduleReload(); return; }
     if (event.type === 'repos' || event.type === 'settings') { loadOverview().then(function () { if (state.view !== 'repoForm') scheduleReload(); else draw(); }); }
   });

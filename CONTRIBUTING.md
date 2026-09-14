@@ -248,8 +248,35 @@ repository reviews automatically, and it reads the thread of every open PR with 
 comments each cycle, so a reply is noticed without opening the PR. And a GitHub PR is read with
 its state and stances, which the original never mapped.
 
-Not ported: the Constructor (spec-driven implementation), statistics, Jira and the stories
-board, the database-engine choice, and the MCP bus the Constructor's tasks used.
+Not ported, by decision: the Constructor (spec-driven implementation), statistics, Jira and
+the stories board, and the database-engine choice — the reviewer uses Smart Terminal's
+database.
+
+### The bus
+
+AI Code Reviewer's MCP bus let its parallel tasks see each other; here it does the same for
+the reviewer's fixes and the person's own Claude sessions (`review-bus.js`). Seven tools —
+`peers`, `inbox`, `notify`, `claim`, `who_touched`, `release`, `migration_number` — served by
+`review-bus-mcp.js`, a stdio MCP server that only relays over the app's message socket
+(`op: 'bus'` in `message-bridge.js`). What holds it up:
+
+- **Identity is the app's.** A fix run gets a token the app made, inline in its
+  `--mcp-config` together with `--strict-mcp-config`; a session is known by the
+  `SMART_TERMINAL_SESSION_ID` the app put in its environment, and only while it is in the
+  live roster. Where a session is — which repository, which PR — is worked out from its
+  working directory: a configured clone, or a fix workshop.
+- **Claims never block.** Every branch has its own copy; a claim is for the merge. They go
+  when the fix ends, or when the session stops or moves to another repository.
+- **`who_touched` and `migration_number` read real branches.** The repository's other open
+  PRs are diffed with git (cached per head), so a file or a migration number another PR
+  already uses is seen before the merge. Numbers are reserved in a transaction and never
+  handed out twice.
+- **A fix reads back a day** when it joins, because it is a new writer each run; a session
+  starts from the moment it joins. After a fix commits, the files it changed are recorded
+  against its branch, and if another open branch changes them too, the repository is told.
+
+The panel's Coordination tab shows it, read-only. The plugin's `code-review-bus` skill tells
+a session when to reach for the tools.
 
 Testing it by hand needs no real review: import an AI Code Reviewer history into an isolated
 instance and every screen has data. `test/review-engine.test.js` drives the whole thing — a

@@ -173,6 +173,8 @@ let db = null;
  * about it. Its tables live in this app's own database.
  */
 let reviewService = null;
+/** Where the bus's MCP server lives and the socket it talks to, once messaging has opened it. */
+let reviewBusServer = null;
 let monitor = null;
 /**
  * Watches the working trees the app has open, so the Git panel is current
@@ -251,6 +253,8 @@ function createReviewService() {
       },
       openExternal: (url) => shell.openExternal(url),
       DatabaseSync,
+      // Known once messaging has opened its socket; a fix started before that runs without the bus.
+      busServer: () => reviewBusServer,
     });
   } catch (error) {
     // The rest of the app does not depend on the reviewer; a reviewer that cannot start says so and stays out of the way.
@@ -1924,6 +1928,10 @@ function startMessaging() {
   pluginPath = fs.existsSync(path.join(plugin, '.claude-plugin', 'plugin.json')) ? plugin : null;
   if (!pluginPath) console.log('[hooks] the plugin folder is not there; sessions will run without it');
 
+  // The Code Reviewer's bus, beside the sessions' server and started the same way.
+  const busScript = path.join(__dirname, 'review-bus-mcp.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+  reviewBusServer = { command: process.execPath, script: busScript, socketPath };
+
   try {
     fs.writeFileSync(
       mcpConfigPath,
@@ -1934,6 +1942,12 @@ function startMessaging() {
               command: process.execPath,
               args: [script],
               // Electron's own binary is the only node this app is sure to have.
+              env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
+            },
+            // A session knows itself by the id in its environment, which this server inherits.
+            'code-review': {
+              command: process.execPath,
+              args: [busScript],
               env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
             },
           },
@@ -1961,6 +1975,7 @@ function startMessaging() {
     },
     isFree: sessionIsFree,
     onHook: (request) => handleHook(request),
+    onBus: (request) => (reviewService ? reviewService.bus.handle(request, liveRoster()) : { ok: false, error: 'The Code Reviewer is not running.' }),
     // Sessions the app knows but is not running. Without this, a message to a
     // session that has ended comes back as "no such session", which is false and
     // leaves the sender nothing to do but try again.

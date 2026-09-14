@@ -382,3 +382,8 @@ test('the reviewer routes by name, and asks only before what cannot be undone', 
   assert.match(H.needsConsent('review.deleteRepo', { repoName: 'App' }), /Stop reviewing App/);
   assert.match(H.needsConsent('review.discardWorkshop', { prId: 7 }), /commits are gone unless they were handed back/);
 });
+
+test('the reviewer\'s bus is readable from its panel and nothing more', () => {
+  assert.equal(H.route('review.bus'), 'review');
+  assert.equal(H.needsConsent('review.bus', {}), null);
+});

@@ -28,8 +28,10 @@ const SIGNED_OUT = ['not logged in', 'please run /login', 'invalid api key'];
 /** Twenty minutes: the ceiling the original app put on every run. */
 const DEFAULT_TIMEOUT = 20 * 60 * 1000;
 
-function buildArgs({ model, allowedTools = [], disallowedTools = [], schema, resume }) {
+function buildArgs({ model, allowedTools = [], disallowedTools = [], schema, resume, mcpConfig }) {
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'dontAsk'];
+  // Only the servers this run is given: the person's own MCP servers have no business in a fix.
+  if (mcpConfig) args.push('--mcp-config', typeof mcpConfig === 'string' ? mcpConfig : JSON.stringify(mcpConfig), '--strict-mcp-config');
   if (allowedTools.length) args.push('--allowedTools', ...allowedTools);
   if (disallowedTools.length) args.push('--disallowedTools', ...disallowedTools);
   if (model) args.push('--model', model);

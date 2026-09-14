@@ -106,6 +106,30 @@ const MIGRATIONS = [
      cost_usd REAL, account_id TEXT
    );
    CREATE TABLE IF NOT EXISTS cr_pref (k TEXT PRIMARY KEY, v TEXT)`,
+
+  // 2 — the bus: who is writing in which repository, what they claimed, what they said.
+  `CREATE TABLE IF NOT EXISTS cr_bus_member (
+     token TEXT PRIMARY KEY, kind TEXT NOT NULL, session_id TEXT, repo_id TEXT, pr_id INTEGER,
+     label TEXT NOT NULL, branch TEXT, work_dir TEXT, started_at TEXT NOT NULL, ended_at TEXT
+   );
+   CREATE TABLE IF NOT EXISTS cr_bus_message (
+     id TEXT PRIMARY KEY, scope TEXT NOT NULL, repo_id TEXT, pr_id INTEGER, from_token TEXT,
+     from_label TEXT NOT NULL, kind TEXT NOT NULL, subject TEXT, body TEXT NOT NULL, at TEXT NOT NULL
+   );
+   CREATE INDEX IF NOT EXISTS cr_bus_message_at ON cr_bus_message(at, id);
+   CREATE TABLE IF NOT EXISTS cr_bus_read (token TEXT PRIMARY KEY, last_at TEXT NOT NULL);
+   CREATE TABLE IF NOT EXISTS cr_bus_claim (
+     repo_id TEXT NOT NULL, path TEXT NOT NULL, token TEXT NOT NULL, label TEXT NOT NULL, reason TEXT, at TEXT NOT NULL,
+     PRIMARY KEY (repo_id, path)
+   );
+   CREATE TABLE IF NOT EXISTS cr_bus_touch (
+     repo_id TEXT NOT NULL, path TEXT NOT NULL, pr_id INTEGER NOT NULL, branch TEXT, label TEXT NOT NULL, at TEXT NOT NULL,
+     PRIMARY KEY (repo_id, path, pr_id)
+   );
+   CREATE TABLE IF NOT EXISTS cr_migration_slot (
+     scope TEXT NOT NULL, number INTEGER NOT NULL, token TEXT, repo_id TEXT, pr_id INTEGER, label TEXT,
+     filename TEXT, created_at TEXT NOT NULL, PRIMARY KEY (scope, number)
+   )`,
 ];
 
 const now = () => new Date().toISOString();
@@ -443,7 +467,7 @@ class ReviewStore {
   /** Everything the repository owns goes with it; cascades cover reviews and findings, the rest by hand. */
   deleteRepo(repoId) {
     this.transaction(() => {
-      for (const table of ['cr_finding', 'cr_publication', 'cr_pr_comment', 'cr_local_note', 'cr_reply_draft', 'cr_pr', 'cr_pr_meta', 'cr_pr_approval', 'cr_pending_job', 'cr_guideline', 'cr_finding_fix']) {
+      for (const table of ['cr_finding', 'cr_publication', 'cr_pr_comment', 'cr_local_note', 'cr_reply_draft', 'cr_pr', 'cr_pr_meta', 'cr_pr_approval', 'cr_pending_job', 'cr_guideline', 'cr_finding_fix', 'cr_bus_claim', 'cr_bus_touch', 'cr_migration_slot']) {
         this.run(`DELETE FROM ${table} WHERE repo_id = ?`, repoId);
       }
       this.run('DELETE FROM cr_review WHERE repo_id = ?', repoId);
