@@ -871,6 +871,11 @@ declare global {
         ): () => void;
         onState(handler: (payload: SpringRun) => void): () => void;
       };
+      /** Code Reviewer: every verb through one call; progress and changes through one event. */
+      review: {
+        call(name: string, args?: unknown): Promise<{ ok: boolean; error?: string; [key: string]: unknown }>;
+        onEvent(handler: (payload: { type: string; repoId?: string; prId?: number | null; [key: string]: unknown }) => void): () => void;
+      };
       /** Maven and Gradle projects, read — never run — by the main process. */
       build: {
         call(name: string, args?: unknown): Promise<BuildResult>;

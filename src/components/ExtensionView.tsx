@@ -14,6 +14,7 @@ import {
   springShellSetup,
   jdbCommand,
   terminalSetup,
+  shellQuote,
 } from '../lib/extensionHost';
 
 /**
@@ -314,10 +315,16 @@ function Frame({
           const scoped = verb === 'root' ? { dir: root } : { ...args, root };
           return reply(true, await window.api.build.call(verb, scoped), undefined);
         }
+        if (channel === 'review') {
+          // Not scoped to a folder: the reviewer's subjects are repositories it
+          // was configured with, named by id, and resolved on the other side.
+          return reply(true, await window.api.review.call(name.slice(7), args), undefined);
+        }
         if (channel === 'kube-stream') {
           return reply(true, await stream(name.slice(5), args), undefined);
         }
         if (name.startsWith('spring.')) return reply(true, await springAction(name.slice(7), args), undefined);
+        if (name.startsWith('review.')) return reply(true, await reviewAction(name.slice(7), args), undefined);
         return reply(true, await appAction(name, args), undefined);
       } catch (error) {
         reply(false, null, String((error as Error)?.message ?? error));
@@ -401,6 +408,36 @@ function Frame({
       const brief = await window.api.spring.call('brief', { id: String(args.id ?? ''), root });
       if (!brief.ok) return brief;
       const sessionId = await claudeFor(panelId);
+      if (!sessionId) return { ok: false, error: 'the app could not open a session' };
+      store.focusSession(sessionId);
+      const handed = await window.api.analysis.handOver(sessionId, String(brief.text ?? ''));
+      return { ok: true, sessionId, delivered: handed.delivered ?? false };
+    }
+
+    /**
+     * The two doors, for a pull request.
+     *
+     * `shell` opens a terminal in the repository's clone, or in the workshop
+     * where its fixes are written; the panel names the PR and which of the two,
+     * and the folder comes from what the reviewer has stored. `ask` hands a
+     * Claude session the reviewer's own account of the PR or of one finding.
+     */
+    async function reviewAction(verb: string, args: Record<string, unknown>) {
+      const store = useStore.getState();
+      const ids = { repoId: String(args.repoId ?? ''), prId: args.prId ? Number(args.prId) : undefined };
+      const paths = await window.api.review.call('paths', ids);
+      if (!paths.ok) return paths;
+      if (verb === 'shell') {
+        const dir = String((args.where === 'workshop' ? paths.workshop : paths.clone) ?? '');
+        if (!dir) return { ok: false, error: 'there is no folder for that' };
+        const title = `${args.where === 'workshop' ? 'fix' : 'sh'} ${ids.prId ? `#${ids.prId}` : dir.split('/').pop()}`.slice(0, 28);
+        const sessionId = await store.openShellNear(panelId, title, `cd ${shellQuote(dir, 'The folder')}`, below(panelId));
+        if (!sessionId) return { ok: false, error: 'the app could not open a terminal' };
+        return { ok: true, sessionId };
+      }
+      const brief = await window.api.review.call('brief', { ...ids, findingId: args.findingId ? String(args.findingId) : undefined });
+      if (!brief.ok) return brief;
+      const sessionId = await claudeFor(panelId, { cwd: String(paths.clone ?? ''), title: `ask PR #${ids.prId ?? ''}` });
       if (!sessionId) return { ok: false, error: 'the app could not open a session' };
       store.focusSession(sessionId);
       const handed = await window.api.analysis.handOver(sessionId, String(brief.text ?? ''));
@@ -509,18 +546,21 @@ function Frame({
    * close it — and then the next question opens another, which is the right
    * answer to having closed one.
    */
-  async function claudeFor(id: string): Promise<string | null> {
+  async function claudeFor(id: string, options: { cwd?: string; title?: string } = {}): Promise<string | null> {
     const store = useStore.getState();
     const held = claudeForPanel.get(id);
     if (held && store.sessions[held]) return held;
 
     const sessionId = await store.newSession({
       kind: 'claude',
+      // A reviewer's session stands in the clone of the PR it was asked about.
+      ...(options.cwd ? { cwd: options.cwd } : {}),
       // Named after the cluster, not after the panel: "ask Kubernetes" says
       // nothing on a machine with four clusters in kubeconfig.
-      title: `ask ${
-        view.needs === 'kubernetes' ? shortContext(String(root ?? '')) || 'cluster' : String(root ?? '').split('/').pop() || 'folder'
-      }`.slice(0, 28),
+      title: (
+        options.title ??
+        `ask ${view.needs === 'kubernetes' ? shortContext(String(root ?? '')) || 'cluster' : String(root ?? '').split('/').pop() || 'folder'}`
+      ).slice(0, 28),
       /*
        * An account that is actually signed in.
        *
@@ -653,6 +693,16 @@ function Frame({
       stopState();
     };
   }, [view.listens, root]);
+
+  /*
+   * The reviewer's news: work in progress, and "something about this PR changed".
+   * Every panel that asked hears all of it — a review belongs to the app, not
+   * to the tab that started it, and the dashboard shows every PR at once.
+   */
+  useEffect(() => {
+    if (!view.listens?.includes('review')) return;
+    return window.api.review.onEvent((payload) => tell('review', payload));
+  }, [view.listens]);
 
   // The working tree moved: the panel is told, and decides for itself what of
   // its picture is now wrong. The app does not guess on its behalf.
