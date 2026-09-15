@@ -45,6 +45,14 @@ function buildMenu(send, newWindow, reopenWindow = () => {}) {
         { role: 'paste' },
         { type: 'separator' },
         { label: 'Select All', accelerator: 'CmdOrCtrl+A', click: action('select-all') },
+        { type: 'separator' },
+        /*
+         * Save is the app's, not the editor's. The editor binds ⌘S too, but a
+         * binding inside the editor only fires with the keyboard inside the
+         * editor — and the person who just clicked the tree, the tab strip or
+         * the terminal underneath and pressed ⌘S meant the file all the same.
+         */
+        { label: 'Save', accelerator: 'CmdOrCtrl+S', click: action('save') },
       ],
     },
     {

@@ -1,6 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { App } from './App';
+import { App, handleMenuAction } from './App';
 import { useStore } from './state/store';
 import { getTerminal } from './terminals/registry';
 import './styles.css';
@@ -10,11 +10,13 @@ if (import.meta.env.DEV) {
   // to a canvas, so reading a terminal means going through xterm's buffer API.
   const debug = window as unknown as {
     store: typeof useStore;
+    menuAction: typeof handleMenuAction;
     readTerminal(id: string): string;
     terminal: typeof getTerminal;
     terminalStats(id: string): { lines: number; cols: number; rows: number } | null;
   };
   debug.store = useStore;
+  debug.menuAction = handleMenuAction;
   debug.terminal = getTerminal;
   debug.terminalStats = (id: string) => {
     const handle = getTerminal(id);
