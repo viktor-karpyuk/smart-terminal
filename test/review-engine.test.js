@@ -609,3 +609,20 @@ test('a PR imported without branch names says so instead of naming an empty bran
   const files = await service.call('files', { repoId: repo.id, prId: 7 });
   assert.match(files.error, /imported without its branch names/);
 });
+
+test('an incremental review whose PR row is behind the branch still reads the new commits', { skip }, async () => {
+  const { service, repo, w, claude } = setup([
+    async () => ({ structured: { summary: 'first', findings: [] } }),
+    async () => ({ structured: { summary: 'second', findings: [], carried: [] } }),
+  ]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  assert.equal((await service.call('review', { repoId: repo.id, prId: 7 })).ok, true);
+  // Pushed, but nothing reloaded the PR row: it still names the first commit.
+  fs.writeFileSync(path.join(w.seed, 'app.js'), 'function add(a, b) {\n  return a + b;\n}\n');
+  git(w.seed, 'commit', '-am', 'fix');
+  git(w.seed, 'push', 'origin', 'feature');
+  const newer = git(w.seed, 'rev-parse', 'HEAD');
+  const second = await service.call('review', { repoId: repo.id, prId: 7 });
+  assert.equal(second.ok, true, second.error);
+  assert.match(claude.runs[1].prompt, new RegExp(`Commits nuevos a revisar: ${w.head}\\.\\.${newer}`), 'the range ends at what was fetched, not at the stale row');
+});
