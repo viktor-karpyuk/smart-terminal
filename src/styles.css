@@ -1175,6 +1175,14 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   color: var(--text);
 }
 
+.menu-item .menu-glyph {
+  display: inline-flex;
+  width: 12px;
+  margin-right: 7px;
+  color: var(--text-faint);
+  vertical-align: -1px;
+}
+
 .menu-item:hover { background: var(--accent-soft); }
 
 /*
@@ -3032,7 +3040,16 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 
 /* Name and path on the left; the two things you do to the folder on the right. */
 .files-head-main { flex: 1; min-width: 0; }
-.files-head-tools { flex: none; display: flex; flex-direction: column; gap: 2px; padding-left: 4px; }
+/*
+ * A row, not a column.
+ *
+ * It stacked because there were two of these and a column kept them beside a
+ * two-line name block. Then every extension that applied added one, and the
+ * header grew 21px each time — five tools was 103px of header before a single
+ * file was listed. There are three now and there will always be three: Git,
+ * Terminal, and one ⋮ holding however many the extensions bring.
+ */
+.files-head-tools { flex: none; display: flex; align-items: center; gap: 2px; padding-left: 4px; }
 
 .files-tool {
   position: relative;
