@@ -861,6 +861,37 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .update-extension-list li { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
 .update-extension-list span { color: var(--text-faint); font-variant-numeric: tabular-nums; }
 
+/* ------------------------------------------------- picking sessions to restore */
+
+/*
+ * The bar only exists once something is picked, so it can afford to be plain:
+ * it is never in the way of somebody who is not using it.
+ */
+.history-picked {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 6px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 6px;
+  background: var(--accent-soft);
+  font-size: 12px;
+}
+.history-picked strong { font-weight: 600; margin-right: auto; }
+
+/* A fixed column, empty where a row cannot be picked, so nothing shifts sideways
+   between a session that can come back and one that is already here. */
+.history-pick {
+  flex: none;
+  width: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.history-pick input { margin: 0; cursor: pointer; }
+.history-row.is-picked { background: var(--accent-soft); }
+
 /* What is about to be closed, when it is more than one thing. */
 .confirm-list {
   margin: 10px 0 0;
@@ -1145,6 +1176,39 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 
 .menu-item:hover { background: var(--accent-soft); }
+
+/*
+ * A row that is two acts: go there, or get rid of it.
+ *
+ * The pair is one row and one hover target, so the menu still reads as a list of
+ * lines rather than a list of pairs. The × keeps its own hover, in the danger
+ * colour, because its outcome is not the row's.
+ */
+.menu-item-pair { padding: 0; gap: 0; }
+.menu-item-pair:hover { background: transparent; }
+.menu-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 5px 8px;
+  border-radius: 4px 0 0 4px;
+  font-size: 12.5px;
+  text-align: left;
+  color: inherit;
+}
+.menu-item-main:hover { background: var(--accent-soft); }
+.menu-item-main > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-item-drop {
+  flex: none;
+  width: 24px;
+  align-self: stretch;
+  border-radius: 0 4px 4px 0;
+  color: var(--text-faint);
+  font-size: 14px;
+  line-height: 1;
+}
+.menu-item-drop:hover { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
 .menu-item.is-danger:hover { background: rgba(247, 118, 142, 0.14); color: var(--danger); }
 
 /*

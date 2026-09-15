@@ -64,6 +64,9 @@ const openingTerminal = new Set<string>();
 
 const DEFAULT_SETTINGS: Settings = {
   fontSize: 13,
+  // What the editor's stylesheet had been falling back to all along, so nobody's
+  // editors change size the first time they run a build that has this in it.
+  editorFontSize: 12.5,
   fontFamily: '"JetBrains Mono", "SF Mono", Menlo, "Fira Code", ui-monospace, monospace',
   sidebarVisible: true,
   sidebarWidth: 260,
@@ -630,7 +633,16 @@ interface State {
   setUpdatePanelOpen(open: boolean): void;
   /** Ask now. `force` also ignores a version that was skipped. */
   checkForUpdates(force?: boolean): Promise<void>;
-  reopenSession(historyId: string, asProfileId?: string): Promise<string | null>;
+  reopenSession(historyId: string, asProfileId?: string, options?: { closeHistory?: boolean }): Promise<string | null>;
+  /**
+   * Bring several back at once, in the order they were picked.
+   *
+   * Answers with what happened to each rather than a count: coming back can fail
+   * one session at a time — an account that is not signed in, a conversation
+   * that was never saved — and "4 of 7 restored" is the shape of an answer that
+   * makes somebody open the list again to find out which three.
+   */
+  restoreSessions(historyIds: string[], asProfileId?: string): Promise<{ restored: string[]; failed: string[] }>;
   runClaudeIn(sessionId: string, profileId?: string): void;
   pickConversationIn(sessionId: string): void;
   requestClose(sessionId: string): void;
@@ -3629,7 +3641,7 @@ export const useStore = create<State>((set, get) => ({
    * Continue a session that was closed earlier. It comes back as a new session
    * resuming the same conversation, with a trail back to the one it continues.
    */
-  async reopenSession(historyId, asProfileId) {
+  async reopenSession(historyId, asProfileId, options) {
     const past = await window.api.history.session(historyId);
     if (!past) return null;
 
@@ -3660,7 +3672,9 @@ export const useStore = create<State>((set, get) => ({
       }
     }
 
-    set({ historyOpen: false });
+    // Restoring several keeps the list up until the last one is through, so the
+    // panel does not vanish out from under a selection that is still being acted on.
+    if (options?.closeHistory !== false) set({ historyOpen: false });
     const newId = await get().newSession({
       profileId: profile.id,
       kind: past.kind === 'login' ? 'shell' : past.kind,
@@ -3691,6 +3705,35 @@ export const useStore = create<State>((set, get) => ({
       );
     }
     return newId;
+  },
+
+  /**
+   * Bring back everything that was picked.
+   *
+   * One at a time, and deliberately so. Each one creates a session, spawns a
+   * process and puts a tab in the layout, and firing seven of those at the same
+   * instant is seven writes racing over the same split tree — the tabs arrive in
+   * whatever order the promises settle, which is not the order anybody picked
+   * them in. Sequential costs a second and gives back the order.
+   *
+   * A failure is kept rather than thrown. Six that came back and one that could
+   * not is a useful outcome; an exception halfway through is six tabs and no
+   * explanation.
+   */
+  async restoreSessions(historyIds, asProfileId) {
+    const restored: string[] = [];
+    const failed: string[] = [];
+    for (const id of historyIds) {
+      try {
+        const newId = await get().reopenSession(id, asProfileId, { closeHistory: false });
+        if (newId) restored.push(id);
+        else failed.push(id);
+      } catch {
+        failed.push(id);
+      }
+    }
+    if (restored.length) set({ historyOpen: false });
+    return { restored, failed };
   },
 
   /**
