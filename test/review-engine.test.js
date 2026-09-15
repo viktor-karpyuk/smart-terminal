@@ -626,3 +626,112 @@ test('an incremental review whose PR row is behind the branch still reads the ne
   assert.equal(second.ok, true, second.error);
   assert.match(claude.runs[1].prompt, new RegExp(`Commits nuevos a revisar: ${w.head}\\.\\.${newer}`), 'the range ends at what was fetched, not at the stale row');
 });
+
+// ---------------------------------------------------------------- reviews side by side
+
+/*
+ * Reviewing one pull request must not stop you reviewing another.
+ *
+ * Nothing in the engine ever said otherwise — the claim it keeps is per pull
+ * request, which is right, and two different ones were always free to run. The
+ * limit was the panel: it marked itself busy under the bare key `review`, and
+ * since that call resolves only when the whole review has finished, one running
+ * review greyed out the button everywhere. These cover the two things that had
+ * to become true underneath before that key could be per pull request.
+ */
+test('reviews run several at a time, and the rest wait rather than being refused', async () => {
+  const { Semaphore } = require('../electron/review-engine');
+  const slots = new Semaphore(4);
+
+  let running = 0;
+  let mostAtOnce = 0;
+  const finished = [];
+  const release = [];
+
+  const runs = Array.from({ length: 7 }, (_, i) =>
+    slots.use(async () => {
+      running += 1;
+      mostAtOnce = Math.max(mostAtOnce, running);
+      await new Promise((resolve) => release.push(resolve));
+      running -= 1;
+      finished.push(i);
+    }),
+  );
+
+  // Let the first four take their slots…
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(mostAtOnce, 4, 'four at once, not one');
+
+  // …then let them go, and keep letting go of whoever moves up behind them.
+  // Draining once would only release the first four and leave the queue holding
+  // three promises nobody ever settles.
+  while (finished.length < 7) {
+    while (release.length) release.shift()();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await Promise.all(runs);
+
+  assert.strictEqual(finished.length, 7, 'and the other three ran, they did not fail');
+  assert.ok(mostAtOnce <= 4, 'never more than the slots allow');
+});
+
+/*
+ * The one thing two reviews of the same repository must not do together. A
+ * review reads by sha and never touches the working tree — except the fetch,
+ * which writes refs, and two of those at once is how you get "cannot lock ref"
+ * on a review that had nothing wrong with the code it was reading.
+ */
+test('two reviews of one repository never fetch into it at the same time', async () => {
+  const { ReviewEngine } = require('../electron/review-engine');
+  const engine = Object.create(ReviewEngine.prototype);
+  engine.fetching = new Map();
+
+  let inside = 0;
+  let overlapped = false;
+  const order = [];
+  const fetch = (name, ms) =>
+    engine.inClone('/clone', async () => {
+      inside += 1;
+      if (inside > 1) overlapped = true;
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      inside -= 1;
+      order.push(name);
+    });
+
+  await Promise.all([fetch('a', 20), fetch('b', 1), fetch('c', 1)]);
+  assert.strictEqual(overlapped, false, 'one at a time in one clone');
+  assert.deepStrictEqual(order, ['a', 'b', 'c'], 'and in the order they asked');
+
+  // A different clone is a different queue: one repository's fetch must not
+  // hold up another's. The count is read on the way *in*, since the short one
+  // is long finished by the time the slow one wakes up.
+  inside = 0;
+  let together = 0;
+  const enter = async (ms) => {
+    inside += 1;
+    together = Math.max(together, inside);
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    inside -= 1;
+  };
+  await Promise.all([engine.inClone('/one', () => enter(15)), engine.inClone('/two', () => enter(1))]);
+  assert.strictEqual(together, 2, 'two clones do run together');
+});
+
+/*
+ * A fetch that throws must not leave everyone behind it waiting on a promise
+ * that will never settle — the queue has to survive the failure, while the
+ * caller still sees it.
+ */
+test('a failed fetch does not wedge the queue behind it', async () => {
+  const { ReviewEngine } = require('../electron/review-engine');
+  const engine = Object.create(ReviewEngine.prototype);
+  engine.fetching = new Map();
+
+  const boom = engine.inClone('/clone', async () => {
+    throw new Error('cannot lock ref');
+  });
+  await assert.rejects(boom, /cannot lock ref/, 'the caller is told');
+
+  const after = await engine.inClone('/clone', async () => 'ran anyway');
+  assert.strictEqual(after, 'ran anyway');
+});

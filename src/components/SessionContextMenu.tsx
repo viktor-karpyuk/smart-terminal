@@ -435,6 +435,7 @@ function GroupSection({
   const assignToGroup = useStore((s) => s.assignToGroup);
   const createGroup = useStore((s) => s.createGroup);
   const requestCloseGroup = useStore((s) => s.requestCloseGroup);
+  const removeGroupOnly = useStore((s) => s.removeGroupOnly);
   const [naming, setNaming] = useState(false);
 
   const current = groups.find((group) => group.id === session.groupId);
@@ -485,22 +486,54 @@ function GroupSection({
             <span>Close all of {current.name}</span>
             <kbd title="reopen from History">reopen from History</kbd>
           </button>
+          {/*
+            Getting rid of the group itself, which is a different act from
+            leaving it and from closing it. Nothing that is running stops.
+          */}
+          <button
+            className="menu-item"
+            onClick={() => {
+              onClose();
+              removeGroupOnly(current.id);
+            }}
+          >
+            <span>Delete {current.name}</span>
+            <kbd title="the sessions stay open and ungrouped">keeps the sessions</kbd>
+          </button>
         </>
       )}
+      {/*
+        Every other group is offered here as somewhere to put this session, so
+        this list is exactly as long as the number of groups that have ever been
+        made — and groups outlive the work they were made for. The × is how one
+        stops being offered, without touching anything that is in it.
+      */}
       {others.map((group) => (
-        <button
-          key={group.id}
-          className="menu-item"
-          onClick={() => {
-            onClose();
-            addToGroup(session.id, group.id);
-          }}
-        >
-          <span>
-            <i className="group-dot" style={{ background: group.color, marginRight: 7 }} />
-            Add to {group.name}
-          </span>
-        </button>
+        <div className="menu-item menu-item-pair" key={group.id}>
+          <button
+            className="menu-item-main"
+            onClick={() => {
+              onClose();
+              addToGroup(session.id, group.id);
+            }}
+          >
+            <span>
+              <i className="group-dot" style={{ background: group.color, marginRight: 7 }} />
+              Add to {group.name}
+            </span>
+          </button>
+          <button
+            className="menu-item-drop"
+            title={`Delete ${group.name}. The sessions in it stay open.`}
+            aria-label={`Delete the group ${group.name}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              removeGroupOnly(group.id);
+            }}
+          >
+            &times;
+          </button>
+        </div>
       ))}
       <button className="menu-item" onClick={() => setNaming(true)}>
         <span>New group…</span>

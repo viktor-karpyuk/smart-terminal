@@ -250,6 +250,27 @@ class Database {
     if (!present.has('paused')) {
       this.db.exec('ALTER TABLE sessions ADD COLUMN paused INTEGER DEFAULT 0');
     }
+    /*
+     * When something last *happened* here, which is not when the row was last
+     * written to.
+     *
+     * `last_active_at` moves whenever anything about a session is recorded — a
+     * title, a working directory, the conversation id found on adoption. That
+     * makes it a fine record of bookkeeping and a terrible answer to "when did
+     * I last work on this", because restoring thirty-nine tabs at startup
+     * writes to all thirty-nine rows and they all come to read as touched this
+     * minute. Measured on a real database: every open session said 14:02 today,
+     * while the last thing actually said in them ranged from that morning back
+     * to nine days earlier.
+     *
+     * So this is a column of its own, written only by work: a turn landing in
+     * the conversation, or somebody typing into the terminal.
+     */
+    if (!present.has('last_worked_at')) {
+      this.db.exec('ALTER TABLE sessions ADD COLUMN last_worked_at INTEGER');
+      this.#backfillWork();
+    }
+    this.db.exec('CREATE INDEX IF NOT EXISTS sessions_worked ON sessions (last_worked_at DESC)');
     this.db.exec('CREATE INDEX IF NOT EXISTS sessions_group ON sessions (group_id)');
 
     const windowColumns = new Set(
@@ -354,6 +375,38 @@ class Database {
       DROP TABLE transcript_chunks_old;
       CREATE INDEX IF NOT EXISTS chunks_session ON transcript_chunks (session_id, seq);
       PRAGMA user_version = 1;
+    `);
+  }
+
+  /**
+   * What every session that was here before this column was.
+   *
+   * The conversations were already stored with a time on every message, so the
+   * history does not have to start empty: the last message of a conversation is
+   * the last thing that happened in it. Sessions with nothing stored — a shell,
+   * or a conversation somebody chose not to keep — fall back to when they ended,
+   * which is what the list used before and is right for anything finished.
+   *
+   * Sessions with nothing stored — a shell, or a conversation somebody chose not
+   * to keep — are deliberately left empty rather than filled in from `ended_at`.
+   * The list falls back to `ended_at` for them anyway, so the order is the same
+   * either way; what differs is the claim. Most of those ended in the same
+   * second as each other, because that is what quitting the app does to every
+   * open tab at once, and writing that into a column called "last worked" would
+   * dress up the hour the app closed as the hour somebody was working. Empty is
+   * the truthful answer to a question the app cannot answer, and it is what lets
+   * the panel say "closed" instead of "last worked on".
+   *
+   * Once, when the column appears. The index on `(session_id, seq)` does not
+   * serve `MAX(at)`, so one is added for it first — with 221,000 messages the
+   * difference is a scan against a lookup.
+   */
+  #backfillWork() {
+    this.db.exec('CREATE INDEX IF NOT EXISTS chunks_session_at ON transcript_chunks (session_id, at)');
+    this.db.exec(`
+      UPDATE sessions SET last_worked_at = (
+        SELECT MAX(c.at) FROM transcript_chunks c WHERE c.session_id = sessions.id
+      ) WHERE last_worked_at IS NULL;
     `);
   }
 
@@ -631,13 +684,18 @@ class Database {
     }
 
     /*
-     * Newest first means newest *finished* first.
+     * Newest first means whatever was worked on most recently.
      *
-     * History is looked at to find the thing you were just doing, and the thing
-     * you were just doing is the one that stopped most recently — not the one
-     * that started most recently, which on a long-running session can be days
-     * ago. Anything still open sorts above all of it, because it has not
-     * finished at all.
+     * Not when it started — a long-running session can have started days ago —
+     * and not whether it is open. Open used to sort above everything, and that
+     * is the version of this that was wrong: a tab left open five days ago and
+     * never touched since outranked the one you were talking to until last
+     * night, purely for being open. What somebody scans this list for is the
+     * thing they were last doing, so that is the order.
+     *
+     * `last_worked_at` is written by work alone. `ended_at` catches anything
+     * from before the column existed with nothing stored to backfill from, and
+     * `started_at` is the floor.
      *
      * The stats ride along rather than being fetched per row: they were
      * measured while the session ran, and a list that shows how long something
@@ -659,7 +717,7 @@ class Database {
            FROM sessions s
            LEFT JOIN session_stats t ON t.session_id = s.id
          ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-         ORDER BY s.ended_at IS NULL DESC, s.ended_at DESC, s.started_at DESC LIMIT ?`,
+         ORDER BY COALESCE(s.last_worked_at, s.ended_at, s.started_at) DESC LIMIT ?`,
       )
       .all(...values, limit);
 
@@ -752,7 +810,30 @@ class Database {
       throw error;
     }
     this.#refreshSize(sessionId);
+    /*
+     * The conversation just grew, so this is work — and the message carries the
+     * time it happened rather than the time it was read, which matters because
+     * a conversation is ingested minutes after the fact and, on adoption, days
+     * after it.
+     */
+    const last = lines[lines.length - 1]?.at;
+    if (Number.isFinite(last)) this.noteWork(sessionId, last);
     return lines.length - start;
+  }
+
+  /**
+   * Something happened in this session, at this moment.
+   *
+   * Only ever forwards. A conversation is ingested out of order often enough —
+   * an old transcript adopted, a snapshot catching up after a restart — and a
+   * session that had been used an hour ago must not be dragged back to last
+   * week by a late reading of something older.
+   */
+  noteWork(id, at = Date.now()) {
+    if (!Number.isFinite(at)) return;
+    this.db
+      .prepare('UPDATE sessions SET last_worked_at = ? WHERE id = ? AND COALESCE(last_worked_at, 0) < ?')
+      .run(at, id, at);
   }
 
   /** The stored conversation, in order, for reading a past session back. */
@@ -1748,6 +1829,7 @@ function decorate(row) {
     startedAt: row.started_at,
     endedAt,
     lastActiveAt: row.last_active_at,
+    lastWorkedAt: row.last_worked_at ?? null,
     exitCode: row.exit_code,
     resumedFrom: row.resumed_from,
     windowId: row.window_id,

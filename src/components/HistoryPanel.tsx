@@ -33,6 +33,17 @@ export function HistoryPanel() {
   const [pendingStop, setPendingStop] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [cleared, setCleared] = useState<number | null>(null);
+  /*
+   * The sessions picked to come back.
+   *
+   * By id rather than by row, because the rows are replaced on every search and
+   * every reload — a selection held as objects would quietly empty itself the
+   * moment somebody typed another letter.
+   */
+  const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  const [restoring, setRestoring] = useState(false);
+  const [restoreNote, setRestoreNote] = useState<string | null>(null);
+  const restoreSessions = useStore((s) => s.restoreSessions);
 
   const colours = useMemo(() => new Map(profiles.map((p) => [p.id, p.color])), [profiles]);
 
@@ -54,8 +65,7 @@ export function HistoryPanel() {
 
     const grouped = [...byGroup.entries()]
       .map(([id, members]) => ({ key: id, group: known.get(id)!, rows: members }))
-      // Newest activity first, the same order the flat list uses — which is by
-      // when a session *finished*, with anything still open above all of it.
+      // Newest activity first, the same order the flat list uses.
       .sort((a, b) => lastActive(b.rows[0]) - lastActive(a.rows[0]));
 
     return loose.length ? [...grouped, { key: 'loose', group: null, rows: loose }] : grouped;
@@ -99,10 +109,10 @@ export function HistoryPanel() {
             <button className={tab === 'sessions' ? 'is-on' : ''} onClick={() => setTab('sessions')}>
               Sessions
             </button>
-            <button className={tab === 'groups' ? 'is-on' : ''} onClick={() => setTab('groups')}>
+            <button className={tab === 'groups' ? 'is-on' : ''} onClick={() => { setTab('groups'); setPicked(new Set()); }}>
               Groups
             </button>
-            <button className={tab === 'handoffs' ? 'is-on' : ''} onClick={() => setTab('handoffs')}>
+            <button className={tab === 'handoffs' ? 'is-on' : ''} onClick={() => { setTab('handoffs'); setPicked(new Set()); }}>
               Account moves
             </button>
           </nav>
@@ -141,7 +151,52 @@ export function HistoryPanel() {
               {busy && <span className="history-busy">searching…</span>}
             </div>
 
+            {picked.size > 0 && (
+              /*
+               * Only once something is picked. A bar that is always there is a
+               * row of height spent on a mode nobody is in yet.
+               */
+              <div className="history-picked">
+                <strong>
+                  {picked.size} session{picked.size === 1 ? '' : 's'} picked
+                </strong>
+                <button
+                  className="ghost-btn tiny is-primary"
+                  disabled={restoring}
+                  onClick={async () => {
+                    setRestoring(true);
+                    setRestoreNote(null);
+                    /*
+                     * In the order they are listed, which is the order somebody
+                     * reading the list was thinking in — not the order of a Set.
+                     *
+                     * Then whatever else is picked but not on screen. Searching
+                     * after picking is normal, and a Restore that quietly dropped
+                     * the ones the search hid would be the worst kind of wrong:
+                     * it would look like it worked.
+                     */
+                    const listed = rows.filter((row) => picked.has(row.id)).map((row) => row.id);
+                    const ordered = [...listed, ...[...picked].filter((id) => !listed.includes(id))];
+                    const { restored, failed } = await restoreSessions(ordered);
+                    setRestoring(false);
+                    setPicked(new Set(failed));
+                    if (failed.length) {
+                      setRestoreNote(
+                        `${restored.length} came back. ${failed.length} could not — still picked, so you can see which.`,
+                      );
+                    }
+                  }}
+                >
+                  {restoring ? 'Restoring…' : `Restore ${picked.size}`}
+                </button>
+                <button className="ghost-btn tiny" disabled={restoring} onClick={() => setPicked(new Set())}>
+                  Clear
+                </button>
+              </div>
+            )}
+
             <div className="history-list">
+              {restoreNote && <p className="usage-note">{restoreNote}</p>}
               {cleared !== null && (
                 <p className="usage-note">Removed {cleared} finished session{cleared === 1 ? '' : 's'}.</p>
               )}
@@ -185,7 +240,30 @@ export function HistoryPanel() {
                     </header>
                   )}
               {section.rows.map((row) => (
-                <article className="history-row" key={row.id}>
+                <article className={`history-row${picked.has(row.id) ? ' is-picked' : ''}`} key={row.id}>
+                  {/*
+                    Only what can actually come back is offered. A session running
+                    in this window is already here, and a checkbox beside it would
+                    be a promise the Restore button could not keep.
+                  */}
+                  {canRestore(row, liveSessions, window.api.windowId) ? (
+                    <label className="history-pick" title="Pick this one to bring back">
+                      <input
+                        type="checkbox"
+                        checked={picked.has(row.id)}
+                        onChange={(event) =>
+                          setPicked((was) => {
+                            const next = new Set(was);
+                            if (event.target.checked) next.add(row.id);
+                            else next.delete(row.id);
+                            return next;
+                          })
+                        }
+                      />
+                    </label>
+                  ) : (
+                    <span className="history-pick is-empty" aria-hidden="true" />
+                  )}
                   <span className="tab-dot" style={{ background: colours.get(row.profileId) ?? '#5c6370' }} />
                   <button className="history-main history-open" onClick={() => setReading(row)}>
                     <div className="history-title">
@@ -215,11 +293,11 @@ export function HistoryPanel() {
                     ))}
                   </button>
                   <div className="history-when">
-                    {/* When it closed, because that is what the list is ordered
-                        by and what people are looking for. */}
-                    <span title={row.endedAt ? `closed ${new Date(row.endedAt).toLocaleString()}` : 'still running'}>
-                      {row.endedAt ? closedAt(row.endedAt) : 'open'}
-                    </span>
+                    {/* When something last happened here, because that is what
+                        the list is ordered by and what people are looking for.
+                        Whether it is still open is a badge on the title, which
+                        is a different question and no longer this one. */}
+                    <span title={whenTitle(row)}>{closedAt(lastActive(row))}</span>
                     <small title={`opened ${new Date(row.startedAt).toLocaleString()}`}>
                       {duration(row.durationMs)}
                     </small>
@@ -570,6 +648,17 @@ function when(at: number) {
  * that closed four hours apart on the same afternoon should not read as the
  * same moment.
  */
+/**
+ * The tooltip says which of the three the date actually is, because they are not
+ * the same claim: work that happened, a session that stopped, or one that was
+ * opened and in which nothing was ever recorded.
+ */
+function whenTitle(row: { lastWorkedAt?: number | null; endedAt: number | null; startedAt: number; open?: boolean }) {
+  if (row.lastWorkedAt) return `last worked on ${new Date(row.lastWorkedAt).toLocaleString()}`;
+  if (row.endedAt) return `closed ${new Date(row.endedAt).toLocaleString()}`;
+  return `opened ${new Date(row.startedAt).toLocaleString()} — nothing recorded since`;
+}
+
 function closedAt(at: number) {
   const date = new Date(at);
   const today = new Date().toDateString() === date.toDateString();
@@ -578,14 +667,37 @@ function closedAt(at: number) {
 }
 
 /**
- * The key the list is sorted by: when a session stopped being current.
+ * Whether a session is one that can be brought back.
  *
- * A session still running has not stopped, so it sorts above everything —
- * `Infinity` rather than "now", so two open sessions keep their own order
- * instead of shuffling with the clock.
+ * Anything finished can. Anything running in another window cannot — continuing
+ * it here would give you two tabs holding the same conversation, and the useful
+ * move is to go to where it already is. Anything running *here* is already on
+ * screen, so there is nothing to restore.
  */
-function lastActive(row: { endedAt: number | null; startedAt: number }) {
-  return row.endedAt ?? Number.MAX_SAFE_INTEGER;
+function canRestore(
+  row: { id: string; open: boolean; windowId?: string | null },
+  live: Record<string, unknown>,
+  thisWindow: string,
+) {
+  if (!row.open) return true;
+  if (live[row.id]) return false;
+  return !(row.windowId && row.windowId !== thisWindow);
+}
+
+/**
+ * The key the list is sorted by: when something last happened here.
+ *
+ * Not whether it is open. That was the previous answer — anything running
+ * sorted above everything else — and it put a tab opened five days ago and
+ * never touched since above the one that was being talked to last night. What
+ * this list is scanned for is the thing you were last doing.
+ *
+ * The same order the query already returns; it is repeated here because groups
+ * are folded in the renderer and a fold has to sort by the same key as the
+ * rows inside it, or a group jumps to a place none of its members explain.
+ */
+export function lastActive(row: { lastWorkedAt?: number | null; endedAt: number | null; startedAt: number }) {
+  return row.lastWorkedAt ?? row.endedAt ?? row.startedAt;
 }
 
 /**

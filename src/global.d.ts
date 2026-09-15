@@ -300,6 +300,8 @@ export interface HistorySession {
   startedAt: number;
   endedAt: number | null;
   lastActiveAt: number | null;
+  /** When something last happened here: a turn landing, or somebody typing. */
+  lastWorkedAt: number | null;
   exitCode: number | null;
   resumedFrom: string | null;
   storeTranscript: boolean;

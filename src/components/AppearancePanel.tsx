@@ -287,6 +287,28 @@ export function AppearancePanel() {
               />
             </label>
 
+            {/*
+              The editors' own size, beside the terminals' rather than in a
+              section of its own: they are the same question asked about the two
+              places text appears, and somebody setting one is the person most
+              likely to want the other.
+            */}
+            <label className="field">
+              <span>Editor size — {settings.editorFontSize}px</span>
+              <input
+                type="range"
+                min={9}
+                max={24}
+                step={0.5}
+                value={settings.editorFontSize}
+                onChange={(event) => updateSettings({ editorFontSize: Number(event.target.value) })}
+              />
+            </label>
+            <p className="usage-note">
+              ⌘+ and ⌘− change whichever you are in: the editor when the cursor is in a file,
+              the terminals otherwise. Both are kept and come back after a restart.
+            </p>
+
             <label className="checkbox">
               <input
                 type="checkbox"

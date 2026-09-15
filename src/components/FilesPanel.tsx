@@ -852,12 +852,20 @@ function GitButton({ panelId }: { panelId: string }) {
 }
 
 /**
- * A button for every view an extension contributes to a folder.
+ * One ⋮ for every view the installed extensions bring to this folder.
  *
  * Nothing here knows what any of them do. An extension says it has a panel and
  * what that panel needs, and this offers it where what it needs is there — so
- * the app grows a button without the app being edited, which is the whole point
+ * the app grows an entry without the app being edited, which is the whole point
  * of the thing being an extension rather than a feature.
+ *
+ * A menu rather than a button each, and the reason is arithmetic. These sat in a
+ * column beside the folder's name, so every extension that applied made the
+ * header 21px taller: two tools cost 40px, five cost 103px — more than the
+ * folder name, its path and four rows of tree together. The count only goes up.
+ * Behind one ⋮ the header stops growing, and the long tail gets what it needed
+ * most, which is **names**: nobody was ever going to learn that a cube is Maven
+ * and brackets are the reviewer.
  */
 function ExtensionButtons({ panelId }: { panelId: string }) {
   const root = useStore((s) => asFilePanel(s.panels[panelId])?.root ?? '');
@@ -871,56 +879,115 @@ function ExtensionButtons({ panelId }: { panelId: string }) {
   const wantsBuild = viewIds.some((packed) => packed.endsWith('\u0000build'));
   const buildRoot = useBuildRoot(wantsBuild ? root : '');
   const openExtensionView = useStore((s) => s.openExtensionView);
-  if (!viewIds.length) return null;
+  const anchorRef = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+
+  /*
+   * Which of them this folder can actually offer, worked out once.
+   *
+   * Each rule is the same one it has always been: a panel that needs a
+   * repository is not offered on a folder that is not one, a panel about a
+   * folder needs one on screen, a build panel needs a pom or a Gradle build at
+   * or above here. And a panel about something else entirely — a cluster — is
+   * opened from Extensions, where it is not pretending to have anything to do
+   * with what is on screen.
+   */
+  const views = useMemo(
+    () =>
+      viewIds
+        .map((packed) => {
+          const [id, title, needs] = packed.split('\u0000');
+          return { id, title, needs };
+        })
+        .filter(({ needs }) => {
+          if (needs === 'repository') return Boolean(gitRoot);
+          if (needs === 'folder') return Boolean(root);
+          if (needs === 'build') return Boolean(buildRoot);
+          return !needs;
+        })
+        .map((view) => ({
+          ...view,
+          on: view.needs === 'repository' ? gitRoot : view.needs === 'build' ? buildRoot : root || null,
+        })),
+    [viewIds, gitRoot, root, buildRoot],
+  );
+
+  if (!views.length) return null;
 
   return (
     <>
-      {viewIds.map((packed) => {
-        const [id, title, needs] = packed.split('\u0000');
-        // A panel that needs a repository is not offered on a folder that is
-        // not one: a button whose only possible outcome is an apology.
-        if (needs === 'repository' && !gitRoot) return null;
-        // A panel about a folder needs one on screen.
-        if (needs === 'folder' && !root) return null;
-        // Likewise a build panel on a folder with no pom and no Gradle build
-        // at or above it.
-        if (needs === 'build' && !buildRoot) return null;
-        // This toolbar is the folder's. A view about something else entirely —
-        // a cluster — is opened from Extensions, where it is not pretending to
-        // have anything to do with what is on screen.
-        if (needs && needs !== 'repository' && needs !== 'folder' && needs !== 'build') return null;
-        const on = needs === 'repository' ? gitRoot : needs === 'build' ? buildRoot : root || null;
-        return (
-          <button
-            key={id}
-            className="files-tool"
-            onClick={() => openExtensionView(id, on)}
-            aria-label={title}
-            title={title}
-          >
-            {needs === 'folder' ? (
-              // A folder panel runs things: a play mark.
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
-                <path d="M4 2.2v9.6l7.4-4.8z" />
-              </svg>
-            ) : needs === 'build' ? (
-              // A build: the layers of an artifact, being put together.
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
-                <path d="M7 1.8 12.4 4.5 7 7.2 1.6 4.5z" />
-                <path d="M1.6 7.2 7 9.9l5.4-2.7M1.6 9.9 7 12.6l5.4-2.7" />
-              </svg>
-            ) : (
-              <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3">
-                <path d="M2 10.5V3.2M2 3.2a1.4 1.4 0 1 0 0-.1M2 10.8a1.4 1.4 0 1 0 0 .1" />
-                <path d="M7 11.2V6.4c0-1 .8-1.8 1.8-1.8H11" />
-                <circle cx="7" cy="12" r="1.4" />
-                <circle cx="12" cy="4.6" r="1.4" />
-              </svg>
-            )}
-          </button>
-        );
-      })}
+      <button
+        ref={anchorRef}
+        className={`files-tool${open ? ' is-on' : ''}`}
+        aria-label="What else this folder opens"
+        aria-expanded={open}
+        title={
+          views.length === 1
+            ? views[0].title
+            : `${views.length} more things this folder opens`
+        }
+        onClick={() => setOpen((was) => !was)}
+      >
+        <svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor">
+          <circle cx="7" cy="3" r="1.15" />
+          <circle cx="7" cy="7" r="1.15" />
+          <circle cx="7" cy="11" r="1.15" />
+        </svg>
+      </button>
+      {open && (
+        <Popover anchorEl={anchorRef.current} onClose={() => setOpen(false)}>
+          <div className="menu-label">Open in this folder</div>
+          {views.map((view) => (
+            <button
+              key={view.id}
+              className="menu-item"
+              onClick={() => {
+                setOpen(false);
+                openExtensionView(view.id, view.on);
+              }}
+            >
+              <span>
+                <i className="menu-glyph">{extensionGlyph(view.needs)}</i>
+                {view.title}
+              </span>
+            </button>
+          ))}
+        </Popover>
+      )}
     </>
+  );
+}
+
+/**
+ * A mark for what a panel is about, kept small on purpose.
+ *
+ * In the menu the name does the work — this is only there so the rows have a
+ * left edge to line up on. It is the one place these marks are allowed to be
+ * ambiguous, because nothing depends on reading them.
+ */
+function extensionGlyph(needs: string) {
+  if (needs === 'folder') {
+    return (
+      <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
+        <path d="M4 2.2v9.6l7.4-4.8z" />
+      </svg>
+    );
+  }
+  if (needs === 'build') {
+    return (
+      <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
+        <path d="M7 1.8 12.4 4.5 7 7.2 1.6 4.5z" />
+        <path d="M1.6 7.2 7 9.9l5.4-2.7M1.6 9.9 7 12.6l5.4-2.7" />
+      </svg>
+    );
+  }
+  return (
+    <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3">
+      <path d="M2 10.5V3.2M2 3.2a1.4 1.4 0 1 0 0-.1M2 10.8a1.4 1.4 0 1 0 0 .1" />
+      <path d="M7 11.2V6.4c0-1 .8-1.8 1.8-1.8H11" />
+      <circle cx="7" cy="12" r="1.4" />
+      <circle cx="12" cy="4.6" r="1.4" />
+    </svg>
   );
 }
 

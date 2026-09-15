@@ -336,6 +336,17 @@ export interface PendingClose {
 
 export interface Settings {
   fontSize: number;
+  /**
+   * How big the text is in a file editor.
+   *
+   * Its own number, not the terminal's. They are read differently — a terminal
+   * is watched at arm's length while something scrolls past, a file is read
+   * closely and edited — and somebody who wants one bigger very often wants the
+   * other left alone. The editor used to have no number at all: its stylesheet
+   * asked for `--editor-size` and nothing ever set it, so every editor was
+   * 12.5px and stayed 12.5px through anything you did to it.
+   */
+  editorFontSize: number;
   fontFamily: string;
   sidebarVisible: boolean;
   sidebarWidth: number;

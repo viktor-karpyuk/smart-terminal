@@ -49,6 +49,17 @@ export function App() {
     return () => media.removeEventListener('change', apply);
   }, [settings.theme]);
 
+  /*
+   * The editors' size, on the root where every editor can see it.
+   *
+   * A CSS variable rather than a prop threaded down: an editor is a CodeMirror
+   * instance with a stylesheet of its own, and the variable is what that
+   * stylesheet already asks for — it had simply never been answered.
+   */
+  useEffect(() => {
+    document.documentElement.style.setProperty('--editor-size', `${settings.editorFontSize}px`);
+  }, [settings.editorFontSize]);
+
   const zoomedLeaf = zoomedLeafId ? findLeaf(layout, zoomedLeafId) : null;
 
   return (
@@ -127,6 +138,17 @@ function SidebarResizer() {
       }}
     />
   );
+}
+
+/**
+ * Whether the keyboard is inside a file editor.
+ *
+ * Asked of the document rather than tracked in the store: CodeMirror owns its
+ * own focus and the answer has to be true at the instant the key was pressed,
+ * not at whatever moment the store last heard about it.
+ */
+function inEditor(): boolean {
+  return Boolean(document.activeElement?.closest?.('.cm-editor'));
 }
 
 function activeSessionId(): string | null {
@@ -258,14 +280,25 @@ export function handleMenuAction(id: string) {
     case 'select-all':
       selectAllIn(terminalId);
       break;
+    /*
+     * Bigger and smaller act on whatever the keyboard is in.
+     *
+     * ⌘+ used to mean the terminals, wherever you pressed it — so somebody
+     * reading a file pressed it, watched the terminals behind them grow, and
+     * gave up. Both sizes are settings, so either way the change is kept and
+     * comes back after a restart.
+     */
     case 'font-bigger':
-      store.updateSettings({ fontSize: Math.min(24, store.settings.fontSize + 1) });
+      if (inEditor()) store.updateSettings({ editorFontSize: Math.min(28, store.settings.editorFontSize + 1) });
+      else store.updateSettings({ fontSize: Math.min(24, store.settings.fontSize + 1) });
       break;
     case 'font-smaller':
-      store.updateSettings({ fontSize: Math.max(8, store.settings.fontSize - 1) });
+      if (inEditor()) store.updateSettings({ editorFontSize: Math.max(8, store.settings.editorFontSize - 1) });
+      else store.updateSettings({ fontSize: Math.max(8, store.settings.fontSize - 1) });
       break;
     case 'font-reset':
-      store.updateSettings({ fontSize: 13 });
+      if (inEditor()) store.updateSettings({ editorFontSize: 12.5 });
+      else store.updateSettings({ fontSize: 13 });
       break;
     case 'profiles':
       store.setProfileEditorOpen(true);
