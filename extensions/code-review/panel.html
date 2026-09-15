@@ -171,10 +171,11 @@
   .md ul, .md ol { margin: 4px 0; padding-left: 20px; }
   .md h1, .md h2, .md h3, .md h4 { font-size: 13px; margin: 6px 0; text-transform: none; letter-spacing: 0; color: var(--text); }
   .suggestion { margin-top: 6px; border-left: 3px solid var(--accent); padding-left: 8px; }
-  .entries { margin-top: 6px; border-left: 2px solid var(--border); padding-left: 10px; }
-  .entry { margin: 6px 0; }
-  .entry .who { font-size: 11px; color: var(--text-faint); }
-  .entry.ours .who { color: var(--accent); }
+  .entries { margin-top: 8px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg); }
+  .entries > .cmt-msg:first-child { border-top: 0; }
+  .verdict { margin-top: 8px; padding: 6px 10px; border-radius: 6px; background: var(--bg-elevated); color: var(--text-dim); font-size: 12px; }
+  .verdict-label { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 2px; }
+  .verdict .md p:first-child, .verdict p:first-child { margin-top: 0; } .verdict p:last-child { margin-bottom: 0; }
 
   /* The viewport below the app bar and the sticky tabs: scroll the header away and the diff has the whole screen. */
   .split { display: grid; grid-template-columns: var(--aside, 290px) 7px minmax(0, 1fr); min-height: 0; height: calc(100vh - 88px); }
@@ -312,6 +313,14 @@
   .avatar.ours { box-shadow: 0 0 0 2px var(--accent); }
   .cmt-head .avatar { width: 18px; height: 18px; font-size: 8.5px; }
 
+  .nowrap { white-space: nowrap; }
+  .repo-card { display: flex; flex-direction: column; }
+  .repo-card > .row:last-child { margin-top: auto !important; padding-top: 8px; }
+  .repo-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .repo-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .repo-head .btn { flex: none; }
+  .repo-chips { margin-top: 4px; gap: 4px; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .form { max-width: 760px; }
   .field { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 10px; align-items: start; margin: 8px 0; }
   .field > label { padding-top: 5px; color: var(--text-dim); }
@@ -849,7 +858,7 @@
 
     html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin-top:10px">';
     html += '<div><h3>Recent reviews</h3>' + (d.recent.length ? '<table class="list">' + d.recent.map(function (item) {
-      return '<tr class="click" data-act="open-pr" data-repo="' + esc(item.repoId) + '" data-pr="' + item.prId + '"><td class="faint">' + esc(when(item.at)) + '</td><td>' + esc(item.repoName) + ' #' + item.prId + ' <span class="dim">' + esc(item.title) + '</span></td><td>' + statusChip(item.status) + (item.trigger === 'AUTO' ? ' <span class="chip">auto</span>' : '') + '</td><td class="faint">' + money(item.costUsd) + '</td></tr>';
+      return '<tr class="click" data-act="open-pr" data-repo="' + esc(item.repoId) + '" data-pr="' + item.prId + '"' + (item.error ? ' title="' + esc(item.error) + '"' : '') + '><td class="faint nowrap">' + esc(when(item.at)) + '</td><td>' + esc(item.repoName) + ' #' + item.prId + ' <span class="dim">' + esc(item.title) + '</span></td><td class="nowrap">' + statusChip(item.status) + (item.trigger === 'AUTO' ? ' <span class="chip">auto</span>' : '') + '</td><td class="faint nowrap num">' + (item.costUsd ? money(item.costUsd) : '—') + '</td></tr>';
     }).join('') + '</table>' : '<div class="faint">Nothing yet.</div>') + '</div>';
     html += '<div><h3>Usage</h3>' + drawUsage(d.usage) + '</div>';
     html += '</div></div>';
@@ -909,12 +918,17 @@
     var debt = repo.debt.pendingReplies + repo.debt.unverified + repo.debt.unpublished;
     var total = Math.max(debt, 1);
     var home = String(repo.localPath).replace(/^\/Users\/[^/]+/, '~');
-    return '<div class="card' + (repo.readError || !repo.cloneOk ? ' bad' : '') + '"><div class="row"><strong>' + esc(repo.name) + '</strong><span class="chip">' + (repo.provider === 'GITHUB' ? 'GitHub' : 'Bitbucket') + '</span>' +
+    // Without a token a private repository reads as "not found": say what is actually missing.
+    var readError = repo.readError && !repo.hasToken ? { message: 'No token: a private repository cannot be read without one.', detail: repo.readError.detail } : repo.readError;
+    var oldest = repo.oldestDays == null ? '' : repo.oldestDays < 1 ? 'today' : repo.oldestDays === 1 ? '1 day ago' : repo.oldestDays + ' days ago';
+    return '<div class="card repo-card' + (repo.readError || !repo.cloneOk ? ' bad' : '') + '"><div class="repo-head"><strong class="repo-name" title="' + esc(repo.name) + '">' + esc(repo.name) + '</strong>' +
+      '<button class="btn small" data-act="repo-edit" data-repo="' + esc(repo.id) + '">Edit</button></div><div class="row repo-chips"><span class="chip">' + (repo.provider === 'GITHUB' ? 'GitHub' : 'Bitbucket') + '</span>' +
       (repo.autoReview ? '<span class="chip accent" title="New commits are reviewed on their own">automatic</span>' : '') +
       (!repo.hasToken ? '<span class="chip mine" title="Without a token only public repositories can be read, and nothing can be published">no token</span>' : repo.tokenUnreadable ? '<span class="chip badc" title="The stored token cannot be decrypted on this machine: enter it again">token unreadable</span>' : '') +
-      '<span class="spacer"></span><button class="btn small" data-act="repo-edit" data-repo="' + esc(repo.id) + '">Edit</button></div>' +
+      '</div>' +
       '<div class="faint mono" style="margin:3px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(repo.owner + '/' + repo.slug + '\n' + repo.localPath) + '">' + esc(repo.owner + '/' + repo.slug) + ' · ' + (repo.cloneOk ? '' : '<span class="bad">missing </span>') + esc(home) + '</div>' +
-      (repo.readError ? '<div class="bad" style="margin-top:4px" title="' + esc(repo.readError.detail) + '">' + esc(repo.readError.message) + '</div>' : '') +
+      (readError ? '<div class="bad" style="margin-top:4px" title="' + esc(readError.detail || '') + '">' + esc(readError.message) + (!repo.hasToken ? ' <button class="link" data-act="repo-edit" data-repo="' + esc(repo.id) + '">Add a token</button>' : '') + '</div>' : '') +
+      (!repo.cloneOk ? '<div class="bad" style="margin-top:4px">The clone is not at ' + esc(home) + '.</div>' : '') +
       '<div class="row" style="margin-top:8px"><span>' + repo.open + ' open</span><span class="faint">· ' + repo.reviewed + ' reviewed</span>' +
       (repo.reviewed ? '<span class="faint">· ' + repo.findingsPerPr.toFixed(1) + ' findings/PR · ' + money(repo.costPerPr) + '/PR</span>' : '') + '</div>' +
       (debt ? '<div style="margin-top:6px" title="' + repo.debt.pendingReplies + ' replies · ' + repo.debt.unverified + ' unverified · ' + repo.debt.unpublished + ' unpublished"><div class="bar">' +
@@ -922,7 +936,7 @@
         '<span style="width:' + (repo.debt.unverified / total * 100) + '%;background:#d9a441"></span>' +
         '<span style="width:' + (repo.debt.unpublished / total * 100) + '%;background:var(--accent)"></span></div>' +
         '<div class="faint" style="font-size:11px;margin-top:2px">' + repo.debt.pendingReplies + ' to answer · ' + repo.debt.unverified + ' to verify · ' + repo.debt.unpublished + ' to publish</div></div>' : '') +
-      (repo.oldestDays != null ? '<div class="' + (repo.oldestDays > 14 ? 'bad' : 'faint') + '" style="margin-top:4px">Oldest open PR: ' + repo.oldestDays + ' days</div>' : '') +
+      (oldest ? '<div class="' + (repo.oldestDays > 14 ? 'bad' : 'faint') + '" style="margin-top:4px">Oldest open PR opened ' + oldest + '</div>' : '') +
       '<div class="row" style="margin-top:8px"><button class="btn small primary" data-act="open-prs" data-repo="' + esc(repo.id) + '">Pull requests</button>' +
       '<button class="btn small" data-act="repo-hide" data-repo="' + esc(repo.id) + '" data-hidden="' + (repo.hidden ? '0' : '1') + '">' + (repo.hidden ? 'Show' : 'Hide') + '</button>' +
       '<span class="spacer"></span><span class="faint">' + (repo.fetchedAt ? 'read ' + esc(when(repo.fetchedAt)) : 'never read') + '</span></div></div>';
@@ -1196,7 +1210,7 @@
       var text = md(f.body) + (f.suggestion ? '<div class="suggestion"><div class="faint">How it could be fixed</div>' + md(f.suggestion) + '</div>' : '');
       html += clamped('body-' + f.id, text, String(f.body).length + String(f.suggestion || '').length > 520);
     }
-    if (f.resolutionNote) html += '<div class="faint" style="margin-top:4px">' + esc(f.resolutionNote) + '</div>';
+    html += verdictHtml(f.resolutionNote);
     if (f.publishError) html += '<div class="banner bad">Publishing failed: ' + esc(f.publishError) + '</div>';
     html += '<div class="row" style="margin-top:6px">';
     if (v.pr.state === 'OPEN' && !settled) {
@@ -1344,7 +1358,23 @@
   }
 
   function entryHtml(entry) {
-    return '<div class="entry' + (entry.ours ? ' ours' : '') + '"><div class="who">' + esc(entry.author) + (entry.ours ? ' (us)' : '') + ' · ' + esc(when(entry.at)) + '</div>' + md(entry.body) + '</div>';
+    return message(entry.author, entry.at, entry.body, entry.ours);
+  }
+
+  /** What verification concluded about a finding, set apart from the finding itself. */
+  function verdictHtml(note) {
+    return note ? '<div class="verdict"><div class="verdict-label">Verification</div>' + md(note) + '</div>' : '';
+  }
+
+  /**
+   * A published finding opens with its own title in bold, which the card has
+   * already said above it: the second copy goes.
+   */
+  function withoutTitle(body, title) {
+    var text = String(body || '');
+    var first = text.split('\n')[0].trim();
+    var bare = first.replace(/^#+\s*/, '').replace(/^\*\*(.*)\*\*$/, '$1').replace(/`/g, '').trim();
+    return title && bare === String(title).replace(/`/g, '').trim() ? text.slice(text.indexOf('\n') + 1).replace(/^\s+/, '') : text;
   }
 
   // ---- code ----------------------------------------------------------------------
@@ -1871,7 +1901,7 @@
       '<strong class="cmt-title">' + esc(f.title) + '</strong>' + status + (chain.length ? '<span class="chip">' + chain.length + ' repl' + (chain.length === 1 ? 'y' : 'ies') + '</span>' : '');
     var body = '<div class="cmt-body">' + clamped('code-' + f.id, md(f.body), String(f.body).length > 700) +
       (f.suggestion ? '<div class="suggestion"><div class="faint">How it could be fixed</div>' + md(f.suggestion) + '</div>' : '') +
-      (f.resolutionNote ? '<div class="faint" style="margin-top:6px">' + esc(f.resolutionNote) + '</div>' : '') + '</div>';
+      verdictHtml(f.resolutionNote) + '</div>';
     if (root) body = '<div class="cmt-body faint" style="padding-bottom:0">Posted by ' + esc(root.author) + ' ' + esc(when(root.createdOn)) + (f.publishedUrl ? ' · <button class="link" data-act="open-url" data-url="' + esc(f.publishedUrl) + '">view on the PR ↗</button>' : '') + '</div>' + body;
     body += chain.map(function (c) { return message(c.author, c.createdOn, c.body, c.ours); }).join('');
     if (!f.publishedId && !f.dismissedAt && v.pr.state === 'OPEN') {
@@ -2037,10 +2067,13 @@
     var yours = threads.filter(function (t) { return t.state === 'NEEDS_ANSWER' || t.state === 'DRAFT_READY' || t.state === 'NOT_FIXED'; });
     var waiting = threads.filter(function (t) { return t.state === 'UNVERIFIED' || t.state === 'UNPUBLISHED'; });
     var shut = threads.filter(function (t) { return t.state === 'OK'; });
-    var filter = state.threadFilter || (yours.length ? 'yours' : waiting.length ? 'waiting' : 'all');
-    var shown = filter === 'yours' ? yours : filter === 'waiting' ? waiting : filter === 'closed' ? shut : threads;
+    var left = threads.filter(function (t) { return t.state !== 'OK'; });
+    var filter = state.threadFilter || (open && yours.length ? 'yours' : open && waiting.length ? 'waiting' : 'all');
+    if (!open && (filter === 'yours' || filter === 'waiting')) filter = 'left';
+    if (open && filter === 'left') filter = 'all';
+    var shown = filter === 'yours' ? yours : filter === 'waiting' ? waiting : filter === 'left' ? left : filter === 'closed' ? shut : threads;
     var html = '<div class="page"><div class="section-title"><h3>Threads</h3><span class="faint">' + (threads.length - shut.length) + ' open of ' + threads.length + '</span></div>';
-    html += '<div class="row" style="margin-bottom:8px">' + [['yours', 'Your turn', yours.length], ['waiting', 'Waiting', waiting.length], ['closed', 'Closed', shut.length], ['all', 'All', threads.length]].map(function (o) {
+    html += '<div class="row" style="margin-bottom:8px">' + (open ? [['yours', 'Your turn', yours.length], ['waiting', 'Waiting', waiting.length]] : [['left', 'Left open', left.length]]).concat([['closed', 'Closed', shut.length], ['all', 'All', threads.length]]).map(function (o) {
       return '<span class="chip click' + (filter === o[0] ? ' on' : '') + '" data-act="thread-filter" data-filter="' + o[0] + '">' + o[1] + ' ' + o[2] + '</span>';
     }).join('') + '<span class="spacer"></span>';
     if (open && pendingReplies.length) html += '<button class="btn small primary" data-act="draft-all"' + busyAttr('draft-all') + ' title="Claude drafts an answer to every reply from the code; nothing is published">Draft ' + pendingReplies.length + ' answer' + (pendingReplies.length === 1 ? '' : 's') + '</button><button class="btn small" data-act="dismiss-all-replies">Dismiss all replies</button>';
@@ -2049,6 +2082,8 @@
     else if (!shown.length) html += '<div class="card faint">Nothing here. <button class="link" data-act="thread-filter" data-filter="all">Show every thread</button></div>';
     shown.forEach(function (t) {
       var label = THREAD_LABELS[t.state] || [t.state, ''];
+      // On a PR that is closed nobody's turn is coming: what was still open is only what was left open.
+      if (!open && t.state !== 'OK') label = ['Left open', ''];
       var draft = t.draft;
       if (t.state === 'OK' && !isOpen('t-' + t.findingId)) {
         html += '<div class="finding-line" data-act="fold" data-key="t-' + esc(t.findingId) + '" title="Show the thread"><span class="chip ' + label[1] + '">' + label[0] + '</span><span class="sev ' + esc(t.severity) + '">' + esc(t.severity) + '</span><span class="t">' + esc(t.title) + '</span><span class="faint">' + t.entries.length + ' repl' + (t.entries.length === 1 ? 'y' : 'ies') + '</span></div>';
@@ -2058,8 +2093,8 @@
         (t.filePath ? '<button class="link mono" data-act="jump" data-file="' + esc(t.filePath) + '" data-line="' + (t.lineNo || '') + '">' + anchor(t.filePath, t.lineNo) + '</button>' : '') +
         (t.askedBy ? '<span class="chip accent">asked by ' + esc(t.askedBy) + '</span>' : '') + '<span class="spacer"></span>' +
         (t.waitingDays != null ? '<span class="faint">waiting ' + t.waitingDays + 'd</span>' : '') + '</div>' +
-        '<div class="ftitle">' + esc(t.title) + '</div>' + clamped('q-' + t.findingId, md(t.question), String(t.question).length > 520) +
-        (t.resolutionNote ? '<div class="faint">Verdict: ' + esc(t.resolutionNote) + '</div>' : '') +
+        '<div class="ftitle">' + esc(t.title) + '</div>' + clamped('q-' + t.findingId, md(withoutTitle(t.question, t.title)), String(t.question).length > 520) +
+        verdictHtml(t.resolutionNote) +
         (t.entries.length ? '<div class="entries">' + t.entries.map(entryHtml).join('') + '</div>' : '');
       if (draft && draft.status !== 'PUBLISHED' && !draft.dismissedAt && open) {
         var key = 'reply-' + draft.id;
@@ -2095,6 +2130,7 @@
 
   function drawHistoryTab(v) {
     var events = [];
+    if (v.pr.createdOn) events.push({ at: v.pr.createdOn, who: v.pr.author, kind: 'opened', text: 'Opened the pull request' + (v.pr.sourceBranch ? ': ' + v.pr.sourceBranch + ' → ' + v.pr.targetBranch : '') });
     (v.reviews || []).forEach(function (r) { events.push({ at: r.createdAt, who: r.trigger === 'AUTO' ? 'automatic' : 'you', kind: 'review', text: 'Review ' + (r.status || '').toLowerCase() + (r.sinceSha ? ' (incremental)' : '') + (r.costUsd ? ' · ' + money(r.costUsd) : '') + (r.error ? ' — ' + r.error.slice(0, 160) : '') }); });
     (v.publications || []).forEach(function (p) { events.push({ at: p.publishedAt, who: 'you', kind: 'published', text: p.reviewId ? 'General comment published' : 'Reply published: ' + String(p.body || '').replace(/\s+/g, ' ').slice(0, 160) }); });
     (v.comments || []).forEach(function (cm) { events.push({ at: cm.createdOn, who: cm.author, kind: cm.ours ? 'our comment' : cm.parentId ? 'reply' : 'comment', text: (cm.inlinePath ? cm.inlinePath + (cm.inlineLine ? ':' + cm.inlineLine : '') + ' — ' : '') + String(cm.body).replace(/\s+/g, ' ').slice(0, 220) }); });
@@ -2510,7 +2546,7 @@
       call('editFinding', { findingId: id, title: edit('finding-title-' + id, f.title), body: edit('finding-body-' + id, f.body), suggestion: edit('finding-sugg-' + id, f.suggestion || '') })
         .then(function () { ['open', 'title', 'body', 'sugg'].forEach(function (p) { delete state.edits['finding-' + p + '-' + id]; }); }).catch(fail);
     },
-    fix: function (el) { var id = el.getAttribute('data-id'); call('fix', { findingId: id }).then(function (r) { say(r.fix && r.fix.sha ? 'Fix committed in the workshop: ' + r.fix.sha.slice(0, 7) : 'The fix changed nothing: ' + (r.fix && r.fix.summary || '')); }, fail); },
+    fix: function (el) { var id = el.getAttribute('data-id'); call('fix', { findingId: id }).then(function (r) { say(!r.fix ? 'Already closed: there was nothing left to fix.' : r.fix.sha ? 'Fix committed in the workshop: ' + r.fix.sha.slice(0, 7) : 'The fix changed nothing: ' + (r.fix.summary || '')); }, fail); },
     'fix-all': function () { act('fix-all', function () { return call('fixAll', prArgs()); }, function (r) { say(r.committed + ' fix(es) committed.' + (r.errors.length ? ' ' + r.errors.length + ' failed.' : ''), r.errors.length > 0); }); },
     'retry-fix-reply': function (el) { var id = el.getAttribute('data-id'); act('fixreply-' + id, function () { return call('retryFixReply', { fixId: id }); }); },
     'give-back': function () { act('give-back', function () { return call('giveBack', prArgs()); }, function (r) { say(r.count + ' fix(es) handed back to your clone.'); }); },

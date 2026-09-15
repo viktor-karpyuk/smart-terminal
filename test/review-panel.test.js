@@ -99,3 +99,11 @@ test('a hunk header is read with its lengths, defaulting to one', () => {
   assert.deepEqual(JSON.parse(JSON.stringify(V.parseHunk('@@ -10,3 +12,4 @@ public class A {'))), { oldStart: 10, oldLen: 3, newStart: 12, newLen: 4, label: 'public class A {' });
   assert.deepEqual(JSON.parse(JSON.stringify(V.parseHunk('@@ -1 +1 @@'))), { oldStart: 1, oldLen: 1, newStart: 1, newLen: 1, label: '' });
 });
+
+test('a published finding does not repeat its title under the title', () => {
+  const T = fromPanel(['withoutTitle']);
+  assert.equal(T.withoutTitle('**`switchMode` changes the mode**\n\nThe body.', '`switchMode` changes the mode'), 'The body.');
+  assert.equal(T.withoutTitle('### A title\nBody', 'A title'), 'Body');
+  assert.equal(T.withoutTitle('**Another title**\n\nBody', 'A title'), '**Another title**\n\nBody');
+  assert.equal(T.withoutTitle('Just a body', 'A title'), 'Just a body');
+});
