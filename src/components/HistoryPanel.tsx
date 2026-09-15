@@ -54,8 +54,7 @@ export function HistoryPanel() {
 
     const grouped = [...byGroup.entries()]
       .map(([id, members]) => ({ key: id, group: known.get(id)!, rows: members }))
-      // Newest activity first, the same order the flat list uses — which is by
-      // when a session *finished*, with anything still open above all of it.
+      // Newest activity first, the same order the flat list uses.
       .sort((a, b) => lastActive(b.rows[0]) - lastActive(a.rows[0]));
 
     return loose.length ? [...grouped, { key: 'loose', group: null, rows: loose }] : grouped;
@@ -215,11 +214,11 @@ export function HistoryPanel() {
                     ))}
                   </button>
                   <div className="history-when">
-                    {/* When it closed, because that is what the list is ordered
-                        by and what people are looking for. */}
-                    <span title={row.endedAt ? `closed ${new Date(row.endedAt).toLocaleString()}` : 'still running'}>
-                      {row.endedAt ? closedAt(row.endedAt) : 'open'}
-                    </span>
+                    {/* When something last happened here, because that is what
+                        the list is ordered by and what people are looking for.
+                        Whether it is still open is a badge on the title, which
+                        is a different question and no longer this one. */}
+                    <span title={whenTitle(row)}>{closedAt(lastActive(row))}</span>
                     <small title={`opened ${new Date(row.startedAt).toLocaleString()}`}>
                       {duration(row.durationMs)}
                     </small>
@@ -570,6 +569,17 @@ function when(at: number) {
  * that closed four hours apart on the same afternoon should not read as the
  * same moment.
  */
+/**
+ * The tooltip says which of the three the date actually is, because they are not
+ * the same claim: work that happened, a session that stopped, or one that was
+ * opened and in which nothing was ever recorded.
+ */
+function whenTitle(row: { lastWorkedAt?: number | null; endedAt: number | null; startedAt: number; open?: boolean }) {
+  if (row.lastWorkedAt) return `last worked on ${new Date(row.lastWorkedAt).toLocaleString()}`;
+  if (row.endedAt) return `closed ${new Date(row.endedAt).toLocaleString()}`;
+  return `opened ${new Date(row.startedAt).toLocaleString()} — nothing recorded since`;
+}
+
 function closedAt(at: number) {
   const date = new Date(at);
   const today = new Date().toDateString() === date.toDateString();
@@ -578,14 +588,19 @@ function closedAt(at: number) {
 }
 
 /**
- * The key the list is sorted by: when a session stopped being current.
+ * The key the list is sorted by: when something last happened here.
  *
- * A session still running has not stopped, so it sorts above everything —
- * `Infinity` rather than "now", so two open sessions keep their own order
- * instead of shuffling with the clock.
+ * Not whether it is open. That was the previous answer — anything running
+ * sorted above everything else — and it put a tab opened five days ago and
+ * never touched since above the one that was being talked to last night. What
+ * this list is scanned for is the thing you were last doing.
+ *
+ * The same order the query already returns; it is repeated here because groups
+ * are folded in the renderer and a fold has to sort by the same key as the
+ * rows inside it, or a group jumps to a place none of its members explain.
  */
-function lastActive(row: { endedAt: number | null; startedAt: number }) {
-  return row.endedAt ?? Number.MAX_SAFE_INTEGER;
+export function lastActive(row: { lastWorkedAt?: number | null; endedAt: number | null; startedAt: number }) {
+  return row.lastWorkedAt ?? row.endedAt ?? row.startedAt;
 }
 
 /**

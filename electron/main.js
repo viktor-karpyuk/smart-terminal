@@ -553,6 +553,7 @@ function registerIpc() {
     // Typing is the cheapest possible hint that the picture is about to change,
     // and it is what lets the cwd watcher idle without anyone noticing.
     cwdWatcher?.wake();
+    noteTyping(sessionByPty.get(id));
     ptys.write(id, data);
   });
   ipcMain.on('pty:resize', (_e, { id, cols, rows }) => ptys.resize(id, cols, rows));
@@ -2495,6 +2496,37 @@ function roster() {
 }
 
 let rosterTimer = null;
+/**
+ * Somebody typed into a session, which is the plainest evidence there is that
+ * they are working in it.
+ *
+ * The other evidence is a turn landing in the conversation, and that one is
+ * recorded where the turns are read. This covers what that cannot: a shell,
+ * and a session whose conversation is not being kept.
+ *
+ * Deliberately *not* output. A restore prints in every tab it reopens — Claude's
+ * banner, a resumed command's first line — so an app that counted printing as
+ * work would mark thirty-nine sessions as worked on the moment it launched,
+ * which is the exact bug this is here to fix.
+ *
+ * Throttled, because a keystroke is a keystroke: a minute's resolution is more
+ * than a list sorted by day needs, and the alternative is a database write per
+ * character typed.
+ */
+const NOTE_TYPING_EVERY = 60 * 1000;
+const lastNoted = new Map();
+function noteTyping(sessionId) {
+  if (!sessionId || !db) return;
+  const now = Date.now();
+  if (now - (lastNoted.get(sessionId) ?? 0) < NOTE_TYPING_EVERY) return;
+  lastNoted.set(sessionId, now);
+  try {
+    db.noteWork(sessionId, now);
+  } catch {
+    /* a history that is a minute stale is not worth failing a keystroke over */
+  }
+}
+
 /** Coalesced: a burst of session changes should cost one broadcast, not ten. */
 function announceRoster() {
   clearTimeout(rosterTimer);
