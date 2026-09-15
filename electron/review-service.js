@@ -94,6 +94,11 @@ class ReviewService {
       autoMax: Number(prefs['auto.max.per.cycle'] ?? 3),
       followUpDays: Number(prefs['followup.days'] ?? 3),
       mergeStrategy: prefs['merge.strategy'] ?? 'MERGE_COMMIT',
+      // How the panel was laid out, so a restart does not undo a dragged divider.
+      asideWidth: Number(prefs['ui.asideWidth'] ?? 0) || null,
+      wrapLines: prefs['ui.wrapLines'] !== 'false',
+      diffLayout: prefs['ui.diffLayout'] === 'split' ? 'split' : 'unified',
+      diffFont: Number(prefs['ui.diffFont'] ?? 12) || 12,
     };
   }
 
@@ -114,6 +119,73 @@ class ReviewService {
     const meta = this.store.prMeta(repoId);
     if (!meta?.error) return null;
     return { message: rules.readableError(meta.error), detail: meta.error, at: meta.error_at };
+  }
+
+  /**
+   * The files of a PR someone has marked as looked at, for the commit they
+   * looked at. A new head clears the marks: the file that was reviewed is not
+   * necessarily the file that is there now, and "viewed" has to mean this code.
+   */
+  viewedKey(repoId, prId) {
+    return `viewed:${repoId}#${prId}`;
+  }
+
+  /**
+   * The files marked as viewed on a PR. Each is remembered with the content it
+   * had when it was marked: when new commits arrive, a file they did not touch
+   * stays viewed and a file they changed comes back to be read again — the way
+   * a review is picked up, instead of starting every file over.
+   */
+  async viewed(repoId, prId) {
+    const pr = this.store.pr(repoId, prId);
+    const head = pr?.headSha ?? '';
+    let saved = null;
+    try {
+      saved = JSON.parse(this.store.pref(this.viewedKey(repoId, prId), 'null'));
+    } catch {
+      saved = null;
+    }
+    if (!saved || typeof saved !== 'object') return { head, files: [], marks: {} };
+    // Stored by earlier builds as a plain list, with no content to compare: good for the same head only.
+    const marks = Array.isArray(saved.files) ? Object.fromEntries(saved.files.map((file) => [file, null])) : saved.marks && typeof saved.marks === 'object' ? saved.marks : {};
+    if (saved.head === head) return { head, files: Object.keys(marks), marks };
+    const repo = this.store.repo(repoId);
+    const kept = {};
+    for (const [file, blob] of Object.entries(marks)) {
+      if (blob === null || !repo || !pr?.sourceBranch) continue;
+      if ((await this.blobAt(repo, pr, file)) === blob) kept[file] = blob;
+    }
+    return { head, files: Object.keys(kept), marks: kept };
+  }
+
+  /** One toggle at a time per PR: two overlapping would each write the marks they read, and one would be lost. */
+  setViewed(repoId, prId, file, viewed) {
+    this.viewedQueue ??= new Map();
+    const key = this.viewedKey(repoId, prId);
+    const next = (this.viewedQueue.get(key) ?? Promise.resolve()).catch(() => {}).then(() => this.setViewedNow(repoId, prId, file, viewed));
+    this.viewedQueue.set(key, next);
+    return next.finally(() => {
+      if (this.viewedQueue.get(key) === next) this.viewedQueue.delete(key);
+    });
+  }
+
+  async setViewedNow(repoId, prId, file, viewed) {
+    const current = await this.viewed(repoId, prId);
+    const marks = { ...current.marks };
+    if (viewed) {
+      const repo = this.store.repo(repoId);
+      const pr = this.store.pr(repoId, prId);
+      marks[file] = repo && pr?.sourceBranch ? await this.blobAt(repo, pr, file) : null;
+    } else {
+      delete marks[file];
+    }
+    this.store.setPref(this.viewedKey(repoId, prId), JSON.stringify({ head: current.head, marks }));
+    return { head: current.head, files: Object.keys(marks) };
+  }
+
+  /** A file's content id on the PR's branch; '' when the branch does not have it (deleted). */
+  async blobAt(repo, pr, file) {
+    return (await this.git.revParse(repo.localPath, `origin/${pr.sourceBranch}:${file}`)) ?? '';
   }
 
   factsKey(repoId, prId) {
@@ -276,12 +348,74 @@ class ReviewService {
     };
   }
 
+  /**
+   * Both branches of a PR in the clone, fetched when either is missing. A clone
+   * only has the branches someone fetched, and reading a range against a ref it
+   * does not have fails — which used to come back as an empty list, the same
+   * answer as a PR with nothing in it. Returns what is still missing afterwards.
+   */
+  async ensureRefs(repo, pr, { force = false } = {}) {
+    const refs = [`origin/${pr.targetBranch}`, `origin/${pr.sourceBranch}`];
+    // A PR brought in by the import can have no branch names at all: there is nothing to fetch.
+    if (!pr.sourceBranch || !pr.targetBranch) return { absent: refs, fetchOutput: '' };
+    const missing = async () => (await Promise.all(refs.map(async (ref) => ((await this.git.hasRef(repo.localPath, ref)) ? null : ref)))).filter(Boolean);
+    let absent = await missing();
+    let fetchOutput = '';
+    // Present but behind: the forge says the PR is at a commit the clone's copy of the branch has not reached.
+    const behind = async () => {
+      if (!pr.headSha || absent.length) return false;
+      const tip = await this.git.revParse(repo.localPath, `origin/${pr.sourceBranch}`);
+      if (!tip) return true;
+      // Ahead of the row (someone pulled, or a review fetched since the list was read) is not behind:
+      // behind is when the PR's head is not in the clone's branch at all.
+      return !tip.startsWith(pr.headSha) && !(await this.git.isAncestor(repo.localPath, pr.headSha, tip));
+    };
+    if (force || absent.length || (await behind())) {
+      const fetched = await this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch);
+      if (!fetched.ok) {
+        // A branch deleted on the remote makes the whole fetch fail; fetch what is still there.
+        fetchOutput = fetched.output;
+        await this.git.fetch(repo.localPath, pr.targetBranch);
+      }
+      absent = await missing();
+    }
+    return { absent, fetchOutput };
+  }
+
+  branchGone(pr, fetchOutput) {
+    const closed = pr.state && pr.state !== 'OPEN';
+    if (!pr.sourceBranch) return 'This pull request was imported without its branch names, so its code cannot be read from the clone.';
+    if (pr.sourceBranch.includes(':')) return `This pull request comes from a fork (${pr.sourceBranch}): its branch is not on origin, so its code cannot be read from the clone.`;
+    return (
+      `The branch ${pr.sourceBranch} is not on origin any more` +
+      (closed ? `: the pull request is ${String(pr.state).toLowerCase()}, and its branch was deleted.` : ', and it could not be fetched.') +
+      (fetchOutput && !closed ? ` git said: ${String(fetchOutput.split('\n').filter(Boolean).pop()).replace(/\.?$/, '.')}` : '')
+    );
+  }
+
   async prFiles(repoId, prId, { fetch = false } = {}) {
     const repo = this.engine.requireRepo(repoId);
     this.engine.requireClone(repo);
     const pr = this.engine.prOrThrow(repoId, prId);
-    if (fetch) await this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch);
-    return { files: await this.git.numstat(repo.localPath, `origin/${pr.targetBranch}...origin/${pr.sourceBranch}`) };
+    const { absent, fetchOutput } = await this.ensureRefs(repo, pr, { force: fetch });
+    if (absent.includes(`origin/${pr.sourceBranch}`)) throw new Error(this.branchGone(pr, fetchOutput));
+    if (absent.length) throw new Error(`origin/${pr.targetBranch} is not in the clone and could not be fetched.`);
+    const range = `origin/${pr.targetBranch}...origin/${pr.sourceBranch}`;
+    const [files, statuses] = await Promise.all([this.git.numstat(repo.localPath, range), this.git.nameStatus(repo.localPath, range)]);
+    return { files: files.map((file) => ({ ...file, status: statuses[file.path]?.status ?? 'M', from: statuses[file.path]?.from ?? null })) };
+  }
+
+  /**
+   * The new side of a file, whole, so the code view can show the lines a hunk
+   * left out. Capped: a generated file of a hundred thousand lines is not
+   * context anybody expands by hand.
+   */
+  async prFileText(repoId, prId, file) {
+    const repo = this.engine.requireRepo(repoId);
+    const pr = this.engine.prOrThrow(repoId, prId);
+    const lines = await this.git.fileAt(repo.localPath, `origin/${pr.sourceBranch}`, file);
+    if (!lines) throw new Error(`${file} is not on ${pr.sourceBranch}.`);
+    return { lines: lines.slice(0, 20000), total: lines.length, truncated: lines.length > 20000 };
   }
 
   async prDiff(repoId, prId, file) {
@@ -296,13 +430,28 @@ class ReviewService {
     this.engine.requireClone(repo);
     const pr = this.engine.prOrThrow(repoId, prId);
     const done = this.store.latestDone(repoId, prId);
-    const [commits, local] = await Promise.all([this.git.commits(repo.localPath, pr.targetBranch, pr.sourceBranch), this.git.localAhead(repo.localPath, pr.sourceBranch)]);
+    const { absent, fetchOutput } = await this.ensureRefs(repo, pr);
+    let commits;
+    let local = [];
+    let note = null;
+    if (absent.length) {
+      // Without the branch, the provider still has the pull request's commits: a merged PR keeps its history there.
+      note = this.branchGone(pr, fetchOutput);
+      try {
+        commits = await this.forge.of(repo).commits(prId);
+        note += ' These commits are read from ' + (repo.provider === 'GITHUB' ? 'GitHub' : 'Bitbucket') + '; a commit that is not in the clone cannot show its files.';
+      } catch (error) {
+        throw new Error(`${note} Reading the commits from the provider failed too: ${rules.readableError(String(error?.message ?? error))}`);
+      }
+    } else {
+      [commits, local] = await Promise.all([this.git.commits(repo.localPath, pr.targetBranch, pr.sourceBranch), this.git.localAhead(repo.localPath, pr.sourceBranch)]);
+    }
     let sinceReview = null;
     if (done?.headSha) {
       const index = commits.findIndex((commit) => commit.sha === done.headSha);
       sinceReview = index >= 0 ? index : null;
     }
-    return { commits, local, sinceReview, branch: pr.sourceBranch };
+    return { commits, local, sinceReview, branch: pr.sourceBranch, note };
   }
 
   // --- repositories -------------------------------------------------------------------
@@ -447,6 +596,27 @@ class ReviewService {
       guidelines: (args) => ({ ok: true, guidelines: s.guidelines(args.repoId) }),
       usage: () => ({ ok: true, usage: s.store.usageSummary() }),
       bus: () => ({ ok: true, ...s.bus.overview() }),
+      fileText: async (args) => ({ ok: true, ...(await s.prFileText(str(args.repoId, 'A repository'), num(args.prId), str(args.file, 'A file'))) }),
+      /** An answer in any thread of the PR, from the line it hangs on: someone else's comment or one of ours. */
+      replyToComment: async (args) => {
+        const repoId = str(args.repoId, 'A repository');
+        const prId = num(args.prId);
+        const body = String(args.body ?? '').trim();
+        if (!body) throw new Error('The reply is empty.');
+        const repo = e.requireRepo(repoId);
+        const commentId = str(args.commentId, 'A comment');
+        if (!s.store.comments(repoId, prId).some((comment) => comment.commentId === commentId)) throw new Error('That comment is not in the stored thread; reload the PR.');
+        const posted = await s.forge.of(repo).reply(prId, commentId, body);
+        // A reply written here is ours, in the same record every other road to the PR uses.
+        s.store.recordPublication(null, repoId, prId, posted.id, posted.url, body);
+        await e.syncQuietly(repo, prId);
+        return { ok: true, url: posted.url };
+      },
+      viewed: async (args) => {
+        const { head, files } = await s.viewed(str(args.repoId, 'A repository'), num(args.prId));
+        return { ok: true, head, files };
+      },
+      setViewed: async (args) => ({ ok: true, ...(await s.setViewed(str(args.repoId, 'A repository'), num(args.prId), str(args.file, 'A file'), args.viewed !== false)) }),
       activity: () => ({ ok: true, activity: e.activity.list() }),
       importInspect: () => ({ ok: true, ...importer.inspect({ DatabaseSync: s.DatabaseSync, source: s.importSource }) }),
       models: () => ({ ok: true, models: ['haiku', 'sonnet', 'opus', 'fable'] }),
@@ -469,12 +639,15 @@ class ReviewService {
       },
       saveSettings: (args) => {
         const input = args.settings ?? {};
-        const map = { language: 'review.language', me: 'me.author', profileId: 'claude.profileId', notify: 'notify.enabled', autoEnabled: 'auto.enabled', autoInterval: 'auto.interval.minutes', autoMax: 'auto.max.per.cycle', followUpDays: 'followup.days' };
+        const map = { language: 'review.language', me: 'me.author', profileId: 'claude.profileId', notify: 'notify.enabled', autoEnabled: 'auto.enabled', autoInterval: 'auto.interval.minutes', autoMax: 'auto.max.per.cycle', followUpDays: 'followup.days', asideWidth: 'ui.asideWidth', wrapLines: 'ui.wrapLines', diffLayout: 'ui.diffLayout', diffFont: 'ui.diffFont' };
         for (const [field, key] of Object.entries(map)) {
           if (!(field in input)) continue;
           const value = input[field];
           if (typeof value === 'boolean') s.store.setPref(key, value ? 'true' : 'false');
           else if (field === 'autoInterval' || field === 'autoMax' || field === 'followUpDays') s.store.setPref(key, String(Math.max(1, Number.parseInt(value, 10) || 1)));
+          else if (field === 'asideWidth') s.store.setPref(key, String(Math.min(900, Math.max(160, Number.parseInt(value, 10) || 290))));
+          else if (field === 'diffFont') s.store.setPref(key, String(Math.min(16, Math.max(10, Number.parseInt(value, 10) || 12))));
+          else if (field === 'diffLayout') s.store.setPref(key, value === 'split' ? 'split' : 'unified');
           else s.store.setPref(key, String(value ?? ''));
         }
         s.emitRaw({ type: 'settings', settings: s.settings() });
@@ -548,11 +721,7 @@ class ReviewService {
         return { ok: true, existing: done ? { createdAt: done.createdAt, costUsd: done.costUsd, findings: s.store.findingsForReview(done.id).length } : null };
       },
       cancel: (args) => e.cancel(str(args.repoId, 'A repository'), num(args.prId), args.kind === 'fix' ? 'fix' : args.kind === 'verify' ? 'verify' : args.kind === 'final' ? 'final' : 'review'),
-      cancelRun: (args) => {
-        const run = e.activity.runs.get(str(args.key, 'A run'));
-        run?.handle?.cancel();
-        return { ok: true };
-      },
+      cancelRun: (args) => (e.activity.cancel(str(args.key, 'A run')) ? { ok: true } : { ok: false, error: 'That run has already finished.' }),
       verify: async (args) => e.verify(str(args.repoId, 'A repository'), num(args.prId)),
       finalPass: async (args) => e.finalPass(str(args.repoId, 'A repository'), num(args.prId)),
 

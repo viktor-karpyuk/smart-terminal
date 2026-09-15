@@ -438,7 +438,8 @@ class ReviewStore {
       input.skipAuthors ?? '',
       input.onlyTargets ?? '',
       input.replyMode ?? 'DRAFT',
-      bool(input.hidden),
+      // The edit form does not carry it: an edit leaves a hidden repository hidden.
+      input.hidden === undefined ? (existing?.hidden ?? 0) : bool(input.hidden),
       input.fixMode ?? 'MANUAL',
     ];
     if (existing) {
@@ -866,6 +867,10 @@ class ReviewStore {
     return ids;
   }
 
+  markCommentOurs(repoId, prId, commentId) {
+    this.run('UPDATE cr_pr_comment SET is_ours = 1 WHERE repo_id = ? AND pr_id = ? AND comment_id = ?', repoId, prId, commentId);
+  }
+
   syncComments(repoId, prId, fetched, ours) {
     this.transaction(() => {
       const stamp = now();
@@ -1181,8 +1186,8 @@ class ReviewStore {
   }
 
   recentActivity(limit = 30) {
-    const reviews = this.all('SELECT r.id, r.repo_id, r.pr_id, r.pr_title, r.status, r.created_at, r.finished_at, r.cost_usd, r.trigger_kind, p.name AS repo_name FROM cr_review r JOIN cr_repo p ON p.id = r.repo_id ORDER BY r.created_at DESC LIMIT ?', limit);
-    return reviews.map((row) => ({ kind: 'review', repoId: row.repo_id, repoName: row.repo_name, prId: Number(row.pr_id), title: row.pr_title, status: row.status, at: row.finished_at ?? row.created_at, costUsd: row.cost_usd, trigger: row.trigger_kind }));
+    const reviews = this.all('SELECT r.id, r.repo_id, r.pr_id, r.pr_title, r.status, r.created_at, r.finished_at, r.cost_usd, r.trigger_kind, r.error, p.name AS repo_name FROM cr_review r JOIN cr_repo p ON p.id = r.repo_id ORDER BY r.created_at DESC LIMIT ?', limit);
+    return reviews.map((row) => ({ kind: 'review', repoId: row.repo_id, repoName: row.repo_name, prId: Number(row.pr_id), title: row.pr_title, status: row.status, at: row.finished_at ?? row.created_at, costUsd: row.cost_usd, trigger: row.trigger_kind, error: row.error ?? null }));
   }
 }
 

@@ -43,7 +43,7 @@ const DEPTHS = {
     tools: [
       'Read', 'Grep', 'Glob',
       'Bash(git diff *)', 'Bash(git show *)', 'Bash(git ls-tree *)', 'Bash(git rev-parse *)',
-      'Bash(git status *)', 'Bash(git ls-files *)', 'Bash(git cat-file *)', 'Bash(git grep *)',
+      'Bash(git status *)', 'Bash(git ls-files *)', 'Bash(git cat-file *)',
     ],
     instructions: [
       'PROFUNDIDAD: INTERMEDIA',
@@ -60,7 +60,7 @@ const DEPTHS = {
       'Read', 'Grep', 'Glob',
       'Bash(git diff *)', 'Bash(git log *)', 'Bash(git show *)',
       'Bash(git blame *)', 'Bash(git ls-tree *)', 'Bash(git rev-parse *)',
-      'Bash(git status *)', 'Bash(git ls-files *)', 'Bash(git cat-file *)', 'Bash(git grep *)',
+      'Bash(git status *)', 'Bash(git ls-files *)', 'Bash(git cat-file *)',
       'Bash(git merge-base *)', 'Bash(git describe *)',
     ],
     instructions: [
@@ -133,8 +133,14 @@ const KINDS = {
   GENERIC: { label: 'Generic', focus: '' },
 };
 
-/** Reading-only or network is out of scope for a review at every level. */
-const REVIEW_DENIED = ['Edit', 'Write', 'WebFetch', 'WebSearch'];
+/**
+ * Reading-only or network is out of scope for a review at every level. The git
+ * reads allowed above are not all read-only on every flag: `--output=<file>` on
+ * diff, show and log writes wherever it is pointed, so it is denied by name.
+ * `git grep` is not offered at all (the Grep tool does the same job): its `-O`
+ * runs whatever command it is given.
+ */
+const REVIEW_DENIED = ['Edit', 'Write', 'WebFetch', 'WebSearch', 'Bash(git *--output*)', 'Bash(git grep *)'];
 
 /**
  * A fix writes and reads, nothing more. `Task` is out on purpose: a finding is
@@ -1025,6 +1031,32 @@ function nextStep({ pr, review, findings = [], notes = [], threads = [], running
   return { kind: 'act', action: 'merge-open', title: 'Ready to merge', detail: 'Everything is published, answered and verified.' };
 }
 
+/**
+ * The comment on the PR that is this finding, published — by this app before
+ * it lost track, or by AI Code Reviewer running beside it. Recognised by what
+ * every road that publishes a finding writes: a root comment on the same file
+ * whose text carries the title in bold. The line is not required to match: a
+ * comment Bitbucket re-anchored after a push is still the same comment.
+ *
+ * Without this the finding reads as unpublished, the Code tab offers to publish
+ * it, and pressing the button posts the same comment a second time.
+ */
+function matchPublished(finding, comments) {
+  const title = String(finding.title ?? '').trim();
+  if (!title) return null;
+  const bold = `**${title}**`;
+  return (
+    comments.find((comment) => {
+      if (comment.parentId || comment.deleted) return false;
+      const body = String(comment.body ?? '');
+      if (!body.includes(bold)) return false;
+      // An inline comment on the file, or — for a finding with no line — the general comment that names it.
+      if (comment.inlinePath) return comment.inlinePath === finding.filePath;
+      return !finding.lineNo && body.startsWith(`\`${finding.filePath}\``);
+    }) ?? null
+  );
+}
+
 /** Age urgency marks, as the PR list shows them. */
 function ageMark(days) {
   if (days >= 90) return '▲▲▲';
@@ -1092,4 +1124,5 @@ module.exports = {
   daysBetween,
   readableError,
   nextStep,
+  matchPublished,
 };

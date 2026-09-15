@@ -62,3 +62,95 @@ test('lists, quotes and headings', () => {
 test('age marks', () => {
   assert.deepEqual([1, 3, 7, 14, 90].map(P.ageMark), ['', '•', '▲', '▲▲', '▲▲▲']);
 });
+
+const V = fromPanel(['esc', 'words', 'KW_CLIKE', 'KW_JS', 'KW_PY', 'KW_SQL', 'KW_SH', 'LANGS', 'EXT_LANG', 'langOf', 'tokenize', 'changedRange', 'paint', 'intraline', 'parseHunk']);
+const classes = (tokens) => tokens.filter((t) => t.c).map((t) => `${t.c}:${t.t}`);
+
+test('code is coloured by what it is, per language, and everything stays escaped', () => {
+  const java = V.langOf('src/main/java/App.java');
+  assert.deepEqual(classes(V.tokenize('@Override public String name() { return "x<y"; } // done', java, { block: false })), ['tk-a:@Override', 'tk-k:public', 'tk-t:String', 'tk-f:name', 'tk-k:return', 'tk-s:"x<y"', 'tk-c:// done']);
+  assert.equal(V.paint(V.tokenize('return "<b>";', java, { block: false })), '<span class="tk-k">return</span> <span class="tk-s">&quot;&lt;b&gt;&quot;</span>;');
+  const sql = V.langOf('db/migration/V0552__x.sql');
+  assert.deepEqual(classes(V.tokenize('ALTER TABLE foo ADD COLUMN bar int; -- why', sql, { block: false })), ['tk-k:ALTER', 'tk-k:TABLE', 'tk-k:ADD', 'tk-k:COLUMN', 'tk-k:int', 'tk-c:-- why']);
+  const yaml = V.langOf('application.yml');
+  assert.deepEqual(classes(V.tokenize('  datasource: "jdbc" # local', yaml, { block: false })), ['tk-t:datasource', 'tk-s:"jdbc"', 'tk-c:# local']);
+  assert.equal(V.langOf('README.unknown'), V.LANGS.plain);
+});
+
+test('a block comment carries across lines, and a hunk that starts inside one is guessed from the star', () => {
+  const ts = V.langOf('a.ts');
+  const st = { block: false };
+  assert.deepEqual(classes(V.tokenize('const a = 1; /* start', ts, st)), ['tk-k:const', 'tk-n:1', 'tk-c:/* start']);
+  assert.equal(st.block, true);
+  assert.deepEqual(classes(V.tokenize('still inside */ let b', ts, st)), ['tk-c:still inside */', 'tk-k:let']);
+  assert.deepEqual(classes(V.tokenize(' * a javadoc line', ts, { block: false })), ['tk-c: * a javadoc line']);
+});
+
+test('only the stretch that changed inside a line is marked, and a rewritten line is not', () => {
+  assert.deepEqual(JSON.parse(JSON.stringify(V.changedRange('return a - b;', 'return a + b;'))), { a: [9, 10], b: [9, 10] });
+  assert.equal(V.changedRange('int x = 1;', 'String name = computeSomethingElse();'), null);
+  const lines = [{ kind: 'CONTEXT', text: 'x' }, { kind: 'REMOVED', text: 'foo(1)' }, { kind: 'REMOVED', text: 'bar(2)' }, { kind: 'ADDED', text: 'foo(10)' }, { kind: 'ADDED', text: 'totally new' }];
+  const ranges = V.intraline(lines);
+  assert.deepEqual(JSON.parse(JSON.stringify(ranges)), { 1: [5, 5], 3: [5, 6] });
+  assert.equal(V.paint([{ t: 'foo(10)', c: '' }], [4, 6]), 'foo(<span class="chg">10</span>)');
+});
+
+test('a hunk header is read with its lengths, defaulting to one', () => {
+  assert.deepEqual(JSON.parse(JSON.stringify(V.parseHunk('@@ -10,3 +12,4 @@ public class A {'))), { oldStart: 10, oldLen: 3, newStart: 12, newLen: 4, label: 'public class A {' });
+  assert.deepEqual(JSON.parse(JSON.stringify(V.parseHunk('@@ -1 +1 @@'))), { oldStart: 1, oldLen: 1, newStart: 1, newLen: 1, label: '' });
+});
+
+test('a published finding does not repeat its title under the title', () => {
+  const T = fromPanel(['withoutTitle']);
+  assert.equal(T.withoutTitle('**`switchMode` changes the mode**\n\nThe body.', '`switchMode` changes the mode'), 'The body.');
+  assert.equal(T.withoutTitle('### A title\nBody', 'A title'), 'Body');
+  assert.equal(T.withoutTitle('**Another title**\n\nBody', 'A title'), '**Another title**\n\nBody');
+  assert.equal(T.withoutTitle('Just a body', 'A title'), 'Just a body');
+});
+
+test('unchanged stretches fold into gaps that open from either end, without losing or repeating a line', () => {
+  const D = fromPanel(['diffMetaWorthShowing', 'diffMetaWords', 'parseHunk', 'diffItems']);
+  const total = 30;
+  const fileLines = Array.from({ length: total }, (_, i) => `line ${i + 1}`);
+  const hunk = [{ kind: 'HUNK', text: '@@ -10,3 +10,5 @@' }, { kind: 'CONTEXT', oldNo: 10, newNo: 10, text: 'line 10' }, { kind: 'ADDED', oldNo: null, newNo: 11, text: 'new a' }, { kind: 'ADDED', oldNo: null, newNo: 12, text: 'new b' }, { kind: 'CONTEXT', oldNo: 11, newNo: 13, text: 'line 13' }, { kind: 'CONTEXT', oldNo: 12, newNo: 14, text: 'line 14' }];
+  const shape = (items) => items.map((it) => (it.type === 'gap' ? `gap:${it.key}:${it.hidden}` : it.type === 'hunk' ? 'hunk' : `${it.l.oldNo}/${it.l.newNo}`));
+  D.state = { code: { fileText: { 'a.js': { lines: fileLines, total } }, reveal: {} } };
+  assert.deepEqual(shape(D.diffItems(hunk, 'a.js')), ['gap:g0:9', 'hunk', '10/10', 'null/11', 'null/12', '11/13', '12/14', 'gap:end:16']);
+
+  // Five lines above the change, and every line after it: the old side's numbers follow the lines the hunk added.
+  D.state.code.reveal = { 'a.js': { g0: { top: 0, bottom: 5 }, end: { top: 99, bottom: 0 } } };
+  const opened = shape(D.diffItems(hunk, 'a.js'));
+  assert.deepEqual(opened.slice(0, 7), ['gap:g0:4', '5/5', '6/6', '7/7', '8/8', '9/9', 'hunk']);
+  assert.equal(opened[opened.length - 1], '28/30');
+  assert.ok(!opened.some((item) => item.startsWith('gap:end')), 'fully opened: no gap left');
+  const newNumbers = opened.filter((item) => /\/\d+$/.test(item)).map((item) => Number(item.split('/')[1]));
+  assert.equal(new Set(newNumbers).size, newNumbers.length, 'no line twice');
+
+  // Without the file's text, the tail is unknown and still offered.
+  D.state = { code: { fileText: {}, reveal: {} } };
+  assert.deepEqual(shape(D.diffItems(hunk, 'a.js')).slice(-1), ['gap:end:null']);
+});
+
+test('only the first line after a hunk may be guessed into a block comment', () => {
+  const sql = V.langOf('q.sql');
+  const st = { block: false, fresh: true };
+  V.tokenize('SELECT', sql, st);
+  const star = V.tokenize('  *', sql, st);
+  assert.equal(st.block, false, 'a select list star is not a comment');
+  assert.ok(!star.some((t) => t.c === 'tk-c'));
+  const java = V.langOf('A.java');
+  const first = { block: false, fresh: true };
+  V.tokenize('   * continues a javadoc', java, first);
+  assert.equal(first.block, true, 'at the top of a hunk it is taken as a comment');
+});
+
+test('a title shows its backticked code as code, and nothing else as markup', () => {
+  const T = fromPanel(['esc', 'titleHtml']);
+  assert.equal(T.titleHtml('`switchMode` changes <b>'), '<code>switchMode</code> changes &lt;b&gt;');
+  assert.equal(T.titleHtml('`<img onerror=x>`'), '<code>&lt;img onerror=x&gt;</code>');
+});
+
+test('the title line is dropped as the reviewer posts it, with its category in front', () => {
+  const T = fromPanel(['withoutTitle']);
+  assert.equal(T.withoutTitle('_diseño_ · **El bridge paga una query**\n\nEl cuerpo.', 'El bridge paga una query'), 'El cuerpo.');
+});

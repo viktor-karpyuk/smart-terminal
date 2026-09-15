@@ -31,6 +31,11 @@ process.stdin.on('end', () => {
   const config = process.env.CLAUDE_CONFIG_DIR || 'default';
   require('fs').writeFileSync(process.env.FAKE_LOG, JSON.stringify({ args, input, config }));
   out({ type: 'system', subtype: 'init', session_id: 'sess-1', model: 'haiku' });
+  if (config.endsWith('overage')) {
+    out({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', rateLimitType: 'five_hour', resetsAt: 1900000000 } });
+    out({ type: 'result', is_error: false, result: 'done anyway', session_id: 'sess-2', total_cost_usd: 0.5 });
+    return;
+  }
   if (config.endsWith('broke')) {
     out({ type: 'result', is_error: true, result: 'Claude AI usage limit reached|1700000000' });
     process.exit(1);
@@ -121,4 +126,18 @@ test('accounts are tried from the chosen one, then its fallback, then everyone e
   const profiles = [{ id: 'a' }, { id: 'b', fallbackProfileId: 'c' }, { id: 'c', fallbackProfileId: 'b' }, { id: 'd' }];
   assert.deepEqual(orderAccounts(profiles, 'b').map((p) => p.id), ['b', 'c', 'a', 'd']);
   assert.deepEqual(orderAccounts(profiles, 'missing').map((p) => p.id), ['a', 'b', 'c', 'd']);
+});
+
+test('a run that finished while its account hit the ceiling is kept, and only the account rests', async () => {
+  const log = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'fake-log-')), 'log.json');
+  process.env.FAKE_LOG = log;
+  const binary = fakeClaude(PRINT);
+  const runner = new ClaudeRunner({
+    accounts: async () => [{ id: 'o', name: 'Overage', configDir: '/cfg/overage', claudeCommand: binary }, { id: 'y', name: 'Spare', configDir: '/cfg/spare', claudeCommand: binary }],
+    resolvePath: async () => process.env.PATH,
+  });
+  const result = await runner.run({ cwd: os.tmpdir(), prompt: 'p' });
+  assert.equal(result.ok, true);
+  assert.equal(result.accountName, 'Overage', 'not run a second time on the spare account');
+  assert.ok(runner.resting.get('o') > Date.now());
 });

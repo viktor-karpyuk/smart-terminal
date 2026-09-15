@@ -94,8 +94,15 @@ class FixEngine {
     }
   }
 
-  async fixNow(repo, pr, finding, key) {
+  async fixNow(repo, pr, queued, key) {
     const activity = this.engine.activity;
+    // Read again now that it is this fix's turn: another run may have closed it while this one waited.
+    if (activity.cancelled(key)) throw new Error('Cancelled before it started.');
+    const finding = this.store.finding(queued.id) ?? queued;
+    if (rules.closed(finding)) {
+      activity.line(key, 'Already closed while it waited: nothing to fix.');
+      return null;
+    }
     const dir = this.dirFor(repo, pr.id);
     await this.git.prepareWorkshop({
       origin: repo.localPath,
@@ -104,6 +111,10 @@ class FixEngine {
       hasPendingReturn: async () => this.store.pendingReturn(repo.id, pr.id).length > 0,
       log: (text) => activity.line(key, text),
     });
+    // Changes nobody committed belong to no finding: fixing on top of them would hand them to this one.
+    if (await this.git.isDirty(dir)) {
+      throw new Error('The workshop has uncommitted changes left by an earlier fix whose commit failed. Discard the workshop, or commit them there, before fixing again.');
+    }
     const fixId = this.store.startFix({ findingId: finding.id, reviewId: finding.reviewId, repoId: repo.id, prId: pr.id, branch: pr.sourceBranch, workspace: dir });
     const language = this.engine.language();
     const label = `Fix #${pr.id}: ${finding.title}`.slice(0, 80);

@@ -21,6 +21,27 @@ const { parseNumstat, parseLog } = require('./review-rules');
 const TIMEOUT = 120000;
 const LOG_FORMAT = '%H%x1f%an%x1f%ad%x1f%s%x1f%b%x1e';
 
+/**
+ * A commit as the panel names it: hex and nothing else. It reaches `git show`
+ * where an option would be read as one, and `--output=<file>` writes.
+ */
+function commitId(sha) {
+  const value = String(sha ?? '');
+  if (!/^[0-9a-f]{4,64}$/i.test(value)) throw new Error(`Not a commit: ${value.slice(0, 60)}`);
+  return value;
+}
+
+/**
+ * A push of a branch to the branch of the same name, spelled out in full. A bare
+ * name is a refspec, and a branch called `+main` — a legal name — would be a
+ * forced push of `main`.
+ */
+function headRefspec(branch) {
+  const name = String(branch ?? '');
+  if (!name || name.startsWith('-') || name.includes(':')) throw new Error(`Not a branch that can be pushed: ${name.slice(0, 60)}`);
+  return `refs/heads/${name}:refs/heads/${name}`;
+}
+
 class ReviewGit {
   constructor({ resolvePath } = {}) {
     this.resolvePath = resolvePath ?? (async () => process.env.PATH ?? '');
@@ -45,8 +66,21 @@ class ReviewGit {
     }
   }
 
-  fetch(dir, ...branches) {
-    return this.run(dir, ['fetch', 'origin', ...branches.filter(Boolean)]);
+  /**
+   * The named branches from origin. A name git would read as something else is
+   * not passed at all: `a:b` is a refspec that writes `b` (and is how a fork's
+   * branch is named), `+a` forces, `-a` is an option.
+   */
+  async fetch(dir, ...branches) {
+    const names = branches.filter(Boolean);
+    const odd = names.find((name) => /^[-+]|:/.test(name));
+    if (odd) {
+      const output = odd.includes(':')
+        ? `${odd} is a branch of a fork: origin does not have it, and reviewing a fork's pull request is not supported.`
+        : `${odd} is not a branch name git can be given safely.`;
+      return { ok: false, stdout: '', output, code: 1 };
+    }
+    return this.run(dir, ['fetch', 'origin', ...names]);
   }
 
   async remoteUrl(dir) {
@@ -62,6 +96,29 @@ class ReviewGit {
   async numstat(dir, range) {
     const res = await this.run(dir, ['diff', '--numstat', range]);
     return res.ok ? parseNumstat(res.stdout) : [];
+  }
+
+  /** What happened to each file in a range: A added, M modified, D deleted, R renamed (to its new path). */
+  async nameStatus(dir, range) {
+    const res = await this.run(dir, ['diff', '--name-status', '-M', range]);
+    const out = {};
+    if (!res.ok) return out;
+    for (const line of res.stdout.split('\n')) {
+      const parts = line.split('\t');
+      if (parts.length < 2) continue;
+      const letter = parts[0][0];
+      out[parts[parts.length - 1]] = { status: letter, from: letter === 'R' || letter === 'C' ? parts[1] : null };
+    }
+    return out;
+  }
+
+  /** A file as it is at a ref, as lines. Null when the file is not there. */
+  async fileAt(dir, ref, file) {
+    const res = await this.run(dir, ['show', `${ref}:${file}`]);
+    if (!res.ok) return null;
+    const lines = res.stdout.split('\n');
+    if (lines.length && lines[lines.length - 1] === '') lines.pop();
+    return lines;
   }
 
   async diffFile(dir, range, file) {
@@ -85,12 +142,12 @@ class ReviewGit {
   }
 
   async commitFiles(dir, sha) {
-    const res = await this.run(dir, ['show', '--numstat', '--format=', sha]);
+    const res = await this.run(dir, ['show', '--numstat', '--format=', commitId(sha)]);
     return res.ok ? parseNumstat(res.stdout) : [];
   }
 
   async commitDiff(dir, sha, file) {
-    return (await this.run(dir, ['show', '--unified=5', '--format=', sha, '--', file])).stdout;
+    return (await this.run(dir, ['show', '--unified=5', '--format=', commitId(sha), '--', file])).stdout;
   }
 
   async currentBranch(dir) {
@@ -114,6 +171,10 @@ class ReviewGit {
     return res.ok ? res.stdout.trim() : null;
   }
 
+  async hasRef(dir, ref) {
+    return (await this.run(dir, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).ok;
+  }
+
   async isDirty(dir) {
     return Boolean((await this.run(dir, ['status', '--porcelain'])).stdout.trim());
   }
@@ -125,17 +186,23 @@ class ReviewGit {
 
   /** Never `--force`: if the remote moved, git refuses, and that is the right answer. */
   pushBranch(dir, branch) {
-    return this.run(dir, ['push', 'origin', branch]);
+    return this.run(dir, ['push', 'origin', headRefspec(branch)]);
   }
 
   pushToLocal(workshop, dest, branch) {
-    return this.run(workshop, ['push', dest, `${branch}:${branch}`]);
+    return this.run(workshop, ['push', dest, headRefspec(branch)]);
   }
 
+  /**
+   * Everything in the tree, as one commit. A commit that fails throws with what
+   * git said: returning nothing would read as "nothing changed", and the edits
+   * left behind would be committed under the next finding.
+   */
   async commitAll(dir, message) {
-    await this.run(dir, ['add', '-A']);
+    const added = await this.run(dir, ['add', '-A']);
+    if (!added.ok) throw new Error(`git add failed: ${added.output.slice(0, 400)}`);
     const res = await this.run(dir, ['commit', '-m', message]);
-    if (!res.ok) return null;
+    if (!res.ok) throw new Error(`git commit failed: ${res.output.slice(0, 400)}`);
     return this.head(dir);
   }
 
@@ -189,4 +256,4 @@ class ReviewGit {
   }
 }
 
-module.exports = { ReviewGit, LOG_FORMAT };
+module.exports = { ReviewGit, LOG_FORMAT, commitId, headRefspec };

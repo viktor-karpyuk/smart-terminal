@@ -1,6 +1,9 @@
 'use strict';
 
 const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 /**
  * Code Reviewer: one `claude -p` run, streamed, on an account that can answer.
@@ -179,6 +182,8 @@ class ClaudeRunner {
       if (!trouble || result.cancelled) return result;
       const ceiling = result.limits.find((limit) => limit.status === 'rejected' && limit.resetsAt);
       this.rest(account.id, trouble === 'signed-out' ? this.now() + 10 * 60 * 1000 : ceiling?.resetsAt ?? this.now() + 5 * 60 * 60 * 1000);
+      // It hit its ceiling but finished: the account rests, and the work already paid for is kept rather than done again.
+      if (result.ok) return result;
       last = result;
       const next = await this.pick(tried);
       if (!next) return result;
@@ -205,10 +210,11 @@ class ClaudeRunner {
     if (account.configDir) env.CLAUDE_CONFIG_DIR = account.configDir;
     env.PATH = await this.resolvePath(account.shell);
     const binary = account.claudeCommand && account.claudeCommand.trim() ? account.claudeCommand.trim() : 'claude';
-    const args = buildArgs(options);
+    const config = privateMcpConfig(options.mcpConfig);
+    const args = buildArgs({ ...options, mcpConfig: config ? config.file : options.mcpConfig });
     const started = this.now();
 
-    return new Promise((resolve) => {
+    const running = new Promise((resolve) => {
       const result = {
         ok: false,
         text: '',
@@ -349,7 +355,21 @@ class ClaudeRunner {
       child.on('close', (code) => finish(code));
       child.stdin.end(prompt);
     });
+    return config ? running.finally(config.remove) : running;
   }
+}
+
+/**
+ * An MCP config holding a secret — a fix's bus token — as a file only this user
+ * can read, rather than as JSON on the command line: a fix runs with Bash, and
+ * `ps` would show it every other run's token. Gone when the run ends.
+ */
+function privateMcpConfig(config) {
+  if (!config || typeof config !== 'object') return null;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-mcp-'));
+  const file = path.join(dir, 'mcp.json');
+  fs.writeFileSync(file, JSON.stringify(config), { mode: 0o600 });
+  return { file, remove: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 
 /** The account list the runner walks: the chosen one first, then its fallback, then everyone else. */
@@ -368,4 +388,4 @@ function orderAccounts(profiles, preferredId) {
   return out;
 }
 
-module.exports = { ClaudeRunner, buildArgs, parseEvent, whyEmpty, accountTrouble, orderAccounts, DEFAULT_TIMEOUT };
+module.exports = { ClaudeRunner, buildArgs, parseEvent, whyEmpty, accountTrouble, orderAccounts, privateMcpConfig, DEFAULT_TIMEOUT };

@@ -51,7 +51,9 @@ test('a profile set by hand is kept, and automatic says why', () => {
 });
 
 test('every depth denies writing and the network, and allows more git as it deepens', () => {
-  assert.deepEqual(R.REVIEW_DENIED, ['Edit', 'Write', 'WebFetch', 'WebSearch']);
+  assert.deepEqual(R.REVIEW_DENIED, ['Edit', 'Write', 'WebFetch', 'WebSearch', 'Bash(git *--output*)', 'Bash(git grep *)']);
+  // Neither of these is read-only: grep -O runs a command, --output writes a file.
+  for (const depth of Object.values(R.DEPTHS)) assert.ok(!depth.tools.includes('Bash(git grep *)'));
   assert.ok(!R.DEPTHS.LIGHT.tools.includes('Bash(git log *)'));
   assert.ok(R.DEPTHS.HEAVY.tools.includes('Bash(git blame *)'));
   for (const depth of Object.values(R.DEPTHS)) assert.ok(!depth.tools.some((tool) => /Edit|Write|push/.test(tool)));
@@ -320,4 +322,19 @@ test('a forge time with its zone trimmed off is UTC', () => {
   const now = new Date('2026-09-14T17:30:00Z');
   assert.equal(R.daysBetween('2026-09-10 17:40', now), 3, 'not shifted by the local zone');
   assert.equal(R.daysBetween('2026-09-11T17:30:00Z', now), 3);
+});
+
+test('a finding already on the PR is recognised, whoever published it', () => {
+  const finding = { title: 'Null check', filePath: 'src/a.ts', lineNo: 12 };
+  const comments = [
+    { commentId: '1', body: '_bug_ · **Null check**\n\nbody', inlinePath: 'src/other.ts', inlineLine: 12 },
+    { commentId: '2', body: 'I agree about **Null check**', inlinePath: 'src/a.ts', inlineLine: 12, parentId: '9' },
+    { commentId: '3', body: '_bug_ · **Null check**\n\nbody', inlinePath: 'src/a.ts', inlineLine: 14, deleted: true },
+    { commentId: '4', body: '_bug_ · **Null check**\n\nbody', inlinePath: 'src/a.ts', inlineLine: 15 },
+  ];
+  assert.equal(R.matchPublished(finding, comments).commentId, '4', 'same file and title; a re-anchored line is still the comment');
+  assert.equal(R.matchPublished({ ...finding, title: 'Other' }, comments), null);
+  const wholeFile = { title: 'Naming', filePath: 'src/a.ts', lineNo: null };
+  assert.equal(R.matchPublished(wholeFile, [{ commentId: '5', body: '`src/a.ts`\n\n_diseño_ · **Naming**\n\nx', inlinePath: null }]).commentId, '5');
+  assert.equal(R.matchPublished(finding, [{ commentId: '6', body: '`src/a.ts`\n\n**Null check**', inlinePath: null }]), null, 'a finding with a line is not a general comment');
 });

@@ -68,6 +68,7 @@ function fakeForge(state) {
     undoRequestChanges: async () => state.calls.push('undoRequestChanges'),
     decline: async (prId, reason) => state.calls.push(`decline:${reason}`),
     merge: async (prId, options) => { state.calls.push(`merge:${options.strategy}`); return 'sha'; },
+    commits: async () => { state.calls.push('commits'); return [{ sha: 'abc1234def', author: 'Ana', date: '2026-09-01', subject: 'from the provider', body: '' }]; },
   };
   function post(comment) {
     const id = String(next++);
@@ -137,7 +138,7 @@ test('a review: planned from the diff, read-only, findings stored, body rendered
   const run = claude.runs[0];
   assert.equal(run.kind, 'review');
   assert.equal(run.model, 'haiku', 'one file, two lines: a light review');
-  assert.deepEqual(run.disallowedTools, ['Edit', 'Write', 'WebFetch', 'WebSearch']);
+  assert.deepEqual(run.disallowedTools, ['Edit', 'Write', 'WebFetch', 'WebSearch', 'Bash(git *--output*)', 'Bash(git grep *)']);
   assert.match(run.prompt, /Rango del diff: origin\/main\.\.\.origin\/feature/);
   const view = (await call('pr', { repoId: repo.id, prId: 7 }));
   assert.equal(view.ok, true, view.error);
@@ -392,6 +393,10 @@ test('importing an AI Code Reviewer database: tokens decrypted with its key, his
   acr.prepare('INSERT INTO review VALUES (?,?,?,?,?,?,?,?,?,?)').run('V1', 'R1', 12, 'Old PR', 'abc', 'DONE', 'body', '2026-02-01', 0.5, 'ignored');
   acr.prepare('INSERT INTO review VALUES (?,?,?,?,?,?,?,?,?,?)').run('V2', 'R1', 13, 'Crashed', 'def', 'RUNNING', null, '2026-02-02', 0, null);
   acr.prepare('INSERT INTO finding VALUES (?,?,?,?,?,?,?,?,?,?,?)').run('F1', 'V1', 'R1', 12, 'a.kt', 3, 'major', 'T', 'B', '2026-02-01', null);
+  // Old rows with holes: a review with no head or title, its finding, and a finding whose review is gone.
+  acr.prepare('INSERT INTO review VALUES (?,?,?,?,?,?,?,?,?,?)').run('V3', 'R1', 14, null, null, 'DONE', null, '2026-02-03', null, null);
+  acr.prepare('INSERT INTO finding VALUES (?,?,?,?,?,?,?,?,?,?,?)').run('F2', 'V3', 'R1', 14, 'b.kt', null, 'minor', 'U', 'C', '2026-02-03', null);
+  acr.prepare('INSERT INTO finding VALUES (?,?,?,?,?,?,?,?,?,?,?)').run('F3', 'GONE', 'R1', 14, 'c.kt', null, 'minor', 'Orphan', 'D', '2026-02-03', null);
   acr.prepare('INSERT INTO closed_pr VALUES (?,?,?,?)').run('R1', 12, '2026-03-01', 'MERGED');
   acr.prepare('INSERT INTO pref VALUES (?,?)').run('review.language', 'English');
   acr.prepare('INSERT INTO pref VALUES (?,?)').run('auto.enabled', 'true');
@@ -401,7 +406,7 @@ test('importing an AI Code Reviewer database: tokens decrypted with its key, his
   const source = { dbFile, keyFile, fixesDir: path.join(dir, 'fixes') };
   const found = inspect({ DatabaseSync: sqlite.DatabaseSync, source });
   assert.equal(found.repos.length, 2);
-  assert.equal(found.counts.findings, 1);
+  assert.equal(found.counts.findings, 3);
   const report = importAll({ DatabaseSync: sqlite.DatabaseSync, store: service.store, source });
   assert.equal(report.repos, 1);
   assert.match(report.skippedRepos[0], /Folder: a local folder/);
@@ -409,6 +414,10 @@ test('importing an AI Code Reviewer database: tokens decrypted with its key, his
   assert.equal(legacy.token, 'bb-token');
   assert.deepEqual([legacy.autoReview, legacy.replyMode, legacy.fixMode, legacy.defaultDepth, legacy.projectKind, legacy.defaultModel], [false, 'DRAFT', 'MANUAL', 'HEAVY', null, ''], 'automatic modes arrive switched off; AUTO means unset');
   assert.equal(service.store.finding('F1').title, 'T');
+  assert.equal(service.store.review('V3').status, 'DONE', 'a review with NULLs takes the defaults instead of being dropped');
+  assert.equal(service.store.finding('F2').title, 'U');
+  assert.equal(service.store.finding('F3'), null, 'an orphan is left behind');
+  assert.equal(report.skippedRows, 1);
   assert.equal(service.store.review('V2').status, 'FAILED');
   assert.equal(service.store.pr('R1', 12).state, 'MERGED');
   assert.equal(service.store.pr('R1', 13).title, 'Crashed', 'a PR known only from a review still gets a row');
@@ -426,4 +435,194 @@ test('a database newer than this build refuses to open', { skip }, () => {
   new ReviewStore(db);
   db.prepare('UPDATE cr_schema SET version = ?').run(MIGRATIONS.length + 1);
   assert.throws(() => new ReviewStore(db), /newer than this build knows/);
+});
+
+
+test('a finding someone else already published is recognised, and never posted twice', { skip }, async () => {
+  const { service, repo, forgeState } = setup([async () => ({ structured: { summary: 's', findings: [finding()] } })]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  // AI Code Reviewer, running beside this app, published it in the meantime.
+  forgeState.comments.push({ commentId: '777', author: 'Viktor', body: '_bug_ · **add subtracts**\n\nIt returns a - b.', inlinePath: 'app.js', inlineLine: 2, deleted: false, createdOn: new Date().toISOString(), parentId: null });
+  const posted = forgeState.posted.length;
+  const published = await service.call('publishAll', { repoId: repo.id, prId: 7 });
+  assert.equal(published.ok, true, JSON.stringify(published));
+  assert.equal(forgeState.posted.length, posted, 'nothing was posted again');
+  const view = await service.call('pr', { repoId: repo.id, prId: 7 });
+  assert.equal(view.findings[0].publishedId, '777');
+  assert.ok(view.comments.find((c) => c.commentId === '777').ours, 'and its comment is ours, so a reply to it is a reply to us');
+  forgeState.comments.push({ commentId: '778', author: 'Ana', body: 'fixed', inlinePath: 'app.js', inlineLine: 2, deleted: false, createdOn: new Date(Date.now() + 1000).toISOString(), parentId: '777' });
+  await service.call('loadPr', { repoId: repo.id, prId: 7 });
+  assert.equal((await service.call('pr', { repoId: repo.id, prId: 7 })).threads[0].state, 'NEEDS_ANSWER');
+});
+
+test('commits: a branch missing from the clone is fetched, and a deleted one is read from the provider', { skip }, async () => {
+  const { service, repo, w, forgeState } = setup([]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  git(w.clone, 'update-ref', '-d', 'refs/remotes/origin/feature');
+  const fetched = await service.call('commits', { repoId: repo.id, prId: 7 });
+  assert.equal(fetched.ok, true, fetched.error);
+  assert.equal(fetched.commits.length, 1, 'the missing branch was fetched, not shown as empty');
+  assert.equal(fetched.note, null);
+  const files = await service.call('files', { repoId: repo.id, prId: 7 });
+  assert.deepEqual(files.files.map((f) => f.path), ['app.js']);
+
+  // The PR is merged and its branch deleted on the remote.
+  git(w.seed, 'push', 'origin', '--delete', 'feature');
+  git(w.clone, 'update-ref', '-d', 'refs/remotes/origin/feature');
+  service.store.upsertPr(repo.id, { ...service.store.pr(repo.id, 7), state: 'MERGED' });
+  const gone = await service.call('commits', { repoId: repo.id, prId: 7 });
+  assert.equal(gone.ok, true, gone.error);
+  assert.match(gone.note, /The branch feature is not on origin any more: the pull request is merged, and its branch was deleted\. These commits are read from GitHub/);
+  assert.deepEqual(gone.commits.map((c) => c.subject), ['from the provider']);
+  assert.ok(forgeState.calls.includes('commits'));
+  const noFiles = await service.call('files', { repoId: repo.id, prId: 7 });
+  assert.match(noFiles.error, /The branch feature is not on origin any more/);
+});
+
+test('a review records the commit it read, even when the author pushed after the list was read', { skip }, async () => {
+  const { service, w, repo } = setup([async () => ({ structured: { summary: 'Fine.', findings: [] } })]);
+  const call = (name, args) => service.call(name, args);
+  assert.equal((await call('refreshPrs', { repoId: repo.id })).ok, true);
+  // The author pushes again; the PR row still names the commit the list saw.
+  fs.writeFileSync(path.join(w.seed, 'app.js'), 'function add(a, b) {\n  return a - b - 0;\n}\n');
+  git(w.seed, 'commit', '-am', 'again');
+  git(w.seed, 'push', 'origin', 'feature');
+  const newer = git(w.seed, 'rev-parse', 'HEAD');
+  const outcome = await call('review', { repoId: repo.id, prId: 7 });
+  assert.equal(outcome.ok, true, outcome.error);
+  const view = await call('pr', { repoId: repo.id, prId: 7 });
+  assert.equal(view.review.headSha, newer);
+});
+
+test('a final pass that cannot fetch says so, instead of stamping a head it never saw', { skip }, async () => {
+  const { service, w, repo, claude } = setup([
+    async () => ({ structured: { summary: 'Fine.', findings: [] } }),
+    async () => ({ structured: { summary: 'Nothing.', mergeable: true, blockers: [] } }),
+  ]);
+  const call = (name, args) => service.call(name, args);
+  assert.equal((await call('refreshPrs', { repoId: repo.id })).ok, true);
+  assert.equal((await call('review', { repoId: repo.id, prId: 7 })).ok, true);
+  git(w.clone, 'remote', 'set-url', 'origin', path.join(w.root, 'gone.git'));
+  const outcome = await call('finalPass', { repoId: repo.id, prId: 7 });
+  assert.equal(outcome.ok, false);
+  assert.match(outcome.error, /git fetch failed/);
+  assert.equal(claude.runs.length, 1, 'the model was never asked');
+  const view = await call('pr', { repoId: repo.id, prId: 7 });
+  assert.equal(view.finalPassDone, false);
+});
+
+test('cancel stops a run before its process exists, and a stale cancel is not remembered', () => {
+  const { Activity } = require('../electron/review-engine');
+  const activity = new Activity(() => {});
+  assert.equal(activity.cancel('review:r:1'), false, 'nothing running: nothing to remember');
+  activity.start('review:r:1', { kind: 'review' });
+  assert.equal(activity.cancel('review:r:1'), true);
+  let killed = 0;
+  activity.patch('review:r:1', { handle: { cancel: () => killed++ } });
+  assert.equal(killed, 1, 'the process is stopped as soon as it registers');
+  activity.end('review:r:1');
+  activity.start('review:r:1', { kind: 'review' });
+  activity.patch('review:r:1', { handle: { cancel: () => killed++ } });
+  assert.equal(killed, 1, 'the next run of the same PR is not killed by the old cancel');
+});
+
+test('publishing the same finding twice at once posts it once', { skip }, async () => {
+  const { service, repo, forgeState } = setup([async () => ({ structured: { summary: 'One.', findings: [finding()] } })]);
+  const call = (name, args) => service.call(name, args);
+  assert.equal((await call('refreshPrs', { repoId: repo.id })).ok, true);
+  assert.equal((await call('review', { repoId: repo.id, prId: 7 })).ok, true);
+  const [f] = (await call('pr', { repoId: repo.id, prId: 7 })).findings;
+  const results = await Promise.all([service.engine.publishFinding(f.id), service.engine.publishFinding(f.id)]);
+  assert.equal(forgeState.posted.length, 1);
+  assert.equal(results[0].url, results[1].url);
+});
+
+test('editing a hidden repository leaves it hidden', { skip }, () => {
+  const { service, repo } = setup([]);
+  service.store.setHidden(repo.id, true);
+  const saved = service.store.saveRepo({ id: repo.id, name: 'Renamed', localPath: repo.localPath });
+  assert.equal(saved.hidden, true);
+  assert.equal(service.store.saveRepo({ id: repo.id, name: 'Renamed', localPath: repo.localPath, hidden: false }).hidden, false);
+});
+
+test('the code view: statuses, the file at the head, and viewed marks that survive commits that did not touch them', { skip }, async () => {
+  const { service, repo, w, forgeState } = setup([]);
+  const call = (name, args) => service.call(name, args);
+  // A second file, added on the branch.
+  fs.writeFileSync(path.join(w.seed, 'notes.md'), '# Notes\n\none\n');
+  git(w.seed, 'add', '.');
+  git(w.seed, 'commit', '-m', 'notes');
+  git(w.seed, 'push', 'origin', 'feature');
+  forgeState.prs[0].headSha = git(w.seed, 'rev-parse', 'HEAD');
+  assert.equal((await call('refreshPrs', { repoId: repo.id })).ok, true);
+
+  const files = await call('files', { repoId: repo.id, prId: 7 });
+  assert.equal(files.ok, true, files.error);
+  assert.deepEqual(files.files.map((f) => [f.path, f.status]), [['app.js', 'M'], ['notes.md', 'A']]);
+  const text = await call('fileText', { repoId: repo.id, prId: 7, file: 'app.js' });
+  assert.deepEqual([text.total, text.truncated, text.lines[1]], [3, false, '  return a - b;']);
+  assert.match((await call('fileText', { repoId: repo.id, prId: 7, file: 'nope.js' })).error, /not on feature/);
+
+  assert.deepEqual((await call('setViewed', { repoId: repo.id, prId: 7, file: 'app.js' })).files, ['app.js']);
+  assert.deepEqual((await call('setViewed', { repoId: repo.id, prId: 7, file: 'notes.md' })).files, ['app.js', 'notes.md']);
+
+  // New commits change notes.md only: app.js is still read, notes.md comes back.
+  fs.writeFileSync(path.join(w.seed, 'notes.md'), '# Notes\n\ntwo\n');
+  git(w.seed, 'commit', '-am', 'more notes');
+  git(w.seed, 'push', 'origin', 'feature');
+  git(w.clone, 'fetch', 'origin');
+  forgeState.prs[0].headSha = git(w.seed, 'rev-parse', 'HEAD');
+  assert.equal((await call('refreshPrs', { repoId: repo.id })).ok, true);
+  assert.deepEqual((await call('viewed', { repoId: repo.id, prId: 7 })).files, ['app.js']);
+  assert.deepEqual((await call('setViewed', { repoId: repo.id, prId: 7, file: 'app.js', viewed: false })).files, []);
+});
+
+test('a reply from the code view goes into that thread and is recorded as ours; a note is kept, then published', { skip }, async () => {
+  const { service, repo, forgeState } = setup([]);
+  const call = (name, args) => service.call(name, args);
+  assert.equal((await call('refreshPrs', { repoId: repo.id })).ok, true);
+  forgeState.comments.push({ commentId: '900', author: 'Ana', body: 'Why subtract?', inlinePath: 'app.js', inlineLine: 2, deleted: false, createdOn: '2026-09-03T10:00:00Z', parentId: null });
+  assert.equal((await call('pr', { repoId: repo.id, prId: 7 })).ok, true);
+  await service.engine.syncComments(service.engine.requireRepo(repo.id), 7);
+
+  assert.match((await call('replyToComment', { repoId: repo.id, prId: 7, commentId: '900', body: '  ' })).error, /empty/);
+  assert.match((await call('replyToComment', { repoId: repo.id, prId: 7, commentId: 'missing', body: 'x' })).error, /not in the stored thread/);
+  const replied = await call('replyToComment', { repoId: repo.id, prId: 7, commentId: '900', body: 'It should not.' });
+  assert.equal(replied.ok, true, replied.error);
+  assert.deepEqual(forgeState.posted.map((p) => [p.parentId, p.body]), [['900', 'It should not.']]);
+  const view = await call('pr', { repoId: repo.id, prId: 7 });
+  assert.ok(view.publications.some((p) => p.body === 'It should not.'));
+
+  const added = await call('addNote', { repoId: repo.id, prId: 7, file: 'app.js', line: 2, body: 'Check the sign.' });
+  assert.equal(added.ok, true, added.error);
+  const noteId = (await call('pr', { repoId: repo.id, prId: 7 })).notes[0].id;
+  assert.equal((await call('publishNote', { noteId })).ok, true);
+  assert.deepEqual(forgeState.posted.slice(-1).map((p) => [p.inlinePath, p.inlineLine, p.body]), [['app.js', 2, 'Check the sign.']]);
+  assert.ok((await call('pr', { repoId: repo.id, prId: 7 })).notes[0].publishedId);
+});
+
+test('a PR imported without branch names says so instead of naming an empty branch', { skip }, async () => {
+  const { service, repo } = setup([]);
+  assert.equal((await service.call('refreshPrs', { repoId: repo.id })).ok, true);
+  service.store.upsertPr(repo.id, { ...service.store.pr(repo.id, 7), sourceBranch: '', targetBranch: '', state: 'MERGED' });
+  const files = await service.call('files', { repoId: repo.id, prId: 7 });
+  assert.match(files.error, /imported without its branch names/);
+});
+
+test('an incremental review whose PR row is behind the branch still reads the new commits', { skip }, async () => {
+  const { service, repo, w, claude } = setup([
+    async () => ({ structured: { summary: 'first', findings: [] } }),
+    async () => ({ structured: { summary: 'second', findings: [], carried: [] } }),
+  ]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  assert.equal((await service.call('review', { repoId: repo.id, prId: 7 })).ok, true);
+  // Pushed, but nothing reloaded the PR row: it still names the first commit.
+  fs.writeFileSync(path.join(w.seed, 'app.js'), 'function add(a, b) {\n  return a + b;\n}\n');
+  git(w.seed, 'commit', '-am', 'fix');
+  git(w.seed, 'push', 'origin', 'feature');
+  const newer = git(w.seed, 'rev-parse', 'HEAD');
+  const second = await service.call('review', { repoId: repo.id, prId: 7 });
+  assert.equal(second.ok, true, second.error);
+  assert.match(claude.runs[1].prompt, new RegExp(`Commits nuevos a revisar: ${w.head}\\.\\.${newer}`), 'the range ends at what was fetched, not at the stale row');
 });

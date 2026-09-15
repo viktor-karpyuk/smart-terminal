@@ -39,7 +39,7 @@ export function ExtensionView({ panelId, showing = true }: { panelId: string; sh
     panel ? (s.extensions.panels.find((candidate) => candidate.id === panel.viewId) ?? null) : null,
   );
   const root = panel?.root ?? null;
-  const theme = useStore((s) => s.settings.theme);
+  const theme = useAppliedTheme();
 
   if (!panel) return null;
 
@@ -87,7 +87,10 @@ export function ExtensionView({ panelId, showing = true }: { panelId: string; sh
 
   // Keyed on the theme so a light/dark switch rebuilds the document rather than
   // trying to repaint a frame from the outside, which is not something the app
-  // is allowed to reach into and do.
+  // is allowed to reach into and do. The theme as applied to the page, not the
+  // setting: the setting changes a render before the page's palette does, so a
+  // document rebuilt on it read the old colours — and on "system" the OS can
+  // switch with no setting changing at all.
   return (
     <Frame key={`${view.from}:${view.id}:${theme}`} panelId={panelId} view={view} root={root} showing={showing} />
   );
@@ -109,6 +112,19 @@ export function ExtensionView({ panelId, showing = true }: { panelId: string; sh
  * one — it hands it straight back to the panel that wrote it.
  */
 const whereEachPanelWas = new Map<string, unknown>();
+
+/** The appearance stamped on the root, followed as it changes. */
+function useAppliedTheme(): string {
+  const read = () => document.documentElement.dataset.theme ?? '';
+  const [theme, setTheme] = useState(read);
+  useEffect(() => {
+    const observer = new MutationObserver(() => setTheme(read()));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    setTheme(read());
+    return () => observer.disconnect();
+  }, []);
+  return theme;
+}
 
 /**
  * The Claude session a cluster panel talks to, one per panel.

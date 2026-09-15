@@ -52,7 +52,30 @@ class Activity {
     const run = this.runs.get(key);
     if (!run) return;
     Object.assign(run, fields);
+    // Cancelled before its process existed: the process is stopped the moment it does.
+    if (fields.handle && run.cancelled) fields.handle.cancel();
     this.emit({ type: 'activity', run: this.view(run) });
+  }
+
+  /**
+   * Stop a run, whatever it is doing. A process that exists is killed; a run
+   * still fetching, planning or waiting for the workshop is marked, and its
+   * process is killed as it starts (and a fix still queued does not start).
+   * False when nothing by that key is running, so a stale Cancel is not
+   * remembered and turned on the next run of the same PR.
+   */
+  cancel(key) {
+    const run = this.runs.get(key);
+    if (!run) return false;
+    run.cancelled = true;
+    run.lines.push('Cancelling…');
+    run.handle?.cancel();
+    this.emit({ type: 'activity', run: this.view(run) });
+    return true;
+  }
+
+  cancelled(key) {
+    return Boolean(this.runs.get(key)?.cancelled);
   }
 
   end(key) {
@@ -125,7 +148,6 @@ class ReviewEngine {
     /** Reviews claimed from the moment `review()` starts, not from when the CLI exists: fetch and planning take a minute under rate limiting. */
     this.inFlight = new Set();
     /** A cancel pressed before the process existed, applied when it does. */
-    this.cancelRequested = new Set();
     /** Hooked by the fix engine: what follows a finished review, from wherever the review was started. */
     this.onFinished = null;
   }
@@ -211,7 +233,7 @@ class ReviewEngine {
     const pr = await this.forge.of(repo).get(prId);
     if (!pr) throw new Error(`PR #${prId} was not found.`);
     this.store.upsertPr(repoId, pr);
-    this.store.syncApprovals(repoId, prId, pr);
+    if (!pr.stancesUnknown) this.store.syncApprovals(repoId, prId, pr);
     try {
       await this.syncComments(repo, prId);
     } catch (error) {
@@ -234,11 +256,37 @@ class ReviewEngine {
    * and a fix's notice — or our own words come back as someone else's and the
    * app opens a draft to answer itself.
    */
+  /**
+   * Findings that are already on the PR, found in the stored thread and marked
+   * published with the comment they are. Returns the comment ids it took as
+   * ours, so replies to them are seen as replies to us.
+   */
+  reconcilePublished(repo, prId) {
+    const thread = this.store.comments(repo.id, prId);
+    const taken = new Set(this.store.findingsForPr(repo.id, prId).map((finding) => finding.publishedId).filter(Boolean));
+    const adopted = [];
+    for (const finding of this.store.findingsForPr(repo.id, prId)) {
+      if (finding.publishedId || finding.dismissedAt || finding.askedBy) continue;
+      const comment = rules.matchPublished(finding, thread.filter((entry) => !taken.has(entry.commentId)));
+      if (!comment) continue;
+      const url = repo.provider === 'BITBUCKET' ? `https://bitbucket.org/${repo.owner}/${repo.slug}/pull-requests/${prId}#comment-${comment.commentId}` : null;
+      this.store.markFindingPublished(finding.id, comment.commentId, url);
+      this.store.markCommentOurs(repo.id, prId, comment.commentId);
+      this.store.markPublishedIfComplete(finding.reviewId, url);
+      taken.add(comment.commentId);
+      adopted.push(comment.commentId);
+    }
+    if (adopted.length) this.changed(repo.id, prId);
+    return adopted;
+  }
+
   async syncComments(repo, prId) {
     const fetched = await this.forge.of(repo).comments(prId);
     const ours = this.store.ourCommentIds(repo.id, prId);
     this.store.syncComments(repo.id, prId, fetched, ours);
     this.store.dismissRepliesTo(repo.id, prId, this.store.fixReplyIds(repo.id, prId));
+    const adopted = this.reconcilePublished(repo, prId);
+    for (const id of adopted) ours.add(id);
     const thread = this.store.comments(repo.id, prId);
     let registered = 0;
     for (const entry of rules.repliesToUs(thread, ours)) {
@@ -255,11 +303,35 @@ class ReviewEngine {
   }
 
   cancel(repoId, prId, kind = 'review') {
-    const key = this.key(kind, repoId, prId);
-    const run = this.activity.runs.get(key);
-    if (run?.handle) run.handle.cancel();
-    else this.cancelRequested.add(key);
-    return { ok: true };
+    return this.activity.cancel(this.key(kind, repoId, prId)) ? { ok: true } : { ok: false, error: 'Nothing of that kind is running for this PR.' };
+  }
+
+  /**
+   * The commit the clone has for the PR's branch after a fetch, in the forge's
+   * own spelling (Bitbucket gives twelve characters, GitHub forty) so it compares
+   * with the PR row. The row can be older than the fetch — the author pushed
+   * after the list was read — and what was read is what gets recorded.
+   */
+  async fetchedHead(repo, pr) {
+    const tip = await this.git.revParse(repo.localPath, `origin/${pr.sourceBranch}`);
+    if (!tip) return pr.headSha;
+    return pr.headSha ? tip.slice(0, Math.max(pr.headSha.length, 7)) : tip;
+  }
+
+  /**
+   * The commit an inline comment is placed against: the one its finding was
+   * written from, while that commit is still part of the branch — its line
+   * numbers are that commit's. After a force-push it is not, and GitHub refuses
+   * a commit outside the PR, so the PR's head is used instead.
+   */
+  async anchorCommit(repo, pr, reviewed) {
+    if (!reviewed || reviewed === pr.headSha) return pr.headSha;
+    return (await this.git.isAncestor(repo.localPath, reviewed, `origin/${pr.sourceBranch}`)) ? reviewed : pr.headSha;
+  }
+
+  /** A fetch that failed, as an error that says where and why. */
+  fetchError(repo, fetched) {
+    return new Error(`git fetch failed in ${repo.localPath}: ${fetched.output.slice(0, 400)}${rules.fetchAdvice(fetched.output, repo)}`);
   }
 
   /**
@@ -290,16 +362,23 @@ class ReviewEngine {
         this.store.failReview(reviewId, message);
         return { ok: false, error: message };
       }
+      if (this.activity.cancelled(key)) {
+        // Written down as cancelled, as a cancel later on is: without a row the next sweep would start it again.
+        reviewId = this.store.startReview({ repoId, prId, prTitle: pr.title, headSha: pr.headSha, depth: depth ?? 'INTERMEDIATE', kind: kind ?? 'GENERIC', model: '', auto, prAuthor: pr.author });
+        this.store.failReview(reviewId, 'Review cancelled.', 'CANCELLED');
+        return { ok: false, error: 'Cancelled.' };
+      }
+      const headSha = await this.fetchedHead(repo, pr);
 
       const decision = await rules.decideScope({
         previous: this.store.latestDone(repoId, prId),
-        headSha: pr.headSha,
+        headSha,
         forceFull,
         isAncestor: (a, b) => this.git.isAncestor(repo.localPath, a, b),
       });
       const incremental = decision.scope === 'INCREMENTAL' ? decision : null;
       const range = `origin/${pr.targetBranch}...origin/${pr.sourceBranch}`;
-      const planRange = incremental ? `${incremental.sinceSha}..${pr.headSha}` : range;
+      const planRange = incremental ? `${incremental.sinceSha}..origin/${pr.sourceBranch}` : range;
       const profile = rules.plan(await this.git.numstat(repo.localPath, planRange), depth, kind);
       const resolvedModel = model || rules.DEPTHS[profile.depth].model;
       this.activity.patch(key, { depth: profile.depth, model: resolvedModel });
@@ -314,7 +393,7 @@ class ReviewEngine {
         repoId,
         prId,
         prTitle: pr.title,
-        headSha: pr.headSha,
+        headSha,
         depth: profile.depth,
         kind: profile.kind,
         model: resolvedModel,
@@ -338,8 +417,9 @@ class ReviewEngine {
       const language = this.language();
       const guidelines = this.store.guidelinesForReview(repoId);
       const prompt = incremental
-        ? prompts.incrementalPrompt({ pr, language, depth: profile.depth, kind: profile.kind, sinceSha: incremental.sinceSha, carried: previous, existing, guidelines })
-        : prompts.reviewPrompt({ pr, language, depth: profile.depth, kind: profile.kind, existing, guidelines });
+        // The commit that was fetched, not the one the PR row last saw: the range the model is given is what gets recorded.
+        ? prompts.incrementalPrompt({ pr: { ...pr, headSha }, language, depth: profile.depth, kind: profile.kind, sinceSha: incremental.sinceSha, carried: previous, existing, guidelines })
+        : prompts.reviewPrompt({ pr: { ...pr, headSha }, language, depth: profile.depth, kind: profile.kind, existing, guidelines });
 
       const result = await this.claude.run({
         kind: 'review',
@@ -349,10 +429,7 @@ class ReviewEngine {
         allowedTools: rules.DEPTHS[profile.depth].tools,
         disallowedTools: rules.REVIEW_DENIED,
         schema: incremental ? prompts.INCREMENTAL_SCHEMA : prompts.SCHEMA,
-        register: (handle) => {
-          this.activity.patch(key, { handle });
-          if (this.cancelRequested.delete(key)) handle.cancel();
-        },
+        register: (handle) => this.activity.patch(key, { handle }),
         onEvent: (event) => this.activity.line(key, describeEvent(event)),
       });
 
@@ -444,7 +521,6 @@ class ReviewEngine {
       return { ok: false, error: message };
     } finally {
       this.inFlight.delete(claim);
-      this.cancelRequested.delete(key);
       this.activity.end(key);
       this.changed(repoId, prId);
     }
@@ -470,8 +546,11 @@ class ReviewEngine {
     if (this.activity.has(key)) throw new Error('A verification of this PR is already running.');
     this.activity.start(key, { kind: 'verify', repoId, prId, repoName: repo.name, title: pr.title });
     try {
-      await this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch);
-      const range = review.headSha && review.headSha !== pr.headSha ? `${review.headSha}..origin/${pr.sourceBranch}` : `origin/${pr.targetBranch}...origin/${pr.sourceBranch}`;
+      const fetched = await this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch);
+      // A verdict on refs that could not be brought up to date would be stamped on commits it never saw.
+      if (!fetched.ok) throw this.fetchError(repo, fetched);
+      const headSha = await this.fetchedHead(repo, pr);
+      const range = review.headSha && review.headSha !== headSha ? `${review.headSha}..origin/${pr.sourceBranch}` : `origin/${pr.targetBranch}...origin/${pr.sourceBranch}`;
       const { items, thread } = prompts.resolutionItems(pending, this.store.comments(repoId, prId));
       const result = await this.claude.run({
         kind: 'verify',
@@ -492,7 +571,7 @@ class ReviewEngine {
       let text = parsed.summary;
       const missing = pending.length - parsed.items.length;
       if (missing > 0) text += `\n\n⚠️ ${missing} remark(s) were left without a verdict: they stay unverified.`;
-      this.store.setResolutionSummary(review.id, text, pr.headSha);
+      this.store.setResolutionSummary(review.id, text, headSha);
       return { ok: true, summary: text, mergeable: parsed.mergeable };
     } finally {
       this.activity.end(key);
@@ -511,7 +590,9 @@ class ReviewEngine {
     if (this.activity.has(key)) throw new Error('A final pass of this PR is already running.');
     this.activity.start(key, { kind: 'final', repoId, prId, repoName: repo.name, title: pr.title });
     try {
-      await this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch);
+      const fetched = await this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch);
+      if (!fetched.ok) throw this.fetchError(repo, fetched);
+      const headSha = await this.fetchedHead(repo, pr);
       const range = `origin/${pr.targetBranch}...origin/${pr.sourceBranch}`;
       const discussedList = this.store
         .findingsForReview(review.id)
@@ -534,7 +615,7 @@ class ReviewEngine {
       if (result.toolUses === 0) throw new Error('The model did not open the diff: a final pass that did not look at the code cannot decide anything.');
       const parsed = rules.parseFinalPass(result.structured ?? result.text);
       const text = rules.finalPassText(parsed);
-      this.store.setFinalPass(review.id, pr.headSha, text, parsed.blockers.length);
+      this.store.setFinalPass(review.id, headSha, text, parsed.blockers.length);
       return { ok: true, summary: text, blockers: parsed.blockers.length, mergeable: parsed.mergeable };
     } finally {
       this.activity.end(key);
@@ -545,7 +626,11 @@ class ReviewEngine {
   // --- replies -----------------------------------------------------------------------
 
   /** Drafts the answer to one reply. Publishes nothing. At most three run at once; the rest queue. */
-  async draftReply(replyId) {
+  draftReply(replyId) {
+    return this.once(`draft:${replyId}`, () => this.draftReplyNow(replyId));
+  }
+
+  async draftReplyNow(replyId) {
     const draft = this.store.reply(replyId);
     if (!draft) throw new Error('That reply is gone.');
     const key = this.key('reply', draft.repoId, `${draft.prId}:${replyId}`);
@@ -590,7 +675,11 @@ class ReviewEngine {
   }
 
   /** The answer hangs from the comment it answers. */
-  async publishReply(replyId, body) {
+  publishReply(replyId, body) {
+    return this.once(`reply:${replyId}`, () => this.publishReplyNow(replyId, body));
+  }
+
+  async publishReplyNow(replyId, body) {
     const draft = this.store.reply(replyId);
     if (!draft) throw new Error('That reply is gone.');
     const text = String(body ?? draft.body ?? '').trim();
@@ -641,14 +730,36 @@ class ReviewEngine {
   }
 
   /** One finding as an inline comment. A failure is kept on the finding, not in a toast that goes away. */
-  async publishFinding(findingId) {
+  /**
+   * One at a time per thing posted. Publish on a card while Publish all runs,
+   * or a draft asked for twice, would otherwise both reach the forge before
+   * either is stored: the second caller waits for the first and gets its answer.
+   */
+  once(key, work) {
+    this.posting ??= new Map();
+    const running = this.posting.get(key);
+    if (running) return running;
+    const promise = Promise.resolve().then(work).finally(() => this.posting.delete(key));
+    this.posting.set(key, promise);
+    return promise;
+  }
+
+  publishFinding(findingId) {
+    return this.once(`finding:${findingId}`, () => this.publishFindingNow(findingId));
+  }
+
+  async publishFindingNow(findingId) {
     const finding = this.store.finding(findingId);
     if (!finding) throw new Error('That finding is gone.');
     if (finding.publishedId) return { ok: true, url: finding.publishedUrl };
     const repo = this.requireRepo(finding.repoId);
     const pr = this.prOrThrow(finding.repoId, finding.prId);
+    // Already on the PR under another road? Then it is published, and posting it again would say it twice.
+    this.reconcilePublished(repo, finding.prId);
+    const again = this.store.finding(findingId);
+    if (again.publishedId) return { ok: true, url: again.publishedUrl, alreadyThere: true };
     try {
-      const posted = await this.forge.of(repo).inline(finding.prId, rules.findingComment(finding, this.language()), finding.filePath, finding.lineNo, pr.headSha);
+      const posted = await this.forge.of(repo).inline(finding.prId, rules.findingComment(finding, this.language()), finding.filePath, finding.lineNo, await this.anchorCommit(repo, pr, this.store.review(finding.reviewId)?.headSha));
       this.store.markFindingPublished(findingId, posted.id, posted.url);
       this.store.markPublishedIfComplete(finding.reviewId, posted.url);
       await this.syncQuietly(repo, finding.prId);
@@ -662,6 +773,12 @@ class ReviewEngine {
 
   /** Every finding still waiting, then every note. One failing does not stop the rest. */
   async publishAll(repoId, prId) {
+    // The thread as it is now first: what was published elsewhere since it was last read is not published again.
+    try {
+      await this.syncComments(this.requireRepo(repoId), prId);
+    } catch {
+      /* publishing does not wait on reading; each finding still checks what is stored */
+    }
     const review = this.store.latestDone(repoId, prId);
     const findings = review ? this.store.findingsForReview(review.id).filter((finding) => !rules.settled(finding)) : [];
     const notes = this.store.notes(repoId, prId).filter((note) => !note.publishedId);
@@ -686,7 +803,11 @@ class ReviewEngine {
     return { ok: errors.length === 0, published, errors };
   }
 
-  async publishNote(noteId) {
+  publishNote(noteId) {
+    return this.once(`note:${noteId}`, () => this.publishNoteNow(noteId));
+  }
+
+  async publishNoteNow(noteId) {
     const note = this.store.note(noteId);
     if (!note) throw new Error('That note is gone.');
     if (note.publishedId) return { ok: true, url: note.publishedUrl };

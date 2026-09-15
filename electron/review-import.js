@@ -180,14 +180,28 @@ function importAll({ DatabaseSync, store, source = defaultSource(), repoIds = nu
         if (!tableExists(db, from)) continue;
         const shared = columns(db, from).filter((column) => columns(target, to).includes(column));
         if (!shared.length) continue;
-        const insert = target.prepare(`INSERT OR IGNORE INTO ${to} (${shared.join(', ')}) VALUES (${shared.map(() => '?').join(', ')})`);
+        // One statement per set of columns a row actually has: a NULL left out takes the column's default,
+        // where an explicit NULL would break a NOT NULL column and the row would be silently ignored.
+        const statements = new Map();
+        const insertFor = (present) => {
+          const key = present.join(',');
+          if (!statements.has(key)) statements.set(key, target.prepare(`INSERT OR IGNORE INTO ${to} (${present.join(', ')}) VALUES (${present.map(() => '?').join(', ')})`));
+          return statements.get(key);
+        };
         let copied = 0;
         for (const row of db.prepare(`SELECT * FROM ${from}`).all()) {
           if (!belongs(row)) continue;
           if (from === 'guideline' && row.repo_id === null && target.prepare('SELECT 1 FROM cr_guideline WHERE repo_id IS NULL AND name = ?').get(row.name)) continue;
           if (from === 'review' && row.status === 'RUNNING') row.status = 'FAILED';
-          const result = insert.run(...shared.map((column) => (row[column] === undefined ? null : row[column])));
-          copied += Number(result.changes);
+          const present = shared.filter((column) => row[column] !== undefined && row[column] !== null);
+          if (!present.length) continue;
+          try {
+            copied += Number(insertFor(present).run(...present.map((column) => row[column])).changes);
+          } catch (error) {
+            // A row whose parent did not come across (an orphan in the old database) is left behind, not the whole import.
+            if (!/FOREIGN KEY|NOT NULL/i.test(String(error?.message))) throw error;
+            report.skippedRows = (report.skippedRows ?? 0) + 1;
+          }
         }
         report.rows[to] = copied;
       }
