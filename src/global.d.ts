@@ -455,6 +455,43 @@ export interface Norms {
 }
 
 /** One extension, and where it stands. */
+/** A release as the update panel sees it. */
+export interface UpdateRelease {
+  version: string;
+  tag: string;
+  name: string;
+  /** The release notes, as the Markdown they were written in. */
+  notes: string;
+  url: string;
+  publishedAt: string | null;
+  prerelease: boolean;
+  asset: { name: string; size: number; url: string; digest: string | null } | null;
+}
+
+/**
+ * Everything the update panel draws, as one object.
+ *
+ * One phase rather than a set of booleans: "downloading" and "ready" are not
+ * things that can both be true, and a panel that has to decide what to show when
+ * they are is a panel with a bug in it.
+ */
+export interface UpdateState {
+  phase: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'installing' | 'handed-off' | 'error';
+  current: { version: string; build: number | null };
+  release: UpdateRelease | null;
+  progress: { received: number; total: number } | null;
+  /** The downloaded file, once there is one. */
+  file: string | null;
+  error: string | null;
+  checkedAt: number | null;
+  /** A version that was waved away; anything newer is offered again. */
+  skipped: string | null;
+  auto: boolean;
+  prereleases: boolean;
+  /** Whether this copy can replace itself, and in plain words why not. */
+  install: { can: boolean; kind: 'dmg' | 'appimage' | 'deb' | null; why: string | null; target?: string };
+}
+
 export interface ExtensionRow {
   id: string;
   name: string;
@@ -658,6 +695,17 @@ declare global {
         electron: string;
         node: string;
       }>;
+      updates: {
+        state(): Promise<UpdateState | null>;
+        check(force?: boolean): Promise<UpdateState | null>;
+        download(): Promise<UpdateState | null>;
+        install(): Promise<UpdateState | null>;
+        skip(): Promise<UpdateState | null>;
+        configure(options: { auto?: boolean; prereleases?: boolean }): Promise<UpdateState | null>;
+        cancel(): void;
+        openLog(): void;
+        onState(handler: (state: UpdateState) => void): () => void;
+      };
       pty: {
         create(options: PtyCreateOptions): Promise<PtyCreateResult>;
         write(id: string, data: string): void;

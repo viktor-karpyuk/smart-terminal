@@ -974,6 +974,27 @@ function ActivityBar() {
 function BuildLine() {
   const [info, setInfo] = useState<Awaited<ReturnType<typeof window.api.version>> | null>(null);
   const [copied, setCopied] = useState(false);
+  /*
+   * A newer version, if there is one.
+   *
+   * It belongs here rather than in a notification: the build line is already
+   * the place the question "which one am I running" is answered, and "there is
+   * a newer one" is the same question with a second half. Nothing interrupts —
+   * an update is never urgent enough to take the screen away from a session.
+   */
+  const update = useStore((s) => s.update);
+  const openUpdates = useStore((s) => s.setUpdatePanelOpen);
+  const offered =
+    update && ['available', 'downloading', 'ready'].includes(update.phase) ? update.release : null;
+  /*
+   * Extensions that are behind, said here only when the app itself is not.
+   *
+   * One line, never two. A new version of the app is the bigger news and carries
+   * the extensions with it anyway — so this speaks in the gap, which is exactly
+   * the moment after an update has been taken and the extensions inside it have
+   * not.
+   */
+  const staleExtensions = useStore((s) => s.extensions.rows.filter((row) => row.status === 'update').length);
 
   useEffect(() => {
     window.api.version().then(setInfo);
@@ -998,18 +1019,39 @@ function BuildLine() {
     .join(String.fromCharCode(10));
 
   return (
-    <button
-      className="build-line"
-      title={`${full}${String.fromCharCode(10)}${String.fromCharCode(10)}Click to copy`}
-      onClick={() => {
-        navigator.clipboard.writeText(full);
-        setCopied(true);
-        window.setTimeout(() => setCopied(false), 1400);
-      }}
-    >
-      {copied ? 'copied' : `v${info.version}${info.build ? `·${info.build}` : ''}`}
-      {built && !copied && <em>{built}</em>}
-    </button>
+    <>
+      {offered ? (
+        <button
+          className="build-update"
+          title={`Smart Terminal ${offered.version} is available.${String.fromCharCode(10)}Click to see what is in it.`}
+          onClick={() => openUpdates(true)}
+        >
+          <span className="build-update-dot" />
+          {update?.phase === 'downloading' ? `Downloading ${offered.version}…` : `${offered.version} available`}
+        </button>
+      ) : staleExtensions > 0 ? (
+        <button
+          className="build-update"
+          title={`${staleExtensions} extension${staleExtensions === 1 ? ' has' : 's have'} a newer version.${String.fromCharCode(10)}Click to see what changed.`}
+          onClick={() => openUpdates(true)}
+        >
+          <span className="build-update-dot" />
+          {staleExtensions === 1 ? '1 extension update' : `${staleExtensions} extension updates`}
+        </button>
+      ) : null}
+      <button
+        className="build-line"
+        title={`${full}${String.fromCharCode(10)}${String.fromCharCode(10)}Click to copy`}
+        onClick={() => {
+          navigator.clipboard.writeText(full);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1400);
+        }}
+      >
+        {copied ? 'copied' : `v${info.version}${info.build ? `·${info.build}` : ''}`}
+        {built && !copied && <em>{built}</em>}
+      </button>
+    </>
   );
 }
 

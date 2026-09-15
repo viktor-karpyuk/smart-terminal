@@ -463,6 +463,12 @@ interface State {
   groups: SessionGroup[];
   historyOpen: boolean;
   appearanceOpen: boolean;
+  /**
+   * What the app knows about newer versions of itself. Owned by the main
+   * process — this is a copy of its last broadcast, never a second opinion.
+   */
+  update: import('../global').UpdateState | null;
+  updatePanelOpen: boolean;
   /** Session waiting on a close confirmation, if any. */
   pendingClose: PendingClose | null;
   /** Tabs set aside into the dock, in the order they were put there. */
@@ -618,6 +624,9 @@ interface State {
   restoreGroup(groupId: string, arrangement?: GroupArrangement): Promise<number>;
   setHistoryOpen(open: boolean): void;
   setAppearanceOpen(open: boolean): void;
+  setUpdatePanelOpen(open: boolean): void;
+  /** Ask now. `force` also ignores a version that was skipped. */
+  checkForUpdates(force?: boolean): Promise<void>;
   reopenSession(historyId: string, asProfileId?: string): Promise<string | null>;
   runClaudeIn(sessionId: string, profileId?: string): void;
   pickConversationIn(sessionId: string): void;
@@ -728,6 +737,8 @@ export const useStore = create<State>((set, get) => ({
   groups: [],
   historyOpen: false,
   appearanceOpen: false,
+  update: null,
+  updatePanelOpen: false,
   pendingClose: null,
   minimized: [],
   minimizedSections: [],
@@ -773,6 +784,18 @@ export const useStore = create<State>((set, get) => ({
       panels: basePanels,
       activeLeafId: allLeaves(baseLayout)[0]?.id ?? '',
       ready: true,
+    });
+
+    /*
+     * The update state, and then whatever it becomes.
+     *
+     * Read once at startup rather than waited for: the main process checks on
+     * its own schedule, and a window opened in the middle of that should show
+     * what is already known instead of an empty panel.
+     */
+    window.api.updates.onState((update) => set({ update }));
+    window.api.updates.state().then((update) => {
+      if (update) set({ update });
     });
 
     window.api.pty.onData(({ id, data }) => {
@@ -3556,6 +3579,18 @@ export const useStore = create<State>((set, get) => ({
 
   setAppearanceOpen(open) {
     set({ appearanceOpen: open });
+  },
+
+  setUpdatePanelOpen(open) {
+    set({ updatePanelOpen: open });
+    // Opening it is itself a reason to look: somebody who went to the trouble
+    // of asking should not be told what the answer was six hours ago.
+    if (open) get().checkForUpdates(false);
+  },
+
+  async checkForUpdates(force = false) {
+    const state = await window.api.updates.check(force);
+    if (state) set({ update: state });
   },
 
   /**

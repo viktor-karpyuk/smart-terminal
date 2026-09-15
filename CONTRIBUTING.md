@@ -329,3 +329,139 @@ unsigned build as before. The entitlements in `resources/entitlements.mac.plist`
 there for a reason, listed in the file: the hardened runtime switches off precisely what
 Electron and a terminal need — JIT, inherited environments, and a native module (`node-pty`)
 that lives unpacked outside the asar.
+
+## The version is develop's to set, never a branch's
+
+Look at how the numbers actually move here:
+
+```
+merge the PR  →  Stamp 0.7.0      a commit of its own, on develop, afterwards
+merge the PR  →  Stamp 0.8.0
+merge the PR  →  Stamp 0.8.1
+```
+
+**No feature branch touches `version` or `build-info.json`.** That is not a style
+preference, it is the only arrangement that works: a branch that stamps itself is holding a
+number it does not own, and every day it waits is a chance for that number to be spent by
+something that merged first. This branch learned it twice — it claimed 0.7.0 and the Code
+Reviewer shipped as 0.7.0, then it claimed 0.8.1 and the ⌘S fix shipped as 0.8.1.
+
+The second time was the instructive one, because **git reported no conflict at all**. Both
+sides said `"version": "0.8.1"`, identical text, so the merge was silent — and would have
+left a 0.8.1 in the repository that was not the 0.8.1 anybody could download. With the
+updater in the tree that bites twice over: a copy running the published 0.8.1 compares
+itself against the releases, sees its own number, and concludes it is up to date.
+
+So when a branch syncs with develop, it takes develop's `package.json` version and its
+`build-info.json` **verbatim** — `git checkout origin/develop -- electron/build-info.json`
+— and keeps its own changes to everything else in those files. The stamp is written once,
+on develop, by whoever cuts the release.
+
+## Improving an extension means bumping its version
+
+The version in an `extension.json` is the whole of what the gallery compares against the
+version somebody has installed, and the only thing that turns a row into "Update to
+v1.1.0". An extension improved without its version moving is an improvement **nobody is
+ever offered** — the files ship, the panel even runs the new code, and the app has no way
+to say that anything happened.
+
+That is not hypothetical. It had happened three times before `test/extension-versions.test.js`
+existed: the Code Reviewer (+449 lines), the Maven and Gradle panel (+535) and the Spring
+Boot panel (+170) all changed substantially while their manifests sat at `1.0.0`. The
+machinery to offer those had been there the whole time and had never once lit up.
+
+So the rule, and the test that keeps it: **if anything under `extensions/<id>/` differs
+from the integration branch, `version` must differ too.** The test compares against the
+branch rather than against the previous commit on purpose — bumping first and then editing
+more is exactly right, and a test that compared neighbouring commits would fail it for the
+ordering. It asks about untracked files separately, since `git diff` cannot see a file that
+was never added and half the extensions here are one file plus a manifest.
+
+It skips, rather than fails, where there is no branch to compare against.
+
+## Where an update is offered
+
+Two things can be behind, and they are not the same thing:
+
+- **The app.** Downloaded and swapped, which is the rest of this section.
+- **A built-in extension**, which travels *inside* the app. Its new version arrives with an
+  app update, so there is nothing to download — the offer is to record it as installed.
+
+Both are in the Updates panel, because the moment somebody has just taken an app update is
+exactly the moment its extensions are behind, and leaving that news in a gallery nobody has
+a reason to open is how the three above went unmentioned. The sidebar says one or the
+other, never both: a new version of the app is the bigger news and carries the extensions
+with it anyway, so the extension line only speaks in the gap.
+
+One trap worth knowing, since it cost a blank window: a selector that `filter`s returns a
+new array every time it runs, and the store compares by identity — so `useStore(s =>
+s.rows.filter(…))` re-renders because it rendered, and React ends it by tearing the tree
+down. Use `useShallow`, or select a count. The sidebar picks the count and says so in a
+comment; the Updates panel needs the rows, so it uses `useShallow`.
+
+## Updating, and why it is not electron-updater
+
+`electron-updater` drives Squirrel.Mac on macOS, and Squirrel refuses to apply an update to
+an application it cannot verify a code signature for. The builds here are unsigned — see
+above for what fixing that costs — so the usual machinery is not an option, and pretending
+otherwise would mean an update path that silently does nothing.
+
+So `electron/updates.js` does the job the way the release notes already tell people to do it
+by hand, and the way `scripts/reinstall-locally.sh` already does it from a terminal:
+
+1. **Check.** An unauthenticated GET against `/repos/<slug>/releases`. Drafts are never
+   offered, pre-releases only to somebody who asked, and a tag that cannot be read as a
+   version is skipped rather than guessed at.
+2. **Pick the file.** By extension and by the architecture *in the name*, never by
+   predicting the name — electron-builder writes the product name into it and GitHub
+   replaces the spaces with dots. Two builds of a kind with nothing saying which machine
+   they are for is a release this declines to choose from: installing an Intel build over an
+   Apple-silicon one is a working app replaced by one that limps, with no way back from
+   inside it.
+3. **Download and verify.** Streamed, hashed as it arrives, checked against the SHA-256
+   GitHub recorded for the asset. A file that does not match is deleted rather than kept —
+   left there, the next check would find it, trust its size, and offer to install it. The
+   reading is remembered with the file's size and modification time, so a check every six
+   hours does not mean re-reading 128 MB every six hours; anything that disagrees with
+   either, a fresh launch included, is hashed again.
+
+   The write stream has its own `'error'` listener and everything that can block races
+   against it. An `'error'` on a Writable is an event and not a rejected promise, so with no
+   listener a full disk during a 128 MB download would take down the main process — every
+   window, every session — and the wait for `'drain'` would hang rather than report.
+4. **Swap, from outside.** A process cannot replace its own bundle, so a small script is
+   written with the paths already in it, spawned detached, and the app quits. The script
+   waits on the app's pid, mounts the image, copies the new build in beside the old one and
+   moves it over in one step.
+
+Three things about that last step are load-bearing:
+
+- **The install is the quit.** `app.quit()` is what lets the script proceed, so the
+  confirmation a quit already puts up when sessions are live is the confirmation the update
+  uses — there is no second dialog, and keeping the sessions cancels the update.
+- **A cancelled quit has to be harmless, and the timeout alone does not make it so.** The
+  script cannot tell a refused quit from a quit four minutes later for entirely unrelated
+  reasons, and installing on the second one would replace the app against an answer somebody
+  already gave. So `quitCancelled()` — called from `before-quit` — writes a marker file
+  *synchronously* before signalling the script, because the marker is what survives this
+  process being killed or quitting a moment later. The script checks it every second of its
+  wait and once more after it, and the five-minute timeout is what is left if all of that
+  fails.
+- **Copy, then remove, then move.** Deleting first leaves a window in which a failed copy
+  means no application at all. `test/updates.test.js` asserts that order, because it is the
+  kind of thing a later edit reorders without noticing.
+
+Release notes are parsed into blocks and spans (`src/lib/releaseNotes.ts`) and drawn as React
+elements. They are never turned into HTML. They arrive over the network, they are shown in a
+window that holds `window.api`, and they are written in a web form — three reasons that a
+`dangerouslySetInnerHTML` here would be the worst one in the codebase.
+
+### Rehearsing it
+
+```bash
+SMART_TERMINAL_UPDATE_AS_VERSION=0.1.0 npm start   # everything published looks newer
+SMART_TERMINAL_UPDATE_REPO=owner/repo npm start    # check somewhere else entirely
+```
+
+The first is read once, at startup, and nothing else in the app knows about it. It is the
+only way to exercise offer → download → verify → swap without cutting a release first.
