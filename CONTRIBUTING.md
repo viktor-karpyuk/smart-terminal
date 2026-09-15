@@ -330,6 +330,33 @@ there for a reason, listed in the file: the hardened runtime switches off precis
 Electron and a terminal need — JIT, inherited environments, and a native module (`node-pty`)
 that lives unpacked outside the asar.
 
+## The version is develop's to set, never a branch's
+
+Look at how the numbers actually move here:
+
+```
+merge the PR  →  Stamp 0.7.0      a commit of its own, on develop, afterwards
+merge the PR  →  Stamp 0.8.0
+merge the PR  →  Stamp 0.8.1
+```
+
+**No feature branch touches `version` or `build-info.json`.** That is not a style
+preference, it is the only arrangement that works: a branch that stamps itself is holding a
+number it does not own, and every day it waits is a chance for that number to be spent by
+something that merged first. This branch learned it twice — it claimed 0.7.0 and the Code
+Reviewer shipped as 0.7.0, then it claimed 0.8.1 and the ⌘S fix shipped as 0.8.1.
+
+The second time was the instructive one, because **git reported no conflict at all**. Both
+sides said `"version": "0.8.1"`, identical text, so the merge was silent — and would have
+left a 0.8.1 in the repository that was not the 0.8.1 anybody could download. With the
+updater in the tree that bites twice over: a copy running the published 0.8.1 compares
+itself against the releases, sees its own number, and concludes it is up to date.
+
+So when a branch syncs with develop, it takes develop's `package.json` version and its
+`build-info.json` **verbatim** — `git checkout origin/develop -- electron/build-info.json`
+— and keeps its own changes to everything else in those files. The stamp is written once,
+on develop, by whoever cuts the release.
+
 ## Improving an extension means bumping its version
 
 The version in an `extension.json` is the whole of what the gallery compares against the
