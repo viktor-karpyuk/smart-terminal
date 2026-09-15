@@ -33,7 +33,18 @@ const { parseReport, replyFor, wantsBrief, compactionNote } = require('./hooks')
 const { Autopilot, looksLikeADecision } = require('./autopilot');
 const { tabsInLayout, minimizedIds, sectionIds, sessionsToRestore, unaccountedTabs } = require('./restore');
 const { MessageBridge } = require('./message-bridge');
-const { listDir, readTextFile, writeTextFile, FileWatcher, savePastedImage, forgetOldPastes } = require('./files');
+const {
+  listDir,
+  readTextFile,
+  writeTextFile,
+  FileWatcher,
+  savePastedImage,
+  forgetOldPastes,
+  renamePath,
+  moveInto,
+  createEntry,
+  duplicatePath,
+} = require('./files');
 const git = require('./git');
 const { layout: layoutGraph } = require('./git-graph');
 const kube = require('./kube');
@@ -267,6 +278,25 @@ function createReviewService() {
 function send(channel, payload) {
   for (const win of windows.values()) {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);
+  }
+}
+
+/** The words for a file system refusal, when Node's are a code. */
+function friendlyFileError(error) {
+  switch (error?.code) {
+    case 'ENOENT':
+      return 'That is not there any more.';
+    case 'EEXIST':
+      return 'There is already something with that name there.';
+    case 'EACCES':
+    case 'EPERM':
+      return 'macOS did not allow that. Check the folder’s permissions.';
+    case 'ENOTEMPTY':
+      return 'That folder is not empty.';
+    case 'EBUSY':
+      return 'Something is using it right now.';
+    default:
+      return String(error?.message ?? error);
   }
 }
 
@@ -1097,6 +1127,32 @@ function registerIpc() {
   ipcMain.on('files:watch-tree', (_e, root) => repos.watch(root));
   ipcMain.on('files:unwatch-tree', (_e, root) => repos.release(root));
   ipcMain.on('files:reveal', (_e, file) => shell.showItemInFolder(file));
+
+  /*
+   * Changing the tree. Each answers `{ ok, path }` or `{ ok: false, error }`
+   * in words the tree can show. Nothing here overwrites anything, and delete
+   * is a move to the Trash, which the person can undo from there.
+   */
+  const changing = (work) => async (_e, args) => {
+    try {
+      return await work(args ?? {});
+    } catch (error) {
+      return { ok: false, error: friendlyFileError(error) };
+    }
+  };
+  ipcMain.handle('files:rename', changing(({ from, to }) => renamePath(from, to)));
+  ipcMain.handle('files:move', changing(({ from, dir }) => moveInto(from, dir)));
+  ipcMain.handle('files:create', changing(({ dir, name, kind }) => createEntry(dir, name, kind === 'folder' ? 'folder' : 'file')));
+  ipcMain.handle('files:duplicate', changing(({ file }) => duplicatePath(file)));
+  ipcMain.handle(
+    'files:trash',
+    changing(async ({ file }) => {
+      const target = String(file ?? '');
+      if (!path.isAbsolute(target)) throw new Error('The path to delete must be a full path');
+      await shell.trashItem(target);
+      return { ok: true, path: target };
+    }),
+  );
 
   /*
    * Git, as one call with a name.

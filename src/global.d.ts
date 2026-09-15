@@ -235,6 +235,13 @@ export interface FileRead {
   binary?: boolean;
 }
 
+/** The answer to changing the tree: where the thing is now, or why not. */
+export interface FileChange {
+  ok: boolean;
+  path?: string;
+  error?: string;
+}
+
 export interface FileWrite {
   ok: boolean;
   mtimeMs?: number;
@@ -897,6 +904,11 @@ declare global {
         unwatchTree(root: string): void;
         onTreeChanged(handler: (payload: { root: string; kind: 'tree' | 'git' | 'noise' }) => void): () => void;
         reveal(file: string): void;
+        rename(from: string, to: string): Promise<FileChange>;
+        move(from: string, dir: string): Promise<FileChange>;
+        create(dir: string, name: string, kind: 'file' | 'folder'): Promise<FileChange>;
+        duplicate(file: string): Promise<FileChange>;
+        trash(file: string): Promise<FileChange>;
       };
       system: {
         pickDirectory(startIn?: string): Promise<string | null>;

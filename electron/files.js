@@ -263,8 +263,124 @@ async function forgetOldPastes(dir, { days = 7, now = Date.now() } = {}) {
   return gone;
 }
 
+/* ------------------------------------------------------------------------ *
+ * Changing the tree: rename, move, create, duplicate.
+ *
+ * The rules are few and each is a thing that has bitten somebody: nothing is
+ * overwritten, ever — a rename onto an existing name is refused rather than
+ * replacing what was there; a folder is never moved into itself; a name is a
+ * name and not a path. Deleting is not here: it goes to the Trash, which is
+ * Electron's `shell.trashItem` in the main process, so it can be undone.
+ * ------------------------------------------------------------------------ */
+
+/** What a name may not be. Null when it is fine. The renderer has the same rules; this side is the one that counts. */
+function nameProblem(name) {
+  const text = String(name ?? '');
+  if (!text.trim()) return 'A name is needed.';
+  if (text !== text.trim()) return 'A name cannot start or end with a space.';
+  if (text === '.' || text === '..') return 'That is not a name.';
+  if (/[/\\]/.test(text)) return 'A name cannot contain a slash.';
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f\x7f]/.test(text)) return 'A name cannot contain control characters.';
+  if (/[:]/.test(text)) return 'A name cannot contain a colon.';
+  if (Buffer.byteLength(text) > 255) return 'That name is too long.';
+  return null;
+}
+
+function mustBeAbsolute(value, what) {
+  const text = String(value ?? '');
+  if (!path.isAbsolute(text)) throw new Error(`${what} must be a full path`);
+  return path.resolve(text);
+}
+
+async function exists(file) {
+  try {
+    await fsp.lstat(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `from` becomes `to`. Same folder or another one; a file or a folder.
+ *
+ * Across file systems `rename` fails with EXDEV, and the move is done the long
+ * way: copied, then removed — in that order, so a copy that fails leaves the
+ * original where it was.
+ */
+async function renamePath(fromValue, toValue) {
+  const from = mustBeAbsolute(fromValue, 'The path to rename');
+  const to = mustBeAbsolute(toValue, 'The new path');
+  const problem = nameProblem(path.basename(to));
+  if (problem) throw new Error(problem);
+  if (from === to) return { ok: true, path: to };
+  if (to.startsWith(`${from}${path.sep}`)) throw new Error('A folder cannot be moved into itself.');
+  if (!(await exists(from))) throw new Error('That is not there any more.');
+  if (!(await exists(path.dirname(to)))) throw new Error('The folder to put it in is not there any more.');
+  // Case-only renames on a case-insensitive disk are the one time `to` "exists" and the rename is still right.
+  if ((await exists(to)) && from.toLowerCase() !== to.toLowerCase()) {
+    throw new Error(`There is already something called ${path.basename(to)} there.`);
+  }
+  try {
+    await fsp.rename(from, to);
+  } catch (error) {
+    if (error.code !== 'EXDEV') throw error;
+    await fsp.cp(from, to, { recursive: true, errorOnExist: true, force: false });
+    await fsp.rm(from, { recursive: true, force: true });
+  }
+  return { ok: true, path: to };
+}
+
+/** `from` goes into the folder `dir`, under the name it has. */
+async function moveInto(fromValue, dirValue) {
+  const from = mustBeAbsolute(fromValue, 'The path to move');
+  const dir = mustBeAbsolute(dirValue, 'The folder');
+  return renamePath(from, path.join(dir, path.basename(from)));
+}
+
+/** A new empty file or folder called `name` in `dir`. Refused when the name is taken. */
+async function createEntry(dirValue, name, kind) {
+  const dir = mustBeAbsolute(dirValue, 'The folder');
+  const problem = nameProblem(name);
+  if (problem) throw new Error(problem);
+  const target = path.join(dir, String(name));
+  if (await exists(target)) throw new Error(`There is already something called ${name} there.`);
+  if (kind === 'folder') await fsp.mkdir(target);
+  else await fsp.writeFile(target, '', { flag: 'wx' });
+  return { ok: true, path: target };
+}
+
+/** `name copy.ext`, `name copy 2.ext`… — the first that is free. */
+async function copyName(dir, name) {
+  const dot = name.startsWith('.') ? -1 : name.lastIndexOf('.');
+  const stem = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+  for (let n = 1; n < 1000; n += 1) {
+    const candidate = `${stem} copy${n > 1 ? ` ${n}` : ''}${ext}`;
+    if (!(await exists(path.join(dir, candidate)))) return candidate;
+  }
+  throw new Error('Too many copies already.');
+}
+
+/** A copy of a file or folder beside it, named the way Finder names one. */
+async function duplicatePath(fileValue) {
+  const file = mustBeAbsolute(fileValue, 'The path to duplicate');
+  if (!(await exists(file))) throw new Error('That is not there any more.');
+  const dir = path.dirname(file);
+  const target = path.join(dir, await copyName(dir, path.basename(file)));
+  await fsp.cp(file, target, { recursive: true, errorOnExist: true, force: false });
+  return { ok: true, path: target };
+}
+
 module.exports = {
   listDir,
+  renamePath,
+  moveInto,
+  createEntry,
+  duplicatePath,
+  copyName,
+  nameProblem,
   readTextFile,
   writeTextFile,
   FileWatcher,
