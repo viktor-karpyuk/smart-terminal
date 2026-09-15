@@ -359,6 +359,12 @@
   .repo-chips { margin-top: 4px; gap: 4px; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .form { max-width: 760px; }
+  #keys { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(2px); }
+  .keys-card { width: min(420px, calc(100vw - 32px)); padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-panel); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35); }
+  .keys-group { margin-top: 10px; }
+  .keys-row { display: grid; grid-template-columns: 70px 1fr; gap: 10px; align-items: center; padding: 3px 0; }
+  .keys-row .kbd { justify-self: start; }
+  .keys-hint { align-self: center; font-size: 11px; }
   .form-actions { position: sticky; bottom: 0; z-index: 3; margin-top: 18px; padding: 10px 0 12px; background: var(--bg); border-top: 1px solid var(--border); }
   .field { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 10px; align-items: start; margin: 8px 0; }
   .field > label { padding-top: 5px; color: var(--text-dim); }
@@ -1193,7 +1199,7 @@
     html += '<div class="subtabs">' + [['review', 'Review'], ['code', 'Code'], ['commits', 'Commits'], ['conversation', 'Conversation'], ['history', 'History']].map(function (t, i) {
       return '<button class="tab' + (state.prTab === t[0] ? ' on' : '') + '" data-act="pr-tab" data-tab="' + t[0] + '" title="' + (i + 1) + '">' + t[1] + (counts[t[0]] ? '<span class="count">' + counts[t[0]] + '</span>' : '') + '</button>';
     }).join('') + '<span class="spacer"></span>' + (runs.length ? '<span class="chip accent" style="align-self:center"><span class="dot busy"></span>' + runs.length + ' running</span>' : '') +
-      '<span class="faint" style="align-self:center;font-size:11px"><span class="kbd">1</span>–<span class="kbd">5</span> tabs · <span class="kbd">Esc</span> back</span></div>';
+      '<button class="link faint keys-hint" data-act="keys-open" title="Keyboard shortcuts"><span class="kbd">?</span> keys</button></div>';
     if (state.prTab === 'review') html += drawReviewTab(v);
     else if (state.prTab === 'code') html += drawCodeTab(v);
     else if (state.prTab === 'commits') html += drawCommitsTab(v);
@@ -2381,6 +2387,8 @@
       if (event.key === 'Escape') target.blur();
       return;
     }
+    if (event.key === '?') { event.preventDefault(); toggleKeys(); return; }
+    if (event.key === 'Escape' && $('keys')) { event.preventDefault(); toggleKeys(false); return; }
     if (state.view === 'pr') {
       if (event.key === 'Escape') { event.preventDefault(); actions.back(); return; }
       var tab = ['review', 'code', 'commits', 'conversation', 'history'][Number(event.key) - 1];
@@ -2399,6 +2407,29 @@
       if (search) { event.preventDefault(); search.focus(); }
     }
   });
+
+  /** Every shortcut on one card, so they can be found without reading the source. `?` opens and closes it. */
+  var KEYS = [
+    ['Anywhere', [['?', 'This list'], ['/', 'Search the board']]],
+    ['A pull request', [['1 – 5', 'Review, Code, Commits, Conversation, History'], ['Esc', 'Back']]],
+    ['Code', [['[  ]', 'Previous or next file'], ['n  p', 'Next or previous finding'], ['v', 'Mark the file viewed and go to the next'], ['c', 'Show or hide comments']]]
+  ];
+  function toggleKeys(show) {
+    var open = $('keys');
+    if (show === undefined) show = !open;
+    if (!show) { if (open) open.remove(); return; }
+    if (open) return;
+    var card = document.createElement('div');
+    card.id = 'keys';
+    card.setAttribute('role', 'dialog');
+    card.setAttribute('aria-label', 'Keyboard shortcuts');
+    card.innerHTML = '<div class="keys-card"><div class="row"><strong>Keyboard</strong><span class="spacer"></span><button class="btn small" data-act="keys-close">Close</button></div>' +
+      KEYS.map(function (group) {
+        return '<div class="keys-group"><div class="faint">' + esc(group[0]) + '</div>' + group[1].map(function (k) { return '<div class="keys-row"><span class="kbd">' + esc(k[0]) + '</span><span>' + esc(k[1]) + '</span></div>'; }).join('') + '</div>';
+      }).join('') + '</div>';
+    card.addEventListener('click', function (event) { if (event.target === card) toggleKeys(false); });
+    document.body.appendChild(card);
+  }
 
   function editRepo(repoId) {
     state.formTest = null;
@@ -2755,6 +2786,8 @@
       var id = el.getAttribute('data-id');
       act('follow-' + id, function () { return call('followUp', { findingId: id, body: state.edits['follow-' + id] }); }, function () { delete state.edits['follow-' + id]; say('Reminder sent.'); });
     },
+    'keys-close': function () { toggleKeys(false); },
+    'keys-open': function () { toggleKeys(true); },
     'retry-start': function () { $('main').innerHTML = '<div class="loading">Loading…</div>'; start(); },
     // Through call(): the host answers a failure as {ok:false}, which a bare .catch never sees.
     shell: function (el) { call('shell', prArgs({ where: el.getAttribute('data-where') })).catch(fail); },
