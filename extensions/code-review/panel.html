@@ -46,6 +46,12 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
   .btn.big { padding: 6px 14px; font-weight: 600; }
+  /* The one call to action on a page is filled; every other button stays an outline. */
+  .btn.big.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.big.primary:hover { background: color-mix(in srgb, var(--accent) 85%, #fff); }
+  /* Keyboard focus is visible on everything that can take it; a mouse click draws no ring. */
+  .btn:focus-visible, .tab:focus-visible, .link:focus-visible, .chip.click:focus-visible, .expand-btn:focus-visible, [data-act]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .btn:focus:not(:focus-visible), .tab:focus:not(:focus-visible) { outline: none; }
   .group-btns { display: inline-flex; gap: 4px; padding-right: 8px; margin-right: 4px; border-right: 1px solid var(--border); }
   .group-btns:last-child { border-right: 0; }
 
@@ -353,6 +359,7 @@
   .repo-chips { margin-top: 4px; gap: 4px; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .form { max-width: 760px; }
+  .form-actions { position: sticky; bottom: 0; z-index: 3; margin-top: 18px; padding: 10px 0 12px; background: var(--bg); border-top: 1px solid var(--border); }
   .field { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 10px; align-items: start; margin: 8px 0; }
   .field > label { padding-top: 5px; color: var(--text-dim); }
   .field .help { color: var(--text-faint); font-size: 11px; margin-top: 3px; line-height: 1.4; }
@@ -1084,7 +1091,8 @@
     if (editing) {
       html += '<div class="section"><h3>Conventions for this repository</h3>' + drawGuidelines(state.formGuidelines, f.id) + '</div>';
     }
-    html += '<div class="row" style="margin-top:18px"><button class="btn primary" data-act="form-save"' + busyAttr('form-save') + '>' + (editing ? 'Save' : 'Add repository') + '</button><button class="btn" data-act="nav" data-view="repos">Cancel</button>' +
+    // Held at the bottom of the pane: the form is longer than a screen, and Save should not need finding.
+    html += '<div class="row form-actions"><button class="btn primary" data-act="form-save"' + busyAttr('form-save') + '>' + (editing ? 'Save' : 'Add repository') + '</button><button class="btn" data-act="nav" data-view="repos">Cancel</button>' +
       (editing ? '<span class="spacer"></span><button class="btn danger" data-act="repo-delete"' + busyAttr('repo-delete') + '>Delete repository…</button>' : '') + '</div></div>';
     return html;
   }
