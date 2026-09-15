@@ -3,6 +3,7 @@ import { FOLLOW_APP, resolveTerminalTheme } from '../terminals/themes';
 import { generateSessionName } from '../lib/names';
 import { shortContext, terminalSetup } from '../lib/extensionHost';
 import { whatItDid } from '../lib/gitUpdate';
+import { launchPlan } from '../lib/launcher';
 import { baseOf, movedPath, moveProblem, nameProblem, parentOf } from '../lib/fileOps';
 import { arrangeGroup, moveGroupTo } from './groups';
 import { closePane, movePane, panePlace, restorePaneAt, splitEmpty, splitOffTabs, swapPanes } from './layout';
@@ -585,6 +586,8 @@ interface State {
   openExtensions(): void;
   /** Open a view an extension contributes, on a folder. */
   openExtensionView(viewId: string, root: string | null): void;
+  /** A view from its activity-bar button: in the section in front, bringing the one open copy over if there is one. */
+  launchExtensionView(viewId: string): void;
   /** Show a file somewhere sensible — the app decides where, the asker does not. */
   revealFile(root: string, path: string): void;
   /**
@@ -3062,6 +3065,32 @@ export const useStore = create<State>((set, get) => ({
    * because it happens to be the same extension would be the wrong answer to
    * "show me this one".
    */
+  launchExtensionView(viewId) {
+    const state = get();
+    const existing = Object.values(state.panels).find((panel) => panel.kind === 'extension' && panel.viewId === viewId && panel.root === null);
+    const plan = launchPlan({
+      leaves: allLeaves(state.layout).map((leaf) => ({ id: leaf.id, tabs: leaf.tabs, active: leaf.active })),
+      activeLeafId: state.activeLeafId,
+      existingId: existing?.id ?? null,
+      minimizedIds: state.minimized.map((entry) => entry.sessionId),
+    });
+    if (plan.action === 'open') {
+      get().openExtensionView(viewId, null);
+    } else if (plan.action === 'focus') {
+      get().focusPanel(plan.leafId, plan.panelId);
+    } else if (plan.action === 'move') {
+      get().moveTab(plan.panelId, plan.leafId, 'center');
+    } else {
+      // Back from the dock first — it lands wherever it came from — then into the section that was in front.
+      get().restoreMinimized(plan.panelId);
+      const after = get();
+      const holder = allLeaves(after.layout).find((leaf) => leaf.tabs.includes(plan.panelId));
+      if (plan.leafId && holder && holder.id !== plan.leafId && findLeaf(after.layout, plan.leafId)) {
+        get().moveTab(plan.panelId, plan.leafId, 'center');
+      }
+    }
+  },
+
   openExtensionView(viewId, root) {
     const state = get();
     const view = state.extensions.panels.find((candidate) => candidate.id === viewId);

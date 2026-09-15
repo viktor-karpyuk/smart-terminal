@@ -583,6 +583,10 @@ export interface ExtensionPanelView {
   needs: string | null;
   /** The things the app pushes that this panel asked to hear: `"spring"` for the runs' console and state. */
   listens: string[];
+  /** A button of its own in the activity bar, for a view that needs no folder. */
+  launcher?: boolean;
+  /** Which of the app's own icons that button wears, or null for the generic one. */
+  icon?: string | null;
   render: string;
   from: string;
   source: string | null;

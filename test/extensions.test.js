@@ -180,3 +180,31 @@ test('rules come back lowercased, since a file name is matched against them', ()
 });
 
 test.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+test('a launcher is only for a view that needs no folder, and wears only an icon the app draws', () => {
+  const views = panelViews([
+    {
+      id: 'x',
+      status: 'installed',
+      enabled: true,
+      dir: __dirname,
+      contributes: {
+        panels: [
+          { id: 'app-wide', render: 'a.html', launcher: true, icon: 'review' },
+          { id: 'on-a-folder', render: 'b.html', needs: 'repository', launcher: true, icon: 'review' },
+          { id: 'odd-icon', render: 'c.html', launcher: true, icon: 'https://evil.test/i.png' },
+          { id: 'truthy', render: 'd.html', launcher: 'yes' },
+        ],
+      },
+    },
+    { id: 'off', status: 'installed', enabled: false, dir: __dirname, contributes: { panels: [{ id: 'disabled', render: 'e.html', launcher: true }] } },
+  ]);
+  const byId = Object.fromEntries(views.map((view) => [view.id, view]));
+  assert.deepEqual([byId['app-wide'].launcher, byId['app-wide'].icon], [true, 'review']);
+  assert.equal(byId['on-a-folder'].launcher, false, 'a view about a folder is started from its folder');
+  assert.equal(byId['odd-icon'].icon, null);
+  assert.equal(byId.truthy.launcher, false);
+  assert.equal(byId.disabled, undefined, 'a disabled extension has no views, so no button');
+  const shipped = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'extensions', 'code-review', 'extension.json'), 'utf8'));
+  assert.equal(shipped.contributes.panels[0].launcher, true, 'the Code Reviewer asks for its button');
+});

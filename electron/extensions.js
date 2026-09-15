@@ -212,6 +212,14 @@ const PANEL_NEEDS = [
   'build',
 ];
 
+/**
+ * Icons a launcher may ask for. A fixed vocabulary rather than an image the
+ * extension brings: the activity bar is the app's own chrome, drawn in its
+ * own hand, and an arbitrary picture there would be the one thing on it that
+ * looked like somebody else's.
+ */
+const PANEL_ICONS = ['review'];
+
 /** The things the app pushes that a panel may ask to hear about, beyond its own subject. */
 const PANEL_LISTENS = ['spring', 'review'];
 
@@ -245,6 +253,14 @@ function panelViews(rows) {
         // Only the names the app knows: a panel is told about what it asked
         // for, and a stream it never asked for is a stream it never gets.
         listens: Array.isArray(panel.listens) ? panel.listens.map(String).filter((name) => PANEL_LISTENS.includes(name)) : [],
+        /*
+         * A button of its own in the activity bar, while the extension is
+         * installed and on. Only for a view about the app rather than a folder:
+         * a panel that needs a repository has nothing to show when opened from
+         * a place that is not one, and is started from its folder instead.
+         */
+        launcher: panel.launcher === true && !needs,
+        icon: PANEL_ICONS.includes(String(panel.icon)) ? String(panel.icon) : null,
         render: String(panel.render),
         from: row.id,
         dir: row.dir ?? null,
@@ -353,6 +369,7 @@ function withSources(rules) {
 
 module.exports = {
   PANEL_LISTENS,
+  PANEL_ICONS,
   readManifest,
   discover,
   gallery,

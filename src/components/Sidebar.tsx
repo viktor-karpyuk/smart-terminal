@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { asFilePanel, useStore } from '../state/store';
-import { allTabs, leafOfTab } from '../state/layout';
+import { allLeaves, allTabs, leafOfTab } from '../state/layout';
 import { SESSION_MIME } from '../lib/drag';
 import { sessionLabel } from '../lib/labels';
 import { shortContext } from '../lib/extensionHost';
@@ -864,6 +864,42 @@ function MonitorRow({ sessionId }: { sessionId: string }) {
  * something to press. The two at the top choose what the panel shows; the four
  * at the bottom open the things that are not lists at all.
  */
+/**
+ * A view's own button. On when that view is the tab in front of the section in
+ * front — the same question the other buttons answer about their sections.
+ */
+function LauncherButton({ viewId, title, icon }: { viewId: string; title: string; icon: string | null }) {
+  const showing = useStore((s) => {
+    const leaf = s.activeLeafId ? allLeaves(s.layout).find((candidate) => candidate.id === s.activeLeafId) : null;
+    const panel = leaf?.active ? s.panels[leaf.active] : null;
+    return Boolean(panel && panel.kind === 'extension' && panel.viewId === viewId);
+  });
+  return (
+    <button
+      className={`activity${showing ? ' is-on' : ''}`}
+      data-tip={`${title} — opens in the section in front`}
+      aria-label={title}
+      aria-pressed={showing}
+      onClick={() => useStore.getState().launchExtensionView(viewId)}
+    >
+      {icon === 'review' ? <ReviewIcon /> : <ExtensionsIcon />}
+    </button>
+  );
+}
+
+/** A pull request under a magnifying glass: two branches meeting, looked at. */
+function ReviewIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
+      <circle cx="3.2" cy="3" r="1.3" />
+      <circle cx="3.2" cy="11" r="1.3" />
+      <path d="M3.2 4.3v5.4M3.2 7.6c0-1.6 1.2-2.4 2.8-2.4" />
+      <circle cx="9.2" cy="8.4" r="2.6" />
+      <path d="M11.1 10.3l1.7 1.7" />
+    </svg>
+  );
+}
+
 function ActivityBar() {
   const settings = useStore((s) => s.settings);
   const updateSettings = useStore((s) => s.updateSettings);
@@ -880,6 +916,15 @@ function ActivityBar() {
   /** Sessions with something worth looking at — a count, so the selector is stable. */
   const alerts = useStore(
     (s) => Object.values(s.analysisBySession).filter((v) => v.worst === 'high' || v.worst === 'medium').length,
+  );
+  /*
+   * Views that asked for a button of their own. The list the store holds is
+   * already only what is installed and switched on, so installing an extension
+   * adds its button and removing or disabling it takes the button away.
+   * Compared by id, so a new array with the same views is not a new render.
+   */
+  const launchers = useStore(
+    useShallow((s) => s.extensions.panels.filter((view) => view.launcher && !view.error)),
   );
   const setProfileEditorOpen = useStore((s) => s.setProfileEditorOpen);
   const setUsagePanelOpen = useStore((s) => s.setUsagePanelOpen);
@@ -938,6 +983,10 @@ function ActivityBar() {
           {down > 0 && <span className="activity-count">{down}</span>}
         </button>
       )}
+
+      {launchers.map((view) => (
+        <LauncherButton key={`${view.from}:${view.id}`} viewId={view.id} title={view.title} icon={view.icon ?? null} />
+      ))}
 
       <span className="activity-spacer" />
 
