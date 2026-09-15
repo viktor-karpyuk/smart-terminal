@@ -551,10 +551,14 @@ function EntryMenu({
   const make = (kind: 'file' | 'folder') =>
     act(async () => {
       const name = await freeName(into, kind === 'file' ? 'untitled.txt' : 'untitled folder');
+      // Under a placeholder name, and straight into renaming it: the wish is
+      // left before the row exists, because the row looks for it as it appears.
+      pendingRenames.add(`${into}/${name}`);
       const problem = await createEntry(panelId, into, name, kind);
-      if (problem) tell(panelId, problem);
-      // Under a placeholder name, and straight into renaming it.
-      else pendingRenames.add(`${into}/${name}`);
+      if (problem) {
+        pendingRenames.delete(`${into}/${name}`);
+        tell(panelId, problem);
+      }
     });
 
   return (
@@ -693,7 +697,12 @@ function DropZone({
         event.stopPropagation();
         setOver(false);
         const from = event.dataTransfer.getData(FILE_MIME);
-        if (!from || isInside(dir, from) || parentOf(from) === dir) return;
+        if (!from || parentOf(from) === dir) return;
+        // Said, not swallowed: a folder let go over its own contents looks like it should have gone somewhere.
+        if (isInside(dir, from)) {
+          tell(panelId, 'A folder cannot be moved into itself.');
+          return;
+        }
         void moveEntry(from, dir).then((problem) => {
           if (problem) tell(panelId, problem);
         });
@@ -1260,7 +1269,7 @@ function TrashConfirm({ entry, dirty, onAnswer }: { entry: DirEntry; dirty: bool
   return (
     <div className="modal-backdrop" onMouseDown={() => onAnswer(false)}>
       <div className="confirm" onMouseDown={(event) => event.stopPropagation()}>
-        <h3>Move {entry.isDirectory ? 'the folder' : ''} {entry.name} to the Trash?</h3>
+        <h3>Move {entry.isDirectory ? `the folder ${entry.name}` : entry.name} to the Trash?</h3>
         <p>
           {entry.isDirectory ? 'Everything in it goes with it. ' : ''}
           {dirty ? 'It has changes that were never saved; they go too. ' : ''}
