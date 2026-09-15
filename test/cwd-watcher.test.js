@@ -41,3 +41,17 @@ test('nothing running, or nothing to run, is nothing to remember', () => {
   assert.equal(worthRemembering('node', null), false);
   assert.equal(worthRemembering('', ''), false);
 });
+
+test('what a shell runs on its way in, and anything under a Claude session, is not a command to offer back', () => {
+  const conda = '/opt/anaconda3/bin/python /opt/anaconda3/bin/conda shell.zsh hook';
+  // The same line, seen while the shell was still starting: startup noise.
+  assert.equal(worthRemembering('python', conda, { kind: 'shell', ageMs: 800 }), false);
+  // Seen later, in a shell: the person ran it, and it is offered back.
+  assert.equal(worthRemembering('python', conda, { kind: 'shell', ageMs: 60000 }), true);
+  // Under a Claude session, never — a line typed there is a message.
+  assert.equal(worthRemembering('python', conda, { kind: 'claude', ageMs: 60000 }), false);
+  assert.equal(worthRemembering('node', 'node server.js', { kind: 'claude', ageMs: 60000 }), false);
+  // Without the extra facts the old rule stands.
+  assert.equal(worthRemembering('node', 'node server.js'), true);
+  assert.equal(worthRemembering('zsh', 'zsh'), false);
+});

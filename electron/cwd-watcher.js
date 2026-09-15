@@ -120,7 +120,14 @@ class CwdWatcher {
             continue;
           }
           this.known.set(session.id, { cwd: cwd ?? previous?.cwd, foreground, command });
-          changes.push({ id: session.id, cwd: cwd ?? previous?.cwd, foreground, command });
+          changes.push({
+            id: session.id,
+            cwd: cwd ?? previous?.cwd,
+            foreground,
+            command,
+            kind: session.kind ?? null,
+            ageMs: session.bornAt ? Date.now() - session.bornAt : null,
+          });
         }
         if (changes.length) {
           this.lastChange = Date.now();
@@ -237,9 +244,25 @@ function parseLsof(output) {
  */
 const NOT_WORTH_REMEMBERING = new Set(['claude', 'zsh', 'bash', 'sh', 'fish', 'login', '-zsh', '-bash']);
 
-function worthRemembering(foreground, command) {
+/**
+ * How long a shell is still starting up.
+ *
+ * A `.zshrc` runs programs on its way in — `conda shell.zsh hook` is a
+ * python process, `brew shellenv`, `nvm`, a prompt theme — and for a tick or
+ * two one of them is the shell's child. It looked exactly like something the
+ * person ran, was remembered as the session's last command, and on the next
+ * restore was typed into the session: into a Claude session, as a message.
+ * Nothing anybody typed happens this soon after the shell was born.
+ */
+const STARTUP_MS = 5000;
+
+function worthRemembering(foreground, command, { kind = null, ageMs = null } = {}) {
   const name = String(foreground ?? '').trim();
   if (!name || !String(command ?? '').trim()) return false;
+  // A Claude session comes back by its own machinery; whatever ran under it
+  // — a helper Claude spawned, a startup hook — is not a command to offer.
+  if (kind === 'claude') return false;
+  if (ageMs !== null && ageMs < STARTUP_MS) return false;
   return !NOT_WORTH_REMEMBERING.has(name);
 }
 

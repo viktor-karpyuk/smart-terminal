@@ -134,6 +134,7 @@ class PtyManager {
       flushTimer: null,
       bootstrapped: false,
       bootstrapLine: command ?? bootstrapFor(kind, profile, extraArgs),
+      bornAt: Date.now(),
       notice: relocated
         ? `\r\n\x1b[38;5;214m${relocated} is not there any more — opened in ${workdir} instead.\x1b[0m\r\n`
         : null,
@@ -192,9 +193,14 @@ class PtyManager {
     this.emit('pty:data', { id: session.id, data });
   }
 
-  /** Live sessions and the pid of their shell, for the cwd watcher. */
+  /** Live sessions and the pid of their shell, for the cwd watcher — and what kind and how old each is. */
   list() {
-    return [...this.sessions.values()].map((session) => ({ id: session.id, pid: session.proc.pid }));
+    return [...this.sessions.values()].map((session) => ({
+      id: session.id,
+      pid: session.proc.pid,
+      kind: session.kind,
+      bornAt: session.bornAt,
+    }));
   }
 
   write(id, data) {

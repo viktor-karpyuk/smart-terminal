@@ -1892,7 +1892,7 @@ if (isPrimaryInstance) app.whenReady().then(() => {
          */
         try {
           const owner = sessionByPty.get(change.id);
-          if (owner && change.command && worthRemembering(change.foreground, change.command)) {
+          if (owner && change.command && worthRemembering(change.foreground, change.command, change)) {
             db.updateSession(owner, { lastCommand: change.command });
           }
         } catch (error) {

@@ -1084,7 +1084,10 @@ export const useStore = create<State>((set, get) => ({
          * otherwise it is offered, because the app cannot tell `npm run local`
          * from a migration and should not guess which one it is looking at.
          */
-        const line = descriptor.lastCommand?.trim();
+        // Never into a Claude session: its launch line is its own, and a line
+        // typed into it lands in the conversation as a message. Rows written
+        // before that was enforced at the source are still on disk.
+        const line = descriptor.kind === 'claude' ? '' : descriptor.lastCommand?.trim();
         if (line) {
           if (descriptor.resumeCommand) {
             // After the shell has drawn its prompt; a line typed before that is
