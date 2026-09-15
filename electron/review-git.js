@@ -64,6 +64,29 @@ class ReviewGit {
     return res.ok ? parseNumstat(res.stdout) : [];
   }
 
+  /** What happened to each file in a range: A added, M modified, D deleted, R renamed (to its new path). */
+  async nameStatus(dir, range) {
+    const res = await this.run(dir, ['diff', '--name-status', '-M', range]);
+    const out = {};
+    if (!res.ok) return out;
+    for (const line of res.stdout.split('\n')) {
+      const parts = line.split('\t');
+      if (parts.length < 2) continue;
+      const letter = parts[0][0];
+      out[parts[parts.length - 1]] = { status: letter, from: letter === 'R' || letter === 'C' ? parts[1] : null };
+    }
+    return out;
+  }
+
+  /** A file as it is at a ref, as lines. Null when the file is not there. */
+  async fileAt(dir, ref, file) {
+    const res = await this.run(dir, ['show', `${ref}:${file}`]);
+    if (!res.ok) return null;
+    const lines = res.stdout.split('\n');
+    if (lines.length && lines[lines.length - 1] === '') lines.pop();
+    return lines;
+  }
+
   async diffFile(dir, range, file) {
     return (await this.run(dir, ['diff', '--unified=5', range, '--', file])).stdout;
   }

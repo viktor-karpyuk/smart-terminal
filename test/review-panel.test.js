@@ -62,3 +62,40 @@ test('lists, quotes and headings', () => {
 test('age marks', () => {
   assert.deepEqual([1, 3, 7, 14, 90].map(P.ageMark), ['', '•', '▲', '▲▲', '▲▲▲']);
 });
+
+const V = fromPanel(['esc', 'words', 'KW_CLIKE', 'KW_JS', 'KW_PY', 'KW_SQL', 'KW_SH', 'LANGS', 'EXT_LANG', 'langOf', 'tokenize', 'changedRange', 'paint', 'intraline', 'parseHunk']);
+const classes = (tokens) => tokens.filter((t) => t.c).map((t) => `${t.c}:${t.t}`);
+
+test('code is coloured by what it is, per language, and everything stays escaped', () => {
+  const java = V.langOf('src/main/java/App.java');
+  assert.deepEqual(classes(V.tokenize('@Override public String name() { return "x<y"; } // done', java, { block: false })), ['tk-a:@Override', 'tk-k:public', 'tk-t:String', 'tk-f:name', 'tk-k:return', 'tk-s:"x<y"', 'tk-c:// done']);
+  assert.equal(V.paint(V.tokenize('return "<b>";', java, { block: false })), '<span class="tk-k">return</span> <span class="tk-s">&quot;&lt;b&gt;&quot;</span>;');
+  const sql = V.langOf('db/migration/V0552__x.sql');
+  assert.deepEqual(classes(V.tokenize('ALTER TABLE foo ADD COLUMN bar int; -- why', sql, { block: false })), ['tk-k:ALTER', 'tk-k:TABLE', 'tk-k:ADD', 'tk-k:COLUMN', 'tk-k:int', 'tk-c:-- why']);
+  const yaml = V.langOf('application.yml');
+  assert.deepEqual(classes(V.tokenize('  datasource: "jdbc" # local', yaml, { block: false })), ['tk-t:datasource', 'tk-s:"jdbc"', 'tk-c:# local']);
+  assert.equal(V.langOf('README.unknown'), V.LANGS.plain);
+});
+
+test('a block comment carries across lines, and a hunk that starts inside one is guessed from the star', () => {
+  const ts = V.langOf('a.ts');
+  const st = { block: false };
+  assert.deepEqual(classes(V.tokenize('const a = 1; /* start', ts, st)), ['tk-k:const', 'tk-n:1', 'tk-c:/* start']);
+  assert.equal(st.block, true);
+  assert.deepEqual(classes(V.tokenize('still inside */ let b', ts, st)), ['tk-c:still inside */', 'tk-k:let']);
+  assert.deepEqual(classes(V.tokenize(' * a javadoc line', ts, { block: false })), ['tk-c: * a javadoc line']);
+});
+
+test('only the stretch that changed inside a line is marked, and a rewritten line is not', () => {
+  assert.deepEqual(JSON.parse(JSON.stringify(V.changedRange('return a - b;', 'return a + b;'))), { a: [9, 10], b: [9, 10] });
+  assert.equal(V.changedRange('int x = 1;', 'String name = computeSomethingElse();'), null);
+  const lines = [{ kind: 'CONTEXT', text: 'x' }, { kind: 'REMOVED', text: 'foo(1)' }, { kind: 'REMOVED', text: 'bar(2)' }, { kind: 'ADDED', text: 'foo(10)' }, { kind: 'ADDED', text: 'totally new' }];
+  const ranges = V.intraline(lines);
+  assert.deepEqual(JSON.parse(JSON.stringify(ranges)), { 1: [5, 5], 3: [5, 6] });
+  assert.equal(V.paint([{ t: 'foo(10)', c: '' }], [4, 6]), 'foo(<span class="chg">10</span>)');
+});
+
+test('a hunk header is read with its lengths, defaulting to one', () => {
+  assert.deepEqual(JSON.parse(JSON.stringify(V.parseHunk('@@ -10,3 +12,4 @@ public class A {'))), { oldStart: 10, oldLen: 3, newStart: 12, newLen: 4, label: 'public class A {' });
+  assert.deepEqual(JSON.parse(JSON.stringify(V.parseHunk('@@ -1 +1 @@'))), { oldStart: 1, oldLen: 1, newStart: 1, newLen: 1, label: '' });
+});

@@ -193,7 +193,7 @@
   .viewed-bar { height: 3px; background: var(--bg-elevated); }
   .viewed-bar > span { display: block; height: 100%; background: var(--ok); }
   table.diff.nowrap td.c { white-space: pre; word-break: normal; }
-  .split section { overflow: auto; }
+  .split section { overflow: auto; container-type: inline-size; }
   aside .item { padding: 5px 10px; cursor: pointer; display: flex; gap: 6px; align-items: baseline; border-left: 2px solid transparent; }
   aside .item:hover { background: var(--bg-elevated); }
   aside .item.on { background: var(--accent-soft); border-left-color: var(--accent); }
@@ -202,18 +202,115 @@
   .added { color: var(--git-new, var(--ok)); }
   .removed { color: var(--danger); }
 
-  table.diff { border-collapse: collapse; width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
-  table.diff td { padding: 0 6px; white-space: pre-wrap; word-break: break-all; vertical-align: top; }
-  table.diff td.n { width: 1%; min-width: 34px; text-align: right; color: var(--text-faint); user-select: none; cursor: pointer; white-space: nowrap; }
-  table.diff td.n:hover { color: var(--accent); }
-  table.diff tr.ADDED td.c { background: color-mix(in srgb, var(--ok) 12%, transparent); }
-  table.diff tr.REMOVED td.c { background: color-mix(in srgb, var(--danger) 12%, transparent); }
-  table.diff tr.HUNK td { color: var(--accent); background: var(--bg-elevated); padding: 2px 6px; }
-  table.diff tr.META td { color: var(--text-faint); }
-  /* What sits between diff lines is prose, and reads as prose, not as code. */
-  table.diff tr.anchor td { padding: 4px 8px 6px 60px; background: var(--bg-panel); font: 12.5px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; white-space: normal; word-break: normal; }
+  /*
+   * The diff. Colours for code come from light-dark(), so they read on either
+   * theme the app hands the panel; the rest is the app's own tokens.
+   */
+  table.diff { border-collapse: collapse; width: 100%; font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: var(--diff-font, 12px); line-height: 1.55; table-layout: fixed; }
+  table.diff col.col-n { width: 3.9em; }
+  table.diff col.col-m { width: 1.5em; }
+  table.diff.nowrap { table-layout: auto; }
+  table.diff td { padding: 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; vertical-align: top; }
+  table.diff td.n { width: 3.6em; text-align: right; color: var(--text-faint); user-select: none; white-space: nowrap; font-size: 0.92em; padding: 0 6px 0 4px; position: relative; }
+  table.diff td.n[data-act] { cursor: pointer; }
+  table.diff td.n[data-act]:hover { color: var(--accent); background: var(--accent-soft) !important; }
+  table.diff td.n[data-act]:hover::after { content: '+'; position: absolute; left: 2px; top: 0; color: var(--accent); font-weight: 700; }
+  table.diff td.m { width: 1.4em; padding: 0; text-align: center; user-select: none; color: var(--text-faint); }
+  table.diff.unified td.n.old { border-right: 0; }
+  table.diff.unified td.n.new { border-right: 1px solid var(--border); }
+  table.diff.split-view td.n.new { border-left: 1px solid var(--border); }
+  table.diff tr.ADDED td, table.diff td.add { background: color-mix(in srgb, var(--ok) 11%, transparent); }
+  table.diff tr.ADDED td.n, table.diff td.n.add { background: color-mix(in srgb, var(--ok) 20%, transparent); color: color-mix(in srgb, var(--ok) 80%, var(--text)); }
+  table.diff tr.ADDED td.m, table.diff td.m.add { color: var(--ok); }
+  table.diff tr.REMOVED td, table.diff td.del { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  table.diff tr.REMOVED td.n, table.diff td.n.del { background: color-mix(in srgb, var(--danger) 18%, transparent); color: color-mix(in srgb, var(--danger) 80%, var(--text)); }
+  table.diff tr.REMOVED td.m, table.diff td.m.del { color: var(--danger); }
+  table.diff td.empty { background: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--border) 45%, transparent) 6px 7px); }
+  table.diff tr.expanded td { background: color-mix(in srgb, var(--bg-elevated) 55%, transparent); }
+  table.diff .chg { border-radius: 2px; }
+  table.diff tr.ADDED .chg, table.diff td.add .chg { background: color-mix(in srgb, var(--ok) 34%, transparent); }
+  table.diff tr.REMOVED .chg, table.diff td.del .chg { background: color-mix(in srgb, var(--danger) 32%, transparent); }
+  table.diff tr.HUNK td { color: var(--text-dim); background: color-mix(in srgb, var(--accent) 7%, var(--bg-panel)); padding: 3px 10px; font-size: 0.92em; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  table.diff tr.HUNK .hunk-range { color: var(--accent); margin-right: 10px; }
+  table.diff tr.HUNK .hunk-label { color: var(--text-faint); font-style: italic; }
+  table.diff tr.META td { color: var(--text-faint); padding: 4px 10px; font-style: italic; }
+  table.diff tr.gap td { padding: 0; background: var(--bg-panel); border-top: 1px dashed var(--border); border-bottom: 1px dashed var(--border); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-size: 11px; white-space: nowrap; }
+  table.diff tr.gap .gap-label { color: var(--text-faint); padding: 3px 10px; display: inline-block; }
+  .expand-btn { color: var(--accent); padding: 3px 8px; font-size: 11px; border-left: 1px solid var(--border) !important; }
+  .expand-btn:hover { background: var(--accent-soft); }
+  table.diff tr.focus td.c { box-shadow: inset 3px 0 0 var(--accent); }
+  table.diff tr.focus td.n.new { color: var(--accent); font-weight: 700; }
+  table.diff .dot-cmt { position: absolute; left: 3px; top: 50%; width: 6px; height: 6px; margin-top: -3px; border-radius: 50%; background: var(--accent); cursor: pointer; box-shadow: 0 0 0 3px transparent; }
+  table.diff .dot-cmt:hover { box-shadow: 0 0 0 3px var(--accent-soft); }
+  .tk-k { color: light-dark(#8250df, #c792ea); }
+  .tk-s { color: light-dark(#0a3069, #c3e88d); }
+  .tk-c { color: light-dark(#6e7781, #7f8a99); font-style: italic; }
+  .tk-n { color: light-dark(#0550ae, #f78c6c); }
+  .tk-a { color: light-dark(#953800, #ffcb6b); }
+  .tk-t { color: light-dark(#116329, #82aaff); }
+  .tk-f { color: light-dark(#6639ba, #89ddff); }
+
+  /* The file's header, over its diff. */
+  .file-head { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--border); }
+  .file-row { display: flex; align-items: center; gap: 6px; padding: 6px 10px; min-width: 0; }
+  .file-row.tools-row { padding-top: 0; flex-wrap: wrap; }
+  .file-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: 12px; direction: rtl; text-align: left; }
+  .file-path > * { direction: ltr; unicode-bidi: embed; }
+  .status-badge { flex: none; width: 18px; height: 18px; border-radius: 4px; display: grid; place-items: center; font-size: 10.5px; font-weight: 700; color: #fff; }
+  .status-badge.added { background: var(--ok); }
+  .status-badge.deleted { background: var(--danger); }
+  .status-badge.renamed { background: var(--accent); }
+  .status-badge.modified { background: #d9a441; }
+  .stat-num { font-family: ui-monospace, Menlo, monospace; font-size: 11px; flex: none; }
+  .stat-boxes { display: inline-flex; gap: 1px; flex: none; }
+  .stat-boxes i { width: 7px; height: 7px; border-radius: 1px; background: var(--border); }
+  .stat-boxes i.a { background: var(--ok); }
+  .stat-boxes i.d { background: var(--danger); }
+  .seg { display: inline-flex; align-items: center; gap: 3px; }
+  .seg.toggle .btn { border-radius: 0; }
+  .seg.toggle .btn:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+  .seg.toggle .btn:last-child { border-radius: 0 var(--radius) var(--radius) 0; margin-left: -4px; }
+  .btn.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+  aside .item .st { flex: none; width: 13px; font-size: 10px; font-weight: 700; text-align: center; font-family: ui-monospace, Menlo, monospace; }
+  aside .item .st.A { color: var(--ok); } aside .item .st.D { color: var(--danger); } aside .item .st.R { color: var(--accent); } aside .item .st.M { color: #d9a441; }
+
+  /* What hangs between the lines. */
+  table.diff tr.anchor td { padding: 6px 12px 8px calc(5em + 20px); background: var(--bg); font: 12.5px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; white-space: normal; word-break: normal; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  /* Under the new side when there is room for a card there; a half-width card in a narrow panel is unreadable. */
+  table.diff.split-view tr.anchor td { padding-left: 12px; }
+  @container (min-width: 1100px) { table.diff.split-view tr.anchor td { padding-left: calc(50% + 12px); } }
+  @container (max-width: 560px) { table.diff tr.anchor td { padding-left: 10px; padding-right: 10px; } }
   table.diff tr.anchor td .mono, table.diff tr.anchor td code, table.diff tr.anchor td pre { font-family: ui-monospace, Menlo, monospace; }
-  table.diff tr.focus td.c { outline: 1px solid var(--accent); }
+  .anchor-wrap { max-width: 880px; display: grid; gap: 8px; }
+  .loose { padding: 10px 12px; border-bottom: 1px solid var(--border); display: grid; gap: 8px; }
+  .loose-title { font-size: 11px; }
+  .cmt { border: 1px solid var(--border); border-radius: 8px; background: var(--bg-panel); overflow: hidden; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
+  .cmt.finding-card { border-left: 3px solid var(--text-faint); }
+  .cmt.sev-blocker { border-left-color: var(--danger); }
+  .cmt.sev-major { border-left-color: #d9a441; }
+  .cmt.note-card { border-left: 3px solid var(--accent); }
+  .cmt.thread-card.ours { border-left: 3px solid var(--accent); }
+  .cmt-head { display: flex; align-items: center; gap: 7px; padding: 6px 10px; background: var(--bg-elevated); border-bottom: 1px solid var(--border); cursor: pointer; user-select: none; min-width: 0; }
+  .cmt.folded .cmt-head { border-bottom: 0; }
+  .cmt-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .cmt-summary { flex: 1; min-width: 0; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cmt-head > .chip, .cmt-head > .sev, .cmt-head > .faint, .cmt-head > .avatar { flex: none; }
+  .cmt-head .caret { color: var(--text-dim); font-size: 12px; flex: none; width: 14px; text-align: center; }
+  .cmt textarea { font: 12.5px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; width: 100%; box-sizing: border-box; resize: vertical; }
+  svg.ico { vertical-align: -2px; flex: none; }
+  .btn svg.ico { margin-right: 4px; }
+  .cmt-count { display: inline-flex; align-items: center; gap: 3px; color: var(--text-dim); font-size: 11px; flex: none; }
+  .cmt-body { padding: 8px 12px; }
+  .cmt-msg { display: flex; gap: 9px; padding: 8px 12px; border-top: 1px solid var(--border); }
+  .cmt-main { min-width: 0; flex: 1; }
+  .cmt-who { display: flex; gap: 6px; align-items: center; font-size: 11.5px; margin-bottom: 2px; }
+  .cmt-actions { display: flex; gap: 6px; align-items: center; padding: 6px 12px 8px; border-top: 1px solid var(--border); }
+  .cmt-reply { padding: 6px 12px 8px; border-top: 1px solid var(--border); }
+  .cmt-reply .reply-open { width: 100%; text-align: left; padding: 5px 9px; border: 1px solid var(--border); border-radius: 6px; color: var(--text-faint); background: var(--bg-input); }
+  .cmt-reply .reply-open:hover { border-color: var(--accent); color: var(--text-dim); }
+  .avatar { flex: none; width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 9.5px; font-weight: 700; letter-spacing: 0.02em; color: #fff; background: hsl(var(--hue, 210) 42% 44%); }
+  .avatar.ours { box-shadow: 0 0 0 2px var(--accent); }
+  .cmt-head .avatar { width: 18px; height: 18px; font-size: 8.5px; }
 
   .form { max-width: 760px; }
   .field { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 10px; align-items: start; margin: 8px 0; }
@@ -384,7 +481,7 @@
   }
 
   function remember() {
-    host.emit('remember', { view: state.view, repoId: state.repoId, prId: state.prId, prTab: state.prTab, prSort: state.prSort, dashFilter: state.dashFilter });
+    host.emit('remember', { view: state.view, repoId: state.repoId, prId: state.prId, prTab: state.prTab, prSort: state.prSort, dashFilter: state.dashFilter, codeFile: state.view === 'pr' ? state.code.file : null });
   }
 
   /* ------------------------------------------------------------------ *
@@ -977,7 +1074,7 @@
       '<button class="btn small" data-act="ask" title="A Claude session briefed on this pull request">Ask Claude</button>' +
       '<button class="btn small" data-act="pr-load"' + busyAttr('pr-load') + ' title="Read the pull request, its stances and its thread again">Reload</button></div>' +
       '<h2>#' + pr.id + ' ' + esc(pr.title) + '</h2>' +
-      '<div class="faint">' + esc(pr.author) + ' · <span class="mono">' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch) + '</span> · head <span class="mono">' + sha7(pr.headSha) + '</span>' +
+      '<div class="faint">' + esc(pr.author) + (pr.sourceBranch ? ' · <span class="mono">' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch) + '</span>' : '') + (pr.headSha ? ' · head <span class="mono">' + sha7(pr.headSha) + '</span>' : '') +
       (pr.createdOn ? ' · opened ' + esc(when(pr.createdOn)) : '') + (pr.updatedOn ? ' · updated ' + esc(when(pr.updatedOn)) : '') + '</div>';
     html += drawNextStep(v);
     if (open) html += drawActions(v);
@@ -1259,7 +1356,9 @@
       state.code.files = r.files;
       state.code.error = null;
       state.code.loading = false;
-      if (!state.code.file && r.files.length) return openFile(r.files[0].path);
+      // The file that was open when the frame was last thrown away, if the PR still has it; else the first.
+      var kept = state.code.file && r.files.some(function (f) { return f.path === state.code.file; });
+      if (r.files.length && (!kept || !state.code.lines)) return openFile(kept ? state.code.file : r.files[0].path);
       draw();
     }, function (error) { state.code.error = error.message; state.code.loading = false; draw(); });
   }
@@ -1269,6 +1368,7 @@
     state.code.focusLine = line || null;
     state.code.lines = null;
     state.code.noteAt = null;
+    remember();
     draw();
     return call('diff', { repoId: state.repoId, prId: state.prId, file: path }).then(function (r) {
       if (state.code.file !== path) return;
@@ -1310,8 +1410,9 @@
       var isSeen = viewed.indexOf(file.path) >= 0;
       html += '<div class="item' + (c.file === file.path ? ' on' : '') + (isSeen ? ' viewed' : '') + '" data-act="file" data-file="' + esc(file.path) + '">' +
         '<input type="checkbox" class="seen" data-act="toggle-viewed" data-file="' + esc(file.path) + '"' + (isSeen ? ' checked' : '') + ' title="' + (isSeen ? 'Viewed — uncheck to look again' : 'Mark as viewed') + '">' +
-        '<span class="p mono" style="direction:ltr" title="' + esc(file.path) + '">' + esc(base) + '</span>' +
-        (info && info.f ? '<span class="sev ' + info.sev + '">' + info.f + '</span>' : '') + (info && info.c ? '<span class="faint">💬' + info.c + '</span>' : '') +
+        '<span class="st ' + esc(file.status || 'M') + '" title="' + esc({ A: 'Added', D: 'Deleted', R: 'Renamed', C: 'Copied', M: 'Modified' }[file.status] || 'Modified') + '">' + esc(file.status || 'M') + '</span>' +
+        '<span class="p mono" style="direction:ltr" title="' + esc(file.path + (file.from ? ' (from ' + file.from + ')' : '')) + '">' + esc(base) + '</span>' +
+        (info && info.f ? '<span class="sev ' + info.sev + '">' + info.f + '</span>' : '') + (info && info.c ? '<span class="cmt-count" title="' + info.c + ' comment(s) on this file">' + ICON_CMT + info.c + '</span>' : '') +
         '<span class="added mono">+' + file.added + '</span><span class="removed mono">−' + file.deleted + '</span></div>';
     });
     if (!shown.length) html += '<div class="empty" style="padding:14px">No file matches.</div>';
@@ -1325,56 +1426,6 @@
     else if (!c.lines) html += '<div class="loading">Loading ' + esc(c.file) + '…</div>';
     else html += drawDiff(v, c.file, c.lines);
     return html + '</section></div>';
-  }
-
-  function drawDiff(v, file, lines) {
-    var findings = (v.findings || []).filter(function (f) { return f.filePath === file; });
-    var notes = (v.notes || []).filter(function (n) { return n.filePath === file; });
-    var threads = (v.comments || []).filter(function (cm) { return cm.inlinePath === file && !cm.parentId && !cm.deleted; });
-    var replies = {};
-    (v.comments || []).forEach(function (cm) { if (cm.parentId) { (replies[cm.parentId] = replies[cm.parentId] || []).push(cm); } });
-    var at = function (list, key) { var m = {}; list.forEach(function (x) { var n = x[key]; if (n) (m[n] = m[n] || []).push(x); }); return m; };
-    var fByLine = at(findings, 'lineNo');
-    var nByLine = at(notes, 'lineNo');
-    var tByLine = at(threads, 'inlineLine');
-    var shown = {};
-    lines.forEach(function (l) { if (l.newNo) shown[l.newNo] = true; });
-    var outside = findings.filter(function (f) { return !f.lineNo || !shown[f.lineNo]; });
-    var outsideThreads = threads.filter(function (t) { return !t.inlineLine || !shown[t.inlineLine]; });
-    var files = state.code.files || [];
-    var at = files.map(function (f) { return f.path; }).indexOf(file);
-    var anchored = codeAnchors(v);
-    var html = '<div style="padding:6px 10px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:1" class="row">' +
-      '<button class="btn small" data-act="step-file" data-dir="-1"' + (at <= 0 ? ' disabled' : '') + ' title="Previous file ( [ )">‹</button><strong class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1 1 auto">' + esc(file) + '</strong>' +
-      '<span class="faint">' + (at + 1) + ' of ' + files.length + '</span><button class="btn small" data-act="step-file" data-dir="1"' + (at < 0 || at >= files.length - 1 ? ' disabled' : '') + ' title="Next file ( ] )">›</button>' +
-      (anchored.length ? '<span class="group-btns" style="margin-left:8px;border-left:1px solid var(--border);padding-left:8px;border-right:0"><button class="btn small" data-act="step-finding" data-dir="-1" title="Previous finding ( p )">↑</button><span class="faint">' + anchored.length + ' finding' + (anchored.length === 1 ? '' : 's') + '</span><button class="btn small" data-act="step-finding" data-dir="1" title="Next finding ( n )">↓</button></span>' : '') +
-
-      '<button class="btn small' + ((state.code.viewed || []).indexOf(file) >= 0 ? ' go' : '') + '" data-act="toggle-viewed" data-file="' + esc(file) + '" title="Mark this file as looked at, and go to the next one not viewed ( v )">' + ((state.code.viewed || []).indexOf(file) >= 0 ? '✓ Viewed' : 'Viewed') + '</button>' +
-      '<button class="btn small' + (wrapLines() ? ' on' : '') + '" data-act="toggle-wrap" title="Wrap long lines, or scroll them sideways">Wrap</button>' +
-      '<button class="btn small" data-act="note-file" data-file="' + esc(file) + '" title="A note on the whole file. For a line, click its number.">+ Note</button></div>';
-    if (outside.length || outsideThreads.length) {
-      html += '<div style="padding:6px 10px">' + outside.map(function (f) { return anchorBlock(f, 'finding', v); }).join('') + outsideThreads.map(function (t) { return threadBlock(t, replies); }).join('') + '</div>';
-    }
-    if (state.code.noteAt && state.code.noteAt.line == null) html += '<div style="padding:6px 10px">' + noteForm(file, null) + '</div>';
-    html += '<table class="diff' + (wrapLines() ? '' : ' nowrap') + '">';
-    lines.forEach(function (l) {
-      var focus = state.code.focusLine && l.newNo === state.code.focusLine;
-      if (l.kind === 'HUNK' || l.kind === 'META') {
-        if (l.kind === 'META' && !diffMetaWorthShowing(l.text)) return;
-        html += '<tr class="' + l.kind + '"><td colspan="3">' + esc(l.kind === 'META' ? diffMetaWords(l.text) : l.text) + '</td></tr>';
-        return;
-      }
-      html += '<tr class="' + l.kind + (focus ? ' focus' : '') + '"' + (l.newNo ? ' data-new="' + l.newNo + '"' : '') + '><td class="n" ' + (l.newNo ? 'data-act="note-line" data-file="' + esc(file) + '" data-line="' + l.newNo + '"' : '') + '>' + (l.oldNo || '') + '</td>' +
-        '<td class="n" ' + (l.newNo ? 'data-act="note-line" data-file="' + esc(file) + '" data-line="' + l.newNo + '"' : '') + '>' + (l.newNo || '') + '</td><td class="c">' + esc(l.text) + '</td></tr>';
-      if (l.newNo) {
-        var blocks = (fByLine[l.newNo] || []).map(function (f) { return anchorBlock(f, 'finding', v); })
-          .concat((nByLine[l.newNo] || []).map(function (n) { return anchorBlock(n, 'note', v); }))
-          .concat((tByLine[l.newNo] || []).filter(function (t) { return !findings.some(function (f) { return f.publishedId === t.commentId; }); }).map(function (t) { return threadBlock(t, replies); }));
-        if (state.code.noteAt && state.code.noteAt.line === l.newNo) blocks.push(noteForm(file, l.newNo));
-        if (blocks.length) html += '<tr class="anchor"><td colspan="3">' + blocks.join('') + '</td></tr>';
-      }
-    });
-    return html + '</table>';
   }
 
   /*
@@ -1421,28 +1472,515 @@
     openFile(target.filePath, target.lineNo);
   }
 
-  function anchorBlock(item, kind, v) {
-    if (kind === 'finding') {
-      return '<div class="finding"><div class="meta"><span class="sev ' + esc(item.severity) + '">' + esc(item.severity) + '</span>' + (item.category ? '<span class="chip">' + esc(CATEGORY_LABELS[item.category] || item.category) + '</span>' : '') + '<span class="spacer"></span>' +
-        (item.publishedId ? '<span class="chip okc">published</span>' : item.dismissedAt ? '<span class="chip">dismissed</span>' : v.pr.state === 'OPEN' ? '<button class="btn small primary" data-act="publish-finding" data-id="' + esc(item.id) + '"' + busyAttr('publish-' + item.id) + '>Publish</button><button class="btn small" data-act="dismiss" data-id="' + esc(item.id) + '" data-on="1">Dismiss</button>' : '') +
-        '</div><div class="ftitle">' + esc(item.title) + '</div>' + clamped('code-' + item.id, md(item.body), String(item.body).length > 520) + '</div>';
+  /* ------------------------------------------------------------------ *
+   * Reading code: syntax colours and what changed inside a line
+   * ------------------------------------------------------------------ */
+
+  /*
+   * A small highlighter, written here because a panel cannot load one: it has no
+   * network and no files. It is not a parser. It knows what makes a diff easy to
+   * read — keywords, strings, comments, numbers, annotations, types — for the
+   * languages these repositories are written in, and it errs towards plain text.
+   * A diff is fragments, so a block comment that opened above the hunk is only
+   * guessed from how the line starts.
+   */
+  var KW_CLIKE = 'abstract assert boolean break byte case catch char class const continue default do double else enum extends final finally float for goto if implements import instanceof int interface long native new package private protected public return short static strictfp super switch synchronized this throw throws transient try void volatile while var val fun object when is in as data sealed override open lateinit companion suspend inline reified typealias init constructor internal record yield permits null true false struct func go defer chan select range map type let mut impl trait use mod pub crate self match fn where unsafe namespace using virtual readonly async await';
+  var KW_JS = 'await break case catch class const continue debugger default delete do else enum export extends false finally for from function if implements import in instanceof interface let new null of package private protected public readonly return static super switch this throw true try type typeof undefined var void while with yield async as satisfies keyof declare namespace abstract get set';
+  var KW_PY = 'and as assert async await break class continue def del elif else except False finally for from global if import in is lambda None nonlocal not or pass raise return True try while with yield self match case';
+  var KW_SQL = 'select from where and or not insert into values update set delete create table alter add drop index on primary key foreign references constraint unique null default as join left right inner outer full cross group by order having limit offset union all distinct case when then else end exists in is like ilike between returning if cascade view sequence trigger function begin commit rollback grant revoke with varchar char text integer int bigint smallint boolean bool timestamp timestamptz numeric decimal uuid serial bigserial date time jsonb json true false column rename to type using do language plpgsql replace policy enable row level security owner check coalesce count sum max min now';
+  var KW_SH = 'if then else elif fi for while until do done case esac in function return local export readonly set unset echo exit source';
+  function words(list) { var m = {}; list.split(' ').forEach(function (w) { m[w] = true; }); return m; }
+  var LANGS = {
+    clike: { kw: words(KW_CLIKE), line: '//', block: ['/*', '*/'], annot: '@', types: true },
+    js: { kw: words(KW_JS), line: '//', block: ['/*', '*/'], annot: '@', types: true, template: true },
+    py: { kw: words(KW_PY), line: '#', annot: '@', types: true, triple: true },
+    sql: { kw: words(KW_SQL), line: '--', block: ['/*', '*/'], ci: true },
+    sh: { kw: words(KW_SH), line: '#', vars: true },
+    yaml: { line: '#', keys: /^(\s*-?\s*)([A-Za-z0-9_.\-"'\/]+)(\s*:)(?=\s|$)/ },
+    props: { line: '#', keys: /^(\s*)([A-Za-z0-9_.\-\[\]]+)(\s*[=:])/ },
+    json: { jsonKeys: true },
+    xml: { markup: true, block: ['<!--', '-->'] },
+    css: { line: null, block: ['/*', '*/'], cssProps: true },
+    md: { md: true },
+    plain: {}
+  };
+  var EXT_LANG = {
+    java: 'clike', kt: 'clike', kts: 'clike', scala: 'clike', groovy: 'clike', gradle: 'clike', c: 'clike', h: 'clike', cpp: 'clike', hpp: 'clike', cc: 'clike', cs: 'clike', go: 'clike', rs: 'clike', swift: 'clike', dart: 'clike', php: 'clike',
+    js: 'js', jsx: 'js', ts: 'js', tsx: 'js', mjs: 'js', cjs: 'js', vue: 'js', svelte: 'js',
+    py: 'py', rb: 'py', sql: 'sql', sh: 'sh', bash: 'sh', zsh: 'sh', env: 'props', properties: 'props', ini: 'props', toml: 'props',
+    yml: 'yaml', yaml: 'yaml', json: 'json', xml: 'xml', html: 'xml', htm: 'xml', svg: 'xml', css: 'css', scss: 'css', less: 'css', md: 'md'
+  };
+  function langOf(file) {
+    var name = String(file || '').split('/').pop().toLowerCase();
+    if (name === 'dockerfile' || name === 'makefile') return LANGS.sh;
+    var ext = name.indexOf('.') >= 0 ? name.split('.').pop() : '';
+    return LANGS[EXT_LANG[ext] || 'plain'];
+  }
+
+  /** One line as `[{t: text, c: class}]`. `st.block` carries a block comment from one line to the next. */
+  function tokenize(text, lang, st) {
+    var out = [];
+    var push = function (t, c) { if (!t) return; var last = out[out.length - 1]; if (last && last.c === c) last.t += t; else out.push({ t: t, c: c }); };
+    var s = String(text);
+    var i = 0;
+    if (lang.md) {
+      if (/^#{1,6}\s/.test(s)) return [{ t: s, c: 'tk-k' }];
+      if (/^\s*([-*+]|\d+\.)\s/.test(s)) { var m = /^\s*([-*+]|\d+\.)/.exec(s); push(m[0], 'tk-a'); i = m[0].length; }
     }
-    var key = 'note-' + item.id;
-    return '<div class="finding"><div class="meta"><span class="chip">note</span>' + (item.publishedId ? '<span class="chip okc">published</span>' : '') + '<span class="spacer"></span>' +
-      (!item.publishedId ? '<button class="btn small primary" data-act="publish-note" data-id="' + esc(item.id) + '"' + busyAttr('note-' + item.id) + '>Publish</button><button class="btn small danger" data-act="delete-note" data-id="' + esc(item.id) + '">Delete</button>' : '') + '</div>' +
-      (item.publishedId ? md(item.body) : '<textarea rows="3" data-edit="' + key + '" data-note="' + esc(item.id) + '">' + esc(edit(key, item.body)) + '</textarea>') + '</div>';
+    if (lang.keys) {
+      var k = lang.keys.exec(s);
+      if (k && !/^\s*#/.test(s)) { push(k[1], ''); push(k[2], 'tk-t'); push(k[3], ''); i = k[0].length; }
+    }
+    // A diff hunk can start inside a block comment; a line that looks like one is taken as one.
+    if (lang.block && lang.block[0] === '/*' && /^\s*\*(\s|\/|$)/.test(s) && !st.block) st.block = true;
+    while (i < s.length) {
+      if (st.block && lang.block) {
+        var close = s.indexOf(lang.block[1], i);
+        if (close < 0) { push(s.slice(i), 'tk-c'); return out; }
+        push(s.slice(i, close + lang.block[1].length), 'tk-c');
+        i = close + lang.block[1].length;
+        st.block = false;
+        continue;
+      }
+      var rest = s.slice(i);
+      if (lang.block && rest.indexOf(lang.block[0]) === 0) { st.block = true; continue; }
+      if (lang.line && rest.indexOf(lang.line) === 0 && (lang.line !== '#' || i === 0 || /\s/.test(s[i - 1]))) { push(rest, 'tk-c'); return out; }
+      var ch = s[i];
+      if (lang.markup) {
+        var tag = /^<\/?[A-Za-z][\w:.-]*/.exec(rest);
+        if (tag) { push(tag[0], 'tk-k'); i += tag[0].length; continue; }
+        var attr = /^\s([\w:.-]+)(?==)/.exec(rest);
+        if (attr) { push(' ', ''); push(attr[1], 'tk-a'); i += attr[0].length; continue; }
+      }
+      if (lang.cssProps) {
+        var prop = /^([a-z-]+)(\s*:)(?!:)/.exec(rest);
+        if (prop && (i === 0 || /[\s{;]/.test(s[i - 1]))) { push(prop[1], 'tk-t'); push(prop[2], ''); i += prop[0].length; continue; }
+      }
+      if (ch === '"' || ch === "'" || (ch === '`' && lang.template)) {
+        var j = i + 1;
+        while (j < s.length && s[j] !== ch) j += s[j] === '\\' ? 2 : 1;
+        var str = s.slice(i, Math.min(j + 1, s.length));
+        var isKey = lang.jsonKeys && /^\s*:/.test(s.slice(j + 1));
+        push(str, isKey ? 'tk-t' : 'tk-s');
+        i += str.length;
+        continue;
+      }
+      if (/[0-9]/.test(ch) && (i === 0 || !/[\w$]/.test(s[i - 1]))) {
+        var num = /^(0x[0-9a-fA-F_]+|\d[\d_]*(\.\d+)?([eE][+-]?\d+)?[lLfFdD]?)/.exec(rest);
+        if (num) { push(num[0], 'tk-n'); i += num[0].length; continue; }
+      }
+      if (lang.annot && ch === lang.annot && /[A-Za-z]/.test(s[i + 1] || '')) {
+        var an = /^@[\w.]+/.exec(rest);
+        push(an[0], 'tk-a');
+        i += an[0].length;
+        continue;
+      }
+      if (lang.vars && ch === '$') {
+        var vr = /^\$(\{[^}]*\}|\w+)/.exec(rest);
+        if (vr) { push(vr[0], 'tk-a'); i += vr[0].length; continue; }
+      }
+      if (/[A-Za-z_$]/.test(ch)) {
+        var word = /^[A-Za-z_$][\w$]*/.exec(rest)[0];
+        var lookup = lang.ci ? word.toLowerCase() : word;
+        var cls = '';
+        if (lang.kw && lang.kw[lookup]) cls = 'tk-k';
+        else if (lang.types && /^[A-Z][A-Za-z0-9_]*[a-z][A-Za-z0-9_]*$/.test(word)) cls = 'tk-t';
+        else if (lang.kw && /^\s*\(/.test(s.slice(i + word.length))) cls = 'tk-f';
+        push(word, cls);
+        i += word.length;
+        continue;
+      }
+      push(ch, '');
+      i++;
+    }
+    return out;
   }
 
-  function threadBlock(comment, replies) {
-    var chain = replies[comment.commentId] || [];
-    return '<div class="finding"><div class="entry' + (comment.ours ? ' ours' : '') + '"><div class="who">' + esc(comment.author) + (comment.ours ? ' (us)' : '') + ' · ' + esc(when(comment.createdOn)) + '</div>' + md(comment.body) + '</div>' +
-      (chain.length ? '<div class="entries">' + chain.map(function (r) { return entryHtml({ author: r.author, body: r.body, ours: r.ours, at: r.createdOn }); }).join('') + '</div>' : '') + '</div>';
+  /**
+   * What changed between a removed line and the added line that replaced it:
+   * everything between their common start and their common end. When that is
+   * nearly the whole line, nothing is marked — a line rewritten from scratch
+   * reads better without a highlight that covers all of it.
+   */
+  function changedRange(a, b) {
+    var start = 0;
+    var max = Math.min(a.length, b.length);
+    while (start < max && a[start] === b[start]) start++;
+    var endA = a.length;
+    var endB = b.length;
+    while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) { endA--; endB--; }
+    var longest = Math.max(a.length, b.length) || 1;
+    if (Math.max(endA - start, endB - start) / longest > 0.7) return null;
+    return { a: [start, endA], b: [start, endB] };
   }
 
-  function noteForm(file, line) {
+  /** Tokens to HTML, with the changed stretch wrapped so it can be marked. */
+  function paint(tokens, range) {
+    var html = '';
+    var pos = 0;
+    tokens.forEach(function (tok) {
+      var from = pos;
+      var to = pos + tok.t.length;
+      pos = to;
+      var pieces = [[from, to, false]];
+      if (range && range[1] > range[0] && range[0] < to && range[1] > from) {
+        pieces = [];
+        if (range[0] > from) pieces.push([from, range[0], false]);
+        pieces.push([Math.max(from, range[0]), Math.min(to, range[1]), true]);
+        if (range[1] < to) pieces.push([range[1], to, false]);
+      }
+      pieces.forEach(function (p) {
+        var text = tok.t.slice(p[0] - from, p[1] - from);
+        if (!text) return;
+        var cls = (tok.c ? tok.c : '') + (p[2] ? ' chg' : '');
+        html += cls ? '<span class="' + cls.trim() + '">' + esc(text) + '</span>' : esc(text);
+      });
+    });
+    return html;
+  }
+
+  /** Pairs each run of removed lines with the added lines that follow it, and marks what changed in each pair. */
+  function intraline(lines) {
+    var ranges = {};
+    var i = 0;
+    while (i < lines.length) {
+      if (lines[i].kind !== 'REMOVED') { i++; continue; }
+      var removed = [];
+      while (i < lines.length && lines[i].kind === 'REMOVED') removed.push(i++);
+      var added = [];
+      while (i < lines.length && lines[i].kind === 'ADDED') added.push(i++);
+      for (var k = 0; k < Math.min(removed.length, added.length); k++) {
+        var r = changedRange(lines[removed[k]].text, lines[added[k]].text);
+        if (r) { ranges[removed[k]] = r.a; ranges[added[k]] = r.b; }
+      }
+    }
+    return ranges;
+  }
+
+  /* ------------------------------------------------------------------ *
+   * The diff: unified or side by side, with its hidden context
+   * ------------------------------------------------------------------ */
+
+  function diffFont() { var s = state.overview && state.overview.settings; return (s && s.diffFont) || 12; }
+  function diffLayout() { var s = state.overview && state.overview.settings; return s && s.diffLayout === 'split' ? 'split' : 'unified'; }
+
+  function parseHunk(text) {
+    var m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@\s?(.*)$/.exec(String(text));
+    if (!m) return null;
+    return { oldStart: Number(m[1]), oldLen: m[2] === undefined ? 1 : Number(m[2]), newStart: Number(m[3]), newLen: m[4] === undefined ? 1 : Number(m[4]), label: m[5] || '' };
+  }
+
+  /**
+   * The diff as rows: lines, hunk headers, and the gaps between hunks — the
+   * unchanged lines git leaves out — with whatever of each gap has been opened.
+   */
+  function diffItems(lines, file) {
+    var items = [];
+    var prevNewEnd = 0;
+    var offset = 0;
+    var hunks = 0;
+    var text = state.code.fileText && state.code.fileText[file];
+    var reveal = (state.code.reveal && state.code.reveal[file]) || {};
+    var addGap = function (key, from, to, off, edge) {
+      var r = reveal[key] || { top: 0, bottom: 0 };
+      var known = to !== null;
+      var last = known ? to : text ? text.total : null;
+      if (last !== null && last < from) return;
+      var hidden = last === null ? null : last - from + 1;
+      var top = hidden === null ? 0 : Math.min(r.top, hidden);
+      var bottom = hidden === null ? 0 : Math.min(r.bottom, hidden - top);
+      var lineAt = function (n) { return { kind: 'CONTEXT', oldNo: n + off, newNo: n, text: text ? text.lines[n - 1] || '' : '', expanded: true }; };
+      for (var a = 0; a < top; a++) items.push({ type: 'line', l: lineAt(from + a) });
+      var left = hidden === null ? null : hidden - top - bottom;
+      if (left === null || left > 0) items.push({ type: 'gap', key: key, hidden: left, edge: edge });
+      for (var b = bottom; b > 0; b--) items.push({ type: 'line', l: lineAt(last - b + 1) });
+    };
+    lines.forEach(function (l) {
+      if (l.kind === 'HUNK') {
+        var h = parseHunk(l.text);
+        if (h) {
+          addGap('g' + hunks, prevNewEnd + 1, h.newStart - 1, h.oldStart - h.newStart, hunks === 0 ? 'first' : 'middle');
+          prevNewEnd = h.newStart + h.newLen - 1;
+          offset = h.oldStart + h.oldLen - (h.newStart + h.newLen);
+          hunks++;
+        }
+        items.push({ type: 'hunk', text: l.text, h: h });
+      } else if (l.kind === 'META') {
+        if (diffMetaWorthShowing(l.text)) items.push({ type: 'meta', text: diffMetaWords(l.text) });
+      } else {
+        items.push({ type: 'line', l: l });
+      }
+    });
+    if (hunks && file) addGap('end', prevNewEnd + 1, null, offset, 'last');
+    return items;
+  }
+
+  function marker(kind) { return kind === 'ADDED' ? '+' : kind === 'REMOVED' ? '−' : ''; }
+
+  /**
+   * One diff as a table. `anchors(newNo)` returns what hangs under a line of the
+   * new side — findings, notes, threads — and `noteable` makes the new side's
+   * numbers open a note. Used by the Code tab and, without anchors, by Commits.
+   */
+  function diffTable(lines, opts) {
+    var file = opts.file;
+    var lang = langOf(file);
+    var ranges = intraline(lines);
+    lines.forEach(function (l, i) { if (ranges[i]) l.range = ranges[i]; });
+    var stOld = { block: false };
+    var stNew = { block: false };
+    var codeOf = function (l, side) {
+      var st = l.kind === 'REMOVED' || side === 'old' ? stOld : stNew;
+      var tokens = tokenize(l.text, lang, st);
+      if (l.kind === 'CONTEXT') { if (side === 'old') stNew.block = stOld.block; else stOld.block = stNew.block; }
+      return paint(tokens, l.range) || '&nbsp;';
+    };
+    var items = diffItems(lines, opts.expandable ? file : null);
+    var split = opts.layout === 'split';
+    var cols = split ? 6 : 4;
+    var html = '<table class="diff ' + (split ? 'split-view' : 'unified') + (wrapLines() ? '' : ' nowrap') + '" style="--diff-font:' + diffFont() + 'px">' +
+      // Fixed layout takes its widths from here: without them every column, numbers included, was as wide as the code.
+      (split
+        ? '<colgroup><col class="col-n"><col class="col-m"><col class="col-c"><col class="col-n"><col class="col-m"><col class="col-c"></colgroup>'
+        : '<colgroup><col class="col-n"><col class="col-n"><col class="col-m"><col class="col-c"></colgroup>');
+    var numCell = function (l, side) {
+      var n = side === 'old' ? l.oldNo : l.newNo;
+      var noteable = opts.noteable && side === 'new' && l.newNo;
+      var dot = side === 'new' && l.newNo && opts.dots && opts.dots[l.newNo] ? '<span class="dot-cmt" data-act="toggle-comments" title="' + opts.dots[l.newNo] + ' comment(s) on this line: show the comments"></span>' : '';
+      return '<td class="n ' + side + '"' + (noteable ? ' data-act="note-line" data-file="' + esc(file) + '" data-line="' + l.newNo + '" title="Leave a note on line ' + l.newNo + '"' : '') + '>' + dot + (n || '') + '</td>';
+    };
+    var anchorRow = function (newNo) {
+      if (!opts.anchors || !newNo) return '';
+      var cards = opts.anchors(newNo);
+      return cards ? '<tr class="anchor"><td colspan="' + cols + '"><div class="anchor-wrap' + (split ? ' right' : '') + '">' + cards + '</div></td></tr>' : '';
+    };
+    var gapRow = function (item) {
+      var label = item.hidden === null ? 'The rest of the file' : item.hidden + ' unchanged line' + (item.hidden === 1 ? '' : 's');
+      var buttons = '';
+      if (item.edge !== 'first' && (item.hidden === null || item.hidden > 20)) buttons += '<button class="expand-btn" data-act="expand" data-file="' + esc(file) + '" data-gap="' + item.key + '" data-dir="top" title="Show 20 more lines below the change above">↓ 20</button>';
+      if (item.edge !== 'last' && item.hidden > 20) buttons += '<button class="expand-btn" data-act="expand" data-file="' + esc(file) + '" data-gap="' + item.key + '" data-dir="bottom" title="Show 20 more lines above the change below">↑ 20</button>';
+      buttons += '<button class="expand-btn" data-act="expand" data-file="' + esc(file) + '" data-gap="' + item.key + '" data-dir="all">' + (item.hidden !== null && item.hidden <= 20 ? 'Show ' + item.hidden : 'Show all') + '</button>';
+      return '<tr class="gap"><td colspan="' + cols + '"><span class="gap-line"></span><span class="gap-label">⋯ ' + label + '</span>' + buttons + '</td></tr>';
+    };
+    var hunkRow = function (item) {
+      var h = item.h;
+      return '<tr class="HUNK"><td colspan="' + cols + '"><span class="hunk-range">' + (h ? '−' + h.oldStart + ' +' + h.newStart : esc(item.text)) + '</span>' + (h && h.label ? '<span class="hunk-label">' + esc(h.label) + '</span>' : '') + '</td></tr>';
+    };
+
+    if (!split) {
+      items.forEach(function (item) {
+        if (item.type === 'gap') { html += opts.expandable ? gapRow(item) : ''; return; }
+        if (item.type === 'hunk') { html += hunkRow(item); return; }
+        if (item.type === 'meta') { html += '<tr class="META"><td colspan="4">' + esc(item.text) + '</td></tr>'; return; }
+        var l = item.l;
+        var focus = state.code.focusLine && l.newNo === state.code.focusLine && opts.anchors;
+        html += '<tr class="' + l.kind + (l.expanded ? ' expanded' : '') + (focus ? ' focus' : '') + '"' + (l.newNo ? ' data-new="' + l.newNo + '"' : '') + '>' +
+          numCell(l, 'old') + numCell(l, 'new') + '<td class="m">' + marker(l.kind) + '</td><td class="c">' + codeOf(l, l.kind === 'REMOVED' ? 'old' : 'new') + '</td></tr>';
+        if (l.kind !== 'REMOVED') html += anchorRow(l.newNo);
+      });
+      return html + '</table>';
+    }
+
+    // Side by side: a removed run faces the added run that replaced it, row for row.
+    var k = 0;
+    var side = function (l, which) {
+      if (!l) return '<td class="n ' + which + ' empty"></td><td class="m empty"></td><td class="c empty"></td>';
+      var cls = l.kind === 'ADDED' ? ' add' : l.kind === 'REMOVED' ? ' del' : '';
+      return numCell(l, which).replace('<td class="n ' + which + '"', '<td class="n ' + which + cls + '"') + '<td class="m' + cls + '">' + marker(l.kind) + '</td><td class="c' + cls + '">' + codeOf(l, which) + '</td>';
+    };
+    while (k < items.length) {
+      var item = items[k];
+      if (item.type === 'gap') { html += opts.expandable ? gapRow(item) : ''; k++; continue; }
+      if (item.type === 'hunk') { html += hunkRow(item); k++; continue; }
+      if (item.type === 'meta') { html += '<tr class="META"><td colspan="6">' + esc(item.text) + '</td></tr>'; k++; continue; }
+      if (item.l.kind === 'CONTEXT') {
+        var c = item.l;
+        var focusC = state.code.focusLine && c.newNo === state.code.focusLine && opts.anchors;
+        html += '<tr class="CONTEXT' + (c.expanded ? ' expanded' : '') + (focusC ? ' focus' : '') + '" data-new="' + c.newNo + '">' + side(c, 'old') + side(c, 'new') + '</tr>' + anchorRow(c.newNo);
+        k++;
+        continue;
+      }
+      var removed = [];
+      var added = [];
+      while (k < items.length && items[k].type === 'line' && items[k].l.kind === 'REMOVED') removed.push(items[k++].l);
+      while (k < items.length && items[k].type === 'line' && items[k].l.kind === 'ADDED') added.push(items[k++].l);
+      for (var r = 0; r < Math.max(removed.length, added.length); r++) {
+        var right = added[r];
+        var focusR = right && state.code.focusLine && right.newNo === state.code.focusLine && opts.anchors;
+        html += '<tr class="pair' + (focusR ? ' focus' : '') + '"' + (right ? ' data-new="' + right.newNo + '"' : '') + '>' + side(removed[r], 'old') + side(right, 'new') + '</tr>';
+        if (right) html += anchorRow(right.newNo);
+      }
+    }
+    return html + '</table>';
+  }
+
+  /* ------------------------------------------------------------------ *
+   * What hangs under a line: findings, notes, and the PR's threads
+   * ------------------------------------------------------------------ */
+
+  /** Initials in a colour of their own, the same for the same name everywhere. */
+  var ICON_CMT = '<svg class="ico" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M3 2.5h10a1.5 1.5 0 0 1 1.5 1.5v6A1.5 1.5 0 0 1 13 11.5H8l-3.2 2.6c-.3.2-.8 0-.8-.4v-2.2H3A1.5 1.5 0 0 1 1.5 10V4A1.5 1.5 0 0 1 3 2.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+
+  function avatar(name, ours) {
+    var text = String(name || '?');
+    var parts = text.replace(/\(.*\)/, '').trim().split(/\s+/);
+    var initials = ((parts[0] || '?')[0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+    var hash = 0;
+    for (var i = 0; i < text.length; i++) hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+    return '<span class="avatar' + (ours ? ' ours' : '') + '" style="--hue:' + (hash % 360) + '" title="' + esc(text) + '">' + esc(initials) + '</span>';
+  }
+
+  /** Every reply under a comment, in order, however deep. */
+  function repliesUnder(commentId, comments) {
+    var byParent = {};
+    comments.forEach(function (c) { if (c.parentId && !c.deleted) (byParent[c.parentId] = byParent[c.parentId] || []).push(c); });
+    var out = [];
+    var walk = function (id) { (byParent[id] || []).sort(function (a, b) { return String(a.createdOn).localeCompare(String(b.createdOn)); }).forEach(function (c) { out.push(c); walk(c.commentId); }); };
+    walk(commentId);
+    return out;
+  }
+
+  function message(author, at, body, ours, extra) {
+    return '<div class="cmt-msg">' + avatar(author, ours) + '<div class="cmt-main"><div class="cmt-who"><strong>' + esc(author) + '</strong>' + (ours ? '<span class="chip accent">you</span>' : '') +
+      '<span class="faint">' + esc(when(at)) + '</span>' + (extra || '') + '</div>' + clamped('msg-' + author + at, md(body), String(body).length > 700) + '</div></div>';
+  }
+
+  /** The reply box of a thread: a button until it is wanted, then a box. Only on an open PR. */
+  function replyBox(commentId, v) {
+    if (v.pr.state !== 'OPEN' || !commentId) return '';
+    var key = 'rep-' + commentId;
+    if (state.edits[key] == null) return '<div class="cmt-reply"><button class="reply-open" data-act="reply-open" data-id="' + esc(commentId) + '">Reply…</button></div>';
+    return '<div class="cmt-reply open"><textarea rows="3" data-edit="' + esc(key) + '" placeholder="Write a reply. It is posted on the pull request, in this thread.">' + esc(state.edits[key]) + '</textarea>' +
+      '<div class="row" style="margin-top:6px"><button class="btn small primary" data-act="reply-send" data-id="' + esc(commentId) + '"' + busyAttr('reply-' + commentId) + '>Reply</button><button class="btn small" data-act="reply-cancel" data-id="' + esc(commentId) + '">Cancel</button><span class="faint">Markdown</span></div></div>';
+  }
+
+  /** A card that folds to its first line: a thread nobody is reading does not have to take the screen. */
+  function card(key, cls, head, summary, body) {
+    var folded = isOpen(key, false);
+    return '<div class="cmt ' + cls + (folded ? ' folded' : '') + '"><div class="cmt-head" data-act="fold" data-key="' + esc(key) + '" title="' + (folded ? 'Unfold' : 'Fold') + '">' + head +
+      (folded ? '<span class="cmt-summary">' + esc(summary) + '</span>' : '<span class="spacer"></span>') + '<span class="caret">' + (folded ? '▸' : '▾') + '</span></div>' + (folded ? '' : body) + '</div>';
+  }
+
+  function findingInCode(f, v) {
+    var comments = v.comments || [];
+    var root = f.publishedId ? comments.filter(function (c) { return c.commentId === f.publishedId; })[0] : null;
+    var chain = f.publishedId ? repliesUnder(f.publishedId, comments) : [];
+    var status = (f.publishedId ? '<span class="chip okc">published</span>' : f.dismissedAt ? '<span class="chip">dismissed</span>' : '<span class="chip mine">draft</span>') +
+      (f.resolution && RESOLUTION_LABELS[f.resolution] ? '<span class="chip ' + RESOLUTION_LABELS[f.resolution][1] + '">' + RESOLUTION_LABELS[f.resolution][0] + '</span>' : '');
+    var head = '<span class="sev ' + esc(f.severity) + '">' + esc(f.severity) + '</span>' + (f.category ? '<span class="chip">' + esc(CATEGORY_LABELS[f.category] || f.category) + '</span>' : '') +
+      '<strong class="cmt-title">' + esc(f.title) + '</strong>' + status + (chain.length ? '<span class="chip">' + chain.length + ' repl' + (chain.length === 1 ? 'y' : 'ies') + '</span>' : '');
+    var body = '<div class="cmt-body">' + clamped('code-' + f.id, md(f.body), String(f.body).length > 700) +
+      (f.suggestion ? '<div class="suggestion"><div class="faint">How it could be fixed</div>' + md(f.suggestion) + '</div>' : '') +
+      (f.resolutionNote ? '<div class="faint" style="margin-top:6px">' + esc(f.resolutionNote) + '</div>' : '') + '</div>';
+    if (root) body = '<div class="cmt-body faint" style="padding-bottom:0">Posted by ' + esc(root.author) + ' ' + esc(when(root.createdOn)) + (f.publishedUrl ? ' · <button class="link" data-act="open-url" data-url="' + esc(f.publishedUrl) + '">view on the PR ↗</button>' : '') + '</div>' + body;
+    body += chain.map(function (c) { return message(c.author, c.createdOn, c.body, c.ours); }).join('');
+    if (!f.publishedId && !f.dismissedAt && v.pr.state === 'OPEN') {
+      body += '<div class="cmt-actions"><button class="btn small primary" data-act="publish-finding" data-id="' + esc(f.id) + '"' + busyAttr('publish-' + f.id) + '>Publish</button><button class="btn small" data-act="dismiss" data-id="' + esc(f.id) + '" data-on="1">Dismiss</button>' +
+        (v.repo.fixMode !== 'OFF' ? '<button class="btn small go" data-act="fix" data-id="' + esc(f.id) + '">Fix</button>' : '') + '<span class="spacer"></span><button class="btn small" data-act="ask" data-finding="' + esc(f.id) + '">Ask Claude</button></div>';
+    } else if (f.publishedId) {
+      body += replyBox(f.publishedId, v);
+    }
+    return card('cf-' + f.id, 'finding-card sev-' + esc(f.severity), head, f.body.split('\n')[0], body);
+  }
+
+  function noteInCode(n, v) {
+    var key = 'note-' + n.id;
+    var head = '<span class="chip accent">note</span><strong class="cmt-title">Your note</strong>' + (n.publishedId ? '<span class="chip okc">published</span>' : '<span class="chip mine">not published</span>');
+    var body = n.publishedId
+      ? '<div class="cmt-body">' + md(n.body) + '</div>' + replyBox(n.publishedId, v)
+      : '<div class="cmt-body"><textarea rows="3" data-edit="' + key + '" data-note="' + esc(n.id) + '">' + esc(edit(key, n.body)) + '</textarea></div>' +
+        '<div class="cmt-actions"><button class="btn small primary" data-act="publish-note" data-id="' + esc(n.id) + '"' + busyAttr('note-' + n.id) + '>Publish</button><button class="btn small danger" data-act="delete-note" data-id="' + esc(n.id) + '">Delete</button></div>';
+    return card('cn-' + n.id, 'note-card', head, n.body.split('\n')[0], body);
+  }
+
+  function threadInCode(root, v) {
+    var chain = repliesUnder(root.commentId, v.comments || []);
+    var head = avatar(root.author, root.ours) + '<strong class="cmt-title">' + esc(root.author) + '</strong><span class="faint">' + esc(when(root.createdOn)) + '</span>' +
+      (chain.length ? '<span class="chip">' + chain.length + ' repl' + (chain.length === 1 ? 'y' : 'ies') + '</span>' : '');
+    var body = '<div class="cmt-body">' + clamped('thr-' + root.commentId, md(root.body), String(root.body).length > 700) + '</div>' +
+      chain.map(function (c) { return message(c.author, c.createdOn, c.body, c.ours); }).join('') + replyBox(root.commentId, v);
+    return card('ct-' + root.commentId, 'thread-card' + (root.ours ? ' ours' : ''), head, String(root.body).split('\n')[0], body);
+  }
+
+  function noteComposer(file, line) {
     var key = 'newnote-' + file + '-' + (line || 'file');
-    return '<div class="finding"><div class="faint">New note on ' + anchor(file, line) + ' — kept here until published</div><textarea rows="3" data-edit="' + esc(key) + '">' + esc(edit(key)) + '</textarea>' +
-      '<div class="row" style="margin-top:4px"><button class="btn small primary" data-act="add-note" data-file="' + esc(file) + '" data-line="' + (line || '') + '">Save note</button><button class="btn small" data-act="note-cancel">Cancel</button></div></div>';
+    return '<div class="cmt note-card composing"><div class="cmt-head"><span class="chip accent">note</span><strong class="cmt-title">New note on ' + anchor(file, line) + '</strong><span class="spacer"></span></div>' +
+      '<div class="cmt-body"><textarea rows="3" data-edit="' + esc(key) + '" placeholder="Kept here until you publish it.">' + esc(edit(key)) + '</textarea></div>' +
+      '<div class="cmt-actions"><button class="btn small primary" data-act="add-note" data-file="' + esc(file) + '" data-line="' + (line || '') + '">Save note</button><button class="btn small" data-act="note-cancel">Cancel</button></div></div>';
+  }
+
+  /** A file's header: where it is, what happened to it, how much, and the view's controls. */
+  function diffHeader(v, file) {
+    var files = state.code.files || [];
+    var index = files.map(function (f) { return f.path; }).indexOf(file);
+    var info = files[index] || { added: 0, deleted: 0, status: 'M' };
+    var cut = file.lastIndexOf('/');
+    var status = { A: ['added', 'New file'], D: ['deleted', 'Deleted'], R: ['renamed', 'Renamed' + (info.from ? ' from ' + info.from : '')], C: ['renamed', 'Copied'], M: ['modified', 'Modified'] }[info.status] || ['modified', 'Modified'];
+    var total = info.added + info.deleted;
+    var boxes = '';
+    for (var b = 0; b < 5; b++) {
+      var green = total ? Math.round((info.added / total) * 5) : 0;
+      boxes += '<i class="' + (b < green ? 'a' : total ? 'd' : '') + '"></i>';
+    }
+    var anchored = codeAnchors(v);
+    var here = (v.findings || []).filter(function (f) { return f.filePath === file; }).length + (v.comments || []).filter(function (c) { return c.inlinePath === file && !c.parentId && !c.deleted; }).length;
+    var viewed = (state.code.viewed || []).indexOf(file) >= 0;
+    var layout = diffLayout();
+    return '<div class="file-head">' +
+      '<div class="file-row">' +
+        '<button class="btn small" data-act="step-file" data-dir="-1"' + (index <= 0 ? ' disabled' : '') + ' title="Previous file ( [ )">‹</button>' +
+        '<span class="status-badge ' + status[0] + '" title="' + esc(status[1]) + '">' + esc(info.status || 'M') + '</span>' +
+        '<span class="file-path" title="' + esc(file) + '">' + (cut >= 0 ? '<span class="faint">' + esc(file.slice(0, cut + 1)) + '</span>' : '') + '<strong>' + esc(file.slice(cut + 1)) + '</strong></span>' +
+        '<span class="stat-num added">+' + info.added + '</span><span class="stat-num removed">−' + info.deleted + '</span><span class="stat-boxes">' + boxes + '</span>' +
+        '<span class="spacer"></span><span class="faint" style="white-space:nowrap;flex:none">' + (index + 1) + ' / ' + files.length + '</span>' +
+        '<button class="btn small" data-act="step-file" data-dir="1"' + (index < 0 || index >= files.length - 1 ? ' disabled' : '') + ' title="Next file ( ] )">›</button>' +
+      '</div>' +
+      '<div class="file-row tools-row">' +
+        (anchored.length ? '<span class="seg"><button class="btn small" data-act="step-finding" data-dir="-1" title="Previous finding ( p )">↑</button><span class="faint">' + anchored.length + ' finding' + (anchored.length === 1 ? '' : 's') + '</span><button class="btn small" data-act="step-finding" data-dir="1" title="Next finding ( n )">↓</button></span>' : '') +
+        '<button class="btn small' + (state.code.hideComments ? '' : ' on') + '" data-act="toggle-comments" title="Show or hide the comments between the lines ( c )">' + ICON_CMT + here + '</button>' +
+        '<span class="seg toggle"><button class="btn small' + (layout === 'unified' ? ' on' : '') + '" data-act="layout" data-layout="unified" title="One column">Unified</button><button class="btn small' + (layout === 'split' ? ' on' : '') + '" data-act="layout" data-layout="split" title="Old and new side by side">Split</button></span>' +
+        '<button class="btn small' + (wrapLines() ? ' on' : '') + '" data-act="toggle-wrap" title="Wrap long lines, or scroll them sideways">Wrap</button>' +
+        '<span class="seg"><button class="btn small" data-act="font" data-delta="-1" title="Smaller text">A−</button><span class="faint">' + diffFont() + '</span><button class="btn small" data-act="font" data-delta="1" title="Larger text">A+</button></span>' +
+        '<span class="spacer"></span>' +
+        '<button class="btn small" data-act="note-file" data-file="' + esc(file) + '" title="A note on the whole file. For a line, click its number.">+ Note</button>' +
+        '<button class="btn small' + (viewed ? ' go' : '') + '" data-act="toggle-viewed" data-file="' + esc(file) + '" title="Mark this file as looked at, and go to the next one not viewed ( v )">' + (viewed ? '✓ Viewed' : 'Viewed') + '</button>' +
+      '</div></div>';
+  }
+
+  function drawDiff(v, file, lines) {
+    var findings = (v.findings || []).filter(function (f) { return f.filePath === file; });
+    var notes = (v.notes || []).filter(function (n) { return n.filePath === file; });
+    var published = {};
+    findings.forEach(function (f) { if (f.publishedId) published[f.publishedId] = true; });
+    notes.forEach(function (n) { if (n.publishedId) published[n.publishedId] = true; });
+    // A thread that is a finding's or a note's own comment is drawn inside that card, not twice.
+    var threads = (v.comments || []).filter(function (c) { return c.inlinePath === file && !c.parentId && !c.deleted && !published[c.commentId]; });
+    var group = function (list, key) { var m = {}; list.forEach(function (x) { if (x[key]) (m[x[key]] = m[x[key]] || []).push(x); }); return m; };
+    var fByLine = group(findings, 'lineNo');
+    var nByLine = group(notes, 'lineNo');
+    var tByLine = group(threads, 'inlineLine');
+    var present = {};
+    lines.forEach(function (l) { if (l.newNo) present[l.newNo] = true; });
+    var hide = state.code.hideComments;
+    var dots = {};
+    [findings, notes].forEach(function (list) { list.forEach(function (x) { if (x.lineNo) dots[x.lineNo] = (dots[x.lineNo] || 0) + 1; }); });
+    threads.forEach(function (t) { if (t.inlineLine) dots[t.inlineLine] = (dots[t.inlineLine] || 0) + 1; });
+    var anchors = function (newNo) {
+      var cards = (fByLine[newNo] || []).map(function (f) { return findingInCode(f, v); })
+        .concat((nByLine[newNo] || []).map(function (n) { return noteInCode(n, v); }))
+        .concat((tByLine[newNo] || []).map(function (t) { return threadInCode(t, v); }));
+      if (state.code.noteAt && state.code.noteAt.line === newNo) cards.push(noteComposer(file, newNo));
+      if (hide && !(state.code.noteAt && state.code.noteAt.line === newNo)) return '';
+      return cards.join('');
+    };
+    var html = diffHeader(v, file);
+    // What has no line in this diff — the whole file, or a line the diff does not show — goes on top.
+    var loose = findings.filter(function (f) { return !f.lineNo || !present[f.lineNo]; }).map(function (f) { return findingInCode(f, v); })
+      .concat(notes.filter(function (n) { return !n.lineNo || !present[n.lineNo]; }).map(function (n) { return noteInCode(n, v); }))
+      .concat(threads.filter(function (t) { return !t.inlineLine || !present[t.inlineLine]; }).map(function (t) { return threadInCode(t, v); }));
+    if (state.code.noteAt && state.code.noteAt.line == null) loose.push(noteComposer(file, null));
+    if (loose.length && !hide) html += '<div class="loose"><div class="faint loose-title">On the file, or on lines this diff does not show</div>' + loose.join('') + '</div>';
+    return html + diffTable(lines, { file: file, anchors: anchors, noteable: true, expandable: true, layout: diffLayout(), dots: hide ? dots : null });
   }
 
   // ---- commits ----------------------------------------------------------------------
@@ -1479,11 +2017,7 @@
         html += '<div style="padding:6px 12px" class="row">' + c.files.map(function (file) {
           return '<span class="chip click' + (c.file === file.path ? ' on' : '') + '" data-act="commit-file" data-file="' + esc(file.path) + '">' + esc(file.path.split('/').pop()) + ' <span class="added">+' + file.added + '</span> <span class="removed">−' + file.deleted + '</span></span>';
         }).join('') + '</div>';
-        if (c.file && c.lines) html += '<table class="diff' + (wrapLines() ? '' : ' nowrap') + '">' + c.lines.map(function (l) {
-          if (l.kind === 'META' && !diffMetaWorthShowing(l.text)) return '';
-          if (l.kind === 'HUNK' || l.kind === 'META') return '<tr class="' + l.kind + '"><td colspan="3">' + esc(l.kind === 'META' ? diffMetaWords(l.text) : l.text) + '</td></tr>';
-          return '<tr class="' + l.kind + '"><td class="n">' + (l.oldNo || '') + '</td><td class="n">' + (l.newNo || '') + '</td><td class="c">' + esc(l.text) + '</td></tr>';
-        }).join('') + '</table>';
+        if (c.file && c.lines) html += diffTable(c.lines, { file: c.file, layout: diffLayout() });
       }
     }
     return html + '</section></div>';
@@ -1562,7 +2096,7 @@
   function drawHistoryTab(v) {
     var events = [];
     (v.reviews || []).forEach(function (r) { events.push({ at: r.createdAt, who: r.trigger === 'AUTO' ? 'automatic' : 'you', kind: 'review', text: 'Review ' + (r.status || '').toLowerCase() + (r.sinceSha ? ' (incremental)' : '') + (r.costUsd ? ' · ' + money(r.costUsd) : '') + (r.error ? ' — ' + r.error.slice(0, 160) : '') }); });
-    (v.publications || []).forEach(function (p) { events.push({ at: p.publishedAt, who: 'you', kind: 'published', text: 'General comment published' }); });
+    (v.publications || []).forEach(function (p) { events.push({ at: p.publishedAt, who: 'you', kind: 'published', text: p.reviewId ? 'General comment published' : 'Reply published: ' + String(p.body || '').replace(/\s+/g, ' ').slice(0, 160) }); });
     (v.comments || []).forEach(function (cm) { events.push({ at: cm.createdOn, who: cm.author, kind: cm.ours ? 'our comment' : cm.parentId ? 'reply' : 'comment', text: (cm.inlinePath ? cm.inlinePath + (cm.inlineLine ? ':' + cm.inlineLine : '') + ' — ' : '') + String(cm.body).replace(/\s+/g, ' ').slice(0, 220) }); });
     (v.notes || []).forEach(function (n) { events.push({ at: n.createdAt, who: 'you', kind: 'note', text: n.filePath + ' — ' + String(n.body).slice(0, 160) }); });
     (v.fixes || []).forEach(function (f) { events.push({ at: f.createdAt, who: 'fix', kind: 'fix ' + String(f.state).toLowerCase(), text: (f.sha ? f.sha.slice(0, 7) + ' ' : '') + (f.summary || f.error || '').slice(0, 200) }); });
@@ -1694,6 +2228,7 @@
       if (event.key === '[') { event.preventDefault(); stepFile(-1); return; }
       if (event.key === 'n') { event.preventDefault(); stepFinding(1); return; }
       if (event.key === 'p') { event.preventDefault(); stepFinding(-1); return; }
+      if (event.key === 'c') { event.preventDefault(); actions['toggle-comments'](); return; }
       if (event.key === 'v' && state.code.file) { event.preventDefault(); actions['toggle-viewed']({ getAttribute: function () { return state.code.file; } }); return; }
     }
     if (state.view === 'dashboard' && event.key === '/') {
@@ -1787,6 +2322,44 @@
         }
         draw();
       }, fail);
+    },
+    expand: function (el) {
+      var file = el.getAttribute('data-file');
+      var gap = el.getAttribute('data-gap');
+      var dir = el.getAttribute('data-dir');
+      var apply = function () {
+        state.code.reveal = state.code.reveal || {};
+        var byFile = state.code.reveal[file] = state.code.reveal[file] || {};
+        var r = byFile[gap] = byFile[gap] || { top: 0, bottom: 0 };
+        if (dir === 'all') r.top = 1e9;
+        else if (dir === 'top') r.top += 20;
+        else r.bottom += 20;
+        draw();
+      };
+      state.code.fileText = state.code.fileText || {};
+      if (state.code.fileText[file]) return apply();
+      call('fileText', { repoId: state.repoId, prId: state.prId, file: file }).then(function (r) { state.code.fileText[file] = r; apply(); }, fail);
+    },
+    'reply-open': function (el) { state.edits['rep-' + el.getAttribute('data-id')] = ''; draw(); var box = document.querySelector('[data-edit="rep-' + el.getAttribute('data-id') + '"]'); if (box) box.focus(); },
+    'reply-cancel': function (el) { delete state.edits['rep-' + el.getAttribute('data-id')]; draw(); },
+    'reply-send': function (el) {
+      var id = el.getAttribute('data-id');
+      var body = state.edits['rep-' + id];
+      if (!String(body || '').trim()) return say('The reply is empty.', true);
+      act('reply-' + id, function () { return call('replyToComment', { repoId: state.repoId, prId: state.prId, commentId: id, body: body }); }, function () { delete state.edits['rep-' + id]; say('Reply posted.'); });
+    },
+    'toggle-comments': function () { state.code.hideComments = !state.code.hideComments; draw(); },
+    layout: function (el) {
+      var next = el.getAttribute('data-layout') === 'split' ? 'split' : 'unified';
+      if (state.overview) state.overview.settings.diffLayout = next;
+      draw();
+      call('saveSettings', { settings: { diffLayout: next } }).catch(function () {});
+    },
+    font: function (el) {
+      var next = Math.min(16, Math.max(10, diffFont() + Number(el.getAttribute('data-delta'))));
+      if (state.overview) state.overview.settings.diffFont = next;
+      draw();
+      call('saveSettings', { settings: { diffFont: next } }).catch(function () {});
     },
     'toggle-wrap': function () {
       var next = !wrapLines();
@@ -1963,7 +2536,7 @@
       if (!state.code.files) { loadFiles().then(function () { openFile(file, line); }); draw(); } else openFile(file, line);
     },
     file: function (el) { openFile(el.getAttribute('data-file')); },
-    'code-fetch': function () { state.code.files = null; state.code.file = null; draw(); loadFiles(true); },
+    'code-fetch': function () { state.code.files = null; state.code.lines = null; draw(); loadFiles(true); },
     'note-line': function (el) { state.code.noteAt = { line: Number(el.getAttribute('data-line')) }; draw(); },
     'note-file': function () { state.code.noteAt = { line: null }; draw(); },
     'note-cancel': function () { state.code.noteAt = null; draw(); },
@@ -2113,6 +2686,7 @@
       if (saved.prTab) state.prTab = saved.prTab;
       if (saved.prSort) state.prSort = saved.prSort;
       if (saved.dashFilter) state.dashFilter = saved.dashFilter;
+      if (saved.codeFile && state.view === 'pr') state.code.file = saved.codeFile;
     }
     if (payload && payload.showing === false) state.showing = false;
     if (state.showing) start();

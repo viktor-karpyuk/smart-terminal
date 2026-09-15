@@ -97,6 +97,8 @@ class ReviewService {
       // How the panel was laid out, so a restart does not undo a dragged divider.
       asideWidth: Number(prefs['ui.asideWidth'] ?? 0) || null,
       wrapLines: prefs['ui.wrapLines'] !== 'false',
+      diffLayout: prefs['ui.diffLayout'] === 'split' ? 'split' : 'unified',
+      diffFont: Number(prefs['ui.diffFont'] ?? 12) || 12,
     };
   }
 
@@ -316,6 +318,8 @@ class ReviewService {
    */
   async ensureRefs(repo, pr, { force = false } = {}) {
     const refs = [`origin/${pr.targetBranch}`, `origin/${pr.sourceBranch}`];
+    // A PR brought in by the import can have no branch names at all: there is nothing to fetch.
+    if (!pr.sourceBranch || !pr.targetBranch) return { absent: refs, fetchOutput: '' };
     const missing = async () => (await Promise.all(refs.map(async (ref) => ((await this.git.hasRef(repo.localPath, ref)) ? null : ref)))).filter(Boolean);
     let absent = await missing();
     let fetchOutput = '';
@@ -333,6 +337,7 @@ class ReviewService {
 
   branchGone(pr, fetchOutput) {
     const closed = pr.state && pr.state !== 'OPEN';
+    if (!pr.sourceBranch) return 'This pull request was imported without its branch names, so its code cannot be read from the clone.';
     return (
       `The branch ${pr.sourceBranch} is not on origin any more` +
       (closed ? `: the pull request is ${String(pr.state).toLowerCase()}, and its branch was deleted.` : ', and it could not be fetched.') +
@@ -347,7 +352,22 @@ class ReviewService {
     const { absent, fetchOutput } = await this.ensureRefs(repo, pr, { force: fetch });
     if (absent.includes(`origin/${pr.sourceBranch}`)) throw new Error(this.branchGone(pr, fetchOutput));
     if (absent.length) throw new Error(`origin/${pr.targetBranch} is not in the clone and could not be fetched.`);
-    return { files: await this.git.numstat(repo.localPath, `origin/${pr.targetBranch}...origin/${pr.sourceBranch}`) };
+    const range = `origin/${pr.targetBranch}...origin/${pr.sourceBranch}`;
+    const [files, statuses] = await Promise.all([this.git.numstat(repo.localPath, range), this.git.nameStatus(repo.localPath, range)]);
+    return { files: files.map((file) => ({ ...file, status: statuses[file.path]?.status ?? 'M', from: statuses[file.path]?.from ?? null })) };
+  }
+
+  /**
+   * The new side of a file, whole, so the code view can show the lines a hunk
+   * left out. Capped: a generated file of a hundred thousand lines is not
+   * context anybody expands by hand.
+   */
+  async prFileText(repoId, prId, file) {
+    const repo = this.engine.requireRepo(repoId);
+    const pr = this.engine.prOrThrow(repoId, prId);
+    const lines = await this.git.fileAt(repo.localPath, `origin/${pr.sourceBranch}`, file);
+    if (!lines) throw new Error(`${file} is not on ${pr.sourceBranch}.`);
+    return { lines: lines.slice(0, 20000), total: lines.length, truncated: lines.length > 20000 };
   }
 
   async prDiff(repoId, prId, file) {
@@ -528,6 +548,22 @@ class ReviewService {
       guidelines: (args) => ({ ok: true, guidelines: s.guidelines(args.repoId) }),
       usage: () => ({ ok: true, usage: s.store.usageSummary() }),
       bus: () => ({ ok: true, ...s.bus.overview() }),
+      fileText: async (args) => ({ ok: true, ...(await s.prFileText(str(args.repoId, 'A repository'), num(args.prId), str(args.file, 'A file'))) }),
+      /** An answer in any thread of the PR, from the line it hangs on: someone else's comment or one of ours. */
+      replyToComment: async (args) => {
+        const repoId = str(args.repoId, 'A repository');
+        const prId = num(args.prId);
+        const body = String(args.body ?? '').trim();
+        if (!body) throw new Error('The reply is empty.');
+        const repo = e.requireRepo(repoId);
+        const commentId = str(args.commentId, 'A comment');
+        if (!s.store.comments(repoId, prId).some((comment) => comment.commentId === commentId)) throw new Error('That comment is not in the stored thread; reload the PR.');
+        const posted = await s.forge.of(repo).reply(prId, commentId, body);
+        // A reply written here is ours, in the same record every other road to the PR uses.
+        s.store.recordPublication(null, repoId, prId, posted.id, posted.url, body);
+        await e.syncQuietly(repo, prId);
+        return { ok: true, url: posted.url };
+      },
       viewed: (args) => ({ ok: true, ...s.viewed(str(args.repoId, 'A repository'), num(args.prId)) }),
       setViewed: (args) => ({ ok: true, ...s.setViewed(str(args.repoId, 'A repository'), num(args.prId), str(args.file, 'A file'), args.viewed !== false) }),
       activity: () => ({ ok: true, activity: e.activity.list() }),
@@ -552,13 +588,15 @@ class ReviewService {
       },
       saveSettings: (args) => {
         const input = args.settings ?? {};
-        const map = { language: 'review.language', me: 'me.author', profileId: 'claude.profileId', notify: 'notify.enabled', autoEnabled: 'auto.enabled', autoInterval: 'auto.interval.minutes', autoMax: 'auto.max.per.cycle', followUpDays: 'followup.days', asideWidth: 'ui.asideWidth', wrapLines: 'ui.wrapLines' };
+        const map = { language: 'review.language', me: 'me.author', profileId: 'claude.profileId', notify: 'notify.enabled', autoEnabled: 'auto.enabled', autoInterval: 'auto.interval.minutes', autoMax: 'auto.max.per.cycle', followUpDays: 'followup.days', asideWidth: 'ui.asideWidth', wrapLines: 'ui.wrapLines', diffLayout: 'ui.diffLayout', diffFont: 'ui.diffFont' };
         for (const [field, key] of Object.entries(map)) {
           if (!(field in input)) continue;
           const value = input[field];
           if (typeof value === 'boolean') s.store.setPref(key, value ? 'true' : 'false');
           else if (field === 'autoInterval' || field === 'autoMax' || field === 'followUpDays') s.store.setPref(key, String(Math.max(1, Number.parseInt(value, 10) || 1)));
           else if (field === 'asideWidth') s.store.setPref(key, String(Math.min(900, Math.max(160, Number.parseInt(value, 10) || 290))));
+          else if (field === 'diffFont') s.store.setPref(key, String(Math.min(16, Math.max(10, Number.parseInt(value, 10) || 12))));
+          else if (field === 'diffLayout') s.store.setPref(key, value === 'split' ? 'split' : 'unified');
           else s.store.setPref(key, String(value ?? ''));
         }
         s.emitRaw({ type: 'settings', settings: s.settings() });

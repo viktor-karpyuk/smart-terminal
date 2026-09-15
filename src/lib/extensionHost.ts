@@ -194,12 +194,12 @@ const SPRING_VERBS = new Map<string, Channel>([
  */
 const REVIEW_READ = [
   'overview', 'dashboard', 'repos', 'repo', 'prs', 'pr', 'files', 'diff', 'commits', 'commitFiles', 'commitDiff',
-  'guidelines', 'usage', 'activity', 'viewed', 'importInspect', 'models', 'depths', 'rerunCheck', 'followUpText', 'brief', 'paths',
+  'guidelines', 'usage', 'activity', 'viewed', 'fileText', 'importInspect', 'models', 'depths', 'rerunCheck', 'followUpText', 'brief', 'paths',
   'detectRemote', 'bus',
 ] as const;
 const REVIEW_WRITE = [
   'pickFolder', 'saveRepo', 'testRepo', 'deleteRepo', 'hideRepo', 'saveSettings', 'saveGuideline', 'deleteGuideline',
-  'importClaudeMd', 'importRun', 'setViewed', 'autoRunNow', 'openUrl', 'refreshPrs', 'refreshAll', 'searchHistory', 'loadPr',
+  'importClaudeMd', 'importRun', 'setViewed', 'replyToComment', 'autoRunNow', 'openUrl', 'refreshPrs', 'refreshAll', 'searchHistory', 'loadPr',
   'review', 'cancel', 'cancelRun', 'verify', 'finalPass', 'saveReviewBody', 'publishReview', 'publishFinding',
   'publishAll', 'dismissFinding', 'closeFinding', 'editFinding', 'addNote', 'updateNote', 'deleteNote', 'publishNote',
   'draftReply', 'draftAll', 'saveReplyDraft', 'publishReply', 'dismissReply', 'dismissAllReplies', 'followUp',
