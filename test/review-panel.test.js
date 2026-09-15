@@ -107,3 +107,26 @@ test('a published finding does not repeat its title under the title', () => {
   assert.equal(T.withoutTitle('**Another title**\n\nBody', 'A title'), '**Another title**\n\nBody');
   assert.equal(T.withoutTitle('Just a body', 'A title'), 'Just a body');
 });
+
+test('unchanged stretches fold into gaps that open from either end, without losing or repeating a line', () => {
+  const D = fromPanel(['diffMetaWorthShowing', 'diffMetaWords', 'parseHunk', 'diffItems']);
+  const total = 30;
+  const fileLines = Array.from({ length: total }, (_, i) => `line ${i + 1}`);
+  const hunk = [{ kind: 'HUNK', text: '@@ -10,3 +10,5 @@' }, { kind: 'CONTEXT', oldNo: 10, newNo: 10, text: 'line 10' }, { kind: 'ADDED', oldNo: null, newNo: 11, text: 'new a' }, { kind: 'ADDED', oldNo: null, newNo: 12, text: 'new b' }, { kind: 'CONTEXT', oldNo: 11, newNo: 13, text: 'line 13' }, { kind: 'CONTEXT', oldNo: 12, newNo: 14, text: 'line 14' }];
+  const shape = (items) => items.map((it) => (it.type === 'gap' ? `gap:${it.key}:${it.hidden}` : it.type === 'hunk' ? 'hunk' : `${it.l.oldNo}/${it.l.newNo}`));
+  D.state = { code: { fileText: { 'a.js': { lines: fileLines, total } }, reveal: {} } };
+  assert.deepEqual(shape(D.diffItems(hunk, 'a.js')), ['gap:g0:9', 'hunk', '10/10', 'null/11', 'null/12', '11/13', '12/14', 'gap:end:16']);
+
+  // Five lines above the change, and every line after it: the old side's numbers follow the lines the hunk added.
+  D.state.code.reveal = { 'a.js': { g0: { top: 0, bottom: 5 }, end: { top: 99, bottom: 0 } } };
+  const opened = shape(D.diffItems(hunk, 'a.js'));
+  assert.deepEqual(opened.slice(0, 7), ['gap:g0:4', '5/5', '6/6', '7/7', '8/8', '9/9', 'hunk']);
+  assert.equal(opened[opened.length - 1], '28/30');
+  assert.ok(!opened.some((item) => item.startsWith('gap:end')), 'fully opened: no gap left');
+  const newNumbers = opened.filter((item) => /\/\d+$/.test(item)).map((item) => Number(item.split('/')[1]));
+  assert.equal(new Set(newNumbers).size, newNumbers.length, 'no line twice');
+
+  // Without the file's text, the tail is unknown and still offered.
+  D.state = { code: { fileText: {}, reveal: {} } };
+  assert.deepEqual(shape(D.diffItems(hunk, 'a.js')).slice(-1), ['gap:end:null']);
+});
