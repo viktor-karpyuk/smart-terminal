@@ -234,11 +234,37 @@ class ReviewEngine {
    * and a fix's notice — or our own words come back as someone else's and the
    * app opens a draft to answer itself.
    */
+  /**
+   * Findings that are already on the PR, found in the stored thread and marked
+   * published with the comment they are. Returns the comment ids it took as
+   * ours, so replies to them are seen as replies to us.
+   */
+  reconcilePublished(repo, prId) {
+    const thread = this.store.comments(repo.id, prId);
+    const taken = new Set(this.store.findingsForPr(repo.id, prId).map((finding) => finding.publishedId).filter(Boolean));
+    const adopted = [];
+    for (const finding of this.store.findingsForPr(repo.id, prId)) {
+      if (finding.publishedId || finding.dismissedAt || finding.askedBy) continue;
+      const comment = rules.matchPublished(finding, thread.filter((entry) => !taken.has(entry.commentId)));
+      if (!comment) continue;
+      const url = repo.provider === 'BITBUCKET' ? `https://bitbucket.org/${repo.owner}/${repo.slug}/pull-requests/${prId}#comment-${comment.commentId}` : null;
+      this.store.markFindingPublished(finding.id, comment.commentId, url);
+      this.store.markCommentOurs(repo.id, prId, comment.commentId);
+      this.store.markPublishedIfComplete(finding.reviewId, url);
+      taken.add(comment.commentId);
+      adopted.push(comment.commentId);
+    }
+    if (adopted.length) this.changed(repo.id, prId);
+    return adopted;
+  }
+
   async syncComments(repo, prId) {
     const fetched = await this.forge.of(repo).comments(prId);
     const ours = this.store.ourCommentIds(repo.id, prId);
     this.store.syncComments(repo.id, prId, fetched, ours);
     this.store.dismissRepliesTo(repo.id, prId, this.store.fixReplyIds(repo.id, prId));
+    const adopted = this.reconcilePublished(repo, prId);
+    for (const id of adopted) ours.add(id);
     const thread = this.store.comments(repo.id, prId);
     let registered = 0;
     for (const entry of rules.repliesToUs(thread, ours)) {
@@ -647,6 +673,10 @@ class ReviewEngine {
     if (finding.publishedId) return { ok: true, url: finding.publishedUrl };
     const repo = this.requireRepo(finding.repoId);
     const pr = this.prOrThrow(finding.repoId, finding.prId);
+    // Already on the PR under another road? Then it is published, and posting it again would say it twice.
+    this.reconcilePublished(repo, finding.prId);
+    const again = this.store.finding(findingId);
+    if (again.publishedId) return { ok: true, url: again.publishedUrl, alreadyThere: true };
     try {
       const posted = await this.forge.of(repo).inline(finding.prId, rules.findingComment(finding, this.language()), finding.filePath, finding.lineNo, pr.headSha);
       this.store.markFindingPublished(findingId, posted.id, posted.url);
@@ -662,6 +692,12 @@ class ReviewEngine {
 
   /** Every finding still waiting, then every note. One failing does not stop the rest. */
   async publishAll(repoId, prId) {
+    // The thread as it is now first: what was published elsewhere since it was last read is not published again.
+    try {
+      await this.syncComments(this.requireRepo(repoId), prId);
+    } catch {
+      /* publishing does not wait on reading; each finding still checks what is stored */
+    }
     const review = this.store.latestDone(repoId, prId);
     const findings = review ? this.store.findingsForReview(review.id).filter((finding) => !rules.settled(finding)) : [];
     const notes = this.store.notes(repoId, prId).filter((note) => !note.publishedId);

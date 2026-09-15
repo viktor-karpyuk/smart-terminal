@@ -866,6 +866,10 @@ class ReviewStore {
     return ids;
   }
 
+  markCommentOurs(repoId, prId, commentId) {
+    this.run('UPDATE cr_pr_comment SET is_ours = 1 WHERE repo_id = ? AND pr_id = ? AND comment_id = ?', repoId, prId, commentId);
+  }
+
   syncComments(repoId, prId, fetched, ours) {
     this.transaction(() => {
       const stamp = now();

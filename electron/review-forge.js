@@ -284,6 +284,18 @@ class Bitbucket {
     return this.posted(await this.json(`${this.base}/pullrequests/${prId}/comments`, { method: 'POST', body: payload, idempotent: false }), prId);
   }
 
+  /** A PR's commits as the provider keeps them — there even after its branch was merged and deleted. */
+  async commits(prId) {
+    const values = await this.paged(`${this.base}/pullrequests/${prId}/commits?pagelen=100`, 5);
+    return values.map((commit) => ({
+      sha: String(commit.hash ?? ''),
+      author: commit.author?.user?.display_name ?? String(commit.author?.raw ?? '?').replace(/\s*<.*>$/, ''),
+      date: String(commit.date ?? '').slice(0, 10),
+      subject: String(commit.message ?? '').split('\n')[0],
+      body: String(commit.message ?? '').split('\n').slice(1).join('\n').trim(),
+    }));
+  }
+
   async approve(prId) {
     await this.json(`${this.base}/pullrequests/${prId}/approve`, { method: 'POST', idempotent: false });
   }
@@ -436,6 +448,20 @@ class GitHub {
       parentId: comment.in_reply_to_id ? `rc-${comment.in_reply_to_id}` : null,
     }));
     return [...general, ...inline].sort((a, b) => a.createdOn.localeCompare(b.createdOn));
+  }
+
+  /** Oldest first on GitHub; newest first everywhere else in the app, so it is turned round. */
+  async commits(prId) {
+    const values = await this.paged(`${this.base}/pulls/${prId}/commits?per_page=100`, 5);
+    return values
+      .map((commit) => ({
+        sha: String(commit.sha ?? ''),
+        author: commit.commit?.author?.name ?? commit.author?.login ?? '?',
+        date: String(commit.commit?.author?.date ?? '').slice(0, 10),
+        subject: String(commit.commit?.message ?? '').split('\n')[0],
+        body: String(commit.commit?.message ?? '').split('\n').slice(1).join('\n').trim(),
+      }))
+      .reverse();
   }
 
   async comment(prId, body) {

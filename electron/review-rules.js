@@ -1025,6 +1025,32 @@ function nextStep({ pr, review, findings = [], notes = [], threads = [], running
   return { kind: 'act', action: 'merge-open', title: 'Ready to merge', detail: 'Everything is published, answered and verified.' };
 }
 
+/**
+ * The comment on the PR that is this finding, published — by this app before
+ * it lost track, or by AI Code Reviewer running beside it. Recognised by what
+ * every road that publishes a finding writes: a root comment on the same file
+ * whose text carries the title in bold. The line is not required to match: a
+ * comment Bitbucket re-anchored after a push is still the same comment.
+ *
+ * Without this the finding reads as unpublished, the Code tab offers to publish
+ * it, and pressing the button posts the same comment a second time.
+ */
+function matchPublished(finding, comments) {
+  const title = String(finding.title ?? '').trim();
+  if (!title) return null;
+  const bold = `**${title}**`;
+  return (
+    comments.find((comment) => {
+      if (comment.parentId || comment.deleted) return false;
+      const body = String(comment.body ?? '');
+      if (!body.includes(bold)) return false;
+      // An inline comment on the file, or — for a finding with no line — the general comment that names it.
+      if (comment.inlinePath) return comment.inlinePath === finding.filePath;
+      return !finding.lineNo && body.startsWith(`\`${finding.filePath}\``);
+    }) ?? null
+  );
+}
+
 /** Age urgency marks, as the PR list shows them. */
 function ageMark(days) {
   if (days >= 90) return '▲▲▲';
@@ -1092,4 +1118,5 @@ module.exports = {
   daysBetween,
   readableError,
   nextStep,
+  matchPublished,
 };

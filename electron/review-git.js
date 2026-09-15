@@ -114,6 +114,10 @@ class ReviewGit {
     return res.ok ? res.stdout.trim() : null;
   }
 
+  async hasRef(dir, ref) {
+    return (await this.run(dir, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).ok;
+  }
+
   async isDirty(dir) {
     return Boolean((await this.run(dir, ['status', '--porcelain'])).stdout.trim());
   }

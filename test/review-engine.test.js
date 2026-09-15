@@ -68,6 +68,7 @@ function fakeForge(state) {
     undoRequestChanges: async () => state.calls.push('undoRequestChanges'),
     decline: async (prId, reason) => state.calls.push(`decline:${reason}`),
     merge: async (prId, options) => { state.calls.push(`merge:${options.strategy}`); return 'sha'; },
+    commits: async () => { state.calls.push('commits'); return [{ sha: 'abc1234def', author: 'Ana', date: '2026-09-01', subject: 'from the provider', body: '' }]; },
   };
   function post(comment) {
     const id = String(next++);
@@ -426,4 +427,47 @@ test('a database newer than this build refuses to open', { skip }, () => {
   new ReviewStore(db);
   db.prepare('UPDATE cr_schema SET version = ?').run(MIGRATIONS.length + 1);
   assert.throws(() => new ReviewStore(db), /newer than this build knows/);
+});
+
+
+test('a finding someone else already published is recognised, and never posted twice', { skip }, async () => {
+  const { service, repo, forgeState } = setup([async () => ({ structured: { summary: 's', findings: [finding()] } })]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  // AI Code Reviewer, running beside this app, published it in the meantime.
+  forgeState.comments.push({ commentId: '777', author: 'Viktor', body: '_bug_ · **add subtracts**\n\nIt returns a - b.', inlinePath: 'app.js', inlineLine: 2, deleted: false, createdOn: new Date().toISOString(), parentId: null });
+  const posted = forgeState.posted.length;
+  const published = await service.call('publishAll', { repoId: repo.id, prId: 7 });
+  assert.equal(published.ok, true, JSON.stringify(published));
+  assert.equal(forgeState.posted.length, posted, 'nothing was posted again');
+  const view = await service.call('pr', { repoId: repo.id, prId: 7 });
+  assert.equal(view.findings[0].publishedId, '777');
+  assert.ok(view.comments.find((c) => c.commentId === '777').ours, 'and its comment is ours, so a reply to it is a reply to us');
+  forgeState.comments.push({ commentId: '778', author: 'Ana', body: 'fixed', inlinePath: 'app.js', inlineLine: 2, deleted: false, createdOn: new Date(Date.now() + 1000).toISOString(), parentId: '777' });
+  await service.call('loadPr', { repoId: repo.id, prId: 7 });
+  assert.equal((await service.call('pr', { repoId: repo.id, prId: 7 })).threads[0].state, 'NEEDS_ANSWER');
+});
+
+test('commits: a branch missing from the clone is fetched, and a deleted one is read from the provider', { skip }, async () => {
+  const { service, repo, w, forgeState } = setup([]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  git(w.clone, 'update-ref', '-d', 'refs/remotes/origin/feature');
+  const fetched = await service.call('commits', { repoId: repo.id, prId: 7 });
+  assert.equal(fetched.ok, true, fetched.error);
+  assert.equal(fetched.commits.length, 1, 'the missing branch was fetched, not shown as empty');
+  assert.equal(fetched.note, null);
+  const files = await service.call('files', { repoId: repo.id, prId: 7 });
+  assert.deepEqual(files.files.map((f) => f.path), ['app.js']);
+
+  // The PR is merged and its branch deleted on the remote.
+  git(w.seed, 'push', 'origin', '--delete', 'feature');
+  git(w.clone, 'update-ref', '-d', 'refs/remotes/origin/feature');
+  service.store.upsertPr(repo.id, { ...service.store.pr(repo.id, 7), state: 'MERGED' });
+  const gone = await service.call('commits', { repoId: repo.id, prId: 7 });
+  assert.equal(gone.ok, true, gone.error);
+  assert.match(gone.note, /The branch feature is not on origin any more: the pull request is merged, and its branch was deleted\. These commits are read from GitHub/);
+  assert.deepEqual(gone.commits.map((c) => c.subject), ['from the provider']);
+  assert.ok(forgeState.calls.includes('commits'));
+  const noFiles = await service.call('files', { repoId: repo.id, prId: 7 });
+  assert.match(noFiles.error, /The branch feature is not on origin any more/);
 });

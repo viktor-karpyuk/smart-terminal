@@ -177,8 +177,22 @@
   .entry.ours .who { color: var(--accent); }
 
   /* The viewport below the app bar and the sticky tabs: scroll the header away and the diff has the whole screen. */
-  .split { display: grid; grid-template-columns: 290px minmax(0, 1fr); min-height: 0; height: calc(100vh - 88px); }
-  .split aside { border-right: 1px solid var(--border); overflow: auto; background: var(--bg-panel); }
+  .split { display: grid; grid-template-columns: var(--aside, 290px) 7px minmax(0, 1fr); min-height: 0; height: calc(100vh - 88px); }
+  .split aside { overflow: auto; background: var(--bg-panel); }
+  /* The divider between the files and the code: drag it, double-click it to reset, or focus it and use the arrows. */
+  .gutter { position: relative; cursor: col-resize; background: var(--bg-panel); border-left: 1px solid var(--border); outline: none; touch-action: none; }
+  .gutter::after { content: ''; position: absolute; top: 50%; left: 2px; width: 2px; height: 28px; margin-top: -14px; border-radius: 1px; background: var(--border-strong); opacity: 0.6; }
+  .gutter:hover, .gutter:focus-visible, .gutter.dragging { background: var(--accent-soft); }
+  .gutter:hover::after, .gutter:focus-visible::after, .gutter.dragging::after { background: var(--accent); opacity: 1; }
+  body.resizing, body.resizing * { cursor: col-resize !important; user-select: none !important; }
+  aside .dir { padding: 6px 10px 2px; color: var(--text-faint); font-size: 10.5px; font-family: ui-monospace, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+  aside .item .seen { width: 13px; height: 13px; margin: 0; flex: none; cursor: pointer; accent-color: var(--ok); }
+  aside .item.viewed .p { color: var(--text-faint); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text-faint) 50%, transparent); }
+  aside .tools { display: flex; gap: 6px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg-panel); z-index: 1; }
+  aside .tools input { flex: 1; min-width: 0; padding: 3px 6px; font-size: 11.5px; }
+  .viewed-bar { height: 3px; background: var(--bg-elevated); }
+  .viewed-bar > span { display: block; height: 100%; background: var(--ok); }
+  table.diff.nowrap td.c { white-space: pre; word-break: normal; }
   .split section { overflow: auto; }
   aside .item { padding: 5px 10px; cursor: pointer; display: flex; gap: 6px; align-items: baseline; border-left: 2px solid transparent; }
   aside .item:hover { background: var(--bg-elevated); }
@@ -296,6 +310,64 @@
       })
       .then(function () { delete state.busy[key]; draw(); });
   }
+  /** The divider: a width in pixels, remembered in the app's settings once a drag ends. */
+  function asideWidth() {
+    var saved = state.overview && state.overview.settings ? state.overview.settings.asideWidth : null;
+    return state.asideWidth || saved || 290;
+  }
+  function gutter() {
+    return '<div class="gutter" role="separator" aria-orientation="vertical" aria-label="Resize the file list" aria-valuenow="' + asideWidth() + '" tabindex="0" title="Drag to resize · double-click to reset · ← → when focused"></div>';
+  }
+  function splitStyle() { return ' style="--aside:' + asideWidth() + 'px"'; }
+  function setAsideWidth(width, save) {
+    var total = document.body.clientWidth || 1200;
+    var clamped = Math.round(Math.min(Math.max(160, width), Math.max(220, total - 320)));
+    state.asideWidth = clamped;
+    var splits = document.querySelectorAll('.split');
+    for (var i = 0; i < splits.length; i++) splits[i].style.setProperty('--aside', clamped + 'px');
+    var gutters = document.querySelectorAll('.gutter');
+    for (var j = 0; j < gutters.length; j++) gutters[j].setAttribute('aria-valuenow', String(clamped));
+    if (save) {
+      call('saveSettings', { settings: { asideWidth: clamped } }).then(function (r) { if (state.overview) state.overview.settings = r.settings; }, function () {});
+    }
+  }
+
+  // Dragging the divider moves it directly, without redrawing the panel on every pixel.
+  document.addEventListener('pointerdown', function (event) {
+    var handle = event.target.closest && event.target.closest('.gutter');
+    if (!handle || event.button !== 0) return;
+    var split = handle.parentElement;
+    var left = split.getBoundingClientRect().left;
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+    handle.classList.add('dragging');
+    document.body.classList.add('resizing');
+    var move = function (e) { setAsideWidth(e.clientX - left - 3, false); };
+    var up = function () {
+      handle.releasePointerCapture(event.pointerId);
+      handle.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      handle.removeEventListener('pointercancel', up);
+      setAsideWidth(asideWidth(), true);
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+    handle.addEventListener('pointercancel', up);
+  });
+  document.addEventListener('dblclick', function (event) {
+    if (event.target.closest && event.target.closest('.gutter')) setAsideWidth(290, true);
+  });
+  document.addEventListener('keydown', function (event) {
+    if (!event.target.classList || !event.target.classList.contains('gutter')) return;
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    event.stopPropagation();
+    setAsideWidth(asideWidth() + (event.key === 'ArrowLeft' ? -24 : 24) * (event.shiftKey ? 4 : 1), true);
+  }, true);
+
+  function wrapLines() { return !state.overview || !state.overview.settings || state.overview.settings.wrapLines !== false; }
   function busyAttr(key) { return state.busy[key] ? ' disabled aria-busy="true"' : ''; }
 
   /** Folded sections remember whether they were open, per key, for as long as the panel lives. */
@@ -1182,6 +1254,7 @@
 
   function loadFiles(fetch) {
     state.code.loading = true;
+    call('viewed', { repoId: state.repoId, prId: state.prId }).then(function (r) { state.code.viewed = r.files; draw(); }, function () {});
     return call('files', { repoId: state.repoId, prId: state.prId, fetch: Boolean(fetch) }).then(function (r) {
       state.code.files = r.files;
       state.code.error = null;
@@ -1208,6 +1281,7 @@
     }, fail);
   }
 
+  /** Files in diff order, grouped under their folder so a long path is read once, not on every row. */
   function drawCodeTab(v) {
     var c = state.code;
     if (c.error) return '<div class="page"><div class="banner bad">' + esc(c.error) + '</div><button class="btn" data-act="code-fetch">Fetch and try again</button></div>';
@@ -1217,19 +1291,36 @@
     var byFile = {};
     findings.forEach(function (f) { byFile[f.filePath] = byFile[f.filePath] || { f: 0, sev: 'minor', c: 0 }; byFile[f.filePath].f++; if (f.severity === 'blocker' || (f.severity === 'major' && byFile[f.filePath].sev !== 'blocker')) byFile[f.filePath].sev = f.severity; });
     comments.forEach(function (cm) { if (cm.inlinePath) { byFile[cm.inlinePath] = byFile[cm.inlinePath] || { f: 0, sev: 'minor', c: 0 }; byFile[cm.inlinePath].c++; } });
-    var html = '<div class="split"><aside><div class="row" style="padding:6px 10px"><span class="faint">' + c.files.length + ' files</span><span class="spacer"></span><button class="btn small" data-act="code-fetch">Fetch</button></div>';
-    html += '<div class="group">Files</div>' + c.files.map(function (file) {
+    var viewed = c.viewed || [];
+    var seen = viewed.filter(function (path) { return c.files.some(function (f) { return f.path === path; }); }).length;
+    var needle = String(c.filter || '').toLowerCase();
+    var shown = c.files.filter(function (file) { return !needle || file.path.toLowerCase().indexOf(needle) >= 0; });
+
+    var html = '<div class="split"' + splitStyle() + '><aside>';
+    html += '<div class="tools"><input type="text" placeholder="Filter files" data-bind="code-filter" data-edit="code-filter" value="' + esc(c.filter || '') + '">' +
+      '<span class="faint" title="Files marked as viewed, for this commit">' + seen + '/' + c.files.length + '</span><button class="btn small" data-act="code-fetch" title="Fetch the branches and read the diff again">Fetch</button></div>';
+    html += '<div class="viewed-bar" title="' + seen + ' of ' + c.files.length + ' files viewed"><span style="width:' + (c.files.length ? Math.round((seen / c.files.length) * 100) : 0) + '%"></span></div>';
+    var lastDir = null;
+    shown.forEach(function (file) {
+      var cut = file.path.lastIndexOf('/');
+      var dir = cut >= 0 ? file.path.slice(0, cut) : '';
+      var base = cut >= 0 ? file.path.slice(cut + 1) : file.path;
+      if (dir !== lastDir) { html += '<div class="dir" title="' + esc(dir || 'the repository root') + '">' + esc(dir ? dir + '/' : './') + '</div>'; lastDir = dir; }
       var info = byFile[file.path];
-      return '<div class="item' + (c.file === file.path ? ' on' : '') + '" data-act="file" data-file="' + esc(file.path) + '"><span class="p mono" title="' + esc(file.path) + '">' + esc(file.path) + '</span>' +
+      var isSeen = viewed.indexOf(file.path) >= 0;
+      html += '<div class="item' + (c.file === file.path ? ' on' : '') + (isSeen ? ' viewed' : '') + '" data-act="file" data-file="' + esc(file.path) + '">' +
+        '<input type="checkbox" class="seen" data-act="toggle-viewed" data-file="' + esc(file.path) + '"' + (isSeen ? ' checked' : '') + ' title="' + (isSeen ? 'Viewed — uncheck to look again' : 'Mark as viewed') + '">' +
+        '<span class="p mono" style="direction:ltr" title="' + esc(file.path) + '">' + esc(base) + '</span>' +
         (info && info.f ? '<span class="sev ' + info.sev + '">' + info.f + '</span>' : '') + (info && info.c ? '<span class="faint">💬' + info.c + '</span>' : '') +
         '<span class="added mono">+' + file.added + '</span><span class="removed mono">−' + file.deleted + '</span></div>';
-    }).join('');
+    });
+    if (!shown.length) html += '<div class="empty" style="padding:14px">No file matches.</div>';
     if (findings.length) {
       html += '<div class="group">Findings</div>' + findings.map(function (f) {
         return '<div class="item" data-act="jump" data-file="' + esc(f.filePath) + '" data-line="' + (f.lineNo || '') + '"><span class="sev ' + esc(f.severity) + '">' + esc(f.severity[0]) + '</span><span class="p" style="direction:ltr" title="' + esc(f.title) + '">' + esc(f.title) + '</span></div>';
       }).join('');
     }
-    html += '</aside><section>';
+    html += '</aside>' + gutter() + '<section>';
     if (!c.file) html += '<div class="empty">No file chosen.</div>';
     else if (!c.lines) html += '<div class="loading">Loading ' + esc(c.file) + '…</div>';
     else html += drawDiff(v, c.file, c.lines);
@@ -1258,17 +1349,19 @@
       '<span class="faint">' + (at + 1) + ' of ' + files.length + '</span><button class="btn small" data-act="step-file" data-dir="1"' + (at < 0 || at >= files.length - 1 ? ' disabled' : '') + ' title="Next file ( ] )">›</button>' +
       (anchored.length ? '<span class="group-btns" style="margin-left:8px;border-left:1px solid var(--border);padding-left:8px;border-right:0"><button class="btn small" data-act="step-finding" data-dir="-1" title="Previous finding ( p )">↑</button><span class="faint">' + anchored.length + ' finding' + (anchored.length === 1 ? '' : 's') + '</span><button class="btn small" data-act="step-finding" data-dir="1" title="Next finding ( n )">↓</button></span>' : '') +
 
+      '<button class="btn small' + ((state.code.viewed || []).indexOf(file) >= 0 ? ' go' : '') + '" data-act="toggle-viewed" data-file="' + esc(file) + '" title="Mark this file as looked at, and go to the next one not viewed ( v )">' + ((state.code.viewed || []).indexOf(file) >= 0 ? '✓ Viewed' : 'Viewed') + '</button>' +
+      '<button class="btn small' + (wrapLines() ? ' on' : '') + '" data-act="toggle-wrap" title="Wrap long lines, or scroll them sideways">Wrap</button>' +
       '<button class="btn small" data-act="note-file" data-file="' + esc(file) + '" title="A note on the whole file. For a line, click its number.">+ Note</button></div>';
     if (outside.length || outsideThreads.length) {
       html += '<div style="padding:6px 10px">' + outside.map(function (f) { return anchorBlock(f, 'finding', v); }).join('') + outsideThreads.map(function (t) { return threadBlock(t, replies); }).join('') + '</div>';
     }
     if (state.code.noteAt && state.code.noteAt.line == null) html += '<div style="padding:6px 10px">' + noteForm(file, null) + '</div>';
-    html += '<table class="diff">';
+    html += '<table class="diff' + (wrapLines() ? '' : ' nowrap') + '">';
     lines.forEach(function (l) {
       var focus = state.code.focusLine && l.newNo === state.code.focusLine;
       if (l.kind === 'HUNK' || l.kind === 'META') {
-        if (l.kind === 'META' && !l.text) return;
-        html += '<tr class="' + l.kind + '"><td colspan="3">' + esc(l.text) + '</td></tr>';
+        if (l.kind === 'META' && !diffMetaWorthShowing(l.text)) return;
+        html += '<tr class="' + l.kind + '"><td colspan="3">' + esc(l.kind === 'META' ? diffMetaWords(l.text) : l.text) + '</td></tr>';
         return;
       }
       html += '<tr class="' + l.kind + (focus ? ' focus' : '') + '"' + (l.newNo ? ' data-new="' + l.newNo + '"' : '') + '><td class="n" ' + (l.newNo ? 'data-act="note-line" data-file="' + esc(file) + '" data-line="' + l.newNo + '"' : '') + '>' + (l.oldNo || '') + '</td>' +
@@ -1282,6 +1375,25 @@
       }
     });
     return html + '</table>';
+  }
+
+  /*
+   * Git's header lines — `diff --git`, `index`, `---`, `+++` — repeat the path
+   * the view already names and a blob id nobody reads. What they sometimes say
+   * that matters is kept, in words: a new file, a deleted one, a rename, a binary.
+   */
+  function diffMetaWorthShowing(text) {
+    return /^(new file|deleted file|rename from|rename to|similarity index|Binary files|old mode|new mode)/.test(String(text || ''));
+  }
+  function diffMetaWords(text) {
+    var t = String(text || '');
+    if (/^new file/.test(t)) return 'New file';
+    if (/^deleted file/.test(t)) return 'Deleted file';
+    if (/^rename from /.test(t)) return 'Renamed from ' + t.slice(12);
+    if (/^rename to /.test(t)) return 'Renamed to ' + t.slice(10);
+    if (/^similarity index /.test(t)) return t.slice(17) + ' similar';
+    if (/^Binary files/.test(t)) return 'A binary file: nothing to show line by line';
+    return t;
   }
 
   /** Findings with a file, in the order the files appear in the diff and then by line. */
@@ -1344,7 +1456,9 @@
     if (c.error) return '<div class="page"><div class="banner bad">' + esc(c.error) + '</div></div>';
     if (!c.data) return '<div class="loading">Reading commits…</div>';
     var d = c.data;
-    var html = '<div class="split"><aside>';
+    var html = '<div class="split"' + splitStyle() + '><aside>';
+    if (d.note) html += '<div class="banner warn" style="margin:8px;font-size:11.5px">' + esc(d.note) + '</div>';
+    if (!d.commits.length && !d.local.length) html += '<div class="empty" style="padding:16px">No commits between <span class="mono">' + esc(state.pr && state.pr.pr ? state.pr.pr.targetBranch : 'the target') + '</span> and <span class="mono">' + esc(d.branch) + '</span>.</div>';
     if (d.local.length) {
       html += '<div class="group">In your clone, not on origin</div><div style="padding:4px 10px"><button class="btn small primary" data-act="push"' + busyAttr('push') + '>Push to origin/' + esc(d.branch) + '</button></div>' +
         d.local.map(function (commit) { return commitItem(commit, true); }).join('');
@@ -1354,7 +1468,7 @@
       if (d.sinceReview !== null && index === d.sinceReview) html += '<div class="group" style="color:var(--accent)">↑ ' + index + ' since the review</div>';
       html += commitItem(commit, false);
     });
-    html += '</aside><section>';
+    html += '</aside>' + gutter() + '<section>';
     if (!c.sha) html += '<div class="empty">Choose a commit.</div>';
     else {
       var commit = d.local.concat(d.commits).filter(function (x) { return x.sha === c.sha; })[0];
@@ -1365,9 +1479,9 @@
         html += '<div style="padding:6px 12px" class="row">' + c.files.map(function (file) {
           return '<span class="chip click' + (c.file === file.path ? ' on' : '') + '" data-act="commit-file" data-file="' + esc(file.path) + '">' + esc(file.path.split('/').pop()) + ' <span class="added">+' + file.added + '</span> <span class="removed">−' + file.deleted + '</span></span>';
         }).join('') + '</div>';
-        if (c.file && c.lines) html += '<table class="diff">' + c.lines.map(function (l) {
-          if (l.kind === 'META' && !l.text) return '';
-          if (l.kind === 'HUNK' || l.kind === 'META') return '<tr class="' + l.kind + '"><td colspan="3">' + esc(l.text) + '</td></tr>';
+        if (c.file && c.lines) html += '<table class="diff' + (wrapLines() ? '' : ' nowrap') + '">' + c.lines.map(function (l) {
+          if (l.kind === 'META' && !diffMetaWorthShowing(l.text)) return '';
+          if (l.kind === 'HUNK' || l.kind === 'META') return '<tr class="' + l.kind + '"><td colspan="3">' + esc(l.kind === 'META' ? diffMetaWords(l.text) : l.text) + '</td></tr>';
           return '<tr class="' + l.kind + '"><td class="n">' + (l.oldNo || '') + '</td><td class="n">' + (l.newNo || '') + '</td><td class="c">' + esc(l.text) + '</td></tr>';
         }).join('') + '</table>';
       }
@@ -1580,6 +1694,7 @@
       if (event.key === '[') { event.preventDefault(); stepFile(-1); return; }
       if (event.key === 'n') { event.preventDefault(); stepFinding(1); return; }
       if (event.key === 'p') { event.preventDefault(); stepFinding(-1); return; }
+      if (event.key === 'v' && state.code.file) { event.preventDefault(); actions['toggle-viewed']({ getAttribute: function () { return state.code.file; } }); return; }
     }
     if (state.view === 'dashboard' && event.key === '/') {
       var search = $('dash-search');
@@ -1657,6 +1772,28 @@
     'refresh-all': function () { act('refresh-all', function () { return call('refreshAll'); }, function (r) { state.refreshResult = r; load(); }); },
     fold: function (el) { var key = el.getAttribute('data-key'); state.folds[key] = !isOpen(key, el.closest('.fold') ? el.closest('.fold').classList.contains('open') : false); draw(); },
     more: function (el) { state.folds['more-' + el.getAttribute('data-key')] = true; draw(); },
+    // A checkbox inside a row that also opens the file: the click marks, and does not open.
+    'toggle-viewed': function (el) {
+      var file = el.getAttribute('data-file');
+      var marking = (state.code.viewed || []).indexOf(file) < 0;
+      call('setViewed', { repoId: state.repoId, prId: state.prId, file: file, viewed: marking }).then(function (r) {
+        state.code.viewed = r.files;
+        // Marking the file in front as viewed moves on to the next one nobody has looked at, the way a review is read.
+        if (marking && state.code.file === file) {
+          var files = (state.code.files || []).map(function (f) { return f.path; });
+          var from = files.indexOf(file);
+          var next = files.slice(from + 1).concat(files.slice(0, from)).filter(function (path) { return r.files.indexOf(path) < 0; })[0];
+          if (next) { openFile(next); return; }
+        }
+        draw();
+      }, fail);
+    },
+    'toggle-wrap': function () {
+      var next = !wrapLines();
+      if (state.overview) state.overview.settings.wrapLines = next;
+      draw();
+      call('saveSettings', { settings: { wrapLines: next } }).catch(function () {});
+    },
     'finding-filter': function (el) { state.findingFilter = el.getAttribute('data-filter'); draw(); },
     'thread-filter': function (el) { state.threadFilter = el.getAttribute('data-filter'); draw(); },
     'step-file': function (el) { stepFile(Number(el.getAttribute('data-dir'))); },
@@ -1895,7 +2032,7 @@
     var el = event.target.closest('[data-act]');
     if (!el || el.hasAttribute('disabled')) return;
     var name = el.getAttribute('data-act');
-    if (el.tagName === 'INPUT' && el.type === 'checkbox' && name !== 'guide-toggle' && name !== 'import-pick') return;
+    if (el.tagName === 'INPUT' && el.type === 'checkbox' && name !== 'guide-toggle' && name !== 'import-pick' && name !== 'toggle-viewed') return;
     var handler = actions[name];
     if (!handler) return;
     if (el.tagName !== 'INPUT') event.preventDefault();
@@ -1909,6 +2046,7 @@
     var formField = el.getAttribute('data-form');
     if (formField && state.form && el.type !== 'radio' && el.type !== 'checkbox') state.form[formField] = el.value;
     if (el.getAttribute('data-bind') === 'dash-text') { state.dashFilter.text = el.value; draw(); }
+    if (el.getAttribute('data-bind') === 'code-filter') { state.code.filter = el.value; draw(); }
   });
 
   document.addEventListener('change', function (event) {

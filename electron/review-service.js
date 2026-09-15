@@ -94,6 +94,9 @@ class ReviewService {
       autoMax: Number(prefs['auto.max.per.cycle'] ?? 3),
       followUpDays: Number(prefs['followup.days'] ?? 3),
       mergeStrategy: prefs['merge.strategy'] ?? 'MERGE_COMMIT',
+      // How the panel was laid out, so a restart does not undo a dragged divider.
+      asideWidth: Number(prefs['ui.asideWidth'] ?? 0) || null,
+      wrapLines: prefs['ui.wrapLines'] !== 'false',
     };
   }
 
@@ -114,6 +117,35 @@ class ReviewService {
     const meta = this.store.prMeta(repoId);
     if (!meta?.error) return null;
     return { message: rules.readableError(meta.error), detail: meta.error, at: meta.error_at };
+  }
+
+  /**
+   * The files of a PR someone has marked as looked at, for the commit they
+   * looked at. A new head clears the marks: the file that was reviewed is not
+   * necessarily the file that is there now, and "viewed" has to mean this code.
+   */
+  viewedKey(repoId, prId) {
+    return `viewed:${repoId}#${prId}`;
+  }
+
+  viewed(repoId, prId) {
+    const head = this.store.pr(repoId, prId)?.headSha ?? '';
+    let saved = null;
+    try {
+      saved = JSON.parse(this.store.pref(this.viewedKey(repoId, prId), 'null'));
+    } catch {
+      saved = null;
+    }
+    return { head, files: saved && saved.head === head && Array.isArray(saved.files) ? saved.files : [] };
+  }
+
+  setViewed(repoId, prId, file, viewed) {
+    const current = this.viewed(repoId, prId);
+    const files = new Set(current.files);
+    if (viewed) files.add(file);
+    else files.delete(file);
+    this.store.setPref(this.viewedKey(repoId, prId), JSON.stringify({ head: current.head, files: [...files] }));
+    return { head: current.head, files: [...files] };
   }
 
   factsKey(repoId, prId) {
@@ -276,11 +308,45 @@ class ReviewService {
     };
   }
 
+  /**
+   * Both branches of a PR in the clone, fetched when either is missing. A clone
+   * only has the branches someone fetched, and reading a range against a ref it
+   * does not have fails — which used to come back as an empty list, the same
+   * answer as a PR with nothing in it. Returns what is still missing afterwards.
+   */
+  async ensureRefs(repo, pr, { force = false } = {}) {
+    const refs = [`origin/${pr.targetBranch}`, `origin/${pr.sourceBranch}`];
+    const missing = async () => (await Promise.all(refs.map(async (ref) => ((await this.git.hasRef(repo.localPath, ref)) ? null : ref)))).filter(Boolean);
+    let absent = await missing();
+    let fetchOutput = '';
+    if (force || absent.length) {
+      const fetched = await this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch);
+      if (!fetched.ok) {
+        // A branch deleted on the remote makes the whole fetch fail; fetch what is still there.
+        fetchOutput = fetched.output;
+        await this.git.fetch(repo.localPath, pr.targetBranch);
+      }
+      absent = await missing();
+    }
+    return { absent, fetchOutput };
+  }
+
+  branchGone(pr, fetchOutput) {
+    const closed = pr.state && pr.state !== 'OPEN';
+    return (
+      `The branch ${pr.sourceBranch} is not on origin any more` +
+      (closed ? `: the pull request is ${String(pr.state).toLowerCase()}, and its branch was deleted.` : ', and it could not be fetched.') +
+      (fetchOutput && !closed ? ` git said: ${String(fetchOutput.split('\n').filter(Boolean).pop()).replace(/\.?$/, '.')}` : '')
+    );
+  }
+
   async prFiles(repoId, prId, { fetch = false } = {}) {
     const repo = this.engine.requireRepo(repoId);
     this.engine.requireClone(repo);
     const pr = this.engine.prOrThrow(repoId, prId);
-    if (fetch) await this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch);
+    const { absent, fetchOutput } = await this.ensureRefs(repo, pr, { force: fetch });
+    if (absent.includes(`origin/${pr.sourceBranch}`)) throw new Error(this.branchGone(pr, fetchOutput));
+    if (absent.length) throw new Error(`origin/${pr.targetBranch} is not in the clone and could not be fetched.`);
     return { files: await this.git.numstat(repo.localPath, `origin/${pr.targetBranch}...origin/${pr.sourceBranch}`) };
   }
 
@@ -296,13 +362,28 @@ class ReviewService {
     this.engine.requireClone(repo);
     const pr = this.engine.prOrThrow(repoId, prId);
     const done = this.store.latestDone(repoId, prId);
-    const [commits, local] = await Promise.all([this.git.commits(repo.localPath, pr.targetBranch, pr.sourceBranch), this.git.localAhead(repo.localPath, pr.sourceBranch)]);
+    const { absent, fetchOutput } = await this.ensureRefs(repo, pr);
+    let commits;
+    let local = [];
+    let note = null;
+    if (absent.length) {
+      // Without the branch, the provider still has the pull request's commits: a merged PR keeps its history there.
+      note = this.branchGone(pr, fetchOutput);
+      try {
+        commits = await this.forge.of(repo).commits(prId);
+        note += ' These commits are read from ' + (repo.provider === 'GITHUB' ? 'GitHub' : 'Bitbucket') + '; a commit that is not in the clone cannot show its files.';
+      } catch (error) {
+        throw new Error(`${note} Reading the commits from the provider failed too: ${rules.readableError(String(error?.message ?? error))}`);
+      }
+    } else {
+      [commits, local] = await Promise.all([this.git.commits(repo.localPath, pr.targetBranch, pr.sourceBranch), this.git.localAhead(repo.localPath, pr.sourceBranch)]);
+    }
     let sinceReview = null;
     if (done?.headSha) {
       const index = commits.findIndex((commit) => commit.sha === done.headSha);
       sinceReview = index >= 0 ? index : null;
     }
-    return { commits, local, sinceReview, branch: pr.sourceBranch };
+    return { commits, local, sinceReview, branch: pr.sourceBranch, note };
   }
 
   // --- repositories -------------------------------------------------------------------
@@ -447,6 +528,8 @@ class ReviewService {
       guidelines: (args) => ({ ok: true, guidelines: s.guidelines(args.repoId) }),
       usage: () => ({ ok: true, usage: s.store.usageSummary() }),
       bus: () => ({ ok: true, ...s.bus.overview() }),
+      viewed: (args) => ({ ok: true, ...s.viewed(str(args.repoId, 'A repository'), num(args.prId)) }),
+      setViewed: (args) => ({ ok: true, ...s.setViewed(str(args.repoId, 'A repository'), num(args.prId), str(args.file, 'A file'), args.viewed !== false) }),
       activity: () => ({ ok: true, activity: e.activity.list() }),
       importInspect: () => ({ ok: true, ...importer.inspect({ DatabaseSync: s.DatabaseSync, source: s.importSource }) }),
       models: () => ({ ok: true, models: ['haiku', 'sonnet', 'opus', 'fable'] }),
@@ -469,12 +552,13 @@ class ReviewService {
       },
       saveSettings: (args) => {
         const input = args.settings ?? {};
-        const map = { language: 'review.language', me: 'me.author', profileId: 'claude.profileId', notify: 'notify.enabled', autoEnabled: 'auto.enabled', autoInterval: 'auto.interval.minutes', autoMax: 'auto.max.per.cycle', followUpDays: 'followup.days' };
+        const map = { language: 'review.language', me: 'me.author', profileId: 'claude.profileId', notify: 'notify.enabled', autoEnabled: 'auto.enabled', autoInterval: 'auto.interval.minutes', autoMax: 'auto.max.per.cycle', followUpDays: 'followup.days', asideWidth: 'ui.asideWidth', wrapLines: 'ui.wrapLines' };
         for (const [field, key] of Object.entries(map)) {
           if (!(field in input)) continue;
           const value = input[field];
           if (typeof value === 'boolean') s.store.setPref(key, value ? 'true' : 'false');
           else if (field === 'autoInterval' || field === 'autoMax' || field === 'followUpDays') s.store.setPref(key, String(Math.max(1, Number.parseInt(value, 10) || 1)));
+          else if (field === 'asideWidth') s.store.setPref(key, String(Math.min(900, Math.max(160, Number.parseInt(value, 10) || 290))));
           else s.store.setPref(key, String(value ?? ''));
         }
         s.emitRaw({ type: 'settings', settings: s.settings() });
