@@ -550,7 +550,6 @@
     if (s < 86400) return Math.round(s / 3600) + ' h ago';
     return Math.round(s / 86400) + ' d ago';
   }
-  function day(iso) { return String(iso || '').slice(0, 10); }
   function ageMark(days) {
     if (days == null) return '';
     if (days >= 90) return '▲▲▲';
@@ -641,7 +640,8 @@
       state.auto = result.auto;
       state.activity = {};
       (result.activity || []).forEach(function (run) { state.activity[run.key] = run; });
-      if (!state.depths) return call('depths').then(function (d) { state.depths = d; });
+      // The depth list only labels the review form: without it the panel still opens.
+      if (!state.depths) return call('depths').then(function (d) { state.depths = d; }, function () {});
     });
   }
 
@@ -663,7 +663,18 @@
   }
 
   function loadPrView() {
-    return call('pr', { repoId: state.repoId, prId: state.prId }).then(function (r) {
+    var repoId = state.repoId;
+    var prId = state.prId;
+    return call('pr', { repoId: repoId, prId: prId }).then(function (r) {
+      // An answer about the PR that was open before this one is not about this one.
+      if (state.view !== 'pr' || state.repoId !== repoId || state.prId !== prId) return;
+      // New commits: the file list, its diffs and the file text read for the old head are all stale.
+      var before = state.pr && state.pr.pr && state.pr.pr.headSha;
+      var after = r && r.pr && r.pr.headSha;
+      if (before && after && before !== after) {
+        state.code = { files: null, file: state.code.file, lines: null, error: null, focusLine: null, noteAt: null };
+        state.commits = { data: null, sha: null, files: null, file: null, lines: null, error: null };
+      }
       state.pr = r;
       state.prError = null;
       if (state.prTab === 'code' && !state.code.files) loadFiles();
@@ -698,6 +709,11 @@
     Object.keys(fields || {}).forEach(function (key) { state[key] = fields[key]; });
     if (view !== 'pr') { state.pr = null; state.prError = null; }
     if (view === 'pr') {
+      // Drafts that belong to the PR that was open — a merge message, a decline reason, a new note — do not follow into another.
+      if (state.edits.__pr !== state.repoId + '#' + state.prId) {
+        Object.keys(state.edits).forEach(function (key) { if (/^(merge-|decline-|newnote-|follow-|rep-)/.test(key)) delete state.edits[key]; });
+        state.edits.__pr = state.repoId + '#' + state.prId;
+      }
       state.code = { files: null, file: null, lines: null, error: null, focusLine: null, noteAt: null };
       state.commits = { data: null, sha: null, files: null, file: null, lines: null, error: null };
       state.confirmRerun = null; state.decline = null; state.merge = null;
@@ -774,14 +790,41 @@
     } catch (error) {
       html = '<div class="page"><div class="banner bad">This view could not be drawn: ' + esc(error && error.stack || error) + '</div></div>';
     }
-    var focus = document.activeElement && document.activeElement.getAttribute && document.activeElement.getAttribute('data-edit');
-    var caret = focus && document.activeElement.selectionStart;
+    var active = document.activeElement;
+    var focus = active && active.getAttribute && active.getAttribute('data-edit');
+    var selection = focus ? { start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection, scroll: active.scrollTop } : null;
     main.innerHTML = html;
     main.scrollTop = scroll;
+    state.drawPending = false;
     if (focus) {
-      var again = main.querySelector('[data-edit="' + focus + '"]');
-      if (again) { again.focus(); try { again.setSelectionRange(caret, caret); } catch (e) { /* not a text field */ } }
+      // Keys carry file paths and comment ids: escaped, a quote in one does not break the selector.
+      var again = main.querySelector('[data-edit="' + cssEscape(focus) + '"]');
+      if (again) {
+        again.focus();
+        try { again.setSelectionRange(selection.start, selection.end, selection.direction || 'none'); } catch (e) { /* not a text field */ }
+        again.scrollTop = selection.scroll;
+      }
     }
+  }
+
+  function cssEscape(value) {
+    return window.CSS && CSS.escape ? CSS.escape(value) : String(value).replace(/["\\]/g, '\\$&');
+  }
+
+  /** Someone is typing in the page: a redraw now would take the text field out from under them. */
+  function typing() {
+    var active = document.activeElement;
+    return Boolean(active && (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && /^(text|search|number|password|)$/.test(active.type))));
+  }
+
+  /**
+   * A redraw nobody asked for — a run's progress, a count — waits while someone
+   * types: the top bar is drawn now, the page when the field is left.
+   */
+  function drawQuietly() {
+    if (!typing()) return draw();
+    drawTop();
+    state.drawPending = true;
   }
 
   function edit(key, fallback) {
@@ -1341,16 +1384,17 @@
       html += fold('run', '<strong>' + (done ? 'Review again' : 'Review this pull request') + '</strong>', esc(profileLabel), body, !done || Boolean(state.confirmRerun));
     }
 
-    // --- how the last review went
-    if (review) {
-      var failed = review.status === 'FAILED' || review.status === 'CANCELLED';
-      var summary = [review.depth ? review.depth.toLowerCase() : '', review.model, review.sinceSha ? 'only new commits' : '', when(review.finishedAt || review.createdAt), review.costUsd ? money(review.costUsd) : ''].filter(Boolean).join(' · ');
-      html += fold('last-review', statusChip(review.status) + '<strong>Last review, of ' + sha7(review.headSha) + '</strong>' + (review.trigger === 'AUTO' ? '<span class="chip">automatic</span>' : ''), esc(summary),
-        '<div class="faint">' + esc(summary) + (review.tokensIn ? ' · ' + tokens((review.tokensIn || 0) + (review.tokensOut || 0)) + ' tokens' : '') + (review.accountName ? ' · ' + esc(review.accountName) : '') + '</div>' +
-        (review.planReason ? '<div class="faint" style="margin-top:3px">' + esc(review.planReason) + '</div>' : '') +
-        (failed ? '<div class="banner bad">' + esc(review.error || 'It did not finish.') + '</div>' : '') +
-        (review.deniedTools ? '<div class="banner warn">Ran with tools denied: ' + esc(review.deniedTools) + '</div>' : '') +
-        (done && done.id !== review.id ? '<div class="faint" style="margin-top:4px">The findings above are from the last finished review, ' + esc(when(done.finishedAt)) + '.</div>' : ''), failed);
+    // --- how the last review went: the newest one that ended, failed or not — a failed re-review is news
+    var last = (v.reviews || []).filter(function (r) { return r.status !== 'RUNNING'; })[0] || review;
+    if (last) {
+      var failed = last.status === 'FAILED' || last.status === 'CANCELLED';
+      var summary = [last.depth ? last.depth.toLowerCase() : '', last.model, last.sinceSha ? 'only new commits' : '', when(last.finishedAt || last.createdAt), last.costUsd ? money(last.costUsd) : ''].filter(Boolean).join(' · ');
+      html += fold('last-review', statusChip(last.status) + '<strong>Last review, of ' + sha7(last.headSha) + '</strong>' + (last.trigger === 'AUTO' ? '<span class="chip">automatic</span>' : ''), esc(summary),
+        '<div class="faint">' + esc(summary) + (last.tokensIn ? ' · ' + tokens((last.tokensIn || 0) + (last.tokensOut || 0)) + ' tokens' : '') + (last.accountName ? ' · ' + esc(last.accountName) : '') + '</div>' +
+        (last.planReason ? '<div class="faint" style="margin-top:3px">' + esc(last.planReason) + '</div>' : '') +
+        (failed ? '<div class="banner bad">' + esc(last.error || 'It did not finish.') + '</div>' : '') +
+        (last.deniedTools ? '<div class="banner warn">Ran with tools denied: ' + esc(last.deniedTools) + '</div>' : '') +
+        (done && done.id !== last.id ? '<div class="faint" style="margin-top:4px">The findings above are from the last finished review, ' + esc(when(done.finishedAt)) + '.</div>' : ''), failed);
     } else if (!runs.length && !open) {
       html += '<div class="empty">Never reviewed.</div>';
     }
@@ -1411,9 +1455,12 @@
   // ---- code ----------------------------------------------------------------------
 
   function loadFiles(fetch) {
-    state.code.loading = true;
-    call('viewed', { repoId: state.repoId, prId: state.prId }).then(function (r) { state.code.viewed = r.files; draw(); }, function () {});
+    // Every answer below writes into this PR's code state only: `go` replaces the object when the PR changes.
+    var code = state.code;
+    code.loading = true;
+    call('viewed', { repoId: state.repoId, prId: state.prId }).then(function (r) { if (state.code !== code) return; code.viewed = r.files; draw(); }, function () {});
     return call('files', { repoId: state.repoId, prId: state.prId, fetch: Boolean(fetch) }).then(function (r) {
+      if (state.code !== code) return;
       state.code.files = r.files;
       state.code.error = null;
       state.code.loading = false;
@@ -1421,7 +1468,7 @@
       var kept = state.code.file && r.files.some(function (f) { return f.path === state.code.file; });
       if (r.files.length && (!kept || !state.code.lines)) return openFile(kept ? state.code.file : r.files[0].path);
       draw();
-    }, function (error) { state.code.error = error.message; state.code.loading = false; draw(); });
+    }, function (error) { if (state.code !== code) return; code.error = error.message; code.loading = false; draw(); });
   }
 
   function openFile(path, line) {
@@ -1431,8 +1478,9 @@
     state.code.noteAt = null;
     remember();
     draw();
+    var code = state.code;
     return call('diff', { repoId: state.repoId, prId: state.prId, file: path }).then(function (r) {
-      if (state.code.file !== path) return;
+      if (state.code !== code || code.file !== path) return;
       state.code.lines = r.lines;
       draw();
       if (line) {
@@ -1523,6 +1571,7 @@
 
   /** The next finding after the one in focus, across files, wrapping around. */
   function stepFinding(direction) {
+    if (!state.pr) return;
     var list = codeAnchors(state.pr);
     if (!list.length) return;
     var order = (state.code.files || []).map(function (f) { return f.path; });
@@ -1592,8 +1641,10 @@
       var k = lang.keys.exec(s);
       if (k && !/^\s*#/.test(s)) { push(k[1], ''); push(k[2], 'tk-t'); push(k[3], ''); i = k[0].length; }
     }
-    // A diff hunk can start inside a block comment; a line that looks like one is taken as one.
-    if (lang.block && lang.block[0] === '/*' && /^\s*\*(\s|\/|$)/.test(s) && !st.block) st.block = true;
+    // A diff hunk can start inside a block comment; its first line, when it looks like one, is taken as one.
+    // Only the first: further down the state is known, and a lone `*` (SQL's select list) is not a comment.
+    if (st.fresh !== false && lang.block && lang.block[0] === '/*' && /^\s*\*(\s|\/|$)/.test(s) && !st.block) st.block = true;
+    st.fresh = false;
     while (i < s.length) {
       if (st.block && lang.block) {
         var close = s.indexOf(lang.block[1], i);
@@ -1735,7 +1786,7 @@
    * The diff as rows: lines, hunk headers, and the gaps between hunks — the
    * unchanged lines git leaves out — with whatever of each gap has been opened.
    */
-  function diffItems(lines, file) {
+  function diffItems(lines, file, status) {
     var items = [];
     var prevNewEnd = 0;
     var offset = 0;
@@ -1745,7 +1796,8 @@
     var addGap = function (key, from, to, off, edge) {
       var r = reveal[key] || { top: 0, bottom: 0 };
       var known = to !== null;
-      var last = known ? to : text ? text.total : null;
+      // The service sends at most so many lines of a file: past them there is nothing to show, not blank rows.
+      var last = known ? to : text ? Math.min(text.total, text.lines.length) : null;
       if (last !== null && last < from) return;
       var hidden = last === null ? null : last - from + 1;
       var top = hidden === null ? 0 : Math.min(r.top, hidden);
@@ -1772,7 +1824,8 @@
         items.push({ type: 'line', l: l });
       }
     });
-    if (hunks && file) addGap('end', prevNewEnd + 1, null, offset, 'last');
+    // An added file's diff is all of it, and a deleted one has no new side to read from.
+    if (hunks && file && status !== 'A' && status !== 'D') addGap('end', prevNewEnd + 1, null, offset, 'last');
     return items;
   }
 
@@ -1788,15 +1841,25 @@
     var lang = langOf(file);
     var ranges = intraline(lines);
     lines.forEach(function (l, i) { if (ranges[i]) l.range = ranges[i]; });
-    var stOld = { block: false };
-    var stNew = { block: false };
+    var stOld = { block: false, fresh: true };
+    var stNew = { block: false, fresh: true };
+    // After a hunk header or hidden lines nothing is known about what came before.
+    var unknown = function () { stOld.block = stNew.block = false; stOld.fresh = stNew.fresh = true; };
+    // A context line is on both sides; drawn twice side by side, it is tokenized once, from the state before it.
+    var painted = new Map();
     var codeOf = function (l, side) {
-      var st = l.kind === 'REMOVED' || side === 'old' ? stOld : stNew;
-      var tokens = tokenize(l.text, lang, st);
-      if (l.kind === 'CONTEXT') { if (side === 'old') stNew.block = stOld.block; else stOld.block = stNew.block; }
-      return paint(tokens, l.range) || '&nbsp;';
+      if (l.kind === 'CONTEXT') {
+        if (!painted.has(l)) {
+          var html = paint(tokenize(l.text, lang, stNew), l.range) || '&nbsp;';
+          stOld.block = stNew.block; stOld.fresh = stNew.fresh;
+          painted.set(l, html);
+        }
+        return painted.get(l);
+      }
+      var st = l.kind === 'REMOVED' ? stOld : stNew;
+      return paint(tokenize(l.text, lang, st), l.range) || '&nbsp;';
     };
-    var items = diffItems(lines, opts.expandable ? file : null);
+    var items = diffItems(lines, opts.expandable ? file : null, opts.status);
     var split = opts.layout === 'split';
     var cols = split ? 6 : 4;
     var html = '<table class="diff ' + (split ? 'split-view' : 'unified') + (wrapLines() ? '' : ' nowrap') + '" style="--diff-font:' + diffFont() + 'px">' +
@@ -1830,8 +1893,8 @@
 
     if (!split) {
       items.forEach(function (item) {
-        if (item.type === 'gap') { html += opts.expandable ? gapRow(item) : ''; return; }
-        if (item.type === 'hunk') { html += hunkRow(item); return; }
+        if (item.type === 'gap') { unknown(); html += opts.expandable ? gapRow(item) : ''; return; }
+        if (item.type === 'hunk') { unknown(); html += hunkRow(item); return; }
         if (item.type === 'meta') { html += '<tr class="META"><td colspan="4">' + esc(item.text) + '</td></tr>'; return; }
         var l = item.l;
         var focus = state.code.focusLine && l.newNo === state.code.focusLine && opts.anchors;
@@ -1851,8 +1914,8 @@
     };
     while (k < items.length) {
       var item = items[k];
-      if (item.type === 'gap') { html += opts.expandable ? gapRow(item) : ''; k++; continue; }
-      if (item.type === 'hunk') { html += hunkRow(item); k++; continue; }
+      if (item.type === 'gap') { unknown(); html += opts.expandable ? gapRow(item) : ''; k++; continue; }
+      if (item.type === 'hunk') { unknown(); html += hunkRow(item); k++; continue; }
       if (item.type === 'meta') { html += '<tr class="META"><td colspan="6">' + esc(item.text) + '</td></tr>'; k++; continue; }
       if (item.l.kind === 'CONTEXT') {
         var c = item.l;
@@ -2041,13 +2104,18 @@
       .concat(threads.filter(function (t) { return !t.inlineLine || !present[t.inlineLine]; }).map(function (t) { return threadInCode(t, v); }));
     if (state.code.noteAt && state.code.noteAt.line == null) loose.push(noteComposer(file, null));
     if (loose.length && !hide) html += '<div class="loose"><div class="faint loose-title">On the file, or on lines this diff does not show</div>' + loose.join('') + '</div>';
-    return html + diffTable(lines, { file: file, anchors: anchors, noteable: true, expandable: true, layout: diffLayout(), dots: hide ? dots : null });
+    var info = (state.code.files || []).filter(function (f) { return f.path === file; })[0];
+    return html + diffTable(lines, { file: file, status: info && info.status, anchors: anchors, noteable: true, expandable: true, layout: diffLayout(), dots: hide ? dots : null });
   }
 
   // ---- commits ----------------------------------------------------------------------
 
   function loadCommits() {
-    return call('commits', { repoId: state.repoId, prId: state.prId }).then(function (r) { state.commits.data = r; state.commits.error = null; draw(); }, function (error) { state.commits.error = error.message; draw(); });
+    var commits = state.commits;
+    return call('commits', { repoId: state.repoId, prId: state.prId }).then(function (r) {
+      if (state.commits !== commits) return;
+      commits.data = r; commits.error = null; draw();
+    }, function (error) { if (state.commits !== commits) return; commits.error = error.message; draw(); });
   }
 
   function drawCommitsTab(v) {
@@ -2169,15 +2237,17 @@
     (v.fixes || []).forEach(function (f) { events.push({ at: f.createdAt, who: 'fix', kind: 'fix ' + String(f.state).toLowerCase(), text: (f.sha ? f.sha.slice(0, 7) + ' ' : '') + (f.summary || f.error || '').slice(0, 200) }); });
     var authors = {};
     events.forEach(function (e) { authors[e.who] = true; });
-    events = events.filter(function (e) { return e.at && (!state.historyAuthor || e.who === state.historyAuthor); }).sort(function (a, b) { return String(b.at).localeCompare(String(a.at)); });
+    events = events.filter(function (e) { return e.at && !isNaN(parseTime(e.at)) && (!state.historyAuthor || e.who === state.historyAuthor); }).sort(function (a, b) { return parseTime(b.at) - parseTime(a.at); });
     var html = '<div class="page timeline"><div class="row"><span class="faint">Author</span><select data-bind="history-author"><option value="">Everyone</option>' + Object.keys(authors).sort().map(function (a) {
       return '<option' + (state.historyAuthor === a ? ' selected' : '') + '>' + esc(a) + '</option>';
     }).join('') + '</select></div>';
     var current = '';
     events.forEach(function (e) {
-      var d = day(e.at);
+      // In the viewer's own clock: the stored times are UTC, and an evening belongs to its own day.
+      var local = new Date(parseTime(e.at));
+      var d = local.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
       if (d !== current) { current = d; html += '<div class="day">' + esc(d) + '</div>'; }
-      html += '<div class="ev"><span class="faint mono">' + esc(String(e.at).slice(11, 16)) + '</span><span class="dim">' + esc(e.who) + ' · ' + esc(e.kind) + '</span><span>' + esc(e.text) + '</span></div>';
+      html += '<div class="ev"><span class="faint mono">' + esc(local.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })) + '</span><span class="dim">' + esc(e.who) + ' · ' + esc(e.kind) + '</span><span>' + esc(e.text) + '</span></div>';
     });
     if (!events.length) html += '<div class="empty">Nothing happened here yet.</div>';
     return html + '</div>';
@@ -2194,15 +2264,15 @@
     html += '<div class="field"><label>Claude account</label><div><select data-setting="profileId"><option value="">The default account</option>' + o.accounts.map(function (a) {
       return '<option value="' + esc(a.id) + '"' + (val('profileId') === a.id ? ' selected' : '') + '>' + esc(a.name) + '</option>';
     }).join('') + '</select><div class="help">Runs use this account first. When it hits its limit or is signed out, the next account is used, starting with its fallback.</div></div></div>';
-    html += '<div class="field"><label>Review language</label><div><input type="text" data-setting="language" data-edit="set-language" value="' + esc(val('language')) + '"><div class="help">The language findings, answers and summaries are written in, e.g. español or English.</div></div></div>';
+    html += '<div class="field"><label>Review language</label><div><input type="text" data-setting="language" data-edit="set-language" value="' + esc(edit('set-language', val('language'))) + '"><div class="help">The language findings, answers and summaries are written in, e.g. español or English.</div></div></div>';
     var suggestions = (o.meSuggestions || []).filter(function (name) { return name !== val('me'); });
-    html += '<div class="field"><label>Your name on the forge</label><div><input type="text" data-setting="me" data-edit="set-me" value="' + esc(val('me')) + '"><div class="help">So your own comments are not listed as requests from others.' +
+    html += '<div class="field"><label>Your name on the forge</label><div><input type="text" data-setting="me" data-edit="set-me" value="' + esc(edit('set-me', val('me'))) + '"><div class="help">So your own comments are not listed as requests from others.' +
       (suggestions.length ? ' Your published comments are signed as: ' + suggestions.map(function (name) { return '<button class="link" data-act="use-me" data-name="' + esc(name) + '">' + esc(name) + '</button>'; }).join(', ') + '.' : '') + '</div></div></div>';
     html += '<div class="field"><label>Notifications</label><div><label class="check"><input type="checkbox" data-setting="notify"' + (val('notify') ? ' checked' : '') + '> Tell me when a review is ready, someone replies, or a fix is written</label></div></div>';
     html += '<div class="section"><h3>Automatic mode</h3><div class="field"><label>Sweep</label><div><label class="check"><input type="checkbox" data-setting="autoEnabled"' + (val('autoEnabled') ? ' checked' : '') + '> Review, verify and draft on their own, for the repositories that ask for it</label></div></div>';
-    html += '<div class="field"><label>Every</label><div class="row"><input type="number" min="1" data-setting="autoInterval" value="' + esc(val('autoInterval')) + '" style="width:80px"> minutes</div></div>';
-    html += '<div class="field"><label>At most per cycle</label><div class="row"><input type="number" min="1" data-setting="autoMax" value="' + esc(val('autoMax')) + '" style="width:80px"> reviews and verifications<div class="help" style="width:100%">The spending cap of each sweep. Answers are drafted within the same cap, counted apart.</div></div></div>';
-    html += '<div class="field"><label>Remind after</label><div class="row"><input type="number" min="1" data-setting="followUpDays" value="' + esc(val('followUpDays')) + '" style="width:80px"> days without an answer</div></div>';
+    html += '<div class="field"><label>Every</label><div class="row"><input type="number" min="1" data-setting="autoInterval" data-edit="set-autoInterval" value="' + esc(edit('set-autoInterval', val('autoInterval'))) + '" style="width:80px"> minutes</div></div>';
+    html += '<div class="field"><label>At most per cycle</label><div class="row"><input type="number" min="1" data-setting="autoMax" data-edit="set-autoMax" value="' + esc(edit('set-autoMax', val('autoMax'))) + '" style="width:80px"> reviews and verifications<div class="help" style="width:100%">The spending cap of each sweep. Answers are drafted within the same cap, counted apart.</div></div></div>';
+    html += '<div class="field"><label>Remind after</label><div class="row"><input type="number" min="1" data-setting="followUpDays" data-edit="set-followUpDays" value="' + esc(edit('set-followUpDays', val('followUpDays'))) + '" style="width:80px"> days without an answer</div></div>';
     var auto = state.auto || o.auto;
     html += '<div class="row"><button class="btn" data-act="auto-now">Sweep now</button><span class="faint">' + esc(auto && auto.lastMessage ? (auto.lastRunAt ? when(auto.lastRunAt) + ': ' : '') + auto.lastMessage : 'No sweep yet.') + '</span></div></div>';
     html += '<div class="section"><h3>Global conventions</h3>' + drawGuidelines(state.globalGuidelines, null) + '</div>';
@@ -2259,7 +2329,7 @@
     var r = state.importReport;
     if (r) {
       html += '<div class="banner ok">Imported ' + r.repos + ' repositor' + (r.repos === 1 ? 'y' : 'ies') + ', ' + (r.rows.cr_review || 0) + ' reviews, ' + (r.rows.cr_finding || 0) + ' findings, ' + (r.rows.cr_reply_draft || 0) + ' replies, ' + (r.rows.cr_finding_fix || 0) + ' fixes' + (r.prefs ? ', ' + r.prefs + ' settings' : '') + '.' +
-        (r.skippedRepos.length ? '\nSkipped: ' + r.skippedRepos.join('; ') : '') + (r.tokensUnreadable.length ? '\nTokens to enter again: ' + r.tokensUnreadable.join(', ') : '') + '</div>';
+        (r.skippedRepos.length ? '<br>Skipped: ' + r.skippedRepos.map(esc).join('<br>') : '') + (r.tokensUnreadable.length ? '<br>Tokens to enter again: ' + r.tokensUnreadable.map(esc).join(', ') : '') + '</div>';
     }
     return html + '</div>';
   }
@@ -2378,7 +2448,9 @@
     'toggle-viewed': function (el) {
       var file = el.getAttribute('data-file');
       var marking = (state.code.viewed || []).indexOf(file) < 0;
+      var code = state.code;
       call('setViewed', { repoId: state.repoId, prId: state.prId, file: file, viewed: marking }).then(function (r) {
+        if (state.code !== code) return;
         state.code.viewed = r.files;
         // Marking the file in front as viewed moves on to the next one nobody has looked at, the way a review is read.
         if (marking && state.code.file === file) {
@@ -2405,9 +2477,10 @@
       };
       state.code.fileText = state.code.fileText || {};
       if (state.code.fileText[file]) return apply();
-      call('fileText', { repoId: state.repoId, prId: state.prId, file: file }).then(function (r) { state.code.fileText[file] = r; apply(); }, fail);
+      var code = state.code;
+      call('fileText', { repoId: state.repoId, prId: state.prId, file: file }).then(function (r) { if (state.code !== code) return; code.fileText[file] = r; apply(); }, fail);
     },
-    'reply-open': function (el) { state.edits['rep-' + el.getAttribute('data-id')] = ''; draw(); var box = document.querySelector('[data-edit="rep-' + el.getAttribute('data-id') + '"]'); if (box) box.focus(); },
+    'reply-open': function (el) { state.edits['rep-' + el.getAttribute('data-id')] = ''; draw(); var box = document.querySelector('[data-edit="' + cssEscape('rep-' + el.getAttribute('data-id')) + '"]'); if (box) box.focus(); },
     'reply-cancel': function (el) { delete state.edits['rep-' + el.getAttribute('data-id')]; draw(); },
     'reply-send': function (el) {
       var id = el.getAttribute('data-id');
@@ -2603,7 +2676,7 @@
       if (!state.code.files) { loadFiles().then(function () { openFile(file, line); }); draw(); } else openFile(file, line);
     },
     file: function (el) { openFile(el.getAttribute('data-file')); },
-    'code-fetch': function () { state.code.files = null; state.code.lines = null; draw(); loadFiles(true); },
+    'code-fetch': function () { state.code.files = null; state.code.lines = null; state.code.fileText = {}; state.code.reveal = {}; draw(); loadFiles(true); },
     'note-line': function (el) { state.code.noteAt = { line: Number(el.getAttribute('data-line')) }; draw(); },
     'note-file': function () { state.code.noteAt = { line: null }; draw(); },
     'note-cancel': function () { state.code.noteAt = null; draw(); },
@@ -2622,8 +2695,9 @@
     commit: function (el) {
       var sha = el.getAttribute('data-sha');
       state.commits.sha = sha; state.commits.files = null; state.commits.file = null; state.commits.lines = null; draw();
+      var commits = state.commits;
       call('commitFiles', { repoId: state.repoId, sha: sha }).then(function (r) {
-        if (state.commits.sha !== sha) return;
+        if (state.commits !== commits || commits.sha !== sha) return;
         state.commits.files = r.files; draw();
         if (r.files.length) actions['commit-file']({ getAttribute: function () { return r.files[0].path; } });
       }, fail);
@@ -2632,7 +2706,8 @@
       var file = el.getAttribute('data-file');
       var sha = state.commits.sha;
       state.commits.file = file; state.commits.lines = null; draw();
-      call('commitDiff', { repoId: state.repoId, sha: sha, file: file }).then(function (r) { if (state.commits.file === file) { state.commits.lines = r.lines; draw(); } }, fail);
+      var commits = state.commits;
+      call('commitDiff', { repoId: state.repoId, sha: sha, file: file }).then(function (r) { if (state.commits === commits && commits.sha === sha && commits.file === file) { commits.lines = r.lines; draw(); } }, fail);
     },
     'draft-reply': function (el) { var id = el.getAttribute('data-id'); delete state.edits['reply-' + id]; act('draft-' + id, function () { return call('draftReply', { replyId: id }); }); },
     'draft-all': function () { act('draft-all', function () { return call('draftAll', prArgs()); }, function (r) { say(r.drafted + ' drafted' + (r.failed ? ', ' + r.failed + ' failed' : '') + '.', r.failed > 0); }); },
@@ -2654,8 +2729,10 @@
       var id = el.getAttribute('data-id');
       act('follow-' + id, function () { return call('followUp', { findingId: id, body: state.edits['follow-' + id] }); }, function () { delete state.edits['follow-' + id]; say('Reminder sent.'); });
     },
-    shell: function (el) { host.call('review.shell', prArgs({ where: el.getAttribute('data-where') })).catch(fail); },
-    ask: function (el) { host.call('review.ask', prArgs({ findingId: el.getAttribute('data-finding') || undefined })).catch(fail); },
+    'retry-start': function () { $('main').innerHTML = '<div class="loading">Loading…</div>'; start(); },
+    // Through call(): the host answers a failure as {ok:false}, which a bare .catch never sees.
+    shell: function (el) { call('shell', prArgs({ where: el.getAttribute('data-where') })).catch(fail); },
+    ask: function (el) { call('ask', prArgs({ findingId: el.getAttribute('data-finding') || undefined })).catch(fail); },
     'use-me': function (el) {
       call('saveSettings', { settings: { me: el.getAttribute('data-name') } }).then(function (r) { state.settings = r.settings; if (state.overview) state.overview.settings = r.settings; say('Saved.'); draw(); }, fail);
     },
@@ -2664,7 +2741,7 @@
     'import-run': function () {
       var ids = state.importInfo.repos.filter(function (repo) { return state.importPick[repo.id] !== false && !repo.localOnly; }).map(function (repo) { return repo.id; });
       if (!ids.length) return say('Nothing selected.', true);
-      act('import', function () { return call('importRun', { repoIds: ids }); }, function (r) { state.importReport = r.report; loadOverview().then(draw); });
+      act('import', function () { return call('importRun', { repoIds: ids }); }, function (r) { state.importReport = r.report; loadOverview().then(draw, fail); });
     }
   };
 
@@ -2685,8 +2762,19 @@
     if (key) state.edits[key] = el.value;
     var formField = el.getAttribute('data-form');
     if (formField && state.form && el.type !== 'radio' && el.type !== 'checkbox') state.form[formField] = el.value;
+    // Mid-composition (a dead key, an IME) the text is not final, and a redraw would lose it.
+    if (!event.isComposing) filterInput(el);
+  });
+
+  document.addEventListener('compositionend', function (event) { filterInput(event.target); });
+
+  function filterInput(el) {
     if (el.getAttribute('data-bind') === 'dash-text') { state.dashFilter.text = el.value; draw(); }
     if (el.getAttribute('data-bind') === 'code-filter') { state.code.filter = el.value; draw(); }
+  }
+
+  document.addEventListener('focusout', function () {
+    setTimeout(function () { if (state.drawPending && !typing()) draw(); }, 0);
   });
 
   document.addEventListener('change', function (event) {
@@ -2724,7 +2812,7 @@
         state.pr.running = runningList().filter(function (r) { return r.repoId === state.repoId && r.prId === state.prId; });
       }
       if (state.view === 'dashboard' && state.dashboard) state.dashboard.stats.running = runningList().length;
-      if (!activityTimer) activityTimer = setTimeout(function () { activityTimer = null; draw(); }, 250);
+      if (!activityTimer) activityTimer = setTimeout(function () { activityTimer = null; drawQuietly(); }, 250);
       if (run.done) scheduleReload();
       return;
     }
@@ -2736,7 +2824,7 @@
     }
     if (event.type === 'bus') { if (state.view === 'bus') scheduleReload(); return; }
     if (event.type === 'auto') { state.auto = event.status; drawTop(); if (state.view === 'dashboard' && !event.status.running) scheduleReload(); return; }
-    if (event.type === 'repos' || event.type === 'settings') { loadOverview().then(function () { if (state.view !== 'repoForm') scheduleReload(); else draw(); }); }
+    if (event.type === 'repos' || event.type === 'settings') { loadOverview().then(function () { if (state.view !== 'repoForm') scheduleReload(); else draw(); }, fail); }
   });
 
   host.on('showing', function (payload) {
@@ -2764,7 +2852,9 @@
     state.started = true;
     if ((state.view === 'pr' || state.view === 'prs') && !state.repoId) state.view = 'dashboard';
     loadOverview().then(function () { draw(); return load(); }).catch(function (error) {
-      $('main').innerHTML = '<div class="page"><div class="banner bad">The Code Reviewer did not answer: ' + esc(error.message) + '</div></div>';
+      // Not started after all: the next time the panel is shown, it tries again.
+      state.started = false;
+      $('main').innerHTML = '<div class="page"><div class="banner bad">The Code Reviewer did not answer: ' + esc(error.message) + '</div><button class="btn" data-act="retry-start">Try again</button></div>';
     });
   }
 

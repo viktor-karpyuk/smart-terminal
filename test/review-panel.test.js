@@ -130,3 +130,16 @@ test('unchanged stretches fold into gaps that open from either end, without losi
   D.state = { code: { fileText: {}, reveal: {} } };
   assert.deepEqual(shape(D.diffItems(hunk, 'a.js')).slice(-1), ['gap:end:null']);
 });
+
+test('only the first line after a hunk may be guessed into a block comment', () => {
+  const sql = V.langOf('q.sql');
+  const st = { block: false, fresh: true };
+  V.tokenize('SELECT', sql, st);
+  const star = V.tokenize('  *', sql, st);
+  assert.equal(st.block, false, 'a select list star is not a comment');
+  assert.ok(!star.some((t) => t.c === 'tk-c'));
+  const java = V.langOf('A.java');
+  const first = { block: false, fresh: true };
+  V.tokenize('   * continues a javadoc', java, first);
+  assert.equal(first.block, true, 'at the top of a hunk it is taken as a comment');
+});
