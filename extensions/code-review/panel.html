@@ -1485,7 +1485,8 @@
   function withoutTitle(body, title) {
     var text = String(body || '');
     var first = text.split('\n')[0].trim();
-    var bare = first.replace(/^#+\s*/, '').replace(/^\*\*(.*)\*\*$/, '$1').replace(/`/g, '').trim();
+    // As the reviewer posts one: `_category_ · **title**`, or a heading.
+    var bare = first.replace(/^_[^_]+_\s*·\s*/, '').replace(/^#+\s*/, '').replace(/^\*\*(.*)\*\*$/, '$1').replace(/`/g, '').trim();
     return title && bare === String(title).replace(/`/g, '').trim() ? text.slice(text.indexOf('\n') + 1).replace(/^\s+/, '') : text;
   }
 

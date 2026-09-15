@@ -149,3 +149,8 @@ test('a title shows its backticked code as code, and nothing else as markup', ()
   assert.equal(T.titleHtml('`switchMode` changes <b>'), '<code>switchMode</code> changes &lt;b&gt;');
   assert.equal(T.titleHtml('`<img onerror=x>`'), '<code>&lt;img onerror=x&gt;</code>');
 });
+
+test('the title line is dropped as the reviewer posts it, with its category in front', () => {
+  const T = fromPanel(['withoutTitle']);
+  assert.equal(T.withoutTitle('_diseño_ · **El bridge paga una query**\n\nEl cuerpo.', 'El bridge paga una query'), 'El cuerpo.');
+});
