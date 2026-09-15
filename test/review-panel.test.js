@@ -143,3 +143,9 @@ test('only the first line after a hunk may be guessed into a block comment', () 
   V.tokenize('   * continues a javadoc', java, first);
   assert.equal(first.block, true, 'at the top of a hunk it is taken as a comment');
 });
+
+test('a title shows its backticked code as code, and nothing else as markup', () => {
+  const T = fromPanel(['esc', 'titleHtml']);
+  assert.equal(T.titleHtml('`switchMode` changes <b>'), '<code>switchMode</code> changes &lt;b&gt;');
+  assert.equal(T.titleHtml('`<img onerror=x>`'), '<code>&lt;img onerror=x&gt;</code>');
+});

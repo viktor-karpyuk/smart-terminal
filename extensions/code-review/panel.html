@@ -113,8 +113,11 @@
   .card.hi { border-color: var(--accent); }
   .card.bad { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); }
   .grid-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 10px; }
-  .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin-bottom: 12px; }
-  .stat { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; cursor: pointer; background: var(--bg-panel); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-bottom: 12px; }
+  .stat { position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; cursor: pointer; background: var(--bg-panel); transition: border-color 0.12s, background 0.12s; }
+  .stat .n { font-variant-numeric: tabular-nums; }
+  /* What waits on you carries a line across the top, so it is seen before it is read. */
+  .stat.urgent::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 2px; background: #d9a441; }
   .stat:hover { border-color: var(--border-strong); }
   .stat.on { border-color: var(--accent); background: var(--accent-soft); }
   .stat .n { font-size: 20px; font-weight: 600; }
@@ -176,10 +179,15 @@
   .subtabs .tab.on { border-bottom-color: var(--accent); background: none; }
   .count { display: inline-block; min-width: 14px; padding: 0 4px; border-radius: 7px; background: var(--bg-elevated); font-size: 10px; text-align: center; margin-left: 3px; color: var(--text-dim); }
 
-  .finding { border: 1px solid var(--border); border-radius: var(--radius); padding: 9px 11px; background: var(--bg-panel); }
-  .finding + .finding { margin-top: 8px; }
+  .finding { border: 1px solid var(--border); border-left: 3px solid var(--border-strong, var(--border)); border-radius: var(--radius); padding: 10px 12px 10px 12px; background: var(--bg-panel); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+  .finding + .finding { margin-top: 10px; }
   .finding.settled { opacity: 0.72; }
-  .finding .ftitle { font-weight: 600; margin: 4px 0; }
+  .ftitle code, .cmt-title code, .finding-line .t code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; padding: 0 3px; border-radius: 3px; background: var(--bg-elevated); }
+  .finding .ftitle { font-weight: 600; font-size: 13.5px; line-height: 1.35; margin: 6px 0 4px; }
+  /* The severity is the first thing read: it runs down the card's edge as well as in its label. */
+  .finding.sev-blocker, .finding-line.sev-blocker { border-left-color: var(--danger); }
+  .finding.sev-major, .finding-line.sev-major { border-left-color: #d9a441; }
+  .finding-line { border-left-width: 3px; }
   .finding .meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 11px; }
   .md { line-height: 1.5; word-break: break-word; }
   .md p { margin: 4px 0; }
@@ -416,6 +424,10 @@
   var $ = function (id) { return document.getElementById(id); };
   function esc(value) {
     return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  /** A one-line title as models write them, with `code` in backticks: escaped first, then only the code spans become markup. */
+  function titleHtml(value) {
+    return esc(value).replace(/`([^`]+)`/g, '<code>$1</code>');
   }
   function call(name, args) {
     return host.call('review.' + name, args || {}).then(function (result) {
@@ -866,7 +878,7 @@
       var on = s[0] && f.flags.indexOf(s[0]) >= 0;
       // What waits on you is coloured when there is some; a zero is quiet.
       var urgent = s[1] > 0 && (s[0] === 'TO_PUBLISH' || s[0] === 'REPLIED' || s[0] === 'TO_VERIFY' || s[0] === 'UNREVIEWED');
-      return '<div class="stat' + (on ? ' on' : '') + '" data-act="dash-flag" data-flag="' + s[0] + '" title="' + (s[0] ? 'Show only these' : 'Show all') + '"><div class="n' + (urgent ? ' warn' : s[1] === 0 ? ' faint' : '') + '">' + s[1] + '</div><div class="l">' + s[2] + '</div></div>';
+      return '<div class="stat' + (on ? ' on' : '') + (urgent ? ' urgent' : '') + '" data-act="dash-flag" data-flag="' + s[0] + '" title="' + (s[0] ? 'Show only these' : 'Show all') + '"><div class="n' + (urgent ? ' warn' : s[1] === 0 ? ' faint' : '') + '">' + s[1] + '</div><div class="l">' + s[2] + '</div></div>';
     }).join('') + '</div>';
     if (d.readErrors && d.readErrors.length) {
       html += fold('read-errors', '<span class="warn">⚠</span><strong>' + d.readErrors.length + ' repositor' + (d.readErrors.length === 1 ? 'y' : 'ies') + ' could not be read</strong>',
@@ -923,9 +935,12 @@
     });
 
     html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin-top:10px">';
-    html += '<div><h3>Recent reviews</h3>' + (d.recent.length ? '<table class="list">' + d.recent.map(function (item) {
+    // A dozen is what anyone reads; the rest is one click away.
+    var recentAll = isOpen('recent-all', false);
+    var recent = recentAll ? d.recent : d.recent.slice(0, 12);
+    html += '<div><h3>Recent reviews</h3>' + (d.recent.length ? '<table class="list">' + recent.map(function (item) {
       return '<tr class="click" data-act="open-pr" data-repo="' + esc(item.repoId) + '" data-pr="' + item.prId + '"' + (item.error ? ' title="' + esc(item.error) + '"' : '') + '><td class="faint nowrap">' + esc(when(item.at)) + '</td><td>' + esc(item.repoName) + ' #' + item.prId + ' <span class="dim">' + esc(item.title) + '</span></td><td class="nowrap">' + statusChip(item.status) + (item.trigger === 'AUTO' ? ' <span class="chip">auto</span>' : '') + '</td><td class="faint nowrap num">' + (item.costUsd ? money(item.costUsd) : '—') + '</td></tr>';
-    }).join('') + '</table>' : '<div class="faint">Nothing yet.</div>') + '</div>';
+    }).join('') + '</table>' + (d.recent.length > 12 ? '<button class="link" data-act="fold" data-key="recent-all" style="margin-top:6px">' + (recentAll ? 'Show fewer' : 'Show all ' + d.recent.length) + '</button>' : '') : '<div class="faint">Nothing yet.</div>') + '</div>';
     html += '<div><h3>Usage</h3>' + drawUsage(d.usage) + '</div>';
     html += '</div></div>';
     return html;
@@ -1259,16 +1274,16 @@
     var fixOn = v.repo.fixMode !== 'OFF' && v.pr.state === 'OPEN';
     // What is finished folds to one line, so what is still open is what the eye lands on.
     if (findingDone(f) && !isOpen('f-' + f.id)) {
-      return '<div class="finding-line" data-act="fold" data-key="f-' + esc(f.id) + '" title="Show the whole finding"><span class="sev ' + esc(f.severity) + '">' + esc(f.severity) + '</span><span class="t">' + esc(f.title) + '</span>' +
+      return '<div class="finding-line sev-' + esc(f.severity) + '" data-act="fold" data-key="f-' + esc(f.id) + '" title="Show the whole finding"><span class="sev ' + esc(f.severity) + '">' + esc(f.severity) + '</span><span class="t">' + titleHtml(f.title) + '</span>' +
         (fix && fix.sha ? '<span class="chip okc">✔ ' + sha7(fix.sha) + '</span>' : '') + findingStatus(f) + '</div>';
     }
-    var html = '<div class="finding' + (findingDone(f) ? ' settled' : '') + '"><div class="meta"><span class="sev ' + esc(f.severity) + '">' + esc(f.severity) + '</span>' +
+    var html = '<div class="finding sev-' + esc(f.severity) + (findingDone(f) ? ' settled' : '') + '"><div class="meta"><span class="sev ' + esc(f.severity) + '">' + esc(f.severity) + '</span>' +
       (f.category ? '<span class="chip">' + esc(CATEGORY_LABELS[f.category] || f.category) + '</span>' : '') +
       (f.askedBy ? '<span class="chip accent">asked by ' + esc(f.askedBy) + '</span>' : '') +
       (f.filePath ? '<button class="link mono" data-act="jump" data-file="' + esc(f.filePath) + '" data-line="' + (f.lineNo || '') + '" title="Open it in the diff">' + anchor(f.filePath, f.lineNo) + '</button>' : '') +
       '<span class="spacer"></span>' + findingStatus(f) +
       (findingDone(f) ? '<button class="more" data-act="fold" data-key="f-' + esc(f.id) + '">fold</button>' : '') +
-      '</div><div class="ftitle">' + esc(f.title) + '</div>';
+      '</div><div class="ftitle">' + titleHtml(f.title) + '</div>';
     var editing = state.edits['finding-open-' + f.id];
     if (editing) {
       html += '<input type="text" data-edit="finding-title-' + f.id + '" value="' + esc(edit('finding-title-' + f.id, f.title)) + '" style="width:100%;box-sizing:border-box">' +
@@ -1995,7 +2010,7 @@
     var status = (f.publishedId ? '<span class="chip okc">published</span>' : f.dismissedAt ? '<span class="chip">dismissed</span>' : '<span class="chip mine">draft</span>') +
       (f.resolution && RESOLUTION_LABELS[f.resolution] ? '<span class="chip ' + RESOLUTION_LABELS[f.resolution][1] + '">' + RESOLUTION_LABELS[f.resolution][0] + '</span>' : '');
     var head = '<span class="sev ' + esc(f.severity) + '">' + esc(f.severity) + '</span>' + (f.category ? '<span class="chip">' + esc(CATEGORY_LABELS[f.category] || f.category) + '</span>' : '') +
-      '<strong class="cmt-title">' + esc(f.title) + '</strong>' + status + (chain.length ? '<span class="chip">' + chain.length + ' repl' + (chain.length === 1 ? 'y' : 'ies') + '</span>' : '');
+      '<strong class="cmt-title">' + titleHtml(f.title) + '</strong>' + status + (chain.length ? '<span class="chip">' + chain.length + ' repl' + (chain.length === 1 ? 'y' : 'ies') + '</span>' : '');
     var body = '<div class="cmt-body">' + clamped('code-' + f.id, md(f.body), String(f.body).length > 700) +
       (f.suggestion ? '<div class="suggestion"><div class="faint">How it could be fixed</div>' + md(f.suggestion) + '</div>' : '') +
       verdictHtml(f.resolutionNote) + '</div>';
@@ -2188,14 +2203,14 @@
       if (!open && t.state !== 'OK') label = ['Left open', ''];
       var draft = t.draft;
       if (t.state === 'OK' && !isOpen('t-' + t.findingId)) {
-        html += '<div class="finding-line" data-act="fold" data-key="t-' + esc(t.findingId) + '" title="Show the thread"><span class="chip ' + label[1] + '">' + label[0] + '</span><span class="sev ' + esc(t.severity) + '">' + esc(t.severity) + '</span><span class="t">' + esc(t.title) + '</span><span class="faint">' + t.entries.length + ' repl' + (t.entries.length === 1 ? 'y' : 'ies') + '</span></div>';
+        html += '<div class="finding-line sev-' + esc(t.severity) + '" data-act="fold" data-key="t-' + esc(t.findingId) + '" title="Show the thread"><span class="chip ' + label[1] + '">' + label[0] + '</span><span class="sev ' + esc(t.severity) + '">' + esc(t.severity) + '</span><span class="t">' + titleHtml(t.title) + '</span><span class="faint">' + t.entries.length + ' repl' + (t.entries.length === 1 ? 'y' : 'ies') + '</span></div>';
         return;
       }
-      html += '<div class="finding' + (t.state === 'OK' ? ' settled' : '') + '"><div class="meta"><span class="chip ' + label[1] + '">' + label[0] + '</span><span class="sev ' + esc(t.severity) + '">' + esc(t.severity) + '</span>' +
+      html += '<div class="finding sev-' + esc(t.severity) + (t.state === 'OK' ? ' settled' : '') + '"><div class="meta"><span class="chip ' + label[1] + '">' + label[0] + '</span><span class="sev ' + esc(t.severity) + '">' + esc(t.severity) + '</span>' +
         (t.filePath ? '<button class="link mono" data-act="jump" data-file="' + esc(t.filePath) + '" data-line="' + (t.lineNo || '') + '">' + anchor(t.filePath, t.lineNo) + '</button>' : '') +
         (t.askedBy ? '<span class="chip accent">asked by ' + esc(t.askedBy) + '</span>' : '') + '<span class="spacer"></span>' +
         (t.waitingDays != null ? '<span class="faint">waiting ' + t.waitingDays + 'd</span>' : '') + '</div>' +
-        '<div class="ftitle">' + esc(t.title) + '</div>' + clamped('q-' + t.findingId, md(withoutTitle(t.question, t.title)), String(t.question).length > 520) +
+        '<div class="ftitle">' + titleHtml(t.title) + '</div>' + clamped('q-' + t.findingId, md(withoutTitle(t.question, t.title)), String(t.question).length > 520) +
         verdictHtml(t.resolutionNote) +
         (t.entries.length ? '<div class="entries">' + t.entries.map(entryHtml).join('') + '</div>' : '');
       if (draft && draft.status !== 'PUBLISHED' && !draft.dismissedAt && open) {
