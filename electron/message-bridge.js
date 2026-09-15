@@ -54,7 +54,7 @@ class MessageBridge {
    * @param {(id: string) => boolean} deps.isFree   idle at a Claude prompt, no dialog up
    * @param {object} deps.store               the queue: queue/pending/markDelivered/markRead
    */
-  constructor({ socketPath, reach, roster, write, isFree, store, health = null, lookup = null, onHook = null }) {
+  constructor({ socketPath, reach, roster, write, isFree, store, health = null, lookup = null, onHook = null, onBus = null }) {
     this.socketPath = socketPath;
     this.reach = reach;
     this.roster = roster;
@@ -70,6 +70,8 @@ class MessageBridge {
     /** What to do when Claude reports one of its own moments. Optional: without
      *  it the channel still carries messages, it just hears nothing. */
     this.onHook = onHook;
+    /** The Code Reviewer's bus. Optional: without it the channel carries messages and nothing else. */
+    this.onBus = onBus;
     this.server = null;
     this.sweep = null;
   }
@@ -225,6 +227,16 @@ class MessageBridge {
     if (op === 'hook') {
       if (!this.onHook) return { ok: false, error: 'Smart Terminal is not listening for hooks.' };
       return this.onHook(request);
+    }
+
+    /*
+      The Code Reviewer's bus has its own idea of who is asking — a fix run
+      carries a token the app made, a session its own id — and its own rules
+      about who hears what, so it is answered apart from the reach of messaging.
+    */
+    if (op === 'bus') {
+      if (!this.onBus) return { ok: false, error: 'The Code Reviewer is not running.' };
+      return this.onBus(request);
     }
 
     if (!from) return { ok: false, error: 'This session did not identify itself.' };

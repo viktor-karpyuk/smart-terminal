@@ -212,6 +212,80 @@ repeated on a timer rather than trusted the first time.
 
 ---
 
+## Code Reviewer
+
+The `code-review` extension is a port of AI Code Reviewer, a Kotlin desktop app that reviews
+pull requests by running the person's own `claude -p`. The rules came across rule for rule —
+each of them cost that app a real mistake — and the comments in `electron/review-*.js` say
+which. What it keeps, and what a change must not break:
+
+- **No API key, ever.** Every run is the local CLI on a Smart Terminal account
+  (`review-claude.js`), spawned without a shell, prompt on stdin, **each permission pattern
+  its own argument** — joined with commas, `Bash(git diff *)` is split by the CLI and the
+  review runs blind to the diff without saying so. An account out of room is rested and the
+  next one takes the run; a session is never resumed across accounts.
+- **A review is read-only, and one that used no tool is failed.** The model sometimes answers
+  "I cannot access the diff" without trying, with no permission denial to show for it.
+- **Nothing is published by itself.** Findings are drafts. The only automatic publication is
+  an answer to a reply, for a repository whose reply mode is AUTO.
+- **Fixes are written in a workshop** — a `git clone --local` under
+  `userData/code-review/fixes` — never in the person's clone, with `git push` and
+  `git commit` denied to the model. The tool commits; a clean tree means nothing was fixed.
+  A written fix closes its finding and says so in the thread, from a template that always
+  says the commit is not on the branch yet.
+- **One database.** Its tables live in `smart-terminal.db`, prefixed `cr_`, with their own
+  forward-only migration list and a guard against a newer schema. The columns are the
+  original app's, name for name, which is what makes `review-import.js` a copy.
+- **Tokens** are encrypted with Electron's `safeStorage`; the store refuses to keep one in the
+  clear, and no view the panel receives carries it.
+- **The panel cannot reach the network.** Everything goes through `review:call`, a fixed verb
+  table in `review-service.js`; `extensionHost.ts` routes `review.*` and asks before the five
+  things that cannot be undone — merge, decline, push, deleting a repository, discarding a
+  workshop.
+
+Two deliberate departures from the original: the sweep drafts answers to replies even when no
+repository reviews automatically, and it reads the thread of every open PR with published
+comments each cycle, so a reply is noticed without opening the PR. And a GitHub PR is read with
+its state and stances, which the original never mapped.
+
+Not ported, by decision: the Constructor (spec-driven implementation), statistics, Jira and
+the stories board, and the database-engine choice — the reviewer uses Smart Terminal's
+database.
+
+### The bus
+
+AI Code Reviewer's MCP bus let its parallel tasks see each other; here it does the same for
+the reviewer's fixes and the person's own Claude sessions (`review-bus.js`). Seven tools —
+`peers`, `inbox`, `notify`, `claim`, `who_touched`, `release`, `migration_number` — served by
+`review-bus-mcp.js`, a stdio MCP server that only relays over the app's message socket
+(`op: 'bus'` in `message-bridge.js`). What holds it up:
+
+- **Identity is the app's.** A fix run gets a token the app made, inline in its
+  `--mcp-config` together with `--strict-mcp-config`; a session is known by the
+  `SMART_TERMINAL_SESSION_ID` the app put in its environment, and only while it is in the
+  live roster. Where a session is — which repository, which PR — is worked out from its
+  working directory: a configured clone, or a fix workshop.
+- **Claims never block.** Every branch has its own copy; a claim is for the merge. They go
+  when the fix ends, or when the session stops or moves to another repository.
+- **`who_touched` and `migration_number` read real branches.** The repository's other open
+  PRs are diffed with git (cached per head), so a file or a migration number another PR
+  already uses is seen before the merge. Numbers are reserved in a transaction and never
+  handed out twice.
+- **A fix reads back a day** when it joins, because it is a new writer each run; a session
+  starts from the moment it joins. After a fix commits, the files it changed are recorded
+  against its branch, and if another open branch changes them too, the repository is told.
+
+The panel's Coordination tab shows it, read-only. The plugin's `code-review-bus` skill tells
+a session when to reach for the tools.
+
+Testing it by hand needs no real review: import an AI Code Reviewer history into an isolated
+instance and every screen has data. `test/review-engine.test.js` drives the whole thing — a
+review, publishing, a reply, verification, a fix, handing it back and pushing — on real git
+repositories with a fake forge and a fake CLI. It needs `node:sqlite` (Node 22+) and skips
+itself on an older Node.
+
+---
+
 ## Tests
 
 ```bash

@@ -173,6 +173,13 @@ contextBridge.exposeInMainWorld('api', {
     unwatchTree: (root) => ipcRenderer.send('files:unwatch-tree', root),
     onTreeChanged: (handler) => on('tree:changed', handler),
     reveal: (file) => ipcRenderer.send('files:reveal', file),
+    /** Changing the tree. Each answers `{ ok, path }` or `{ ok: false, error }`. */
+    rename: (from, to) => ipcRenderer.invoke('files:rename', { from, to }),
+    move: (from, dir) => ipcRenderer.invoke('files:move', { from, dir }),
+    create: (dir, name, kind) => ipcRenderer.invoke('files:create', { dir, name, kind }),
+    duplicate: (file) => ipcRenderer.invoke('files:duplicate', { file }),
+    /** To the Trash, never gone for good. */
+    trash: (file) => ipcRenderer.invoke('files:trash', { file }),
   },
 
   extensions: {
@@ -243,6 +250,19 @@ contextBridge.exposeInMainWorld('api', {
       const handler = (_e, payload) => fn(payload);
       ipcRenderer.on('spring:state', handler);
       return () => ipcRenderer.removeListener('spring:state', handler);
+    },
+  },
+
+  /**
+   * Code Reviewer: one call for every verb, and one event stream — work in
+   * progress, and "something about this PR changed, read it again".
+   */
+  review: {
+    call: (name, args) => ipcRenderer.invoke('review:call', { name, args }),
+    onEvent: (fn) => {
+      const handler = (_e, payload) => fn(payload);
+      ipcRenderer.on('review:event', handler);
+      return () => ipcRenderer.removeListener('review:event', handler);
     },
   },
 

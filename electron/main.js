@@ -2,7 +2,8 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { app, BrowserWindow, ipcMain, dialog, protocol, shell, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, shell, net, Notification, safeStorage } = require('electron');
+const { DatabaseSync } = require('node:sqlite');
 const { createHash, randomUUID } = require('node:crypto');
 
 const { PtyManager, claudeLaunchLine } = require('./pty-manager');
@@ -32,7 +33,18 @@ const { parseReport, replyFor, wantsBrief, compactionNote } = require('./hooks')
 const { Autopilot, looksLikeADecision } = require('./autopilot');
 const { tabsInLayout, minimizedIds, sectionIds, sessionsToRestore, unaccountedTabs } = require('./restore');
 const { MessageBridge } = require('./message-bridge');
-const { listDir, readTextFile, writeTextFile, FileWatcher, savePastedImage, forgetOldPastes } = require('./files');
+const {
+  listDir,
+  readTextFile,
+  writeTextFile,
+  FileWatcher,
+  savePastedImage,
+  forgetOldPastes,
+  renamePath,
+  moveInto,
+  createEntry,
+  duplicatePath,
+} = require('./files');
 const git = require('./git');
 const { layout: layoutGraph } = require('./git-graph');
 const kube = require('./kube');
@@ -40,6 +52,8 @@ const helm = require('./helm');
 const spring = require('./spring');
 const buildTools = require('./build-tools');
 const { Updates, repoSlug } = require('./updates');
+const { ReviewService } = require('./review-service');
+const { resolvedPath } = require('./cli-env');
 
 /**
  * What this build is. Written at package time, so the answer comes from the app
@@ -170,6 +184,16 @@ const sessionByPty = new Map();
 let recordByDefault = true;
 let context = null;
 let db = null;
+/**
+ * The Code Reviewer extension's engine: reviews, fixes and the automatic sweep.
+ *
+ * App-owned rather than window-owned, like the Spring Boot runs: a review keeps
+ * going when the tab that started it closes, and every window's panel hears
+ * about it. Its tables live in this app's own database.
+ */
+let reviewService = null;
+/** Where the bus's MCP server lives and the socket it talks to, once messaging has opened it. */
+let reviewBusServer = null;
 let monitor = null;
 /**
  * Watches the working trees the app has open, so the Git panel is current
@@ -215,10 +239,72 @@ const usageCache = new Map();
 const usageInFlight = new Map();
 const USAGE_TTL = 5 * 60 * 1000;
 
+/**
+ * The reviewer's dependencies on the app, in one place: the database handle,
+ * tokens encrypted by the OS keychain through safeStorage, the accounts,
+ * notifications and a folder picker. Nothing else of Electron reaches it.
+ */
+function createReviewService() {
+  const secrets = {
+    encrypt: (text) => {
+      // A token stored in the clear is worse than a token not stored: refuse, and say why.
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('This system offers no encrypted storage, so the token cannot be kept safely.');
+      return safeStorage.encryptString(text).toString('base64');
+    },
+    decrypt: (cipher) => safeStorage.decryptString(Buffer.from(cipher, 'base64')),
+  };
+  try {
+    return new ReviewService({
+      db: db.db,
+      secrets,
+      fetch: (url, init) => net.fetch(url, init),
+      profiles,
+      resolvePath: (profileShell) => resolvedPath(profileShell || process.env.SHELL || '/bin/zsh'),
+      notify: (title, body) => {
+        if (Notification.isSupported()) new Notification({ title, body }).show();
+      },
+      emit: (event) => send('review:event', event),
+      dataDir: app.getPath('userData'),
+      pickFolder: async () => {
+        const owner = BrowserWindow.getFocusedWindow() ?? undefined;
+        const picked = await dialog.showOpenDialog(owner, { properties: ['openDirectory'] });
+        return picked.canceled ? null : picked.filePaths[0] ?? null;
+      },
+      openExternal: (url) => shell.openExternal(url),
+      DatabaseSync,
+      // Known once messaging has opened its socket; a fix started before that runs without the bus.
+      busServer: () => reviewBusServer,
+    });
+  } catch (error) {
+    // The rest of the app does not depend on the reviewer; a reviewer that cannot start says so and stays out of the way.
+    console.error('[code-review] could not start:', error);
+    return null;
+  }
+}
+
 /** Broadcast to every window; session events can concern any of them. */
 function send(channel, payload) {
   for (const win of windows.values()) {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);
+  }
+}
+
+/** The words for a file system refusal, when Node's are a code. */
+function friendlyFileError(error) {
+  switch (error?.code) {
+    case 'ENOENT':
+      return 'That is not there any more.';
+    case 'EEXIST':
+      return 'There is already something with that name there.';
+    case 'EACCES':
+    case 'EPERM':
+      return 'macOS did not allow that. Check the folder’s permissions.';
+    case 'ENOTEMPTY':
+      return 'That folder is not empty.';
+    case 'EBUSY':
+      return 'Something is using it right now.';
+    default:
+      return String(error?.message ?? error);
   }
 }
 
@@ -1051,6 +1137,32 @@ function registerIpc() {
   ipcMain.on('files:reveal', (_e, file) => shell.showItemInFolder(file));
 
   /*
+   * Changing the tree. Each answers `{ ok, path }` or `{ ok: false, error }`
+   * in words the tree can show. Nothing here overwrites anything, and delete
+   * is a move to the Trash, which the person can undo from there.
+   */
+  const changing = (work) => async (_e, args) => {
+    try {
+      return await work(args ?? {});
+    } catch (error) {
+      return { ok: false, error: friendlyFileError(error) };
+    }
+  };
+  ipcMain.handle('files:rename', changing(({ from, to }) => renamePath(from, to)));
+  ipcMain.handle('files:move', changing(({ from, dir }) => moveInto(from, dir)));
+  ipcMain.handle('files:create', changing(({ dir, name, kind }) => createEntry(dir, name, kind === 'folder' ? 'folder' : 'file')));
+  ipcMain.handle('files:duplicate', changing(({ file }) => duplicatePath(file)));
+  ipcMain.handle(
+    'files:trash',
+    changing(async ({ file }) => {
+      const target = String(file ?? '');
+      if (!path.isAbsolute(target)) throw new Error('The path to delete must be a full path');
+      await shell.trashItem(target);
+      return { ok: true, path: target };
+    }),
+  );
+
+  /*
    * Git, as one call with a name.
    *
    * The names are a fixed table rather than anything derived from the argument —
@@ -1374,6 +1486,15 @@ function registerIpc() {
       return spring.brief(run, text);
     },
   };
+
+  /**
+   * Code Reviewer. One door, a table of verbs on the other side of it; the
+   * panel names repositories, PRs and findings, never paths or commands.
+   */
+  ipcMain.handle('review:call', async (_e, { name, args } = {}) => {
+    if (!reviewService) return { ok: false, error: 'The Code Reviewer is not running.' };
+    return reviewService.call(String(name ?? ''), args ?? {});
+  });
 
   ipcMain.handle('spring:call', async (_e, { name, args } = {}) => {
     const handler = name === 'readable' ? null : SPRING[name];
@@ -1707,6 +1828,7 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   const crashed = db.closeStaleSessions();
   if (crashed.length) console.log(`[db] closed ${crashed.length} session(s) left open by a previous run`);
   db.prune();
+  reviewService = createReviewService();
 
   workspace = new JsonStore('workspace.json', { layout: null, sessions: [], settings: {} });
   migrateWorkspaceIntoDb();
@@ -1863,6 +1985,8 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   const previous = db.openWindows();
   if (previous.length) previous.forEach(({ id, bounds }) => createWindow(id, bounds));
   else createWindow();
+  // After the windows: a review resumed from a previous launch must have somewhere to be seen.
+  reviewService?.start();
 
   app.on('activate', () => {
     // Not on the way out: the database is closed and a window would open onto nothing.
@@ -1912,6 +2036,10 @@ function startMessaging() {
   pluginPath = fs.existsSync(path.join(plugin, '.claude-plugin', 'plugin.json')) ? plugin : null;
   if (!pluginPath) console.log('[hooks] the plugin folder is not there; sessions will run without it');
 
+  // The Code Reviewer's bus, beside the sessions' server and started the same way.
+  const busScript = path.join(__dirname, 'review-bus-mcp.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+  reviewBusServer = { command: process.execPath, script: busScript, socketPath };
+
   try {
     fs.writeFileSync(
       mcpConfigPath,
@@ -1922,6 +2050,12 @@ function startMessaging() {
               command: process.execPath,
               args: [script],
               // Electron's own binary is the only node this app is sure to have.
+              env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
+            },
+            // A session knows itself by the id in its environment, which this server inherits.
+            'code-review': {
+              command: process.execPath,
+              args: [busScript],
               env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
             },
           },
@@ -1949,6 +2083,7 @@ function startMessaging() {
     },
     isFree: sessionIsFree,
     onHook: (request) => handleHook(request),
+    onBus: (request) => (reviewService ? reviewService.bus.handle(request, liveRoster()) : { ok: false, error: 'The Code Reviewer is not running.' }),
     // Sessions the app knows but is not running. Without this, a message to a
     // session that has ended comes back as "no such session", which is false and
     // leaves the sender nothing to do but try again.
@@ -2398,6 +2533,8 @@ function retireLegacyWorkspace() {
 let springStopped = false;
 app.on('will-quit', () => {
   kubeStreams.stopAll();
+  // A `claude -p` nobody can see would go on spending on the person's account.
+  reviewService?.stop();
   // A Gradle client asked for a task list is a JVM that would otherwise
   // outlive the app by up to three minutes.
   buildTools.stopAll();

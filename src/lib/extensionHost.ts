@@ -181,6 +181,39 @@ const SPRING_VERBS = new Map<string, Channel>([
   ...SPRING_APP.map((name) => [name, 'app'] as [string, Channel]),
 ]);
 
+/**
+ * Code Reviewer, which reviews pull requests with the person's own Claude Code.
+ *
+ * Reading costs nothing. Most writing is ordinary and reversible — a review is
+ * a draft, a finding is published with a click, a fix is written in a workshop
+ * copy — so it does not stop to ask; the reviewer this clones puts a modal only
+ * in front of what cannot be taken back, and so does this list (see
+ * `needsConsent`). `shell` and `ask` are the app's doors, not the reviewer's:
+ * a terminal in the clone or the workshop, and a Claude session handed a brief
+ * the app wrote.
+ */
+const REVIEW_READ = [
+  'overview', 'dashboard', 'repos', 'repo', 'prs', 'pr', 'files', 'diff', 'commits', 'commitFiles', 'commitDiff',
+  'guidelines', 'usage', 'activity', 'importInspect', 'models', 'depths', 'rerunCheck', 'followUpText', 'brief', 'paths',
+  'detectRemote', 'bus',
+] as const;
+const REVIEW_WRITE = [
+  'pickFolder', 'saveRepo', 'testRepo', 'deleteRepo', 'hideRepo', 'saveSettings', 'saveGuideline', 'deleteGuideline',
+  'importClaudeMd', 'importRun', 'autoRunNow', 'openUrl', 'refreshPrs', 'refreshAll', 'searchHistory', 'loadPr',
+  'review', 'cancel', 'cancelRun', 'verify', 'finalPass', 'saveReviewBody', 'publishReview', 'publishFinding',
+  'publishAll', 'dismissFinding', 'closeFinding', 'editFinding', 'addNote', 'updateNote', 'deleteNote', 'publishNote',
+  'draftReply', 'draftAll', 'saveReplyDraft', 'publishReply', 'dismissReply', 'dismissAllReplies', 'followUp',
+  'adopt', 'fix', 'fixAll', 'retryFixReply', 'giveBack', 'discardWorkshop', 'push',
+  'approve', 'unapprove', 'requestChanges', 'undoRequestChanges', 'decline', 'merge',
+] as const;
+const REVIEW_APP = ['shell', 'ask'] as const;
+
+const REVIEW_VERBS = new Map<string, Channel>([
+  ...REVIEW_READ.map((name) => [name, 'review'] as [string, Channel]),
+  ...REVIEW_WRITE.map((name) => [name, 'review'] as [string, Channel]),
+  ...REVIEW_APP.map((name) => [name, 'app'] as [string, Channel]),
+]);
+
 const GIT_VERBS = new Set<string>([...READ_VERBS, ...WRITE_VERBS]);
 const KUBE_VERBS = new Map<string, Channel>([
   ...KUBE_READ.map((name) => [name, 'kube'] as [string, Channel]),
@@ -189,7 +222,7 @@ const KUBE_VERBS = new Map<string, Channel>([
   ...KUBE_APP.map((name) => [name, 'app'] as [string, Channel]),
 ]);
 
-export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build';
+export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review';
 
 /**
  * Which door a call goes through, or none.
@@ -205,6 +238,7 @@ export function route(name: string): Channel | null {
   if (name.startsWith('helm.')) return HELM_VERBS.get(name.slice(5)) ?? null;
   if (name.startsWith('spring.')) return SPRING_VERBS.get(name.slice(7)) ?? null;
   if (name.startsWith('build.')) return BUILD_VERBS.get(name.slice(6)) ?? null;
+  if (name.startsWith('review.')) return REVIEW_VERBS.get(name.slice(7)) ?? null;
   return null;
 }
 
@@ -350,6 +384,37 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
       `Uninstall ${String(args.name ?? 'this release')}${whereItIs(args)}?\n\n` +
       'Everything the chart installed is deleted.'
     );
+  }
+
+  /*
+   * The reviewer's irreversible five. Everything else it does is a draft, a
+   * click that can be undone on the PR, or a commit in a workshop copy. These
+   * change a shared branch, close somebody's PR, or throw away the only copy of
+   * a fix — and each question says which PR and which branch, because "Merge?"
+   * with no noun in it is a dialog people learn to click through.
+   */
+  if (name.startsWith('review.')) {
+    const pr = args?.prId ? ` #${String(args.prId)}` : '';
+    const repo = args?.repoName ? ` of ${String(args.repoName)}` : '';
+    if (name === 'review.merge') {
+      const skipped = Array.isArray(args?.skipping) && args.skipping.length
+        ? `\n\nStill pending, merged anyway:\n${args.skipping.map((line) => `• ${String(line)}`).join('\n')}`
+        : '';
+      return `Merge pull request${pr}${repo} into ${String(args?.target ?? 'its target')} (${String(args?.strategy ?? 'MERGE_COMMIT').toLowerCase().replace('_', ' ')})?${skipped}\n\nA merge cannot be undone from here.`;
+    }
+    if (name === 'review.decline') {
+      return `Decline pull request${pr}${repo}?\n\nThe reason is posted as a comment first, and the PR is closed.`;
+    }
+    if (name === 'review.push') {
+      return `Push ${String(args?.count ?? 'the')} commit(s) to origin/${String(args?.branch ?? '?')}?\n\nEverybody who pulls the branch gets them. It is never forced: if the remote moved, git refuses.`;
+    }
+    if (name === 'review.deleteRepo') {
+      return `Stop reviewing ${String(args?.repoName ?? 'this repository')} and delete everything stored about it?\n\nReviews, findings, drafts and history go. Nothing on GitHub or Bitbucket changes.`;
+    }
+    if (name === 'review.discardWorkshop') {
+      return `Delete the fix workshop of pull request${pr}${repo}?\n\nIts commits are gone unless they were handed back to your clone.`;
+    }
+    return null;
   }
 
   /*
@@ -762,10 +827,25 @@ const SHIM = `(function () {
       else waiting.reject(new Error(message.error || 'the app would not do that'));
       return;
     }
+    if (message.type === 'copy') {
+      // The app's Copy landed while this frame had the focus: what is selected
+      // here goes to the app, which owns the clipboard.
+      var chosen = String(window.getSelection ? window.getSelection() : '');
+      if (chosen) post({ type: 'event', name: 'copy', payload: { text: chosen } });
+      return;
+    }
     var fns = listeners[message.type] || [];
     for (var i = 0; i < fns.length; i += 1) {
       try { fns[i](message.payload); } catch (error) { /* one listener's problem */ }
     }
+  });
+
+  // A frame in an origin of its own has no clipboard; a copy typed here is asked of the app instead.
+  document.addEventListener('copy', function (event) {
+    var chosen = String(window.getSelection ? window.getSelection() : '');
+    if (!chosen) return;
+    event.preventDefault();
+    post({ type: 'event', name: 'copy', payload: { text: chosen } });
   });
 
   window.host = {

@@ -288,6 +288,8 @@ electron/
   updates.js      which version is published, and replacing this one with it
   kube.js         Kubernetes, through kubectl; helm.js for Helm
   spring.js       Spring Boot applications: found, run, debugged, read
+  review-*.js     Code Reviewer: GitHub/Bitbucket PRs reviewed with your own Claude Code
+                  (rules, prompts, forge, CLI runner, git, store, engine, fixes, sweep, import)
 src/
   state/layout.ts    the split tree: split, drop, prune, resize, collapse
   state/store.ts     zustand store: sessions, layout, settings, pty plumbing

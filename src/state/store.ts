@@ -3,6 +3,7 @@ import { FOLLOW_APP, resolveTerminalTheme } from '../terminals/themes';
 import { generateSessionName } from '../lib/names';
 import { shortContext, terminalSetup } from '../lib/extensionHost';
 import { whatItDid } from '../lib/gitUpdate';
+import { baseOf, movedPath, moveProblem, nameProblem, parentOf } from '../lib/fileOps';
 import { arrangeGroup, moveGroupTo } from './groups';
 import { closePane, movePane, panePlace, restorePaneAt, splitEmpty, splitOffTabs, swapPanes } from './layout';
 import { GIT_TAB } from './types';
@@ -232,6 +233,91 @@ function followTree(panelId: string, root: string | null) {
   } else {
     followedRoots.delete(panelId);
   }
+}
+
+/**
+ * A path became another: every key that was the old path, or under it, is
+ * now the new one — in every files panel, in the buffers, in the listings.
+ *
+ * The buffer moves with its edit: a file renamed while it has unsaved changes
+ * keeps them, under the new name. The watch on the old path is released and
+ * one on the new is taken, with the same mtime — the content did not change.
+ */
+type GetState = () => State;
+type SetState = (update: (prev: State) => Partial<State>) => void;
+
+function relocate(set: SetState, get: GetState, from: string, to: string) {
+  const moved = (path: string) => movedPath(path, from, to);
+  set((prev) => {
+    const panels: typeof prev.panels = {};
+    for (const [id, panel] of Object.entries(prev.panels)) {
+      if (panel.kind !== 'files') {
+        panels[id] = panel;
+        continue;
+      }
+      panels[id] = {
+        ...panel,
+        root: moved(panel.root),
+        expanded: panel.expanded.map(moved),
+        open: panel.open.map(moved),
+        active: panel.active ? moved(panel.active) : panel.active,
+      };
+    }
+    const buffers: typeof prev.buffers = {};
+    for (const [path, buffer] of Object.entries(prev.buffers)) {
+      const now = moved(path);
+      buffers[now] = now === path ? buffer : { ...buffer, path: now, error: null };
+    }
+    // Listings under the old path are stale by name; the folders are read again below.
+    const dirs: typeof prev.dirs = {};
+    for (const [path, listing] of Object.entries(prev.dirs)) {
+      if (path === from || path.startsWith(`${from}/`)) continue;
+      dirs[path] = listing;
+    }
+    return { panels, buffers, dirs };
+  });
+  for (const [path, buffer] of Object.entries(get().buffers)) {
+    if (path !== movedPath(path, from, to)) continue;
+    if (!path.startsWith(to) || (path !== to && !path.startsWith(`${to}/`))) continue;
+    const before = path === to ? from : `${from}${path.slice(to.length)}`;
+    window.api.files.unwatch(before);
+    if (!buffer.error) window.api.files.watch(path, buffer.mtimeMs);
+  }
+  const state = get();
+  for (const dir of new Set([parentOf(from), parentOf(to)])) {
+    if (state.dirs[dir] || Object.values(state.panels).some((panel) => panel.kind === 'files' && panel.root === dir)) {
+      void state.loadDir(dir);
+    }
+  }
+  for (const panel of Object.values(state.panels)) {
+    if (panel.kind === 'files' && panel.expanded.some((path) => path === to || path.startsWith(`${to}/`))) {
+      for (const path of panel.expanded) if (path === to || path.startsWith(`${to}/`)) void state.loadDir(path);
+    }
+  }
+  schedulePersist(get);
+}
+
+/** A path is gone: closed everywhere it was open, dropped from every listing and buffer. */
+function forgetPath(set: SetState, get: GetState, path: string) {
+  const under = (candidate: string) => candidate === path || candidate.startsWith(`${path}/`);
+  for (const [id, panel] of Object.entries(get().panels)) {
+    if (panel.kind !== 'files') continue;
+    for (const open of panel.open) if (under(open)) get().closeFile(id, open);
+  }
+  set((prev) => {
+    const panels: typeof prev.panels = {};
+    for (const [id, panel] of Object.entries(prev.panels)) {
+      panels[id] = panel.kind === 'files' ? { ...panel, expanded: panel.expanded.filter((entry) => !under(entry)) } : panel;
+    }
+    const buffers: typeof prev.buffers = {};
+    for (const [key, buffer] of Object.entries(prev.buffers)) if (!under(key)) buffers[key] = buffer;
+    const dirs: typeof prev.dirs = {};
+    for (const [key, listing] of Object.entries(prev.dirs)) if (!under(key)) dirs[key] = listing;
+    return { panels, buffers, dirs };
+  });
+  for (const key of Object.keys(get().buffers)) if (under(key)) window.api.files.unwatch(key);
+  void get().loadDir(parentOf(path));
+  schedulePersist(get);
 }
 
 /** One repository's picture, refreshed rather than assumed to still be true. */
@@ -501,6 +587,16 @@ interface State {
   openExtensionView(viewId: string, root: string | null): void;
   /** Show a file somewhere sensible — the app decides where, the asker does not. */
   revealFile(root: string, path: string): void;
+  /**
+   * Changing the tree. Each answers with the error to show, or null. Every
+   * place the store knew a path by — buffers, tabs, expanded folders,
+   * listings — follows it to its new name.
+   */
+  renameEntry(path: string, name: string): Promise<string | null>;
+  moveEntry(path: string, dir: string): Promise<string | null>;
+  createEntry(panelId: string, dir: string, name: string, kind: 'file' | 'folder'): Promise<string | null>;
+  duplicateEntry(path: string): Promise<string | null>;
+  trashEntry(path: string): Promise<string | null>;
   setMonitorSession(panelId: string, sessionId: string | null): void;
   refreshAnalysis(sessionId: string, force?: boolean): Promise<void>;
   setExtension(id: string, action: 'install' | 'remove' | 'enable' | 'disable'): Promise<void>;
@@ -2226,6 +2322,54 @@ export const useStore = create<State>((set, get) => ({
       return panel ? { panels: { ...prev.panels, [panelId]: { ...panel, active: path } } } : prev;
     });
     schedulePersist(get);
+  },
+
+  async renameEntry(path, name) {
+    const problem = nameProblem(name);
+    if (problem) return problem;
+    const to = `${parentOf(path)}/${name}`;
+    if (to === path) return null;
+    const result = await window.api.files.rename(path, to);
+    if (!result.ok) return result.error ?? 'Could not rename that.';
+    relocate(set, get, path, result.path ?? to);
+    return null;
+  },
+
+  async moveEntry(path, dir) {
+    const problem = moveProblem(path, dir);
+    if (problem) return problem;
+    if (parentOf(path) === dir) return null;
+    const result = await window.api.files.move(path, dir);
+    if (!result.ok) return result.error ?? 'Could not move that.';
+    relocate(set, get, path, result.path ?? `${dir}/${baseOf(path)}`);
+    return null;
+  },
+
+  async createEntry(panelId, dir, name, kind) {
+    const problem = nameProblem(name);
+    if (problem) return problem;
+    const result = await window.api.files.create(dir, name, kind);
+    if (!result.ok) return result.error ?? 'Could not create that.';
+    // Where it went is shown: the folder opened, the listing read again, a file opened.
+    const panel = filesPanel(get(), panelId);
+    if (panel && !panel.expanded.includes(dir)) get().toggleDir(panelId, dir);
+    await get().loadDir(dir);
+    if (kind === 'file' && result.path) await get().openFile(panelId, result.path);
+    return null;
+  },
+
+  async duplicateEntry(path) {
+    const result = await window.api.files.duplicate(path);
+    if (!result.ok) return result.error ?? 'Could not duplicate that.';
+    await get().loadDir(parentOf(path));
+    return null;
+  },
+
+  async trashEntry(path) {
+    const result = await window.api.files.trash(path);
+    if (!result.ok) return result.error ?? 'Could not delete that.';
+    forgetPath(set, get, path);
+    return null;
   },
 
   editBuffer(path, text) {

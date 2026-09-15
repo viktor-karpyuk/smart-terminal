@@ -235,6 +235,13 @@ export interface FileRead {
   binary?: boolean;
 }
 
+/** The answer to changing the tree: where the thing is now, or why not. */
+export interface FileChange {
+  ok: boolean;
+  path?: string;
+  error?: string;
+}
+
 export interface FileWrite {
   ok: boolean;
   mtimeMs?: number;
@@ -919,6 +926,11 @@ declare global {
         ): () => void;
         onState(handler: (payload: SpringRun) => void): () => void;
       };
+      /** Code Reviewer: every verb through one call; progress and changes through one event. */
+      review: {
+        call(name: string, args?: unknown): Promise<{ ok: boolean; error?: string; [key: string]: unknown }>;
+        onEvent(handler: (payload: { type: string; repoId?: string; prId?: number | null; [key: string]: unknown }) => void): () => void;
+      };
       /** Maven and Gradle projects, read — never run — by the main process. */
       build: {
         call(name: string, args?: unknown): Promise<BuildResult>;
@@ -940,6 +952,11 @@ declare global {
         unwatchTree(root: string): void;
         onTreeChanged(handler: (payload: { root: string; kind: 'tree' | 'git' | 'noise' }) => void): () => void;
         reveal(file: string): void;
+        rename(from: string, to: string): Promise<FileChange>;
+        move(from: string, dir: string): Promise<FileChange>;
+        create(dir: string, name: string, kind: 'file' | 'folder'): Promise<FileChange>;
+        duplicate(file: string): Promise<FileChange>;
+        trash(file: string): Promise<FileChange>;
       };
       system: {
         pickDirectory(startIn?: string): Promise<string | null>;

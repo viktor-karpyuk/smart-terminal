@@ -232,9 +232,17 @@ function handleMenuAction(id: string) {
     case 'clear':
       if (terminalId) getTerminal(terminalId)?.term.clear();
       break;
-    case 'copy':
+    case 'copy': {
+      // A panel an extension brought has the focus: it is asked for its
+      // selection, since the app cannot see into a frame of another origin.
+      const focused = document.activeElement;
+      if (focused instanceof HTMLIFrameElement && focused.classList.contains('extension-frame')) {
+        focused.contentWindow?.postMessage({ type: 'copy' }, '*');
+        break;
+      }
       copySelection(terminalId);
       break;
+    }
     case 'select-all':
       selectAllIn(terminalId);
       break;
