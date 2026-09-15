@@ -25,6 +25,18 @@ const prompts = require('./review-prompts');
 
 const PR_TTL = 60 * 1000;
 const REPLY_SLOTS = 3;
+/*
+ * How many reviews may be reading at once.
+ *
+ * Several, because waiting for one pull request before looking at the next is
+ * the slowest possible way to get through a morning's queue and there is
+ * nothing about a review that needs the others to be finished. Not unbounded,
+ * because each one is a `claude -p` of its own: ten at once is ten processes,
+ * ten accounts' worth of usage, and a laptop that stops being usable for the
+ * work the reviews are about. Anything past this waits its turn rather than
+ * being refused.
+ */
+const REVIEW_SLOTS = 4;
 
 /** Work in progress, by key, told to every panel as it changes. */
 class Activity {
@@ -136,6 +148,25 @@ class Semaphore {
 }
 
 class ReviewEngine {
+  /**
+   * Run `fn` with nobody else touching this clone's refs.
+   *
+   * A chain per directory rather than a lock object: each caller waits on the
+   * one before it and leaves its own promise behind for the next. A failure is
+   * swallowed *for the purpose of the queue only* — the caller still sees it —
+   * because a fetch that threw must not leave everyone behind it waiting for a
+   * promise that will never settle.
+   */
+  inClone(dir, fn) {
+    const before = this.fetching.get(dir) ?? Promise.resolve();
+    const mine = before.catch(() => {}).then(fn);
+    this.fetching.set(
+      dir,
+      mine.catch(() => {}),
+    );
+    return mine;
+  }
+
   constructor({ store, forge, git, claude, notify = () => {}, emit = () => {} }) {
     this.store = store;
     this.forge = forge;
@@ -145,6 +176,17 @@ class ReviewEngine {
     this.emit = emit;
     this.activity = new Activity(emit);
     this.replySlots = new Semaphore(REPLY_SLOTS);
+    this.reviewSlots = new Semaphore(REVIEW_SLOTS);
+    /*
+     * One fetch at a time per clone.
+     *
+     * Reviews of the same repository share its working copy, and everything a
+     * review does in there is read-only — a diff, a numstat, a log, all by sha —
+     * except the fetch, which writes refs. Two of those at once in one
+     * repository is how you get "cannot lock ref", and the review that loses
+     * fails for a reason that has nothing to do with the code it was reading.
+     */
+    this.fetching = new Map();
     /** Reviews claimed from the moment `review()` starts, not from when the CLI exists: fetch and planning take a minute under rate limiting. */
     this.inFlight = new Set();
     /** A cancel pressed before the process existed, applied when it does. */
@@ -355,7 +397,7 @@ class ReviewEngine {
       this.activity.start(key, { kind: 'review', repoId, prId, repoName: repo.name, title: pr.title, auto });
       this.activity.line(key, 'Updating the local clone…');
 
-      const fetched = await this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch);
+      const fetched = await this.inClone(repo.localPath, () => this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch));
       if (!fetched.ok) {
         const message = `[${repo.name} · ${repo.owner}/${repo.slug}] git fetch failed in ${repo.localPath}\n\n${fetched.output.slice(0, 600)}${rules.fetchAdvice(fetched.output, repo)}`;
         reviewId = this.store.startReview({ repoId, prId, prTitle: pr.title, headSha: pr.headSha, depth: depth ?? 'INTERMEDIATE', kind: kind ?? 'GENERIC', model: '', auto, prAuthor: pr.author });
@@ -421,17 +463,28 @@ class ReviewEngine {
         ? prompts.incrementalPrompt({ pr: { ...pr, headSha }, language, depth: profile.depth, kind: profile.kind, sinceSha: incremental.sinceSha, carried: previous, existing, guidelines })
         : prompts.reviewPrompt({ pr: { ...pr, headSha }, language, depth: profile.depth, kind: profile.kind, existing, guidelines });
 
-      const result = await this.claude.run({
-        kind: 'review',
-        cwd: repo.localPath,
-        prompt,
-        model: resolvedModel,
-        allowedTools: rules.DEPTHS[profile.depth].tools,
-        disallowedTools: rules.REVIEW_DENIED,
-        schema: incremental ? prompts.INCREMENTAL_SCHEMA : prompts.SCHEMA,
-        register: (handle) => this.activity.patch(key, { handle }),
-        onEvent: (event) => this.activity.line(key, describeEvent(event)),
-      });
+      /*
+       * The reading itself is what is rationed, and only this part of it.
+       * Everything before — the fetch, the plan, the existing findings — is
+       * cheap and can happen while other reviews are still thinking, so the
+       * queue is for the process and not for the pull request.
+       */
+      if (this.reviewSlots.active >= this.reviewSlots.size) {
+        this.activity.line(key, 'Waiting for a free slot…');
+      }
+      const result = await this.reviewSlots.use(() =>
+        this.claude.run({
+          kind: 'review',
+          cwd: repo.localPath,
+          prompt,
+          model: resolvedModel,
+          allowedTools: rules.DEPTHS[profile.depth].tools,
+          disallowedTools: rules.REVIEW_DENIED,
+          schema: incremental ? prompts.INCREMENTAL_SCHEMA : prompts.SCHEMA,
+          register: (handle) => this.activity.patch(key, { handle }),
+          onEvent: (event) => this.activity.line(key, describeEvent(event)),
+        }),
+      );
 
       if (!result.ok) {
         const cancelled = result.cancelled;
@@ -546,7 +599,7 @@ class ReviewEngine {
     if (this.activity.has(key)) throw new Error('A verification of this PR is already running.');
     this.activity.start(key, { kind: 'verify', repoId, prId, repoName: repo.name, title: pr.title });
     try {
-      const fetched = await this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch);
+      const fetched = await this.inClone(repo.localPath, () => this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch));
       // A verdict on refs that could not be brought up to date would be stamped on commits it never saw.
       if (!fetched.ok) throw this.fetchError(repo, fetched);
       const headSha = await this.fetchedHead(repo, pr);
@@ -590,7 +643,7 @@ class ReviewEngine {
     if (this.activity.has(key)) throw new Error('A final pass of this PR is already running.');
     this.activity.start(key, { kind: 'final', repoId, prId, repoName: repo.name, title: pr.title });
     try {
-      const fetched = await this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch);
+      const fetched = await this.inClone(repo.localPath, () => this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch));
       if (!fetched.ok) throw this.fetchError(repo, fetched);
       const headSha = await this.fetchedHead(repo, pr);
       const range = `origin/${pr.targetBranch}...origin/${pr.sourceBranch}`;
@@ -640,7 +693,7 @@ class ReviewEngine {
       this.activity.start(key, { kind: 'reply', repoId: repo.id, prId: pr.id, repoName: repo.name, title: `Reply to ${draft.theirAuthor}` });
       try {
         this.requireClone(repo);
-        await this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch);
+        await this.inClone(repo.localPath, () => this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch));
         const result = await this.claude.run({
           kind: 'reply',
           cwd: repo.localPath,

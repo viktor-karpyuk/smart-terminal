@@ -1228,7 +1228,7 @@
     var icon = { act: '→', wait: '…', warn: '!', done: '✓' }[step.kind] || '→';
     var button = '';
     if (step.action && step.kind !== 'wait' && step.kind !== 'done') {
-      var busyKey = { 'publish-all': 'publish-all', verify: 'verify', 'final-pass': 'final-pass', 'run-review': 'review' }[step.action];
+      var busyKey = { 'publish-all': 'publish-all', verify: 'verify', 'final-pass': 'final-pass', 'run-review': reviewKey() }[step.action];
       var attrs = step.action === 'tab-conversation' ? 'data-act="pr-tab" data-tab="conversation"' : 'data-act="' + step.action + '"';
       button = '<button class="btn ' + (compact ? 'small' : 'big') + ' ' + (step.kind === 'warn' ? '' : 'primary') + '" ' + attrs + (busyKey ? busyAttr(busyKey) : '') + '>' + esc(NEXT_ACTIONS[step.action] || 'Go') + '</button>';
     }
@@ -1410,7 +1410,7 @@
       }).join('') + '</div><div class="row" style="margin-top:6px"><span class="faint" style="width:44px">Kind</span>' + [{ id: 'AUTO', label: 'Auto' }].concat(kinds).map(function (k) {
         return '<span class="chip click' + (p.kind === k.id ? ' on' : '') + '" data-act="profile" data-field="kind" data-value="' + k.id + '">' + esc(k.label) + '</span>';
       }).join('') + '</div>' +
-        '<div class="row" style="margin-top:10px"><button class="btn primary" data-act="run-review"' + (reviewing || state.busy.review ? ' disabled aria-busy="true"' : '') + '>' + (reviewing ? 'Reviewing' : done ? 'Review what is new' : 'Review') + '</button>' +
+        '<div class="row" style="margin-top:10px"><button class="btn primary" data-act="run-review"' + (reviewing || state.busy[reviewKey()] ? ' disabled aria-busy="true"' : '') + '>' + (reviewing ? 'Reviewing' : done ? 'Review what is new' : 'Review') + '</button>' +
         (done ? '<button class="btn" data-act="run-review" data-full="1"' + (reviewing ? ' disabled' : '') + ' title="The whole branch, not only what arrived since the last review">Review everything again</button>' : '') +
         '<span class="faint">' + (v.repo.defaultDepth || v.repo.projectKind || v.repo.defaultModel ? 'Repository default: ' + esc([v.repo.defaultDepth, v.repo.projectKind, v.repo.defaultModel].filter(Boolean).join(' · ').toLowerCase()) : 'Nothing is published until you say so.') + '</span></div>';
       if (state.confirmRerun) {
@@ -2484,13 +2484,23 @@
     return args;
   }
 
+  /*
+   * A review is busy *for the pull request it is reviewing*, not for the panel.
+   *
+   * This used to be the bare key `review`, and since the call resolves only when
+   * the whole review has finished, one running review greyed out the button on
+   * every pull request — which is how a reviewer that can happily run several at
+   * once came to allow exactly one.
+   */
+  function reviewKey() { return 'review:' + state.repoId + ':' + state.prId; }
+
   function runReview(el) {
     var full = el.getAttribute('data-full') === '1';
     var confirmed = el.getAttribute('data-confirmed') === '1';
     var p = state.reviewProfile;
     var start = function () {
       state.confirmRerun = null;
-      act('review', function () {
+      act(reviewKey(), function () {
         return call('review', prArgs({ depth: p.depth === 'AUTO' ? undefined : p.depth, kind: p.kind === 'AUTO' ? undefined : p.kind, forceFull: full }));
       }, function () { say('Review finished.'); });
     };
