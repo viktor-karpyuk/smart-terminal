@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../state/store';
 import { formatBytes } from '../lib/labels';
 import { parseNotes, type NotesBlock, type Span } from '../lib/releaseNotes';
@@ -62,6 +63,8 @@ function UpdateBody({ update }: { update: UpdateState }) {
       </section>
 
       {release && <Notes release={release} />}
+
+      <ExtensionUpdates />
 
       <section className="form-section update-settings">
         <label className="checkbox">
@@ -223,6 +226,84 @@ function Progress({ update }: { update: UpdateState }) {
         Cancel
       </button>
     </div>
+  );
+}
+
+/**
+ * The extensions that have a newer version than the one installed.
+ *
+ * They belong in this panel and not only in the gallery, and the reason is the
+ * order things happen in. A built-in extension travels inside the app, so its
+ * new version arrives with an app update — and the moment it arrives is the
+ * moment somebody is looking at this panel, having just taken one. Leaving the
+ * news in a gallery nobody has a reason to open is how three extensions came to
+ * be improved by hundreds of lines that the app never mentioned to anyone.
+ *
+ * Nothing is fetched here. The gallery already works out which rows are behind,
+ * and this reads the same answer rather than forming a second opinion about it.
+ */
+function ExtensionUpdates() {
+  /*
+   * `useShallow`, and not decoration.
+   *
+   * A selector that filters returns a new array every time it runs, and the
+   * store compares results by identity to decide whether to re-render — so a
+   * plain `filter` here is a component that re-renders because it rendered.
+   * React ends that by tearing the tree down, which is what it did: the whole
+   * window went blank, pill and panel together. The sidebar avoids it by
+   * selecting a count, and says so in a comment; this needs the rows themselves,
+   * so it compares them one level deep instead.
+   */
+  const rows = useStore(useShallow((s) => s.extensions.rows.filter((row) => row.status === 'update')));
+  const setExtension = useStore((s) => s.setExtension);
+  const openExtensions = useStore((s) => s.openExtensions);
+  const closePanel = useStore((s) => s.setUpdatePanelOpen);
+  const [working, setWorking] = useState(false);
+
+  if (!rows.length) return null;
+
+  const takeAll = async () => {
+    setWorking(true);
+    // One at a time: each is a write to the same table, and a failure part way
+    // through should leave the ones that worked applied rather than unknown.
+    for (const row of rows) await setExtension(row.id, 'install').catch(() => {});
+    setWorking(false);
+  };
+
+  return (
+    <section className="form-section update-extensions">
+      <h3>
+        {rows.length === 1 ? 'An extension has' : `${rows.length} extensions have`} a newer version
+      </h3>
+      <ul className="update-extension-list">
+        {rows.map((row) => (
+          <li key={row.id}>
+            <strong>{row.name}</strong>
+            <span>
+              {row.installedVersion} → {row.version}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <div className="update-actions">
+        <button className="primary-btn" onClick={takeAll} disabled={working}>
+          {working
+            ? 'Updating…'
+            : rows.length === 1
+              ? 'Update it'
+              : `Update all ${rows.length}`}
+        </button>
+        <button
+          className="ghost-btn"
+          onClick={() => {
+            closePanel(false);
+            openExtensions();
+          }}
+        >
+          See what changed
+        </button>
+      </div>
+    </section>
   );
 }
 

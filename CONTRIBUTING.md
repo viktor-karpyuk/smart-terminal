@@ -330,6 +330,48 @@ there for a reason, listed in the file: the hardened runtime switches off precis
 Electron and a terminal need — JIT, inherited environments, and a native module (`node-pty`)
 that lives unpacked outside the asar.
 
+## Improving an extension means bumping its version
+
+The version in an `extension.json` is the whole of what the gallery compares against the
+version somebody has installed, and the only thing that turns a row into "Update to
+v1.1.0". An extension improved without its version moving is an improvement **nobody is
+ever offered** — the files ship, the panel even runs the new code, and the app has no way
+to say that anything happened.
+
+That is not hypothetical. It had happened three times before `test/extension-versions.test.js`
+existed: the Code Reviewer (+449 lines), the Maven and Gradle panel (+535) and the Spring
+Boot panel (+170) all changed substantially while their manifests sat at `1.0.0`. The
+machinery to offer those had been there the whole time and had never once lit up.
+
+So the rule, and the test that keeps it: **if anything under `extensions/<id>/` differs
+from the integration branch, `version` must differ too.** The test compares against the
+branch rather than against the previous commit on purpose — bumping first and then editing
+more is exactly right, and a test that compared neighbouring commits would fail it for the
+ordering. It asks about untracked files separately, since `git diff` cannot see a file that
+was never added and half the extensions here are one file plus a manifest.
+
+It skips, rather than fails, where there is no branch to compare against.
+
+## Where an update is offered
+
+Two things can be behind, and they are not the same thing:
+
+- **The app.** Downloaded and swapped, which is the rest of this section.
+- **A built-in extension**, which travels *inside* the app. Its new version arrives with an
+  app update, so there is nothing to download — the offer is to record it as installed.
+
+Both are in the Updates panel, because the moment somebody has just taken an app update is
+exactly the moment its extensions are behind, and leaving that news in a gallery nobody has
+a reason to open is how the three above went unmentioned. The sidebar says one or the
+other, never both: a new version of the app is the bigger news and carries the extensions
+with it anyway, so the extension line only speaks in the gap.
+
+One trap worth knowing, since it cost a blank window: a selector that `filter`s returns a
+new array every time it runs, and the store compares by identity — so `useStore(s =>
+s.rows.filter(…))` re-renders because it rendered, and React ends it by tearing the tree
+down. Use `useShallow`, or select a count. The sidebar picks the count and says so in a
+comment; the Updates panel needs the rows, so it uses `useShallow`.
+
 ## Updating, and why it is not electron-updater
 
 `electron-updater` drives Squirrel.Mac on macOS, and Squirrel refuses to apply an update to

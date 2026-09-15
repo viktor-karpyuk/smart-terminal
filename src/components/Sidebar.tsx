@@ -986,6 +986,15 @@ function BuildLine() {
   const openUpdates = useStore((s) => s.setUpdatePanelOpen);
   const offered =
     update && ['available', 'downloading', 'ready'].includes(update.phase) ? update.release : null;
+  /*
+   * Extensions that are behind, said here only when the app itself is not.
+   *
+   * One line, never two. A new version of the app is the bigger news and carries
+   * the extensions with it anyway — so this speaks in the gap, which is exactly
+   * the moment after an update has been taken and the extensions inside it have
+   * not.
+   */
+  const staleExtensions = useStore((s) => s.extensions.rows.filter((row) => row.status === 'update').length);
 
   useEffect(() => {
     window.api.version().then(setInfo);
@@ -1011,7 +1020,7 @@ function BuildLine() {
 
   return (
     <>
-      {offered && (
+      {offered ? (
         <button
           className="build-update"
           title={`Smart Terminal ${offered.version} is available.${String.fromCharCode(10)}Click to see what is in it.`}
@@ -1020,7 +1029,16 @@ function BuildLine() {
           <span className="build-update-dot" />
           {update?.phase === 'downloading' ? `Downloading ${offered.version}…` : `${offered.version} available`}
         </button>
-      )}
+      ) : staleExtensions > 0 ? (
+        <button
+          className="build-update"
+          title={`${staleExtensions} extension${staleExtensions === 1 ? ' has' : 's have'} a newer version.${String.fromCharCode(10)}Click to see what changed.`}
+          onClick={() => openUpdates(true)}
+        >
+          <span className="build-update-dot" />
+          {staleExtensions === 1 ? '1 extension update' : `${staleExtensions} extension updates`}
+        </button>
+      ) : null}
       <button
         className="build-line"
         title={`${full}${String.fromCharCode(10)}${String.fromCharCode(10)}Click to copy`}

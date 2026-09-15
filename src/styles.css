@@ -856,6 +856,11 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .update-notes a { color: var(--accent); }
 .update-settings { display: grid; gap: 8px; }
 
+/* Extensions that are behind, listed plainly: a name and the two numbers. */
+.update-extension-list { margin: 8px 0 12px; padding: 0; list-style: none; display: grid; gap: 5px; }
+.update-extension-list li { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
+.update-extension-list span { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+
 /* What is about to be closed, when it is more than one thing. */
 .confirm-list {
   margin: 10px 0 0;
