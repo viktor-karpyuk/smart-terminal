@@ -130,24 +130,51 @@ class ReviewService {
     return `viewed:${repoId}#${prId}`;
   }
 
-  viewed(repoId, prId) {
-    const head = this.store.pr(repoId, prId)?.headSha ?? '';
+  /**
+   * The files marked as viewed on a PR. Each is remembered with the content it
+   * had when it was marked: when new commits arrive, a file they did not touch
+   * stays viewed and a file they changed comes back to be read again — the way
+   * a review is picked up, instead of starting every file over.
+   */
+  async viewed(repoId, prId) {
+    const pr = this.store.pr(repoId, prId);
+    const head = pr?.headSha ?? '';
     let saved = null;
     try {
       saved = JSON.parse(this.store.pref(this.viewedKey(repoId, prId), 'null'));
     } catch {
       saved = null;
     }
-    return { head, files: saved && saved.head === head && Array.isArray(saved.files) ? saved.files : [] };
+    if (!saved || typeof saved !== 'object') return { head, files: [], marks: {} };
+    // Stored by earlier builds as a plain list, with no content to compare: good for the same head only.
+    const marks = Array.isArray(saved.files) ? Object.fromEntries(saved.files.map((file) => [file, null])) : saved.marks && typeof saved.marks === 'object' ? saved.marks : {};
+    if (saved.head === head) return { head, files: Object.keys(marks), marks };
+    const repo = this.store.repo(repoId);
+    const kept = {};
+    for (const [file, blob] of Object.entries(marks)) {
+      if (blob === null || !repo || !pr?.sourceBranch) continue;
+      if ((await this.blobAt(repo, pr, file)) === blob) kept[file] = blob;
+    }
+    return { head, files: Object.keys(kept), marks: kept };
   }
 
-  setViewed(repoId, prId, file, viewed) {
-    const current = this.viewed(repoId, prId);
-    const files = new Set(current.files);
-    if (viewed) files.add(file);
-    else files.delete(file);
-    this.store.setPref(this.viewedKey(repoId, prId), JSON.stringify({ head: current.head, files: [...files] }));
-    return { head: current.head, files: [...files] };
+  async setViewed(repoId, prId, file, viewed) {
+    const current = await this.viewed(repoId, prId);
+    const marks = { ...current.marks };
+    if (viewed) {
+      const repo = this.store.repo(repoId);
+      const pr = this.store.pr(repoId, prId);
+      marks[file] = repo && pr?.sourceBranch ? await this.blobAt(repo, pr, file) : null;
+    } else {
+      delete marks[file];
+    }
+    this.store.setPref(this.viewedKey(repoId, prId), JSON.stringify({ head: current.head, marks }));
+    return { head: current.head, files: Object.keys(marks) };
+  }
+
+  /** A file's content id on the PR's branch; '' when the branch does not have it (deleted). */
+  async blobAt(repo, pr, file) {
+    return (await this.git.revParse(repo.localPath, `origin/${pr.sourceBranch}:${file}`)) ?? '';
   }
 
   factsKey(repoId, prId) {
@@ -323,7 +350,13 @@ class ReviewService {
     const missing = async () => (await Promise.all(refs.map(async (ref) => ((await this.git.hasRef(repo.localPath, ref)) ? null : ref)))).filter(Boolean);
     let absent = await missing();
     let fetchOutput = '';
-    if (force || absent.length) {
+    // Present but behind: the forge says the PR is at a commit the clone's copy of the branch has not reached.
+    const behind = async () => {
+      if (!pr.headSha || absent.length) return false;
+      const tip = await this.git.revParse(repo.localPath, `origin/${pr.sourceBranch}`);
+      return !tip || !tip.startsWith(pr.headSha);
+    };
+    if (force || absent.length || (await behind())) {
       const fetched = await this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch);
       if (!fetched.ok) {
         // A branch deleted on the remote makes the whole fetch fail; fetch what is still there.
@@ -565,8 +598,11 @@ class ReviewService {
         await e.syncQuietly(repo, prId);
         return { ok: true, url: posted.url };
       },
-      viewed: (args) => ({ ok: true, ...s.viewed(str(args.repoId, 'A repository'), num(args.prId)) }),
-      setViewed: (args) => ({ ok: true, ...s.setViewed(str(args.repoId, 'A repository'), num(args.prId), str(args.file, 'A file'), args.viewed !== false) }),
+      viewed: async (args) => {
+        const { head, files } = await s.viewed(str(args.repoId, 'A repository'), num(args.prId));
+        return { ok: true, head, files };
+      },
+      setViewed: async (args) => ({ ok: true, ...(await s.setViewed(str(args.repoId, 'A repository'), num(args.prId), str(args.file, 'A file'), args.viewed !== false)) }),
       activity: () => ({ ok: true, activity: e.activity.list() }),
       importInspect: () => ({ ok: true, ...importer.inspect({ DatabaseSync: s.DatabaseSync, source: s.importSource }) }),
       models: () => ({ ok: true, models: ['haiku', 'sonnet', 'opus', 'fable'] }),

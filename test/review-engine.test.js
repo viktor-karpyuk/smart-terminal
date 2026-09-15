@@ -537,3 +537,67 @@ test('editing a hidden repository leaves it hidden', { skip }, () => {
   assert.equal(saved.hidden, true);
   assert.equal(service.store.saveRepo({ id: repo.id, name: 'Renamed', localPath: repo.localPath, hidden: false }).hidden, false);
 });
+
+test('the code view: statuses, the file at the head, and viewed marks that survive commits that did not touch them', { skip }, async () => {
+  const { service, repo, w, forgeState } = setup([]);
+  const call = (name, args) => service.call(name, args);
+  // A second file, added on the branch.
+  fs.writeFileSync(path.join(w.seed, 'notes.md'), '# Notes\n\none\n');
+  git(w.seed, 'add', '.');
+  git(w.seed, 'commit', '-m', 'notes');
+  git(w.seed, 'push', 'origin', 'feature');
+  forgeState.prs[0].headSha = git(w.seed, 'rev-parse', 'HEAD');
+  assert.equal((await call('refreshPrs', { repoId: repo.id })).ok, true);
+
+  const files = await call('files', { repoId: repo.id, prId: 7 });
+  assert.equal(files.ok, true, files.error);
+  assert.deepEqual(files.files.map((f) => [f.path, f.status]), [['app.js', 'M'], ['notes.md', 'A']]);
+  const text = await call('fileText', { repoId: repo.id, prId: 7, file: 'app.js' });
+  assert.deepEqual([text.total, text.truncated, text.lines[1]], [3, false, '  return a - b;']);
+  assert.match((await call('fileText', { repoId: repo.id, prId: 7, file: 'nope.js' })).error, /not on feature/);
+
+  assert.deepEqual((await call('setViewed', { repoId: repo.id, prId: 7, file: 'app.js' })).files, ['app.js']);
+  assert.deepEqual((await call('setViewed', { repoId: repo.id, prId: 7, file: 'notes.md' })).files, ['app.js', 'notes.md']);
+
+  // New commits change notes.md only: app.js is still read, notes.md comes back.
+  fs.writeFileSync(path.join(w.seed, 'notes.md'), '# Notes\n\ntwo\n');
+  git(w.seed, 'commit', '-am', 'more notes');
+  git(w.seed, 'push', 'origin', 'feature');
+  git(w.clone, 'fetch', 'origin');
+  forgeState.prs[0].headSha = git(w.seed, 'rev-parse', 'HEAD');
+  assert.equal((await call('refreshPrs', { repoId: repo.id })).ok, true);
+  assert.deepEqual((await call('viewed', { repoId: repo.id, prId: 7 })).files, ['app.js']);
+  assert.deepEqual((await call('setViewed', { repoId: repo.id, prId: 7, file: 'app.js', viewed: false })).files, []);
+});
+
+test('a reply from the code view goes into that thread and is recorded as ours; a note is kept, then published', { skip }, async () => {
+  const { service, repo, forgeState } = setup([]);
+  const call = (name, args) => service.call(name, args);
+  assert.equal((await call('refreshPrs', { repoId: repo.id })).ok, true);
+  forgeState.comments.push({ commentId: '900', author: 'Ana', body: 'Why subtract?', inlinePath: 'app.js', inlineLine: 2, deleted: false, createdOn: '2026-09-03T10:00:00Z', parentId: null });
+  assert.equal((await call('pr', { repoId: repo.id, prId: 7 })).ok, true);
+  await service.engine.syncComments(service.engine.requireRepo(repo.id), 7);
+
+  assert.match((await call('replyToComment', { repoId: repo.id, prId: 7, commentId: '900', body: '  ' })).error, /empty/);
+  assert.match((await call('replyToComment', { repoId: repo.id, prId: 7, commentId: 'missing', body: 'x' })).error, /not in the stored thread/);
+  const replied = await call('replyToComment', { repoId: repo.id, prId: 7, commentId: '900', body: 'It should not.' });
+  assert.equal(replied.ok, true, replied.error);
+  assert.deepEqual(forgeState.posted.map((p) => [p.parentId, p.body]), [['900', 'It should not.']]);
+  const view = await call('pr', { repoId: repo.id, prId: 7 });
+  assert.ok(view.publications.some((p) => p.body === 'It should not.'));
+
+  const added = await call('addNote', { repoId: repo.id, prId: 7, file: 'app.js', line: 2, body: 'Check the sign.' });
+  assert.equal(added.ok, true, added.error);
+  const noteId = (await call('pr', { repoId: repo.id, prId: 7 })).notes[0].id;
+  assert.equal((await call('publishNote', { noteId })).ok, true);
+  assert.deepEqual(forgeState.posted.slice(-1).map((p) => [p.inlinePath, p.inlineLine, p.body]), [['app.js', 2, 'Check the sign.']]);
+  assert.ok((await call('pr', { repoId: repo.id, prId: 7 })).notes[0].publishedId);
+});
+
+test('a PR imported without branch names says so instead of naming an empty branch', { skip }, async () => {
+  const { service, repo } = setup([]);
+  assert.equal((await service.call('refreshPrs', { repoId: repo.id })).ok, true);
+  service.store.upsertPr(repo.id, { ...service.store.pr(repo.id, 7), sourceBranch: '', targetBranch: '', state: 'MERGED' });
+  const files = await service.call('files', { repoId: repo.id, prId: 7 });
+  assert.match(files.error, /imported without its branch names/);
+});

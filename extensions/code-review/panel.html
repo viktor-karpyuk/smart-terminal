@@ -1458,9 +1458,12 @@
     // Every answer below writes into this PR's code state only: `go` replaces the object when the PR changes.
     var code = state.code;
     code.loading = true;
-    call('viewed', { repoId: state.repoId, prId: state.prId }).then(function (r) { if (state.code !== code) return; code.viewed = r.files; draw(); }, function () {});
-    return call('files', { repoId: state.repoId, prId: state.prId, fetch: Boolean(fetch) }).then(function (r) {
+    var repoId = state.repoId;
+    var prId = state.prId;
+    return call('files', { repoId: repoId, prId: prId, fetch: Boolean(fetch) }).then(function (r) {
       if (state.code !== code) return;
+      // After the file list, which brings the clone up to the PR's head: what stays viewed is judged against that.
+      call('viewed', { repoId: repoId, prId: prId }).then(function (v) { if (state.code !== code) return; code.viewed = v.files; draw(); }, function () {});
       state.code.files = r.files;
       state.code.error = null;
       state.code.loading = false;
