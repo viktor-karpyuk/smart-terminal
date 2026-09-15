@@ -359,6 +359,11 @@
   .repo-chips { margin-top: 4px; gap: 4px; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
   .form { max-width: 760px; }
+  .commit-item { align-items: flex-start; }
+  .commit-text { display: grid; min-width: 0; gap: 1px; }
+  .commit-text .p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .commit-meta { font-size: 10.5px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .commit-meta .mono { font-size: 10.5px; }
   #keys { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(2px); }
   .keys-card { width: min(420px, calc(100vw - 32px)); padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-panel); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35); }
   .keys-group { margin-top: 10px; }
@@ -2188,7 +2193,10 @@
   }
 
   function commitItem(commit, local) {
-    return '<div class="item' + (state.commits.sha === commit.sha ? ' on' : '') + '" data-act="commit" data-sha="' + esc(commit.sha) + '"><span class="mono ' + (local ? 'warn' : 'faint') + '">' + sha7(commit.sha) + '</span><span class="p" style="direction:ltr" title="' + esc(commit.subject) + '">' + esc(commit.subject) + '</span></div>';
+    // Two lines: what the commit says, then who and when — the second is what tells a fixup from the work.
+    return '<div class="item commit-item' + (state.commits.sha === commit.sha ? ' on' : '') + '" data-act="commit" data-sha="' + esc(commit.sha) + '">' +
+      '<div class="commit-text"><span class="p" title="' + esc(commit.subject) + '">' + titleHtml(commit.subject) + '</span>' +
+      '<span class="commit-meta"><span class="mono ' + (local ? 'warn' : '') + '">' + sha7(commit.sha) + '</span>' + (commit.author ? ' · ' + esc(commit.author) : '') + (commit.date ? ' · ' + esc(commit.date) : '') + '</span></div></div>';
   }
 
   // ---- conversation ------------------------------------------------------------------
