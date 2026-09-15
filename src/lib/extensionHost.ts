@@ -827,10 +827,25 @@ const SHIM = `(function () {
       else waiting.reject(new Error(message.error || 'the app would not do that'));
       return;
     }
+    if (message.type === 'copy') {
+      // The app's Copy landed while this frame had the focus: what is selected
+      // here goes to the app, which owns the clipboard.
+      var chosen = String(window.getSelection ? window.getSelection() : '');
+      if (chosen) post({ type: 'event', name: 'copy', payload: { text: chosen } });
+      return;
+    }
     var fns = listeners[message.type] || [];
     for (var i = 0; i < fns.length; i += 1) {
       try { fns[i](message.payload); } catch (error) { /* one listener's problem */ }
     }
+  });
+
+  // A frame in an origin of its own has no clipboard; a copy typed here is asked of the app instead.
+  document.addEventListener('copy', function (event) {
+    var chosen = String(window.getSelection ? window.getSelection() : '');
+    if (!chosen) return;
+    event.preventDefault();
+    post({ type: 'event', name: 'copy', payload: { text: chosen } });
   });
 
   window.host = {

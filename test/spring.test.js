@@ -387,12 +387,12 @@ const APP = {
 };
 
 test('a multi-module maven app is installed and then run, with the profile and options as arguments', () => {
-  const planned = spring.plan(APP, { profiles: 'local, dev', jvmArgs: '-Xmx2g -Dfoo="a b"', args: '--x=1', port: 8223 }, { jdk: { home: '/jdk/17' } });
+  const planned = spring.plan(APP, { mode: 'run', profiles: 'local, dev', jvmArgs: '-Xmx2g -Dfoo="a b"', args: '--x=1', port: 8223 }, { jdk: { home: '/jdk/17' } });
   assert.equal(planned.steps.length, 2);
   assert.deepEqual(planned.steps[0], {
     label: 'mvn install -pl :app -am',
     cmd: 'mvn',
-    args: ['-B', '-Dstyle.color=always', '-q', '-DskipTests', '-pl', ':app', '-am', 'install'],
+    args: ['-B', '-Dstyle.color=always', '-q', '-DskipTests', '-Djacoco.skip=true', '-pl', ':app', '-am', 'install'],
     cwd: '/w/be',
   });
   assert.equal(planned.steps[1].cmd, 'mvn');
@@ -414,21 +414,77 @@ test('a multi-module maven app is installed and then run, with the profile and o
 
 test('a single-module app with a wrapper just runs, and build:false skips the install', () => {
   const solo = { ...APP, dir: '/w/solo', reactor: '/w/solo', module: '', wrapper: true };
-  const planned = spring.plan(solo, {});
+  const planned = spring.plan(solo, { mode: 'run' });
   assert.equal(planned.steps.length, 1);
   assert.equal(planned.steps[0].cmd, '/w/solo/mvnw');
   assert.deepEqual(planned.steps[0].args, ['-B', '-Dstyle.color=always', 'spring-boot:run', '-Dspring-boot.run.jvmArguments=-Dspring.output.ansi.enabled=always']);
   assert.equal(planned.env.SPRING_PROFILES_ACTIVE, undefined);
   assert.equal(planned.env.JAVA_HOME, undefined);
 
-  const noBuild = spring.plan(APP, { build: false });
+  const noBuild = spring.plan(APP, { mode: 'run', build: false });
   assert.equal(noBuild.steps.length, 1);
   assert.equal(noBuild.steps[0].label, 'mvn spring-boot:run');
+});
+
+/*
+ * The default: what an IDE does. Compile the module and what it needs, ask
+ * Maven for the runtime classpath, run the main class with java. No install,
+ * no packaging, no tests, no coverage check standing in the way of a run.
+ */
+test('exec mode compiles, asks for the classpath, and runs the main class with java', () => {
+  const app = { ...APP, mainClass: 'com.ks.erp.KsErpApp' };
+  const planned = spring.plan(app, { profiles: 'local', jvmArgs: '-Xmx2g', args: '--x=1' }, { jdk: { home: '/jdk/25' } });
+  assert.equal(planned.steps.length, 2);
+  assert.deepEqual(planned.steps[0], {
+    label: 'mvn compile -pl :app -am',
+    cmd: 'mvn',
+    args: ['-B', '-Dstyle.color=always', '-q', '-DskipTests', '-Djacoco.skip=true', '-pl', ':app', '-am', 'compile', 'dependency:build-classpath', '-Dmdep.outputFile=/w/be/app/target/smart-terminal.classpath', '-Dmdep.includeScope=runtime'],
+    cwd: '/w/be',
+  });
+  assert.equal(planned.steps[1].label, 'java KsErpApp');
+  assert.equal(planned.steps[1].cmd, 'java');
+  assert.deepEqual(planned.steps[1].args, ['-Dspring.output.ansi.enabled=always', '-Xmx2g', '-cp', '__CLASSPATH__', 'com.ks.erp.KsErpApp', '--x=1']);
+  assert.equal(planned.steps[1].cwd, '/w/be/app', 'in the module, the way the IDE does');
+  assert.equal(planned.steps[1].classpath, '/w/be/app/target/smart-terminal.classpath');
+  assert.deepEqual(planned.steps[1].classes, ['/w/be/app/target/classes']);
+  assert.equal(planned.env.SPRING_PROFILES_ACTIVE, 'local');
+  assert.equal(planned.env.JAVA_HOME, '/jdk/25');
+  // Without a main class there is nothing for java to run: the tool's own goal instead.
+  assert.equal(spring.plan(APP, {}).steps[1].label, 'mvn spring-boot:run');
+  // Gradle: the init script's task writes the classpath; the project's own output is already in it.
+  const gradle = { ...app, tool: 'gradle', module: ':services:api', wrapper: true, reactor: '/w/g', dir: '/w/g/services/api' };
+  const g = spring.plan(gradle, {}, { gradleInit: '/data/init.gradle' });
+  assert.deepEqual(g.steps[0].args, ['-q', '--init-script', '/data/init.gradle', '-Dsmartterminal.classpathFile=/w/g/services/api/build/smart-terminal.classpath', ':services:api:classes', ':services:api:smartTerminalClasspath']);
+  assert.deepEqual(g.steps[1].classes, []);
+  assert.match(spring.GRADLE_INIT, /smartTerminalClasspath/);
+  // With nowhere to write the init script, Gradle runs its own goal.
+  assert.equal(spring.plan(gradle, {}).steps[0].label, 'gradle bootRun');
+});
+
+test('the run step reads the classpath the compile step wrote, and says so when it is missing', async () => {
+  const project = fakeProject('mkdir -p target; printf "/lib/a.jar:/lib/b.jar\n" > target/smart-terminal.classpath; exit 0');
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'spring-bin-'));
+  fs.writeFileSync(path.join(bin, 'java'), '#!/bin/sh\necho "JAVA $*"\nexit 0\n', { mode: 0o755 });
+  const runs = new spring.Runs({ environment: async () => ({ ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` }) });
+  const app = { ...fakeApp(project), mainClass: 'com.x.App' };
+  await runs.start({ id: 'x1', root: project.dir, app, config: { args: '--y' } });
+  await waitFor(() => runs.get('x1').done);
+  const said = runs.output('x1').lines.find((line) => /^JAVA /.test(line.text)).text;
+  assert.match(said, new RegExp(`-cp ${project.dir}/target/classes:/lib/a.jar:/lib/b.jar com.x.App --y$`));
+  assert.equal(runs.get('x1').status, 'exited');
+
+  // Compile off and no classpath yet: said, not guessed.
+  const fresh = fakeProject('exit 0');
+  await runs.start({ id: 'x2', root: fresh.dir, app: { ...fakeApp(fresh), mainClass: 'com.x.App' }, config: { build: false } });
+  await waitFor(() => runs.get('x2').done);
+  assert.equal(runs.get('x2').status, 'failed');
+  assert.match(runs.get('x2').reason, /compile first/);
 });
 
 test('jar mode packages and runs java -jar, with the jar filled in later', () => {
   const planned = spring.plan(APP, { mode: 'jar', profiles: 'local', jvmArgs: '-Xmx1g', args: '--a --b' });
   assert.equal(planned.steps[0].label, 'mvn install -pl :app -am');
+  assert.ok(planned.steps[0].args.includes('-Djacoco.skip=true'), 'no coverage check on the way to a run');
   assert.deepEqual(planned.steps[1], {
     label: 'java -jar',
     cmd: 'java',
@@ -441,7 +497,7 @@ test('jar mode packages and runs java -jar, with the jar filled in later', () =>
 
 test('a gradle app runs bootRun on its project, with JVM options through an init script and never the environment', () => {
   const gradle = { ...APP, tool: 'gradle', module: ':services:api', wrapper: true, reactor: '/w/g', dir: '/w/g/services/api' };
-  const planned = spring.plan(gradle, { profiles: 'dev', jvmArgs: '-Xmx1g', args: '--x' }, { gradleInit: '/data/init.gradle', debugPort: 5005 });
+  const planned = spring.plan(gradle, { mode: 'run', profiles: 'dev', jvmArgs: '-Xmx1g', args: '--x' }, { gradleInit: '/data/init.gradle', debugPort: 5005 });
   assert.equal(planned.steps.length, 1);
   assert.equal(planned.steps[0].cmd, '/w/g/gradlew');
   assert.deepEqual(planned.steps[0].args, [
@@ -457,7 +513,7 @@ test('a gradle app runs bootRun on its project, with JVM options through an init
   assert.equal(planned.env.JAVA_TOOL_OPTIONS, undefined);
   assert.match(spring.GRADLE_INIT, /smartterminal\.jvmArgs/);
   // Without anywhere to write the script, the options are simply not passed — never through the environment.
-  const bare = spring.plan(gradle, { jvmArgs: '-Xmx1g' });
+  const bare = spring.plan(gradle, { mode: 'run', jvmArgs: '-Xmx1g' });
   assert.deepEqual(bare.steps[0].args, ['-q', ':services:api:bootRun']);
   assert.equal(bare.env.JAVA_TOOL_OPTIONS, undefined);
 });
@@ -468,15 +524,15 @@ test('debugging is a JDWP agent on loopback, on the port asked for or the next f
   assert.throws(() => spring.jdwpOption('5005; rm -rf', false), /not a port/);
   assert.throws(() => spring.jdwpOption(70000, false), /not a port/);
 
-  const planned = spring.plan(APP, { debug: true, debugPort: 5010, jvmArgs: '-Xmx1g' });
+  const planned = spring.plan(APP, { mode: 'run', debug: true, debugPort: 5010, jvmArgs: '-Xmx1g' });
   assert.equal(planned.debugPort, 5010);
   assert.match(planned.steps[1].args.find((a) => a.startsWith('-Dspring-boot.run.jvmArguments=')), /^-Dspring-boot\.run\.jvmArguments=-agentlib:jdwp=[^ ]*address=localhost:5010 -Dspring\.output/);
   // Asked for on this start, over a configuration that does not ask for it — with the port the app chose.
-  const once = spring.plan(APP, { debug: false, debugPort: 5005 }, { debugPort: 5007 });
+  const once = spring.plan(APP, { mode: 'run', debug: false, debugPort: 5005 }, { debugPort: 5007 });
   assert.equal(once.debugPort, 5007);
   assert.match(once.steps[1].args.join(' '), /address=localhost:5007/);
-  assert.equal(spring.plan(APP, {}).debugPort, null);
-  assert.doesNotMatch(spring.plan(APP, {}).steps[1].args.join(' '), /jdwp/);
+  assert.equal(spring.plan(APP, { mode: 'run' }).debugPort, null);
+  assert.doesNotMatch(spring.plan(APP, { mode: 'run' }).steps[1].args.join(' '), /jdwp/);
 
   // A port that is taken is skipped.
   const net = require('node:net');
@@ -525,11 +581,12 @@ test('the pieces of a configuration are read leniently', () => {
   assert.equal(normal.debugPort, 5005);
   assert.equal(spring.normalizeConfig({ debug: true, debugPort: 6000, debugSuspend: true }).debugSuspend, true);
   assert.equal(normal.profiles, 'local');
-  assert.equal(normal.mode, 'run');
+  assert.equal(normal.mode, 'exec', 'the IDE way, unless told otherwise');
   assert.equal(normal.build, true);
   assert.equal(normal.port, 8223);
   assert.equal(normal.jvmArgs, '');
-  assert.equal(spring.normalizeConfig(null).mode, 'run');
+  assert.equal(spring.normalizeConfig(null).mode, 'exec');
+  assert.equal(spring.normalizeConfig({ mode: 'run' }).mode, 'run');
   assert.equal(spring.normalizeConfig({ build: false }).build, false);
   assert.equal(spring.normalizeConfig({ port: 70000 }).port, null, 'not a port');
   assert.equal(spring.normalizeConfig({ debugPort: 0 }).debugPort, 5005);
@@ -622,6 +679,7 @@ function script(lines, { exit = 0, sleep = 0 } = {}) {
 
 function fakeApp(sh) {
   // A "build tool" that is /bin/sh: the plan puts the command in `cmd`, so the app's tool has to be one the plan knows.
+  // No main class: the runs below go through the tool's own run goal.
   return {
     name: 'fake',
     dir: sh.dir,
@@ -1041,7 +1099,7 @@ test('configurations are kept per application folder, under a root', () => {
   assert.equal(configs.get('/w/app').mode, 'jar');
   assert.deepEqual(Object.keys(configs.forRoot('/w')), ['/w/app']);
   assert.deepEqual(Object.keys(configs.forRoot('')).sort(), ['/elsewhere/x', '/w/app']);
-  assert.equal(configs.get('/never').mode, 'run');
+  assert.equal(configs.get('/never').mode, 'exec');
   fs.writeFileSync(file, '{ not json');
   assert.deepEqual(configs.forRoot('/w'), {});
   configs.save('/w/app', { profiles: 'again' });
