@@ -51,7 +51,9 @@ test('a profile set by hand is kept, and automatic says why', () => {
 });
 
 test('every depth denies writing and the network, and allows more git as it deepens', () => {
-  assert.deepEqual(R.REVIEW_DENIED, ['Edit', 'Write', 'WebFetch', 'WebSearch']);
+  assert.deepEqual(R.REVIEW_DENIED, ['Edit', 'Write', 'WebFetch', 'WebSearch', 'Bash(git *--output*)', 'Bash(git grep *)']);
+  // Neither of these is read-only: grep -O runs a command, --output writes a file.
+  for (const depth of Object.values(R.DEPTHS)) assert.ok(!depth.tools.includes('Bash(git grep *)'));
   assert.ok(!R.DEPTHS.LIGHT.tools.includes('Bash(git log *)'));
   assert.ok(R.DEPTHS.HEAVY.tools.includes('Bash(git blame *)'));
   for (const depth of Object.values(R.DEPTHS)) assert.ok(!depth.tools.some((tool) => /Edit|Write|push/.test(tool)));

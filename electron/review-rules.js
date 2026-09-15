@@ -43,7 +43,7 @@ const DEPTHS = {
     tools: [
       'Read', 'Grep', 'Glob',
       'Bash(git diff *)', 'Bash(git show *)', 'Bash(git ls-tree *)', 'Bash(git rev-parse *)',
-      'Bash(git status *)', 'Bash(git ls-files *)', 'Bash(git cat-file *)', 'Bash(git grep *)',
+      'Bash(git status *)', 'Bash(git ls-files *)', 'Bash(git cat-file *)',
     ],
     instructions: [
       'PROFUNDIDAD: INTERMEDIA',
@@ -60,7 +60,7 @@ const DEPTHS = {
       'Read', 'Grep', 'Glob',
       'Bash(git diff *)', 'Bash(git log *)', 'Bash(git show *)',
       'Bash(git blame *)', 'Bash(git ls-tree *)', 'Bash(git rev-parse *)',
-      'Bash(git status *)', 'Bash(git ls-files *)', 'Bash(git cat-file *)', 'Bash(git grep *)',
+      'Bash(git status *)', 'Bash(git ls-files *)', 'Bash(git cat-file *)',
       'Bash(git merge-base *)', 'Bash(git describe *)',
     ],
     instructions: [
@@ -133,8 +133,14 @@ const KINDS = {
   GENERIC: { label: 'Generic', focus: '' },
 };
 
-/** Reading-only or network is out of scope for a review at every level. */
-const REVIEW_DENIED = ['Edit', 'Write', 'WebFetch', 'WebSearch'];
+/**
+ * Reading-only or network is out of scope for a review at every level. The git
+ * reads allowed above are not all read-only on every flag: `--output=<file>` on
+ * diff, show and log writes wherever it is pointed, so it is denied by name.
+ * `git grep` is not offered at all (the Grep tool does the same job): its `-O`
+ * runs whatever command it is given.
+ */
+const REVIEW_DENIED = ['Edit', 'Write', 'WebFetch', 'WebSearch', 'Bash(git *--output*)', 'Bash(git grep *)'];
 
 /**
  * A fix writes and reads, nothing more. `Task` is out on purpose: a finding is

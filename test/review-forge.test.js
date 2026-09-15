@@ -156,3 +156,41 @@ test('remotes are read into provider, owner and slug', () => {
   assert.deepEqual(parseRemote('ssh://git@github.com/me/lib.git'), { provider: 'GITHUB', owner: 'me', slug: 'lib' });
   assert.equal(parseRemote('git@gitlab.com:x/y.git'), null);
 });
+
+test('a PR from another repository is named owner/repo:branch; 401 is retried only for Bitbucket', () => {
+  const { forkBranch, isRetryable } = require('../electron/review-forge');
+  assert.equal(forkBranch('someone/app', 'me/app', 'main'), 'someone/app:main');
+  assert.equal(forkBranch('me/app', 'me/app', 'feature'), 'feature');
+  assert.equal(forkBranch(undefined, 'me/app', 'feature'), 'feature');
+  assert.equal(isRetryable(401, '', true), true);
+  assert.equal(isRetryable(401, '', true, false), false);
+});
+
+test('a GitHub 401 fails at once instead of ten slow tries', async () => {
+  const { forge, calls, slept } = scripted([{ status: 401, body: { message: 'Bad credentials' } }]);
+  await assert.rejects(forge.of(github).json('https://api.github.com/repos/me/lib/pulls/1'), /HTTP 401/);
+  assert.equal(calls.length, 1);
+  assert.equal(slept.length, 0);
+});
+
+test('withdrawing an approval on GitHub dismisses our own review, not a comment beside it', async () => {
+  const { forge, calls } = scripted([
+    (url) => (url.endsWith('/user') ? { body: { login: 'me' } } : { body: [{ id: 5, user: { login: 'other' }, state: 'APPROVED' }, { id: 9, user: { login: 'me' }, state: 'APPROVED' }] }),
+    { body: [{ id: 5, user: { login: 'other' }, state: 'APPROVED' }, { id: 9, user: { login: 'me' }, state: 'APPROVED' }] },
+    { body: {} },
+  ]);
+  await forge.of(github).unapprove(3);
+  const last = calls[calls.length - 1];
+  assert.equal(last.method, 'PUT');
+  assert.match(last.url, /\/pulls\/3\/reviews\/9\/dismissals$/);
+});
+
+test('a GitHub PR whose reviews cannot be read says its stances are unknown', async () => {
+  const { forge } = scripted([
+    { body: { number: 4, title: 't', user: { login: 'a' }, head: { ref: 'f', sha: 'abc', repo: { full_name: 'me/lib' } }, base: { ref: 'main', repo: { full_name: 'me/lib' } }, state: 'open' } },
+    { status: 404, body: { message: 'Not Found' } },
+  ]);
+  const pr = await forge.of(github).get(4);
+  assert.equal(pr.stancesUnknown, true);
+  assert.equal(pr.sourceBranch, 'f');
+});

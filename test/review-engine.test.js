@@ -138,7 +138,7 @@ test('a review: planned from the diff, read-only, findings stored, body rendered
   const run = claude.runs[0];
   assert.equal(run.kind, 'review');
   assert.equal(run.model, 'haiku', 'one file, two lines: a light review');
-  assert.deepEqual(run.disallowedTools, ['Edit', 'Write', 'WebFetch', 'WebSearch']);
+  assert.deepEqual(run.disallowedTools, ['Edit', 'Write', 'WebFetch', 'WebSearch', 'Bash(git *--output*)', 'Bash(git grep *)']);
   assert.match(run.prompt, /Rango del diff: origin\/main\.\.\.origin\/feature/);
   const view = (await call('pr', { repoId: repo.id, prId: 7 }));
   assert.equal(view.ok, true, view.error);
@@ -470,4 +470,70 @@ test('commits: a branch missing from the clone is fetched, and a deleted one is 
   assert.ok(forgeState.calls.includes('commits'));
   const noFiles = await service.call('files', { repoId: repo.id, prId: 7 });
   assert.match(noFiles.error, /The branch feature is not on origin any more/);
+});
+
+test('a review records the commit it read, even when the author pushed after the list was read', { skip }, async () => {
+  const { service, w, repo } = setup([async () => ({ structured: { summary: 'Fine.', findings: [] } })]);
+  const call = (name, args) => service.call(name, args);
+  assert.equal((await call('refreshPrs', { repoId: repo.id })).ok, true);
+  // The author pushes again; the PR row still names the commit the list saw.
+  fs.writeFileSync(path.join(w.seed, 'app.js'), 'function add(a, b) {\n  return a - b - 0;\n}\n');
+  git(w.seed, 'commit', '-am', 'again');
+  git(w.seed, 'push', 'origin', 'feature');
+  const newer = git(w.seed, 'rev-parse', 'HEAD');
+  const outcome = await call('review', { repoId: repo.id, prId: 7 });
+  assert.equal(outcome.ok, true, outcome.error);
+  const view = await call('pr', { repoId: repo.id, prId: 7 });
+  assert.equal(view.review.headSha, newer);
+});
+
+test('a final pass that cannot fetch says so, instead of stamping a head it never saw', { skip }, async () => {
+  const { service, w, repo, claude } = setup([
+    async () => ({ structured: { summary: 'Fine.', findings: [] } }),
+    async () => ({ structured: { summary: 'Nothing.', mergeable: true, blockers: [] } }),
+  ]);
+  const call = (name, args) => service.call(name, args);
+  assert.equal((await call('refreshPrs', { repoId: repo.id })).ok, true);
+  assert.equal((await call('review', { repoId: repo.id, prId: 7 })).ok, true);
+  git(w.clone, 'remote', 'set-url', 'origin', path.join(w.root, 'gone.git'));
+  const outcome = await call('finalPass', { repoId: repo.id, prId: 7 });
+  assert.equal(outcome.ok, false);
+  assert.match(outcome.error, /git fetch failed/);
+  assert.equal(claude.runs.length, 1, 'the model was never asked');
+  const view = await call('pr', { repoId: repo.id, prId: 7 });
+  assert.equal(view.finalPassDone, false);
+});
+
+test('cancel stops a run before its process exists, and a stale cancel is not remembered', () => {
+  const { Activity } = require('../electron/review-engine');
+  const activity = new Activity(() => {});
+  assert.equal(activity.cancel('review:r:1'), false, 'nothing running: nothing to remember');
+  activity.start('review:r:1', { kind: 'review' });
+  assert.equal(activity.cancel('review:r:1'), true);
+  let killed = 0;
+  activity.patch('review:r:1', { handle: { cancel: () => killed++ } });
+  assert.equal(killed, 1, 'the process is stopped as soon as it registers');
+  activity.end('review:r:1');
+  activity.start('review:r:1', { kind: 'review' });
+  activity.patch('review:r:1', { handle: { cancel: () => killed++ } });
+  assert.equal(killed, 1, 'the next run of the same PR is not killed by the old cancel');
+});
+
+test('publishing the same finding twice at once posts it once', { skip }, async () => {
+  const { service, repo, forgeState } = setup([async () => ({ structured: { summary: 'One.', findings: [finding()] } })]);
+  const call = (name, args) => service.call(name, args);
+  assert.equal((await call('refreshPrs', { repoId: repo.id })).ok, true);
+  assert.equal((await call('review', { repoId: repo.id, prId: 7 })).ok, true);
+  const [f] = (await call('pr', { repoId: repo.id, prId: 7 })).findings;
+  const results = await Promise.all([service.engine.publishFinding(f.id), service.engine.publishFinding(f.id)]);
+  assert.equal(forgeState.posted.length, 1);
+  assert.equal(results[0].url, results[1].url);
+});
+
+test('editing a hidden repository leaves it hidden', { skip }, () => {
+  const { service, repo } = setup([]);
+  service.store.setHidden(repo.id, true);
+  const saved = service.store.saveRepo({ id: repo.id, name: 'Renamed', localPath: repo.localPath });
+  assert.equal(saved.hidden, true);
+  assert.equal(service.store.saveRepo({ id: repo.id, name: 'Renamed', localPath: repo.localPath, hidden: false }).hidden, false);
 });

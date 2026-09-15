@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { ReviewGit } = require('../electron/review-git');
+const { ReviewGit, commitId, headRefspec } = require('../electron/review-git');
 
 function repo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-git-'));
@@ -55,4 +55,38 @@ test('fileAt reads a file at a ref as lines, and is null where the file is not',
   const reader = new ReviewGit();
   assert.deepStrictEqual(await reader.fileAt(dir, 'main', 'a.txt'), ['first', '', 'third']);
   assert.strictEqual(await reader.fileAt(dir, 'main', 'missing.txt'), null);
+});
+
+test('a commit the panel names is hex, never an option git would read', async () => {
+  assert.strictEqual(commitId('975c39ba2a992ed05187a0974ca22e875ed2e45f'), '975c39ba2a992ed05187a0974ca22e875ed2e45f');
+  assert.throws(() => commitId('--output=/tmp/x'), /Not a commit/);
+  await assert.rejects(new ReviewGit().commitFiles(os.tmpdir(), '--output=/tmp/x'), /Not a commit/);
+});
+
+test('a branch is pushed by its full name, so a leading + is not a force', () => {
+  assert.strictEqual(headRefspec('+main'), 'refs/heads/+main:refs/heads/+main');
+  assert.strictEqual(headRefspec('feature/x'), 'refs/heads/feature/x:refs/heads/feature/x');
+  assert.throws(() => headRefspec('--force'), /Not a branch/);
+  assert.throws(() => headRefspec('someone/repo:main'), /Not a branch/);
+  assert.throws(() => headRefspec(''), /Not a branch/);
+});
+
+test('a commit that git refuses is an error, not "nothing changed"', async (t) => {
+  const { dir, git, write } = repo();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  write('a.txt', 'one\n');
+  git('add', '.');
+  git('commit', '-qm', 'base');
+  write('a.txt', 'two\n');
+  // A hook that says no stands in for a signing key that is not there, or any other refusal.
+  fs.writeFileSync(path.join(dir, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\necho refused >&2\nexit 1\n', { mode: 0o755 });
+  await assert.rejects(new ReviewGit().commitAll(dir, 'fix'), /git commit failed: .*refused/s);
+});
+
+test('a fork branch or an option-looking name is never handed to git fetch', async () => {
+  const reader = new ReviewGit();
+  const fork = await reader.fetch(os.tmpdir(), 'main', 'someone/app:main');
+  assert.equal(fork.ok, false);
+  assert.match(fork.output, /fork/);
+  assert.equal((await reader.fetch(os.tmpdir(), '+main')).ok, false);
 });

@@ -71,8 +71,13 @@ function retryDelay(attempt, random = Math.random) {
   return base + Math.floor(random() * (base / 2 + 1));
 }
 
-function isRetryable(status, body, idempotent) {
-  if (status === 401) return true;
+/**
+ * Whether an answer is worth asking again. A 401 is, from Bitbucket only: its
+ * edge answers 401 to requests it never checked and to rate limiting. From
+ * GitHub a 401 means the token, and ten tries would only make the error late.
+ */
+function isRetryable(status, body, idempotent, retry401 = true) {
+  if (status === 401) return retry401;
   if (status === 403 && /rate limit/i.test(body)) return true;
   if (!idempotent) return false;
   return status === 429 || status >= 500;
@@ -93,6 +98,17 @@ function describe(context, status, body, attempts) {
 const BITBUCKET_API = 'https://api.bitbucket.org/2.0';
 const GITHUB_API = 'https://api.github.com';
 
+/**
+ * A PR's branch, named the way the forges show one from a fork — `owner/repo:branch`
+ * — when it lives in another repository. The clone's origin does not have that
+ * branch, and a bare name would read the upstream branch of the same name, so the
+ * colon is what the reviewer refuses on.
+ */
+function forkBranch(headRepo, baseRepo, name) {
+  const branch = name ?? '?';
+  return headRepo && baseRepo && headRepo !== baseRepo ? `${headRepo}:${branch}` : branch;
+}
+
 const trimDate = (value) => (value ? String(value).slice(0, 16).replace('T', ' ') : '');
 
 class Forge {
@@ -111,7 +127,7 @@ class Forge {
    * One request with the retry rules. Returns `{status, body, headers}` for a 2xx
    * (or a 304 when `conditional`), and throws a `ForgeError` otherwise.
    */
-  async send(url, { method = 'GET', headers = {}, body, idempotent = method === 'GET', attempts = 10, context = '', conditional = false, backoff } = {}) {
+  async send(url, { method = 'GET', headers = {}, body, idempotent = method === 'GET', attempts = 10, context = '', conditional = false, backoff, retry401 = true } = {}) {
     let lastStatus = 0;
     let lastBody = '';
     for (let attempt = 0; attempt < attempts; attempt++) {
@@ -137,7 +153,7 @@ class Forge {
       }
       lastStatus = response.status;
       lastBody = text;
-      if (!isRetryable(lastStatus, lastBody, idempotent || conditional)) {
+      if (!isRetryable(lastStatus, lastBody, idempotent || conditional, retry401)) {
         throw new ForgeError(describe(context, lastStatus, lastBody), lastStatus);
       }
       if (attempt === attempts - 1) break;
@@ -203,7 +219,7 @@ class Bitbucket {
       id: Number(pr.id),
       title: pr.title ?? '(untitled)',
       author: pr.author?.display_name ?? '?',
-      sourceBranch: pr.source?.branch?.name ?? '?',
+      sourceBranch: forkBranch(pr.source?.repository?.full_name, pr.destination?.repository?.full_name, pr.source?.branch?.name),
       targetBranch: pr.destination?.branch?.name ?? '?',
       headSha: pr.source?.commit?.hash ?? '',
       commentCount: Number(pr.comment_count ?? 0),
@@ -343,7 +359,7 @@ class GitHub {
   }
 
   async json(url, options = {}) {
-    const response = await this.forge.send(url, { headers: this.headers(options.body ? { 'Content-Type': 'application/json' } : {}), context: this.context, ...options });
+    const response = await this.forge.send(url, { headers: this.headers(options.body ? { 'Content-Type': 'application/json' } : {}), context: this.context, retry401: false, ...options });
     return response.body ? lenientParse(response.body) : {};
   }
 
@@ -357,6 +373,7 @@ class GitHub {
         headers: this.headers(),
         context: this.context,
         attempts: 7,
+        retry401: false,
         backoff: (attempt) => Math.min(20000, 1000 * 2 ** attempt) + Math.floor(this.forge.random() * 400),
       });
       const value = lenientParse(response.body);
@@ -374,7 +391,7 @@ class GitHub {
       id: Number(pr.number),
       title: pr.title ?? '(untitled)',
       author: pr.user?.login ?? '?',
-      sourceBranch: pr.head?.ref ?? '?',
+      sourceBranch: forkBranch(pr.head?.repo?.full_name, pr.base?.repo?.full_name, pr.head?.ref),
       targetBranch: pr.base?.ref ?? '?',
       headSha: pr.head?.sha ?? '',
       commentCount: Number(pr.comments ?? 0),
@@ -420,7 +437,9 @@ class GitHub {
       pr.approvedBy = [...latest].filter(([, state]) => state === 'APPROVED').map(([login]) => login);
       pr.changesRequestedBy = [...latest].filter(([, state]) => state === 'CHANGES_REQUESTED').map(([login]) => login);
     } catch {
-      // Stances are a nicety on top of the PR; the PR itself was read.
+      // Stances are a nicety on top of the PR; the PR itself was read. Unknown is
+      // not "nobody": the stored stances stay as they were.
+      pr.stancesUnknown = true;
     }
     return pr;
   }
@@ -500,9 +519,25 @@ class GitHub {
     return this.review(prId, 'APPROVE');
   }
 
-  /** GitHub cannot withdraw a review; a comment saying so is the closest thing. */
+  /**
+   * GitHub withdraws a review by dismissing it: the token's own latest review in
+   * that state. A comment review would not replace it — GitHub goes on counting
+   * the approval — so when dismissing is not allowed this says so and fails.
+   */
+  async withdraw(prId, state) {
+    const me = (await this.json(`${GITHUB_API}/user`)).login;
+    const reviews = await this.paged(`${this.base}/pulls/${prId}/reviews?per_page=100`, 5);
+    const ours = reviews.filter((review) => review.user?.login === me && review.state === state).pop();
+    if (!ours) throw new ForgeError(`There is no ${state === 'APPROVED' ? 'approval' : 'change request'} of yours on PR #${prId} to withdraw.`);
+    try {
+      await this.json(`${this.base}/pulls/${prId}/reviews/${ours.id}/dismissals`, { method: 'PUT', body: { message: 'Withdrawn.' }, idempotent: true });
+    } catch (error) {
+      throw new ForgeError(`GitHub did not let this token dismiss the review (it needs write access to the repository): ${error.message}`, error.status);
+    }
+  }
+
   unapprove(prId) {
-    return this.review(prId, 'COMMENT', 'Retiro la aprobación anterior.');
+    return this.withdraw(prId, 'APPROVED');
   }
 
   requestChanges(prId) {
@@ -510,7 +545,7 @@ class GitHub {
   }
 
   undoRequestChanges(prId) {
-    return this.review(prId, 'COMMENT', 'Retiro el pedido de cambios anterior.');
+    return this.withdraw(prId, 'CHANGES_REQUESTED');
   }
 
   async decline(prId, reason) {
@@ -549,4 +584,4 @@ function parseRemote(url) {
   return { provider: match[1] === 'github.com' ? 'GITHUB' : 'BITBUCKET', owner: match[2], slug: match[3] };
 }
 
-module.exports = { Forge, ForgeError, lenientParse, retryDelay, isRetryable, nextLink, parseRemote };
+module.exports = { Forge, ForgeError, lenientParse, retryDelay, isRetryable, nextLink, parseRemote, forkBranch };

@@ -338,6 +338,7 @@ class ReviewService {
   branchGone(pr, fetchOutput) {
     const closed = pr.state && pr.state !== 'OPEN';
     if (!pr.sourceBranch) return 'This pull request was imported without its branch names, so its code cannot be read from the clone.';
+    if (pr.sourceBranch.includes(':')) return `This pull request comes from a fork (${pr.sourceBranch}): its branch is not on origin, so its code cannot be read from the clone.`;
     return (
       `The branch ${pr.sourceBranch} is not on origin any more` +
       (closed ? `: the pull request is ${String(pr.state).toLowerCase()}, and its branch was deleted.` : ', and it could not be fetched.') +
@@ -670,11 +671,7 @@ class ReviewService {
         return { ok: true, existing: done ? { createdAt: done.createdAt, costUsd: done.costUsd, findings: s.store.findingsForReview(done.id).length } : null };
       },
       cancel: (args) => e.cancel(str(args.repoId, 'A repository'), num(args.prId), args.kind === 'fix' ? 'fix' : args.kind === 'verify' ? 'verify' : args.kind === 'final' ? 'final' : 'review'),
-      cancelRun: (args) => {
-        const run = e.activity.runs.get(str(args.key, 'A run'));
-        run?.handle?.cancel();
-        return { ok: true };
-      },
+      cancelRun: (args) => (e.activity.cancel(str(args.key, 'A run')) ? { ok: true } : { ok: false, error: 'That run has already finished.' }),
       verify: async (args) => e.verify(str(args.repoId, 'A repository'), num(args.prId)),
       finalPass: async (args) => e.finalPass(str(args.repoId, 'A repository'), num(args.prId)),
 
