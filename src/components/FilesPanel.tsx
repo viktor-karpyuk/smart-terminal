@@ -13,6 +13,21 @@ import type { PreviewKind, PreviewRule } from '../lib/preview';
 import { GitPanel } from './GitPanel';
 import { TerminalSlot } from './TerminalSlot';
 import { readAll } from '../terminals/registry';
+import { FILE_MIME } from '../lib/drag';
+import { isInside, nameProblem, parentOf } from '../lib/fileOps';
+
+/**
+ * Entries whose row should open for renaming the moment it appears — a file
+ * or folder just created under a placeholder name. The row is not there yet
+ * when the request is made, so it is left for the row to find.
+ */
+const pendingRenames = new Set<string>();
+
+/** A word to the person about a change to the tree that did not happen, shown by the panel that asked. */
+const noticeListeners = new Map<string, (text: string) => void>();
+function tell(panelId: string, text: string) {
+  noticeListeners.get(panelId)?.(text);
+}
 
 /**
  * A folder on the left, the file you are looking at on the right.
@@ -32,6 +47,18 @@ export function FilesPanel({ panelId }: { panelId: string }) {
   const setActiveFile = useStore((s) => s.setActiveFile);
   const saveBuffer = useStore((s) => s.saveBuffer);
   const [selection, setSelection] = useState<{ from: number; to: number; text: string } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    noticeListeners.set(panelId, setNotice);
+    return () => {
+      noticeListeners.delete(panelId);
+    };
+  }, [panelId]);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 4500);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   if (!panel) return null;
   const active = panel.active;
@@ -45,10 +72,15 @@ export function FilesPanel({ panelId }: { panelId: string }) {
       {/* The tree never moves, whatever is open on the right. */}
       <div className="files-tree" style={{ flexBasis: panel.treeWidth ?? 236 }}>
         <TreeHeader panelId={panelId} root={panel.root} homedir={homedir} />
-        <div className="files-tree-scroll">
+        <DropZone panelId={panelId} dir={panel.root} className="files-tree-scroll">
           <UpRow panelId={panelId} root={panel.root} />
           <Dir panelId={panelId} path={panel.root} depth={0} />
-        </div>
+        </DropZone>
+        {notice && (
+          <div className="git-notice is-floating is-bad" onClick={() => setNotice(null)}>
+            {notice}
+          </div>
+        )}
       </div>
 
       <TreeResizer panelId={panelId} />
@@ -492,15 +524,21 @@ function EntryMenu({
   entry,
   at,
   onClose,
+  onRename,
+  onTrash,
 }: {
   panelId: string;
   entry: DirEntry;
   at: { x: number; y: number };
   onClose(): void;
+  onRename(): void;
+  onTrash(): void;
 }) {
   const openFilePanel = useStore((s) => s.openFilePanel);
   const openFile = useStore((s) => s.openFile);
   const setPanelRoot = useStore((s) => s.setPanelRoot);
+  const createEntry = useStore((s) => s.createEntry);
+  const duplicateEntry = useStore((s) => s.duplicateEntry);
   const layout = useStore((s) => s.layout);
 
   const act = (fn: () => void) => () => {
@@ -508,6 +546,20 @@ function EntryMenu({
     fn();
   };
   const leafId = leafOfTab(layout, panelId)?.id;
+  // A new thing goes into this folder, or beside this file.
+  const into = entry.isDirectory ? entry.path : parentOf(entry.path);
+  const make = (kind: 'file' | 'folder') =>
+    act(async () => {
+      const name = await freeName(into, kind === 'file' ? 'untitled.txt' : 'untitled folder');
+      // Under a placeholder name, and straight into renaming it: the wish is
+      // left before the row exists, because the row looks for it as it appears.
+      pendingRenames.add(`${into}/${name}`);
+      const problem = await createEntry(panelId, into, name, kind);
+      if (problem) {
+        pendingRenames.delete(`${into}/${name}`);
+        tell(panelId, problem);
+      }
+    });
 
   return (
     <Popover anchorPoint={at} onClose={onClose}>
@@ -544,15 +596,126 @@ function EntryMenu({
       )}
 
       <div className="menu-separator" />
+      <MenuRow label="New file" hint={entry.isDirectory ? 'in here' : 'beside it'} onClick={make('file')} />
+      <MenuRow label="New folder" hint={entry.isDirectory ? 'in here' : 'beside it'} onClick={make('folder')} />
+      <div className="menu-separator" />
+      <MenuRow label="Rename" onClick={act(onRename)} />
+      <MenuRow
+        label="Duplicate"
+        onClick={act(async () => {
+          const problem = await duplicateEntry(entry.path);
+          if (problem) tell(panelId, problem);
+        })}
+      />
+      <MenuRow label="Move to Trash" danger onClick={act(onTrash)} />
+      <div className="menu-separator" />
       <MenuRow label="Copy path" onClick={act(() => navigator.clipboard?.writeText(entry.path))} />
       <MenuRow label="Show in Finder" onClick={act(() => window.api.files.reveal(entry.path))} />
     </Popover>
   );
 }
 
-function MenuRow({ label, hint, onClick }: { label: string; hint?: string; onClick(): void }) {
+/** `untitled.txt`, or `untitled 2.txt` when that is taken — read from the listing the tree already has. */
+async function freeName(dir: string, wanted: string): Promise<string> {
+  let listing = useStore.getState().dirs[dir];
+  if (!listing) {
+    await useStore.getState().loadDir(dir);
+    listing = useStore.getState().dirs[dir];
+  }
+  const taken = new Set((listing?.entries ?? []).map((entry) => entry.name));
+  if (!taken.has(wanted)) return wanted;
+  const dot = wanted.lastIndexOf('.');
+  const stem = dot > 0 ? wanted.slice(0, dot) : wanted;
+  const ext = dot > 0 ? wanted.slice(dot) : '';
+  for (let n = 2; n < 1000; n += 1) {
+    const candidate = `${stem} ${n}${ext}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${stem} ${Date.now()}${ext}`;
+}
+
+/**
+ * A folder that takes what is dropped on it.
+ *
+ * Wraps the whole tree at the root and each folder row below; a file dragged
+ * from anywhere in the tree lands in whichever it is let go over. A folder is
+ * refused its own contents, and a file dropped where it already is is nothing.
+ */
+function DropZone({
+  panelId,
+  dir,
+  className,
+  style,
+  children,
+  onClick,
+  onContextMenu,
+  title,
+  draggable,
+  onDragStart,
+  onDragEnd,
+}: {
+  panelId: string;
+  dir: string;
+  className: string;
+  style?: React.CSSProperties;
+  children: React.ReactNode;
+  onClick?: () => void;
+  onContextMenu?: (event: React.MouseEvent) => void;
+  title?: string;
+  draggable?: boolean;
+  onDragStart?: (event: React.DragEvent) => void;
+  onDragEnd?: () => void;
+}) {
+  const moveEntry = useStore((s) => s.moveEntry);
+  const [over, setOver] = useState(false);
+  const accepts = (event: React.DragEvent) => event.dataTransfer.types.includes(FILE_MIME);
   return (
-    <button className="menu-item" onClick={onClick}>
+    <div
+      className={`${className}${over ? ' is-drop' : ''}`}
+      style={style}
+      title={title}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
+      onClick={onClick}
+      onContextMenu={onContextMenu}
+      onDragOver={(event) => {
+        if (!accepts(event)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = 'move';
+        if (!over) setOver(true);
+      }}
+      onDragLeave={(event) => {
+        // Leaving for a child of this element is not leaving.
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        setOver(false);
+      }}
+      onDrop={(event) => {
+        if (!accepts(event)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setOver(false);
+        const from = event.dataTransfer.getData(FILE_MIME);
+        if (!from || parentOf(from) === dir) return;
+        // Said, not swallowed: a folder let go over its own contents looks like it should have gone somewhere.
+        if (isInside(dir, from)) {
+          tell(panelId, 'A folder cannot be moved into itself.');
+          return;
+        }
+        void moveEntry(from, dir).then((problem) => {
+          if (problem) tell(panelId, problem);
+        });
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function MenuRow({ label, hint, danger, onClick }: { label: string; hint?: string; danger?: boolean; onClick(): void }) {
+  return (
+    <button className={`menu-item${danger ? ' is-danger' : ''}`} onClick={onClick}>
       <span>{label}</span>
       {hint && <kbd title={hint}>{hint}</kbd>}
     </button>
@@ -902,21 +1065,39 @@ function Row({
   const iconStyle = useStore((s) => s.settings.fileIcons);
   const folderColour = useStore((s) => s.settings.folderColour);
   const folderStyle = useStore((s) => s.settings.folderStyle);
+  const renameEntry = useStore((s) => s.renameEntry);
+  const trashEntry = useStore((s) => s.trashEntry);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const [dragging, setDragging] = useState(false);
 
-  return (
+  // Just created under a placeholder name: straight into renaming it.
+  useEffect(() => {
+    if (pendingRenames.delete(entry.path)) setRenaming(true);
+  }, [entry.path]);
+
+  const commitRename = async (name: string) => {
+    setRenaming(false);
+    if (!name || name === entry.name) return;
+    const problem = await renameEntry(entry.path, name);
+    if (problem) tell(panelId, problem);
+  };
+
+  const rowClass = `files-row${isOpen ? ' is-open' : ''}${entry.noise ? ' is-noise' : ''}${dragging ? ' is-dragging' : ''}`;
+  const rowStyle = { paddingLeft: 6 + depth * 12 };
+  const onContextMenu = (event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setMenuAt({ x: event.clientX, y: event.clientY });
+  };
+  const onDragStart = (event: React.DragEvent) => {
+    event.dataTransfer.setData(FILE_MIME, entry.path);
+    event.dataTransfer.effectAllowed = 'move';
+    setDragging(true);
+  };
+  const body = (
     <>
-      <div
-        className={`files-row${isOpen ? ' is-open' : ''}${entry.noise ? ' is-noise' : ''}`}
-        style={{ paddingLeft: 6 + depth * 12 }}
-        title={entry.path}
-        onClick={() => (entry.isDirectory ? toggleDir(panelId, entry.path) : openFile(panelId, entry.path))}
-        onContextMenu={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          setMenuAt({ x: event.clientX, y: event.clientY });
-        }}
-      >
         {entry.isDirectory ? (
           <svg className={`files-chevron${expanded ? ' is-open' : ''}`} width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
             <path d="M4.5 2.5L8 6l-3.5 3.5" />
@@ -932,18 +1113,22 @@ function Row({
           folderColour={folderColour}
           folderStyle={folderStyle}
         />
-        <span
-          className="files-name"
-          // In colour mode the name takes the icon's tint too, faintly — an icon
-          // on its own is a small target for the eye at this size.
-          style={
-            iconStyle === 'colour' && !entry.isDirectory
-              ? { color: colourFor(entry.name, false, 'colour') }
-              : undefined
-          }
-        >
-          {entry.name}
-        </span>
+        {renaming ? (
+          <RenameBox name={entry.name} isDirectory={entry.isDirectory} onDone={commitRename} />
+        ) : (
+          <span
+            className="files-name"
+            // In colour mode the name takes the icon's tint too, faintly — an icon
+            // on its own is a small target for the eye at this size.
+            style={
+              iconStyle === 'colour' && !entry.isDirectory
+                ? { color: colourFor(entry.name, false, 'colour') }
+                : undefined
+            }
+          >
+            {entry.name}
+          </span>
+        )}
         {/* Its own checkout, not just a folder: a submodule, a sibling
             repository, something vendored in. Worth knowing before you open it. */}
         {entry.repo && (
@@ -963,12 +1148,143 @@ function Row({
           </svg>
         )}
         {dirty && <span className="files-dirty" title="unsaved" />}
-      </div>
+    </>
+  );
+
+  return (
+    <>
+      {entry.isDirectory ? (
+        <DropZone
+          panelId={panelId}
+          dir={entry.path}
+          className={rowClass}
+          style={rowStyle}
+          title={entry.path}
+          draggable={!renaming}
+          onDragStart={onDragStart}
+          onDragEnd={() => setDragging(false)}
+          onClick={() => !renaming && toggleDir(panelId, entry.path)}
+          onContextMenu={onContextMenu}
+        >
+          {body}
+        </DropZone>
+      ) : (
+        <div
+          className={rowClass}
+          style={rowStyle}
+          title={entry.path}
+          draggable={!renaming}
+          onDragStart={onDragStart}
+          onDragEnd={() => setDragging(false)}
+          onClick={() => !renaming && openFile(panelId, entry.path)}
+          onContextMenu={onContextMenu}
+        >
+          {body}
+        </div>
+      )}
       {menuAt && (
-        <EntryMenu panelId={panelId} entry={entry} at={menuAt} onClose={() => setMenuAt(null)} />
+        <EntryMenu
+          panelId={panelId}
+          entry={entry}
+          at={menuAt}
+          onClose={() => setMenuAt(null)}
+          onRename={() => setRenaming(true)}
+          onTrash={() => setAsking(true)}
+        />
+      )}
+      {asking && (
+        <TrashConfirm
+          entry={entry}
+          dirty={dirty}
+          onAnswer={(yes) => {
+            setAsking(false);
+            if (!yes) return;
+            void trashEntry(entry.path).then((problem) => {
+              if (problem) tell(panelId, problem);
+            });
+          }}
+        />
       )}
       {entry.isDirectory && expanded && <Dir panelId={panelId} path={entry.path} depth={depth + 1} />}
     </>
+  );
+}
+
+/**
+ * The name, editable where it was. The stem is selected and the extension is
+ * not, which is the part of a rename that is nearly always meant. Enter
+ * keeps, Escape leaves it as it was, and clicking elsewhere keeps too — the
+ * way every file manager does it.
+ */
+function RenameBox({ name, isDirectory, onDone }: { name: string; isDirectory: boolean; onDone(name: string): void }) {
+  const box = useRef<HTMLInputElement>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  useEffect(() => {
+    const input = box.current;
+    if (!input) return;
+    input.focus();
+    const dot = isDirectory || name.startsWith('.') ? -1 : name.lastIndexOf('.');
+    input.setSelectionRange(0, dot > 0 ? dot : name.length);
+  }, [name, isDirectory]);
+  const finish = (keep: boolean) => {
+    const input = box.current;
+    if (!input) return;
+    const value = input.value.trim();
+    if (keep && value !== name && nameProblem(value)) {
+      setProblem(nameProblem(value));
+      return;
+    }
+    onDone(keep ? value : name);
+  };
+  return (
+    <input
+      ref={box}
+      className="files-rename"
+      defaultValue={name}
+      spellCheck={false}
+      title={problem ?? undefined}
+      onClick={(event) => event.stopPropagation()}
+      onBlur={() => finish(true)}
+      onInput={() => setProblem(null)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          finish(true);
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          finish(false);
+        }
+        event.stopPropagation();
+      }}
+    />
+  );
+}
+
+/**
+ * The one question the tree asks. To the Trash, so it can be undone from
+ * there — but a folder is a folder, and a file with an edit nobody saved is
+ * an edit that goes with it.
+ */
+function TrashConfirm({ entry, dirty, onAnswer }: { entry: DirEntry; dirty: boolean; onAnswer(yes: boolean): void }) {
+  return (
+    <div className="modal-backdrop" onMouseDown={() => onAnswer(false)}>
+      <div className="confirm" onMouseDown={(event) => event.stopPropagation()}>
+        <h3>Move {entry.isDirectory ? `the folder ${entry.name}` : entry.name} to the Trash?</h3>
+        <p>
+          {entry.isDirectory ? 'Everything in it goes with it. ' : ''}
+          {dirty ? 'It has changes that were never saved; they go too. ' : ''}
+          It can be put back from the Trash.
+        </p>
+        <div className="confirm-actions">
+          <button className="ghost-btn" autoFocus onClick={() => onAnswer(false)}>
+            Keep it
+          </button>
+          <button className="danger-btn" onClick={() => onAnswer(true)}>
+            Move to Trash
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

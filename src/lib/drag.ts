@@ -4,6 +4,8 @@ export const GROUP_MIME = 'application/x-smart-terminal-group';
 export const PANEL_MIME = 'application/x-smart-terminal-panel';
 /** A whole pane, dragged onto another to trade places with it. */
 export const PANE_MIME = 'application/x-smart-terminal-pane';
+/** A file or folder in the tree, dragged onto a folder to move it there. */
+export const FILE_MIME = 'application/x-smart-terminal-file';
 
 export type Side = 'left' | 'right' | 'top' | 'bottom' | 'center';
 
