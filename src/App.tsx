@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { isDarkAppearance, useStore } from './state/store';
 import { findLeaf } from './state/layout';
+import { GIT_TAB } from './state/types';
 import { copySelection, focusedTerminalId, getTerminal, selectAllIn } from './terminals/registry';
 import { LayoutView } from './components/LayoutView';
 import { Pane } from './components/Pane';
@@ -133,7 +134,7 @@ function activeSessionId(): string | null {
   return findLeaf(state.layout, state.activeLeafId)?.active ?? null;
 }
 
-function handleMenuAction(id: string) {
+export function handleMenuAction(id: string) {
   const store = useStore.getState();
   const sessionId = activeSessionId();
   /*
@@ -232,6 +233,17 @@ function handleMenuAction(id: string) {
     case 'clear':
       if (terminalId) getTerminal(terminalId)?.term.clear();
       break;
+    case 'save': {
+      /*
+       * The file in front in the panel in front, wherever the keyboard is —
+       * the tree, the tab strip, the terminal underneath, the editor itself.
+       * A save that depended on the focus being in the editor was a save that
+       * silently did nothing after a click somewhere else.
+       */
+      const panel = sessionId ? store.panels[sessionId] : null;
+      if (panel?.kind === 'files' && panel.active && panel.active !== GIT_TAB) void store.saveBuffer(panel.active);
+      break;
+    }
     case 'copy': {
       // A panel an extension brought has the focus: it is asked for its
       // selection, since the app cannot see into a frame of another origin.
