@@ -162,6 +162,7 @@ test('a PR from another repository is named owner/repo:branch; 401 is retried on
   assert.equal(forkBranch('someone/app', 'me/app', 'main'), 'someone/app:main');
   assert.equal(forkBranch('me/app', 'me/app', 'feature'), 'feature');
   assert.equal(forkBranch(undefined, 'me/app', 'feature'), 'feature');
+  assert.equal(forkBranch(undefined, 'me/app', 'main', true), 'deleted-fork:main', 'GitHub: a deleted fork has no head repository');
   assert.equal(isRetryable(401, '', true), true);
   assert.equal(isRetryable(401, '', true, false), false);
 });

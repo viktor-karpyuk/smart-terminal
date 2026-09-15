@@ -158,7 +158,18 @@ class ReviewService {
     return { head, files: Object.keys(kept), marks: kept };
   }
 
-  async setViewed(repoId, prId, file, viewed) {
+  /** One toggle at a time per PR: two overlapping would each write the marks they read, and one would be lost. */
+  setViewed(repoId, prId, file, viewed) {
+    this.viewedQueue ??= new Map();
+    const key = this.viewedKey(repoId, prId);
+    const next = (this.viewedQueue.get(key) ?? Promise.resolve()).catch(() => {}).then(() => this.setViewedNow(repoId, prId, file, viewed));
+    this.viewedQueue.set(key, next);
+    return next.finally(() => {
+      if (this.viewedQueue.get(key) === next) this.viewedQueue.delete(key);
+    });
+  }
+
+  async setViewedNow(repoId, prId, file, viewed) {
     const current = await this.viewed(repoId, prId);
     const marks = { ...current.marks };
     if (viewed) {
@@ -354,7 +365,10 @@ class ReviewService {
     const behind = async () => {
       if (!pr.headSha || absent.length) return false;
       const tip = await this.git.revParse(repo.localPath, `origin/${pr.sourceBranch}`);
-      return !tip || !tip.startsWith(pr.headSha);
+      if (!tip) return true;
+      // Ahead of the row (someone pulled, or a review fetched since the list was read) is not behind:
+      // behind is when the PR's head is not in the clone's branch at all.
+      return !tip.startsWith(pr.headSha) && !(await this.git.isAncestor(repo.localPath, pr.headSha, tip));
     };
     if (force || absent.length || (await behind())) {
       const fetched = await this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch);

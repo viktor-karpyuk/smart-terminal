@@ -252,13 +252,16 @@ test('a session is placed by where it stands: a clone, a workshop, or nowhere â€
 });
 
 test('who touched: the other open branches, from git, and the fixes written for them', { skip }, async () => {
-  const { bus, repo } = setup();
+  const { bus, repo, store } = setup();
   const seven = bus.member(bus.openFix({ repoId: repo.id, prId: 7, label: 'Fix #7' }));
   const answer = await bus.call(seven, 'who_touched', { paths: ['app.js', 'readme.md'] });
   assert.match(answer, /- other \(PR #8, Bo\): app\.js/);
   assert.doesNotMatch(answer, /feature/, 'your own PR is not another branch');
   bus.touch({ repoId: repo.id, prId: 9, branch: 'hotfix', label: 'Fix #9', paths: ['readme.md'] });
   assert.match(await bus.call(seven, 'who_touched', { paths: ['readme.md'] }), /- hotfix \(PR #9\): readme\.md/);
+  // Once PR 9 is merged, what its fix touched is nobody's business at a merge.
+  store.upsertPr(repo.id, { id: 9, title: 'Hotfix', author: 'Al', sourceBranch: 'hotfix', targetBranch: 'main', headSha: '', state: 'MERGED' });
+  assert.match(await bus.call(seven, 'who_touched', { paths: ['readme.md'] }), /No other branch changes those files/);
   assert.match(await bus.call(seven, 'who_touched', { paths: ['nothing.txt'] }), /No other branch changes those files/);
 });
 
@@ -347,4 +350,16 @@ test('without the app\'s socket a fix runs alone, as before', { skip }, async ()
   const { FixEngine } = require('../electron/review-fix');
   const engine = new FixEngine({ store: {}, engine: {}, root: '/x', bus: { openFix: () => { throw new Error('should not join'); } }, busServer: () => null });
   assert.equal(engine.attach({ repo: {}, pr: {}, dir: '/x', label: 'l' }), null);
+});
+
+test('a config carrying a token is handed over as a private file, not on the command line', () => {
+  const { privateMcpConfig } = require('../electron/review-claude');
+  const config = privateMcpConfig({ mcpServers: { 'code-review': { env: { SMART_TERMINAL_BUS_TOKEN: 'fix:secret' } } } });
+  const args = buildArgs({ mcpConfig: config.file });
+  assert.ok(!args.join(' ').includes('fix:secret'));
+  assert.equal(fs.statSync(config.file).mode & 0o777, 0o600);
+  assert.match(fs.readFileSync(config.file, 'utf8'), /fix:secret/);
+  config.remove();
+  assert.equal(fs.existsSync(config.file), false);
+  assert.equal(privateMcpConfig(null), null);
 });

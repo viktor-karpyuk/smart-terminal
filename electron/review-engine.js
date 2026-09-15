@@ -318,6 +318,17 @@ class ReviewEngine {
     return pr.headSha ? tip.slice(0, Math.max(pr.headSha.length, 7)) : tip;
   }
 
+  /**
+   * The commit an inline comment is placed against: the one its finding was
+   * written from, while that commit is still part of the branch — its line
+   * numbers are that commit's. After a force-push it is not, and GitHub refuses
+   * a commit outside the PR, so the PR's head is used instead.
+   */
+  async anchorCommit(repo, pr, reviewed) {
+    if (!reviewed || reviewed === pr.headSha) return pr.headSha;
+    return (await this.git.isAncestor(repo.localPath, reviewed, `origin/${pr.sourceBranch}`)) ? reviewed : pr.headSha;
+  }
+
   /** A fetch that failed, as an error that says where and why. */
   fetchError(repo, fetched) {
     return new Error(`git fetch failed in ${repo.localPath}: ${fetched.output.slice(0, 400)}${rules.fetchAdvice(fetched.output, repo)}`);
@@ -351,7 +362,12 @@ class ReviewEngine {
         this.store.failReview(reviewId, message);
         return { ok: false, error: message };
       }
-      if (this.activity.cancelled(key)) return { ok: false, error: 'Cancelled.' };
+      if (this.activity.cancelled(key)) {
+        // Written down as cancelled, as a cancel later on is: without a row the next sweep would start it again.
+        reviewId = this.store.startReview({ repoId, prId, prTitle: pr.title, headSha: pr.headSha, depth: depth ?? 'INTERMEDIATE', kind: kind ?? 'GENERIC', model: '', auto, prAuthor: pr.author });
+        this.store.failReview(reviewId, 'Review cancelled.', 'CANCELLED');
+        return { ok: false, error: 'Cancelled.' };
+      }
       const headSha = await this.fetchedHead(repo, pr);
 
       const decision = await rules.decideScope({
@@ -401,8 +417,9 @@ class ReviewEngine {
       const language = this.language();
       const guidelines = this.store.guidelinesForReview(repoId);
       const prompt = incremental
-        ? prompts.incrementalPrompt({ pr, language, depth: profile.depth, kind: profile.kind, sinceSha: incremental.sinceSha, carried: previous, existing, guidelines })
-        : prompts.reviewPrompt({ pr, language, depth: profile.depth, kind: profile.kind, existing, guidelines });
+        // The commit that was fetched, not the one the PR row last saw: the range the model is given is what gets recorded.
+        ? prompts.incrementalPrompt({ pr: { ...pr, headSha }, language, depth: profile.depth, kind: profile.kind, sinceSha: incremental.sinceSha, carried: previous, existing, guidelines })
+        : prompts.reviewPrompt({ pr: { ...pr, headSha }, language, depth: profile.depth, kind: profile.kind, existing, guidelines });
 
       const result = await this.claude.run({
         kind: 'review',
@@ -742,7 +759,7 @@ class ReviewEngine {
     const again = this.store.finding(findingId);
     if (again.publishedId) return { ok: true, url: again.publishedUrl, alreadyThere: true };
     try {
-      const posted = await this.forge.of(repo).inline(finding.prId, rules.findingComment(finding, this.language()), finding.filePath, finding.lineNo, this.store.review(finding.reviewId)?.headSha || pr.headSha);
+      const posted = await this.forge.of(repo).inline(finding.prId, rules.findingComment(finding, this.language()), finding.filePath, finding.lineNo, await this.anchorCommit(repo, pr, this.store.review(finding.reviewId)?.headSha));
       this.store.markFindingPublished(findingId, posted.id, posted.url);
       this.store.markPublishedIfComplete(finding.reviewId, posted.url);
       await this.syncQuietly(repo, finding.prId);

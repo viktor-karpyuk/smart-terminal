@@ -186,10 +186,7 @@ class ReviewBus {
    * let go on the way, and their claims with them.
    */
   sessionMember(sessionId, roster) {
-    const live = new Map((roster ?? []).map((entry) => [entry.id, entry]));
-    for (const row of this.store.all("SELECT token, session_id FROM cr_bus_member WHERE kind = 'session' AND ended_at IS NULL")) {
-      if (!live.has(row.session_id)) this.close(row.token);
-    }
+    const live = this.letGoOfEndedSessions(roster);
     const entry = live.get(sessionId);
     if (!entry) return null;
     const token = `session:${sessionId}`;
@@ -206,6 +203,16 @@ class ReviewBus {
       this.changed();
     }
     return this.member(token);
+  }
+
+  /** Sessions no longer running leave, with their claims. Run on every call, whoever makes it: fixes alone must not keep a closed session's claims alive. */
+  letGoOfEndedSessions(roster) {
+    const live = new Map((roster ?? []).map((entry) => [entry.id, entry]));
+    if (!roster) return live;
+    for (const row of this.store.all("SELECT token, session_id FROM cr_bus_member WHERE kind = 'session' AND ended_at IS NULL")) {
+      if (!live.has(row.session_id)) this.close(row.token);
+    }
+    return live;
   }
 
   liveMembers() {
@@ -355,7 +362,10 @@ class ReviewBus {
       const hit = files.filter((file) => wanted.has(file));
       if (hit.length) byPr.set(pr.id, { prId: pr.id, branch: pr.sourceBranch, title: pr.title, author: pr.author, paths: new Set(hit) });
     }
-    for (const row of this.store.all(`SELECT * FROM cr_bus_touch WHERE repo_id = ? AND path IN (${paths.map(() => '?').join(',')})`, repo.id, ...paths)) {
+    // Not PRs known to be closed: what a merged or declined PR touched meets nobody at a merge any more.
+    const touches = `SELECT t.* FROM cr_bus_touch t LEFT JOIN cr_pr p ON p.repo_id = t.repo_id AND p.pr_id = t.pr_id
+       WHERE t.repo_id = ? AND (p.state IS NULL OR p.state = 'OPEN') AND t.path IN (${paths.map(() => '?').join(',')})`;
+    for (const row of this.store.all(touches, repo.id, ...paths)) {
       if (Number(row.pr_id) === member.prId) continue;
       const prId = Number(row.pr_id);
       if (!byPr.has(prId)) byPr.set(prId, { prId, branch: row.branch, title: null, author: null, paths: new Set() });
@@ -374,7 +384,9 @@ class ReviewBus {
   async migrationNumbers(member, count) {
     const repo = this.store.repo(member.repoId);
     if (!repo) return { numbers: [], reason: 'no-repo' };
-    const onDisk = scanMigrations(member.workDir && fs.existsSync(member.workDir) ? member.workDir : repo.localPath);
+    // A fix scans its workshop, which is a whole checkout; a session's folder can be anywhere inside the clone, so the clone is scanned.
+    const root = member.kind === 'fix' && member.workDir && fs.existsSync(member.workDir) ? member.workDir : repo.localPath;
+    const onDisk = scanMigrations(root);
     if (!onDisk.length) return { numbers: [], reason: 'none' };
     let floor = Math.max(...onDisk.map((file) => file.number));
     const width = onDisk.sort((a, b) => a.number - b.number)[onDisk.length - 1].width;
@@ -510,6 +522,7 @@ class ReviewBus {
     if (!TOOL_NAMES.includes(tool)) return { ok: false, error: `There is no tool called ${tool}.` };
     let member = null;
     if (request.token) {
+      if (roster) this.letGoOfEndedSessions(roster);
       member = this.member(String(request.token));
       if (!member || member.endedAt || member.kind !== 'fix') return { ok: false, error: 'This run is not on the bus any more.' };
     } else if (request.from) {

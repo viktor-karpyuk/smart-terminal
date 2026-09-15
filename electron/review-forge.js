@@ -104,8 +104,10 @@ const GITHUB_API = 'https://api.github.com';
  * branch, and a bare name would read the upstream branch of the same name, so the
  * colon is what the reviewer refuses on.
  */
-function forkBranch(headRepo, baseRepo, name) {
+function forkBranch(headRepo, baseRepo, name, missingMeansFork = false) {
   const branch = name ?? '?';
+  // GitHub names no head repository once the fork is deleted: still not a branch of this one.
+  if (!headRepo && baseRepo && missingMeansFork) return `deleted-fork:${branch}`;
   return headRepo && baseRepo && headRepo !== baseRepo ? `${headRepo}:${branch}` : branch;
 }
 
@@ -391,7 +393,7 @@ class GitHub {
       id: Number(pr.number),
       title: pr.title ?? '(untitled)',
       author: pr.user?.login ?? '?',
-      sourceBranch: forkBranch(pr.head?.repo?.full_name, pr.base?.repo?.full_name, pr.head?.ref),
+      sourceBranch: forkBranch(pr.head?.repo?.full_name, pr.base?.repo?.full_name, pr.head?.ref, Boolean(pr.head)),
       targetBranch: pr.base?.ref ?? '?',
       headSha: pr.head?.sha ?? '',
       commentCount: Number(pr.comments ?? 0),

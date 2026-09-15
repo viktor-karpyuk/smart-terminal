@@ -393,6 +393,10 @@ test('importing an AI Code Reviewer database: tokens decrypted with its key, his
   acr.prepare('INSERT INTO review VALUES (?,?,?,?,?,?,?,?,?,?)').run('V1', 'R1', 12, 'Old PR', 'abc', 'DONE', 'body', '2026-02-01', 0.5, 'ignored');
   acr.prepare('INSERT INTO review VALUES (?,?,?,?,?,?,?,?,?,?)').run('V2', 'R1', 13, 'Crashed', 'def', 'RUNNING', null, '2026-02-02', 0, null);
   acr.prepare('INSERT INTO finding VALUES (?,?,?,?,?,?,?,?,?,?,?)').run('F1', 'V1', 'R1', 12, 'a.kt', 3, 'major', 'T', 'B', '2026-02-01', null);
+  // Old rows with holes: a review with no head or title, its finding, and a finding whose review is gone.
+  acr.prepare('INSERT INTO review VALUES (?,?,?,?,?,?,?,?,?,?)').run('V3', 'R1', 14, null, null, 'DONE', null, '2026-02-03', null, null);
+  acr.prepare('INSERT INTO finding VALUES (?,?,?,?,?,?,?,?,?,?,?)').run('F2', 'V3', 'R1', 14, 'b.kt', null, 'minor', 'U', 'C', '2026-02-03', null);
+  acr.prepare('INSERT INTO finding VALUES (?,?,?,?,?,?,?,?,?,?,?)').run('F3', 'GONE', 'R1', 14, 'c.kt', null, 'minor', 'Orphan', 'D', '2026-02-03', null);
   acr.prepare('INSERT INTO closed_pr VALUES (?,?,?,?)').run('R1', 12, '2026-03-01', 'MERGED');
   acr.prepare('INSERT INTO pref VALUES (?,?)').run('review.language', 'English');
   acr.prepare('INSERT INTO pref VALUES (?,?)').run('auto.enabled', 'true');
@@ -402,7 +406,7 @@ test('importing an AI Code Reviewer database: tokens decrypted with its key, his
   const source = { dbFile, keyFile, fixesDir: path.join(dir, 'fixes') };
   const found = inspect({ DatabaseSync: sqlite.DatabaseSync, source });
   assert.equal(found.repos.length, 2);
-  assert.equal(found.counts.findings, 1);
+  assert.equal(found.counts.findings, 3);
   const report = importAll({ DatabaseSync: sqlite.DatabaseSync, store: service.store, source });
   assert.equal(report.repos, 1);
   assert.match(report.skippedRepos[0], /Folder: a local folder/);
@@ -410,6 +414,10 @@ test('importing an AI Code Reviewer database: tokens decrypted with its key, his
   assert.equal(legacy.token, 'bb-token');
   assert.deepEqual([legacy.autoReview, legacy.replyMode, legacy.fixMode, legacy.defaultDepth, legacy.projectKind, legacy.defaultModel], [false, 'DRAFT', 'MANUAL', 'HEAVY', null, ''], 'automatic modes arrive switched off; AUTO means unset');
   assert.equal(service.store.finding('F1').title, 'T');
+  assert.equal(service.store.review('V3').status, 'DONE', 'a review with NULLs takes the defaults instead of being dropped');
+  assert.equal(service.store.finding('F2').title, 'U');
+  assert.equal(service.store.finding('F3'), null, 'an orphan is left behind');
+  assert.equal(report.skippedRows, 1);
   assert.equal(service.store.review('V2').status, 'FAILED');
   assert.equal(service.store.pr('R1', 12).state, 'MERGED');
   assert.equal(service.store.pr('R1', 13).title, 'Crashed', 'a PR known only from a review still gets a row');
