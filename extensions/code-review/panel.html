@@ -821,6 +821,14 @@
   /* The scroll container gets its own bottom, so the last card is not flush. */
   main#main { scroll-padding-bottom: var(--s6); }
 
+  /* Six columns of mostly digits do not need the whole column to themselves:
+     stretched to 1148px the headings drifted so far from their numbers that the
+     eye had to travel back along an empty row to pair them up. */
+  .usage-table { max-width: 760px; }
+  .usage-table th.num, .usage-table td.num { text-align: right; }
+  .usage-table th:first-child, .usage-table td:first-child { width: 40%; }
+  .usage-table .dot { vertical-align: baseline; }
+
   /* Nothing moves for anybody who has asked for that. */
   @media (prefers-reduced-motion: reduce) {
     * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
@@ -1124,7 +1132,10 @@
     else if (view === 'repos') promise = call('repos').then(function (r) { state.repos = r.repos; });
     else if (view === 'prs') promise = call('prs', { repoId: state.repoId, states: state.prStates }).then(function (r) { state.prList = r; });
     else if (view === 'pr') promise = loadPrView();
-    else if (view === 'settings') promise = Promise.all([call('guidelines', { repoId: null }), call('usage')]).then(function (r) { state.globalGuidelines = r[0].guidelines; state.usage = r[1].usage; });
+    // Usage has a tab, so it fetches its own numbers rather than riding along
+    // with the settings page that used to show a corner of them.
+    else if (view === 'usage') promise = call('usage').then(function (r) { state.usage = r.usage; });
+    else if (view === 'settings') promise = call('guidelines', { repoId: null }).then(function (r) { state.globalGuidelines = r.guidelines; });
     else if (view === 'import') promise = call('importInspect').then(function (r) { state.importInfo = r; });
     else if (view === 'bus') promise = call('bus').then(function (r) { state.bus = r; });
     else promise = Promise.resolve();
@@ -1210,7 +1221,7 @@
     var autoText = !state.overview ? '' : !(state.overview.settings && state.overview.settings.autoEnabled)
       ? 'automatic off'
       : auto && auto.running ? 'sweeping…' : auto && auto.lastRunAt ? 'last sweep ' + when(auto.lastRunAt) : 'automatic on';
-    var tabs = [['dashboard', 'Dashboard'], ['repos', 'Repositories'], ['bus', 'Coordination'], ['settings', 'Settings']];
+    var tabs = [['dashboard', 'Dashboard'], ['repos', 'Repositories'], ['bus', 'Coordination'], ['usage', 'Usage'], ['settings', 'Settings']];
     var html = '<span class="brand">Code Reviewer</span>';
     tabs.forEach(function (tab) {
       var on = state.view === tab[0] || (tab[0] === 'repos' && (state.view === 'prs' || state.view === 'repoForm' || state.view === 'import')) ||
@@ -1263,6 +1274,7 @@
       else if (state.view === 'repoForm') html = drawRepoForm();
       else if (state.view === 'prs') html = drawPrList();
       else if (state.view === 'pr') html = drawPr();
+      else if (state.view === 'usage') html = drawUsagePage();
       else if (state.view === 'settings') html = drawSettings();
       else if (state.view === 'import') html = drawImport();
       else if (state.view === 'bus') html = drawBus();
@@ -1402,15 +1414,78 @@
       html += fold('dash-' + g[0], '<strong>' + g[1] + '</strong><span class="count">' + g[2].length + '</span>', '', drawPrTable(g[2], true), g[0] !== 'others' || groups[0][2].length + groups[1][2].length === 0);
     });
 
-    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin-top:10px">';
+    /*
+     * Recent reviews used to share a two-column row with Usage, which gave a
+     * table of twelve rows half the width it wanted and put a spending summary
+     * where somebody is looking for work. Usage has a tab of its own now, and
+     * this has the column to itself.
+     */
+    html += '<div style="margin-top:10px">';
     // A dozen is what anyone reads; the rest is one click away.
     var recentAll = isOpen('recent-all', false);
     var recent = recentAll ? d.recent : d.recent.slice(0, 12);
     html += '<div><h3>Recent reviews</h3>' + (d.recent.length ? '<table class="list">' + recent.map(function (item) {
       return '<tr class="click" data-act="open-pr" data-repo="' + esc(item.repoId) + '" data-pr="' + item.prId + '"' + (item.error ? ' title="' + esc(item.error) + '"' : '') + '><td class="faint nowrap">' + esc(when(item.at)) + '</td><td>' + esc(item.repoName) + ' #' + item.prId + ' <span class="dim">' + esc(item.title) + '</span></td><td class="nowrap">' + statusChip(item.status) + (item.trigger === 'AUTO' ? ' <span class="chip">auto</span>' : '') + '</td><td class="faint nowrap num">' + (item.costUsd ? money(item.costUsd) : '—') + '</td></tr>';
     }).join('') + '</table>' + (d.recent.length > 12 ? '<button class="link" data-act="fold" data-key="recent-all" style="margin-top:6px">' + (recentAll ? 'Show fewer' : 'Show all ' + d.recent.length) + '</button>' : '') : '<div class="faint">Nothing yet.</div>') + '</div>';
-    html += '<div><h3>Usage</h3>' + drawUsage(d.usage) + '</div>';
     html += '</div></div>';
+    return html;
+  }
+
+  /**
+   * Spending, on a page of its own.
+   *
+   * It was two cards in a corner of the dashboard, which is the screen for
+   * "what needs me now" — and a cost is never that. Given a tab it can say the
+   * thing the cards could not: where the money went, by kind of run and by
+   * repository, and what a review of yours typically costs.
+   */
+  function drawUsagePage() {
+    var u = state.usage;
+    if (!u) return '<div class="loading">Loading…</div>';
+    var html = '<div class="page"><h2>Usage</h2>';
+    html += '<p class="faint" style="max-width:62ch;margin:0 0 14px">An API-price equivalent, not a charge. With a subscription what is actually consumed is tokens — this is what the same work would have cost had it been billed by the API, which is the only number that compares one run to another.</p>';
+
+    html += usageWindow('Last 5 hours', u.fiveHours || [], 'The window a Claude account is limited over.');
+    html += usageWindow('Last 7 days', u.week || [], 'Long enough to see a habit rather than an afternoon.');
+    return html + '</div>';
+  }
+
+  /** One window of spending: the total, then where it went. */
+  function usageWindow(title, list, note) {
+    var total = list.reduce(function (acc, row) {
+      acc.runs += row.runs; acc.billable += row.billable; acc.cache += row.cache; acc.cost += row.costUsd; return acc;
+    }, { runs: 0, billable: 0, cache: 0, cost: 0 });
+
+    var html = '<div class="section"><div class="section-title"><h3>' + esc(title) + '</h3><span class="faint">' + esc(note) + '</span></div>';
+    if (!total.runs) return html + '<div class="empty"><strong>Nothing ran</strong><p>No reviews, verifications or answers in this window.</p></div></div>';
+
+    html += '<div class="stats" style="margin-bottom:10px">' +
+      '<div class="stat" style="cursor:default"><div class="n">' + money(total.cost) + '</div><div class="l">Spent</div></div>' +
+      '<div class="stat" style="cursor:default"><div class="n">' + total.runs + '</div><div class="l">Runs</div></div>' +
+      '<div class="stat" style="cursor:default"><div class="n">' + tokens(total.billable) + '</div><div class="l">Tokens in + out</div></div>' +
+      '<div class="stat" style="cursor:default"><div class="n">' + tokens(total.cache) + '</div><div class="l">From cache</div></div>' +
+      '</div>';
+
+    /*
+     * A bar before the table, because the question is nearly always "what is
+     * taking the money" and that is a shape rather than a list of numbers.
+     */
+    var sorted = list.slice().sort(function (a, b) { return b.costUsd - a.costUsd; });
+    var palette = ['var(--accent)', 'var(--ok)', 'var(--warn)', 'var(--danger)', 'var(--text-faint)'];
+    html += '<div class="bar" style="height:9px;margin-bottom:8px">' + sorted.map(function (row, i) {
+      var share = total.cost ? (row.costUsd / total.cost) * 100 : 0;
+      return '<span style="width:' + share.toFixed(2) + '%;background:' + palette[i % palette.length] + '" title="' + esc(row.kind + ' · ' + money(row.costUsd)) + '"></span>';
+    }).join('') + '</div>';
+
+    html += '<table class="list usage-table"><thead><tr><th>Kind</th><th class="num">Runs</th><th class="num">Tokens in + out</th><th class="num">Cache</th><th class="num">Cost</th><th class="num">Each</th></tr></thead><tbody>' +
+      sorted.map(function (row, i) {
+        return '<tr><td><span class="dot" style="background:' + palette[i % palette.length] + ';margin-right:6px"></span>' + esc(row.kind) + '</td>' +
+          '<td class="num">' + row.runs + '</td>' +
+          '<td class="num faint">' + tokens(row.billable) + '</td>' +
+          '<td class="num faint">' + tokens(row.cache) + '</td>' +
+          '<td class="num">' + money(row.costUsd) + '</td>' +
+          '<td class="num faint">' + (row.runs ? money(row.costUsd / row.runs) : '—') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
     return html;
   }
 
@@ -1418,18 +1493,6 @@
     var cls = status === 'DONE' ? 'okc' : status === 'FAILED' ? 'badc' : status === 'RUNNING' ? 'accent' : '';
     var label = { DONE: 'done', FAILED: 'failed', RUNNING: 'running', CANCELLED: 'cancelled' }[status] || String(status || '').toLowerCase();
     return '<span class="chip ' + cls + '">' + esc(label) + '</span>';
-  }
-
-  function drawUsage(usage) {
-    if (!usage) return '';
-    function block(title, list) {
-      var total = list.reduce(function (acc, row) { acc.runs += row.runs; acc.billable += row.billable; acc.cache += row.cache; acc.cost += row.costUsd; return acc; }, { runs: 0, billable: 0, cache: 0, cost: 0 });
-      return '<div class="card"><div class="row"><strong>' + title + '</strong><span class="spacer"></span><span>' + money(total.cost) + '</span></div>' +
-        '<div class="faint">' + total.runs + ' run(s) · ' + tokens(total.billable) + ' tokens in+out · ' + tokens(total.cache) + ' cache</div>' +
-        (list.length ? '<div class="dim" style="margin-top:4px">' + list.map(function (row) { return esc(row.kind) + ' ' + row.runs + ' · ' + money(row.costUsd); }).join(' — ') + '</div>' : '') + '</div>';
-    }
-    return block('Last 5 hours', usage.fiveHours || []) + block('Last 7 days', usage.week || []) +
-      '<div class="faint" style="margin-top:4px">API-price equivalent, not a charge: with a subscription what is consumed is tokens.</div>';
   }
 
   /**
@@ -2832,7 +2895,9 @@
     html += '</div>';
 
     html += '<div class="section"><h3>Global conventions</h3>' + drawGuidelines(state.globalGuidelines, null) + '</div>';
-    html += '<div class="section"><h3>Usage</h3>' + drawUsage(state.usage) + '</div>';
+    // Spending has a tab now. Two places to read the same number is two places
+    // to keep in step, and one of them is always the stale one.
+    html += '<div class="section"><h3>Usage</h3><p class="faint" style="margin:0">What runs have cost is on its own tab. <button class="link" data-act="nav" data-view="usage">Open Usage</button></p></div>';
     html += '<div class="section"><h3>History</h3><button class="btn" data-act="nav" data-view="import">Import from AI Code Reviewer</button></div>';
     return html + '</div>';
   }
