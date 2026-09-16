@@ -135,6 +135,18 @@ const MIGRATIONS = [
   `ALTER TABLE cr_pr_meta ADD COLUMN error TEXT;
    ALTER TABLE cr_pr_meta ADD COLUMN error_at TEXT;
    ALTER TABLE cr_migration_slot ADD COLUMN code TEXT`,
+
+  /*
+   * 4 — whether this branch would land on its target, and when that was asked.
+   *
+   * Two columns because they answer different questions. The paths are what is
+   * in the way; the stamp is how old that answer is, and an answer about a
+   * branch is only true until either side of the merge moves. Empty means it
+   * merges clean; NULL means nobody has been able to tell, which is not the
+   * same thing and must never be drawn as one.
+   */
+  `ALTER TABLE cr_pr ADD COLUMN conflicts TEXT;
+   ALTER TABLE cr_pr ADD COLUMN conflicts_at TEXT`,
 ];
 
 const now = () => new Date().toISOString();
@@ -305,6 +317,14 @@ const prRow = (row) =>
     firstSeenAt: row.first_seen_at,
     closedAt: row.closed_at,
     fetchedAt: row.fetched_at,
+    /*
+     * `null` is "nobody could tell" and an array is an answer — an empty one
+     * meaning it merges clean. The panel has to keep those apart: saying a
+     * branch is clean when the question was never answered is how somebody
+     * presses Merge and finds out the hard way.
+     */
+    conflicts: row.conflicts == null ? null : JSON.parse(row.conflicts),
+    conflictsAt: row.conflicts_at ?? null,
   };
 
 const fixRow = (row) =>
@@ -505,6 +525,12 @@ class ReviewStore {
    * seen before — the signal for "new PR" notifications — which is not the same
    * as "not in the table": a PR first stored as history is not news.
    */
+  /** What stands in the way of this branch landing, as of now. */
+  setConflicts(repoId, prId, paths) {
+    this.run('UPDATE cr_pr SET conflicts = ?, conflicts_at = ? WHERE repo_id = ? AND pr_id = ?',
+      paths == null ? null : JSON.stringify(paths), now(), repoId, Number(prId));
+  }
+
   upsertPr(repoId, pr, { fetched = true } = {}) {
     const before = this.get('SELECT first_seen_at, state FROM cr_pr WHERE repo_id = ? AND pr_id = ?', repoId, pr.id);
     const stamp = now();

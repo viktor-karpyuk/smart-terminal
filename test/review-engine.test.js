@@ -735,3 +735,60 @@ test('a failed fetch does not wedge the queue behind it', async () => {
   const after = await engine.inClone('/clone', async () => 'ran anyway');
   assert.strictEqual(after, 'ran anyway');
 });
+
+// ---------------------------------------------------------------- does it land
+
+/*
+ * Whether a branch merges is asked of the clone, not of the provider: GitHub
+ * answers `mergeable: null` while it works it out in the background, Bitbucket
+ * does not answer at all, and the clone has both sides already the moment a
+ * review has fetched them.
+ *
+ * `merge-tree --write-tree` performs the merge in the object database and
+ * writes nothing to the working tree, so a clone somebody is using is not
+ * disturbed by being asked.
+ */
+test('a branch is told apart as merging, conflicting, or unanswerable', async () => {
+  const { ReviewGit } = require('../electron/review-git');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-conflict-'));
+  try {
+    git(dir, 'init', '-q', '.');
+    git(dir, 'config', 'user.email', 'test@example.com');
+    git(dir, 'config', 'user.name', 'Test');
+    fs.writeFileSync(path.join(dir, 'shared.txt'), 'one\n');
+    fs.writeFileSync(path.join(dir, 'apart.txt'), 'untouched\n');
+    git(dir, 'add', '.');
+    git(dir, 'commit', '-qm', 'base');
+
+    // One branch that touches a different file, one that touches the same line.
+    git(dir, 'checkout', '-q', '-b', 'clean');
+    fs.writeFileSync(path.join(dir, 'apart.txt'), 'changed over here\n');
+    git(dir, 'commit', '-qam', 'elsewhere');
+
+    git(dir, 'checkout', '-q', 'main');
+    git(dir, 'checkout', '-q', '-b', 'clashing');
+    fs.writeFileSync(path.join(dir, 'shared.txt'), 'theirs\n');
+    git(dir, 'commit', '-qam', 'theirs');
+
+    git(dir, 'checkout', '-q', 'main');
+    fs.writeFileSync(path.join(dir, 'shared.txt'), 'ours\n');
+    git(dir, 'commit', '-qam', 'ours');
+
+    const g = new ReviewGit();
+    assert.deepStrictEqual(await g.conflicts(dir, 'main', 'clean'), [], 'a branch that lands says so with nothing');
+    assert.deepStrictEqual(await g.conflicts(dir, 'main', 'clashing'), ['shared.txt'], 'and one that does not names the file');
+
+    /*
+     * The case that made this need a test. A branch that does not exist exits
+     * 1 as well — the same code as "merged with conflicts" — so reading the
+     * exit code and parsing what follows reports a missing ref as a clean
+     * merge. `null` is "could not tell", and it is the one answer that must
+     * never be confused with "clean".
+     */
+    assert.strictEqual(await g.conflicts(dir, 'main', 'no-such-branch'), null);
+    assert.strictEqual(await g.conflicts(dir, 'main', ''), null);
+    assert.strictEqual(await g.conflicts(dir, '', 'clean'), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

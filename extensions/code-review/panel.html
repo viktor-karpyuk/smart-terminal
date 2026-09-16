@@ -717,6 +717,10 @@
     border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
   }
 
+  .conflict-banner { display: block; }
+  .conflict-list { margin: var(--s2) 0 0; padding-left: 1.4em; max-height: 11em; overflow: auto; }
+  .conflict-list li { color: var(--text-dim); line-height: 1.5; }
+
   /* The number beside the A− A+ pair: fixed width so it does not shuffle the
      buttons either side of it as the digits change. */
   .size-now { min-width: 3.4em; text-align: center; color: var(--text-dim); font-variant-numeric: tabular-nums; }
@@ -1332,6 +1336,34 @@
       '<div class="faint" style="margin-top:4px">API-price equivalent, not a charge: with a subscription what is consumed is tokens.</div>';
   }
 
+  /**
+   * What is known about this branch landing on its target.
+   *
+   * Three answers and they are not two. `null` is nobody could tell — a clone
+   * that was never fetched, a git too old — and it is drawn as nothing rather
+   * than as clean, because "clean" is the one thing this must not invent.
+   * Empty is clean and also drawn as nothing: a branch that merges is the
+   * expected case and does not need saying. Only the trouble speaks.
+   *
+   * Stale is its own state. The answer was true of the commits it was asked
+   * about, and a push since then can have created the conflict or cleared it —
+   * so it still warns, and says the warning is older than the branch.
+   */
+  function conflictState(row) {
+    var pr = row.pr || row;
+    var list = pr.conflicts;
+    if (!list || !list.length) return null;
+    var stale = pr.conflictsAt && pr.updatedOn && pr.conflictsAt < pr.updatedOn;
+    return { paths: list, stale: Boolean(stale) };
+  }
+
+  function conflictChip(row) {
+    var c = conflictState(row);
+    if (!c) return '';
+    return '<span class="chip badc" title="' + esc(c.paths.slice(0, 12).join('\n') + (c.paths.length > 12 ? '\n… and ' + (c.paths.length - 12) + ' more' : '')) +
+      '">' + (c.stale ? 'Conflicts?' : 'Conflicts') + ' ' + c.paths.length + '</span>';
+  }
+
   function drawPrTable(rows, withRepo) {
     if (!rows.length) return '<div class="empty">No pull requests match.</div>';
     var html = '<table class="list"><tr><th>Pull request</th><th>Age</th><th>Waiting for</th><th title="Published / found, and how many published ones are still open">Findings</th><th title="API-price equivalent of the reviews, not a charge">Cost</th></tr>';
@@ -1342,7 +1374,7 @@
         '<td class="title-cell"><div class="t">#' + pr.id + ' ' + esc(pr.title) + '</div><div class="s">' + (withRepo ? '<span class="chip">' + esc(row.repoName) + '</span> ' : '') + esc(pr.author) + (pr.sourceBranch ? ' · <span class="mono">' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch) + '</span>' : '') +
         (row.pendingReturn ? ' · <span class="warn">' + row.pendingReturn + ' fix(es) to hand back</span>' : '') + '</div></td>' +
         '<td class="faint" title="' + esc(pr.createdOn) + '">' + (row.ageDays != null ? row.ageDays + 'd ' : '') + '<span class="' + (row.ageDays >= 14 ? 'bad' : row.ageDays >= 7 ? 'warn' : '') + '">' + ageMark(row.ageDays) + '</span></td>' +
-        '<td><div class="row">' + row.flags.map(flagChip).join('') + '</div></td>' +
+        '<td><div class="row">' + conflictChip(row) + row.flags.map(flagChip).join('') + '</div></td>' +
         '<td class="faint">' + (row.findings.total ? row.findings.published + '/' + row.findings.total + (row.findings.unresolved ? ' <span class="warn">· ' + row.findings.unresolved + ' open</span>' : '') : '') + '</td>' +
         '<td class="faint">' + (row.costUsd ? money(row.costUsd) : '') + '</td></tr>';
     });
@@ -1608,6 +1640,22 @@
         return '<li class="' + (i.done ? 'done' : '') + '">' + esc(i.label) + (i.detail ? ' <span class="faint">' + esc(i.detail) + '</span>' : '') + ' <span class="faint">· ' + i.weight + '</span></li>';
       }).join('') + '</ul>';
     }
+    var conflict = conflictState(v);
+    if (conflict) {
+      /*
+       * A banner rather than a chip, in the header rather than in a tab. The
+       * findings are about the code; this is about whether any of it can land,
+       * and somebody who reads four findings and presses Merge has spent the
+       * time for nothing.
+       */
+      html += '<div class="banner bad conflict-banner"><strong>This branch does not merge into ' + esc(v.pr.targetBranch) + '.</strong> ' +
+        conflict.paths.length + ' file' + (conflict.paths.length === 1 ? '' : 's') + ' conflict' + (conflict.paths.length === 1 ? 's' : '') + '. ' +
+        (conflict.stale ? '<span class="faint">Checked before the newest commits arrived — it may have been resolved since.</span> ' : '') +
+        '<button class="link" data-act="fold" data-key="conflict-files">' + (isOpen('conflict-files') ? 'hide' : 'which') + '</button>' +
+        ' <button class="link" data-act="recheck-conflicts"' + busyAttr('recheck-conflicts') + '>check again</button>' +
+        (isOpen('conflict-files') ? '<ul class="conflict-list">' + conflict.paths.map(function (path) { return '<li class="mono">' + esc(path) + '</li>'; }).join('') + '</ul>' : '') +
+        '</div>';
+    }
     if (state.decline) {
       html += '<div class="card" style="margin-top:8px"><strong>Decline #' + v.pr.id + '</strong><div class="faint">The reason is posted as a comment first; then the PR is closed.</div>' +
         '<textarea rows="3" data-edit="decline-reason" style="margin-top:6px">' + esc(edit('decline-reason')) + '</textarea><div class="row" style="margin-top:6px"><button class="btn danger" data-act="decline"' + busyAttr('decline') + '>Decline</button><button class="btn" data-act="decline-close">Cancel</button></div></div>';
@@ -1615,6 +1663,7 @@
     if (state.merge) {
       var strategy = edit('merge-strategy', v.settings.mergeStrategy || 'MERGE_COMMIT');
       html += '<div class="card" style="margin-top:8px"><strong>Merge #' + v.pr.id + ' into ' + esc(v.pr.targetBranch) + '</strong>' +
+        (conflict ? '<div class="banner bad"><strong>It does not merge.</strong> ' + conflict.paths.length + ' file' + (conflict.paths.length === 1 ? '' : 's') + ' conflict with ' + esc(v.pr.targetBranch) + ', so the forge will refuse this. Resolve them on the branch first.</div>' : '') +
         (v.mergeBlocker ? '<div class="banner warn">Merging with something still pending: ' + esc(v.mergeBlocker) + '</div>' : '') +
         '<div class="row" style="margin-top:6px"><span class="faint">Strategy</span><select data-edit-select="merge-strategy">' + [['MERGE_COMMIT', 'Merge commit'], ['SQUASH', 'Squash'], ['FAST_FORWARD', v.repo.provider === 'GITHUB' ? 'Rebase' : 'Fast forward']].map(function (o) {
           return '<option value="' + o[0] + '"' + (strategy === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
@@ -2940,6 +2989,14 @@
       if (state.overview) state.overview.settings.diffLayout = next;
       draw();
       call('saveSettings', { settings: { diffLayout: next } }).catch(function () {});
+    },
+    'recheck-conflicts': function () {
+      act('recheck-conflicts', function () { return call('checkConflicts', prArgs()); }, function (paths) {
+        if (paths === null) say('Could not tell: the clone could not be read.', true);
+        else if (!paths.length) say('It merges cleanly.');
+        else say(paths.length + ' file' + (paths.length === 1 ? '' : 's') + ' still conflict.', true);
+        load();
+      });
     },
     'ui-font': function (el) {
       var delta = Number(el.getAttribute('data-delta'));

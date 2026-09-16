@@ -410,6 +410,14 @@ class ReviewEngine {
         this.store.failReview(reviewId, 'Review cancelled.', 'CANCELLED');
         return { ok: false, error: 'Cancelled.' };
       }
+      /*
+       * Both sides of the merge are on the disk as of a second ago, so this is
+       * the cheapest it will ever be to ask — and a review of a branch that
+       * cannot land is worth knowing about before reading a word of it. It
+       * must not be able to stop the review: not knowing whether it merges is
+       * a worse reason to fail than any finding.
+       */
+      await this.checkConflicts(repoId, prId).catch(() => {});
       const headSha = await this.fetchedHead(repo, pr);
 
       const decision = await rules.decideScope({
@@ -905,6 +913,33 @@ class ReviewEngine {
     if (pr) this.store.upsertPr(repoId, { ...pr, state: 'DECLINED' });
     this.changed(repoId, prId);
     return { ok: true };
+  }
+
+  /**
+   * Whether this branch would land on its target, written down where it is shown.
+   *
+   * Asked of the clone, not of the provider: GitHub answers `mergeable: null`
+   * while it works it out in the background and Bitbucket does not answer at
+   * all, whereas the clone has both sides already the moment a review has
+   * fetched them. `merge-tree` performs the merge in the object database and
+   * writes nothing to the working tree, so a clone somebody is using is not
+   * disturbed by being asked.
+   *
+   * Refs rather than branch names, because the local branches may be anywhere:
+   * what was just fetched is what `origin/` points at.
+   */
+  async checkConflicts(repoId, prId, { fetch = false } = {}) {
+    const repo = this.requireRepo(repoId);
+    const pr = this.prOrThrow(repoId, prId);
+    if (!repo.localPath) return null;
+    if (fetch) {
+      const got = await this.inClone(repo.localPath, () => this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch));
+      if (!got.ok) return null;
+    }
+    const paths = await this.git.conflicts(repo.localPath, `origin/${pr.targetBranch}`, `origin/${pr.sourceBranch}`);
+    this.store.setConflicts(repoId, prId, paths);
+    if (paths !== null) this.changed(repoId, prId);
+    return paths;
   }
 
   async merge(repoId, prId, { message, closeSourceBranch = true, strategy = 'MERGE_COMMIT' } = {}) {

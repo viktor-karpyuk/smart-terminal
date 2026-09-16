@@ -853,6 +853,7 @@ class ReviewService {
       requestChanges: (args) => e.stance(str(args.repoId, 'A repository'), num(args.prId), 'requestChanges'),
       undoRequestChanges: (args) => e.stance(str(args.repoId, 'A repository'), num(args.prId), 'undoRequestChanges'),
       decline: (args) => e.decline(str(args.repoId, 'A repository'), num(args.prId), args.reason),
+      checkConflicts: (args) => e.checkConflicts(str(args.repoId, 'A repository'), num(args.prId), { fetch: args.fetch !== false }),
       merge: (args) => e.merge(str(args.repoId, 'A repository'), num(args.prId), { message: args.message, closeSourceBranch: args.closeSourceBranch !== false, strategy: ['MERGE_COMMIT', 'SQUASH', 'FAST_FORWARD'].includes(args.strategy) ? args.strategy : 'MERGE_COMMIT' }),
 
       // what the app's doors need to know, never the doors themselves
