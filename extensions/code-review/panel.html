@@ -19,14 +19,14 @@
   .spacer { flex: 1; }
   .faint { color: var(--text-faint); }
   .dim { color: var(--text-dim); }
-  .mono { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+  .mono { font-family: ui-monospace, Menlo, monospace; font-size: 0.958rem; }
   .ok { color: var(--ok); }
   .bad { color: var(--danger); }
   .warn { color: #d9a441; }
   main#main { overflow: auto; min-height: 0; }
   .page { padding: 12px 14px 40px; max-width: 1280px; }
-  h2 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
-  h3 { margin: 14px 0 6px; font-size: 12.5px; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+  h2 { margin: 0 0 8px; font-size: 1.25rem; font-weight: 600; }
+  h3 { margin: 14px 0 6px; font-size: 1.042rem; font-weight: 600; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
 
   .btn { padding: 4px 9px; border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-dim); white-space: nowrap; background: transparent; font: inherit; cursor: pointer; }
   .btn:hover { color: var(--text); border-color: var(--border-strong); background: var(--bg-elevated); }
@@ -37,7 +37,7 @@
   .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
   .btn.danger:hover { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
   .btn[disabled] { opacity: 0.4; pointer-events: none; }
-  .btn.small { padding: 2px 7px; font-size: 11px; }
+  .btn.small { padding: 2px 7px; font-size: 0.917rem; }
   /* A button whose action is running says so, instead of only going grey. */
   .btn[aria-busy="true"] { opacity: 0.75; }
   .btn[aria-busy="true"]::before {
@@ -63,8 +63,8 @@
   .next.warn .icon { background: color-mix(in srgb, #d9a441 20%, transparent); color: #d9a441; }
   .next.done .icon { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
   .next .words { flex: 1; min-width: 0; }
-  .next .words strong { display: block; font-size: 13px; }
-  .next .words span { color: var(--text-dim); font-size: 11.5px; }
+  .next .words strong { display: block; font-size: 1.083rem; }
+  .next .words span { color: var(--text-dim); font-size: 0.958rem; }
 
   /* Sections that can be folded, with their summary visible when folded. */
   .fold { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); margin-top: 8px; }
@@ -83,7 +83,7 @@
   /* Long text trimmed to a few lines until asked for. */
   .clamp { position: relative; max-height: 7.8em; overflow: hidden; }
   .clamp::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2.2em; background: linear-gradient(transparent, var(--bg-panel)); }
-  .more { color: var(--accent); cursor: pointer; font-size: 11px; background: none; border: 0; padding: 0; font: inherit; font-size: 11px; }
+  .more { color: var(--accent); cursor: pointer; font-size: 0.917rem; background: none; border: 0; padding: 0; font: inherit; font-size: 0.917rem; }
   .finding-line { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); cursor: pointer; opacity: 0.75; }
   .finding-line + .finding-line, .finding + .finding-line, .finding-line + .finding { margin-top: 6px; }
   .finding-line:hover { opacity: 1; }
@@ -94,7 +94,7 @@
   .crumbs .link { flex: none; }
   .section-title { display: flex; align-items: baseline; gap: 8px; margin: 16px 0 6px; }
   .section-title h3 { margin: 0; }
-  .kbd { display: inline-block; padding: 0 4px; border: 1px solid var(--border); border-radius: 3px; font-family: ui-monospace, Menlo, monospace; font-size: 10px; color: var(--text-faint); }
+  .kbd { display: inline-block; padding: 0 4px; border: 1px solid var(--border); border-radius: 3px; font-family: ui-monospace, Menlo, monospace; font-size: 0.833rem; color: var(--text-faint); }
   .check-list { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 3px; }
   .check-list li::before { content: '○'; color: var(--text-faint); margin-right: 6px; }
   .check-list li.done { color: var(--text-faint); }
@@ -110,7 +110,7 @@
     background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius);
     padding: 5px 7px; font: inherit; min-width: 0;
   }
-  textarea { width: 100%; box-sizing: border-box; resize: vertical; font-family: ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1.45; }
+  textarea { width: 100%; box-sizing: border-box; resize: vertical; font-family: ui-monospace, Menlo, monospace; font-size: 1rem; line-height: 1.45; }
   input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
   label.check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 
@@ -126,10 +126,10 @@
   .stat.urgent::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 2px; background: #d9a441; }
   .stat:hover { border-color: var(--border-strong); }
   .stat.on { border-color: var(--accent); background: var(--accent-soft); }
-  .stat .n { font-size: 20px; font-weight: 600; }
-  .stat .l { color: var(--text-dim); font-size: 11px; }
+  .stat .n { font-size: 1.667rem; font-weight: 600; }
+  .stat .l { color: var(--text-dim); font-size: 0.917rem; }
 
-  .chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); font-size: 10.5px; color: var(--text-dim); white-space: nowrap; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); font-size: 0.875rem; color: var(--text-dim); white-space: nowrap; }
   .chip.click { cursor: pointer; }
   .chip.click:hover { border-color: var(--border-strong); color: var(--text); }
   .chip.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
@@ -137,20 +137,20 @@
   .chip.okc { border-color: color-mix(in srgb, var(--ok) 60%, var(--border)); color: var(--ok); }
   .chip.badc { border-color: color-mix(in srgb, var(--danger) 60%, var(--border)); color: var(--danger); }
   .chip.accent { border-color: var(--accent); color: var(--accent); }
-  .sev { display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; }
+  .sev { display: inline-block; padding: 0 6px; border-radius: 3px; font-size: 0.875rem; font-weight: 600; text-transform: uppercase; }
   .sev.blocker { background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--danger); }
   .sev.major { background: color-mix(in srgb, #d9a441 22%, transparent); color: #d9a441; }
   .sev.minor { background: var(--bg-elevated); color: var(--text-dim); }
 
   table.list { width: 100%; border-collapse: collapse; }
-  table.list th { text-align: left; font-weight: 500; color: var(--text-faint); font-size: 11px; padding: 4px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.list th { text-align: left; font-weight: 500; color: var(--text-faint); font-size: 0.917rem; padding: 4px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   table.list td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
   table.list tr.click { cursor: pointer; }
   table.list tr.click:hover td { background: var(--bg-elevated); }
   table.list tr.closed td { opacity: 0.6; }
   .title-cell { min-width: 260px; }
   .title-cell .t { font-weight: 500; }
-  .title-cell .s { color: var(--text-faint); font-size: 11px; margin-top: 2px; }
+  .title-cell .s { color: var(--text-faint); font-size: 0.917rem; margin-top: 2px; }
 
   .bar { height: 6px; border-radius: 3px; background: var(--bg-elevated); overflow: hidden; display: flex; }
   .bar > span { display: block; height: 100%; }
@@ -162,18 +162,18 @@
 
   .run { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; background: var(--bg-panel); }
   .run + .run { margin-top: 6px; }
-  .run .lines { margin-top: 6px; max-height: 150px; overflow: auto; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
+  .run .lines { margin-top: 6px; max-height: 150px; overflow: auto; font-family: ui-monospace, Menlo, monospace; font-size: 0.917rem; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
 
   .prhead { padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
-  .prhead h2 { font-size: 16px; margin: 4px 0; }
+  .prhead h2 { font-size: 1.333rem; margin: 4px 0; }
   .prhead.compact { padding: 6px 14px 8px; }
-  .prhead.compact .pr-title { font-size: 13.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+  .prhead.compact .pr-title { font-size: 1.125rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
   .prhead.compact > .row:first-child { flex-wrap: nowrap; }
   .prhead.compact > .row:first-child > .chip, .prhead.compact > .row:first-child > .btn { flex: none; }
-  .prhead.compact .pr-meta { font-size: 11.5px; margin-top: 2px; }
+  .prhead.compact .pr-meta { font-size: 0.958rem; margin-top: 2px; }
   .prhead.compact .next { margin-top: 6px; padding: 4px 8px; gap: 8px; }
-  .prhead.compact .next .icon { width: 18px; height: 18px; font-size: 11px; }
-  .prhead.compact .next .words strong { display: inline; font-size: 12px; }
+  .prhead.compact .next .icon { width: 18px; height: 18px; font-size: 0.917rem; }
+  .prhead.compact .next .words strong { display: inline; font-size: 1rem; }
   .prhead.compact .next .words span { display: none; }
   .prhead.compact > .row[style] { margin-top: 6px !important; }
   .banner { padding: 7px 10px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-elevated); margin: 8px 0; white-space: pre-wrap; }
@@ -183,31 +183,31 @@
   .subtabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); padding: 0 14px; background: var(--bg-panel); position: sticky; top: 0; z-index: 2; }
   .subtabs .tab { border-radius: 0; border: 0; border-bottom: 2px solid transparent; padding: 7px 10px; }
   .subtabs .tab.on { border-bottom-color: var(--accent); background: none; }
-  .count { display: inline-block; min-width: 14px; padding: 0 4px; border-radius: 7px; background: var(--bg-elevated); font-size: 10px; text-align: center; margin-left: 3px; color: var(--text-dim); }
+  .count { display: inline-block; min-width: 14px; padding: 0 4px; border-radius: 7px; background: var(--bg-elevated); font-size: 0.833rem; text-align: center; margin-left: 3px; color: var(--text-dim); }
 
   .finding { border: 1px solid var(--border); border-left: 3px solid var(--border-strong, var(--border)); border-radius: var(--radius); padding: 10px 12px 10px 12px; background: var(--bg-panel); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
   .finding + .finding { margin-top: 10px; }
   .finding.settled { opacity: 0.72; }
   .ftitle code, .cmt-title code, .finding-line .t code { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; padding: 0 3px; border-radius: 3px; background: var(--bg-elevated); }
-  .finding .ftitle { font-weight: 600; font-size: 13.5px; line-height: 1.35; margin: 6px 0 4px; }
+  .finding .ftitle { font-weight: 600; font-size: 1.125rem; line-height: 1.35; margin: 6px 0 4px; }
   /* The severity is the first thing read: it runs down the card's edge as well as in its label. */
   .finding.sev-blocker, .finding-line.sev-blocker { border-left-color: var(--danger); }
   .finding.sev-major, .finding-line.sev-major { border-left-color: #d9a441; }
   .finding-line { border-left-width: 3px; }
-  .finding .meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 11px; }
+  .finding .meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 0.917rem; }
   .md { line-height: 1.5; word-break: break-word; }
   .md p { margin: 4px 0; }
-  .md pre { background: var(--bg-elevated); padding: 6px 8px; border-radius: var(--radius); overflow: auto; font-size: 11.5px; }
-  .md code { background: var(--bg-elevated); padding: 0 3px; border-radius: 3px; font-size: 11.5px; }
+  .md pre { background: var(--bg-elevated); padding: 6px 8px; border-radius: var(--radius); overflow: auto; font-size: 0.958rem; }
+  .md code { background: var(--bg-elevated); padding: 0 3px; border-radius: 3px; font-size: 0.958rem; }
   .md pre code { background: none; padding: 0; }
   .md blockquote { margin: 4px 0; padding-left: 8px; border-left: 3px solid var(--border-strong); color: var(--text-dim); }
   .md ul, .md ol { margin: 4px 0; padding-left: 20px; }
-  .md h1, .md h2, .md h3, .md h4 { font-size: 13px; margin: 6px 0; text-transform: none; letter-spacing: 0; color: var(--text); }
+  .md h1, .md h2, .md h3, .md h4 { font-size: 1.083rem; margin: 6px 0; text-transform: none; letter-spacing: 0; color: var(--text); }
   .suggestion { margin-top: 6px; border-left: 3px solid var(--accent); padding-left: 8px; }
   .entries { margin-top: 8px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg); }
   .entries > .cmt-msg:first-child { border-top: 0; }
-  .verdict { margin-top: 8px; padding: 6px 10px; border-radius: 6px; background: var(--bg-elevated); color: var(--text-dim); font-size: 12px; }
-  .verdict-label { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 2px; }
+  .verdict { margin-top: 8px; padding: 6px 10px; border-radius: 6px; background: var(--bg-elevated); color: var(--text-dim); font-size: 1rem; }
+  .verdict-label { font-size: 0.833rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 2px; }
   .verdict .md p:first-child, .verdict p:first-child { margin-top: 0; } .verdict p:last-child { margin-bottom: 0; }
 
   /* The viewport below the app bar and the sticky tabs: scroll the header away and the diff has the whole screen. */
@@ -219,11 +219,11 @@
   .gutter:hover, .gutter:focus-visible, .gutter.dragging { background: var(--accent-soft); }
   .gutter:hover::after, .gutter:focus-visible::after, .gutter.dragging::after { background: var(--accent); opacity: 1; }
   body.resizing, body.resizing * { cursor: col-resize !important; user-select: none !important; }
-  aside .dir { padding: 6px 10px 2px; color: var(--text-faint); font-size: 10.5px; font-family: ui-monospace, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+  aside .dir { padding: 6px 10px 2px; color: var(--text-faint); font-size: 0.875rem; font-family: ui-monospace, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
   aside .item .seen { width: 13px; height: 13px; margin: 0; flex: none; cursor: pointer; accent-color: var(--ok); }
   aside .item.viewed .p { color: var(--text-faint); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text-faint) 50%, transparent); }
   aside .tools { display: flex; gap: 6px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg-panel); z-index: 1; }
-  aside .tools input { flex: 1; min-width: 0; padding: 3px 6px; font-size: 11.5px; }
+  aside .tools input { flex: 1; min-width: 0; padding: 3px 6px; font-size: 0.958rem; }
   .viewed-bar { height: 3px; background: var(--bg-elevated); }
   .viewed-bar > span { display: block; height: 100%; background: var(--ok); }
   /* A wrapped line continues indented under itself, not back at the margin where it reads as a line of its own. */
@@ -234,7 +234,7 @@
   aside .item:hover { background: var(--bg-elevated); }
   aside .item.on { background: var(--accent-soft); border-left-color: var(--accent); }
   aside .item .p { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
-  aside .group { padding: 8px 10px 3px; color: var(--text-faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; }
+  aside .group { padding: 8px 10px 3px; color: var(--text-faint); font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.06em; }
   .added { color: var(--git-new, var(--ok)); }
   .removed { color: var(--danger); }
 
@@ -270,9 +270,9 @@
   table.diff tr.HUNK .hunk-range { color: var(--accent); margin-right: 10px; }
   table.diff tr.HUNK .hunk-label { color: var(--text-faint); font-style: italic; }
   table.diff tr.META td { color: var(--text-faint); padding: 4px 10px; font-style: italic; }
-  table.diff tr.gap td { padding: 0; background: var(--bg-panel); border-top: 1px dashed var(--border); border-bottom: 1px dashed var(--border); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-size: 11px; white-space: nowrap; }
+  table.diff tr.gap td { padding: 0; background: var(--bg-panel); border-top: 1px dashed var(--border); border-bottom: 1px dashed var(--border); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-size: 0.917rem; white-space: nowrap; }
   table.diff tr.gap .gap-label { color: var(--text-faint); padding: 3px 10px; display: inline-block; }
-  .expand-btn { color: var(--accent); padding: 3px 8px; font-size: 11px; border-left: 1px solid var(--border) !important; }
+  .expand-btn { color: var(--accent); padding: 3px 8px; font-size: 0.917rem; border-left: 1px solid var(--border) !important; }
   .expand-btn:hover { background: var(--accent-soft); }
   table.diff tr.focus td.c { box-shadow: inset 3px 0 0 var(--accent); }
   table.diff tr.focus td.n.new { color: var(--accent); font-weight: 700; }
@@ -290,14 +290,14 @@
   .file-head { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 1px solid var(--border); }
   .file-row { display: flex; align-items: center; gap: 6px; padding: 6px 10px; min-width: 0; }
   .file-row.tools-row { padding-top: 0; flex-wrap: wrap; }
-  .file-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: 12px; direction: rtl; text-align: left; }
+  .file-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: 1rem; direction: rtl; text-align: left; }
   .file-path > * { direction: ltr; unicode-bidi: embed; }
-  .status-badge { flex: none; width: 18px; height: 18px; border-radius: 4px; display: grid; place-items: center; font-size: 10.5px; font-weight: 700; color: #fff; }
+  .status-badge { flex: none; width: 18px; height: 18px; border-radius: 4px; display: grid; place-items: center; font-size: 0.875rem; font-weight: 700; color: #fff; }
   .status-badge.added { background: var(--ok); }
   .status-badge.deleted { background: var(--danger); }
   .status-badge.renamed { background: var(--accent); }
   .status-badge.modified { background: #d9a441; }
-  .stat-num { font-family: ui-monospace, Menlo, monospace; font-size: 11px; flex: none; }
+  .stat-num { font-family: ui-monospace, Menlo, monospace; font-size: 0.917rem; flex: none; }
   .stat-boxes { display: inline-flex; gap: 1px; flex: none; }
   .stat-boxes i { width: 7px; height: 7px; border-radius: 1px; background: var(--border); }
   .stat-boxes i.a { background: var(--ok); }
@@ -307,7 +307,7 @@
   .seg.toggle .btn:first-child { border-radius: var(--radius) 0 0 var(--radius); }
   .seg.toggle .btn:last-child { border-radius: 0 var(--radius) var(--radius) 0; margin-left: -4px; }
   .btn.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
-  aside .item .st { flex: none; width: 13px; font-size: 10px; font-weight: 700; text-align: center; font-family: ui-monospace, Menlo, monospace; }
+  aside .item .st { flex: none; width: 13px; font-size: 0.833rem; font-weight: 700; text-align: center; font-family: ui-monospace, Menlo, monospace; }
   aside .item .st.A { color: var(--ok); } aside .item .st.D { color: var(--danger); } aside .item .st.R { color: var(--accent); } aside .item .st.M { color: #d9a441; }
 
   /* What hangs between the lines. */
@@ -319,7 +319,7 @@
   table.diff tr.anchor td .mono, table.diff tr.anchor td code, table.diff tr.anchor td pre { font-family: ui-monospace, Menlo, monospace; }
   .anchor-wrap { max-width: 880px; display: grid; gap: 8px; }
   .loose { padding: 10px 12px; border-bottom: 1px solid var(--border); display: grid; gap: 8px; }
-  .loose-title { font-size: 11px; }
+  .loose-title { font-size: 0.917rem; }
   .cmt { border: 1px solid var(--border); border-radius: 8px; background: var(--bg-panel); overflow: hidden; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12); }
   .cmt.finding-card { border-left: 3px solid var(--text-faint); }
   .cmt.sev-blocker { border-left-color: var(--danger); }
@@ -337,18 +337,18 @@
   .cmt textarea { font: 12.5px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; width: 100%; box-sizing: border-box; resize: vertical; }
   svg.ico { vertical-align: -2px; flex: none; }
   .btn svg.ico { margin-right: 4px; }
-  .cmt-count { display: inline-flex; align-items: center; gap: 3px; color: var(--text-dim); font-size: 11px; flex: none; }
+  .cmt-count { display: inline-flex; align-items: center; gap: 3px; color: var(--text-dim); font-size: 0.917rem; flex: none; }
   .cmt-body { padding: 8px 12px; }
   .cmt-msg { display: flex; gap: 9px; padding: 8px 12px; border-top: 1px solid var(--border); }
   .cmt-main { min-width: 0; flex: 1; }
-  .cmt-who { display: flex; gap: 6px; align-items: center; font-size: 11.5px; margin-bottom: 2px; }
+  .cmt-who { display: flex; gap: 6px; align-items: center; font-size: 0.958rem; margin-bottom: 2px; }
   .cmt-actions { display: flex; gap: 6px; align-items: center; padding: 6px 12px 8px; border-top: 1px solid var(--border); }
   .cmt-reply { padding: 6px 12px 8px; border-top: 1px solid var(--border); }
   .cmt-reply .reply-open { width: 100%; text-align: left; padding: 5px 9px; border: 1px solid var(--border); border-radius: 6px; color: var(--text-faint); background: var(--bg-input); }
   .cmt-reply .reply-open:hover { border-color: var(--accent); color: var(--text-dim); }
-  .avatar { flex: none; width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 9.5px; font-weight: 700; letter-spacing: 0.02em; color: #fff; background: hsl(var(--hue, 210) 42% 44%); }
+  .avatar { flex: none; width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 0.792rem; font-weight: 700; letter-spacing: 0.02em; color: #fff; background: hsl(var(--hue, 210) 42% 44%); }
   .avatar.ours { box-shadow: 0 0 0 2px var(--accent); }
-  .cmt-head .avatar { width: 18px; height: 18px; font-size: 8.5px; }
+  .cmt-head .avatar { width: 18px; height: 18px; font-size: 0.708rem; }
 
   .nowrap { white-space: nowrap; }
   .repo-card { display: flex; flex-direction: column; }
@@ -362,18 +362,18 @@
   .commit-item { align-items: flex-start; }
   .commit-text { display: grid; min-width: 0; gap: 1px; }
   .commit-text .p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .commit-meta { font-size: 10.5px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .commit-meta .mono { font-size: 10.5px; }
+  .commit-meta { font-size: 0.875rem; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .commit-meta .mono { font-size: 0.875rem; }
   #keys { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(2px); }
   .keys-card { width: min(420px, calc(100vw - 32px)); padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-panel); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35); }
   .keys-group { margin-top: 10px; }
   .keys-row { display: grid; grid-template-columns: 70px 1fr; gap: 10px; align-items: center; padding: 3px 0; }
   .keys-row .kbd { justify-self: start; }
-  .keys-hint { align-self: center; font-size: 11px; }
+  .keys-hint { align-self: center; font-size: 0.917rem; }
   .form-actions { position: sticky; bottom: 0; z-index: 3; margin-top: 18px; padding: 10px 0 12px; background: var(--bg); border-top: 1px solid var(--border); }
   .field { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 10px; align-items: start; margin: 8px 0; }
   .field > label { padding-top: 5px; color: var(--text-dim); }
-  .field .help { color: var(--text-faint); font-size: 11px; margin-top: 3px; line-height: 1.4; }
+  .field .help { color: var(--text-faint); font-size: 0.917rem; margin-top: 3px; line-height: 1.4; }
   .field input[type=text], .field input[type=password], .field select { width: 100%; box-sizing: border-box; }
   .radio { display: grid; gap: 4px; }
   .radio label { display: flex; gap: 6px; align-items: baseline; cursor: pointer; }
@@ -385,8 +385,455 @@
   @keyframes appear { to { opacity: 1; } }
   .readiness { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
   .readiness .bar { width: 160px; }
-  .timeline .day { margin-top: 12px; font-weight: 600; color: var(--text-dim); font-size: 11.5px; }
+  .timeline .day { margin-top: 12px; font-weight: 600; color: var(--text-dim); font-size: 0.958rem; }
   .timeline .ev { display: grid; grid-template-columns: 60px 110px minmax(0, 1fr); gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     A visual pass over everything that is not the diff.
+     ───────────────────────────────────────────────────────────────────────────
+     The diff was already the considered part of this panel — syntax colours
+     chosen per theme, a split view, hunks that read. Everything around it had
+     grown a rule at a time: eleven different paddings, four hardcoded ambers,
+     headings a point and a half bigger than body text doing the work of a
+     hierarchy, and one box-shadow on one component.
+     What follows is the layer that makes it one thing. It overrides rather than
+     replaces, so every selector above still holds and nothing in the markup had
+     to move.
+     ═══════════════════════════════════════════════════════════════════════════ */
+
+  /* ── the size of the whole thing ──────────────────────────────────────────
+     Every size in this sheet is `rem`, and `rem` is this. So one number moves
+     the entire panel — headings, labels, chips, buttons, tables — in proportion,
+     instead of growing the body text inside boxes built for smaller body text.
+     The code in a diff keeps a number of its own: prose and code are read
+     differently, and somebody who wants one bigger often wants the other left
+     where it is. */
+  html { font-size: var(--ui-font, 12px); }
+  body { font-size: 1rem; }
+
+  :root {
+    /* A scale, so a gap is chosen from six values instead of invented. */
+    --s1: 4px; --s2: 6px; --s3: 8px; --s4: 12px; --s5: 16px; --s6: 24px;
+    --r-sm: 5px; --r-md: 8px; --r-lg: 11px; --r-pill: 999px;
+
+    /*
+     * Amber was written out four times as #d9a441 and read differently against
+     * the two themes. One token, mixed toward the app's own so it belongs to
+     * the palette rather than sitting on top of it.
+     */
+    --warn: light-dark(#a8730c, #e0af68);
+    --warn-soft: color-mix(in srgb, var(--warn) 15%, transparent);
+    --ok-soft: color-mix(in srgb, var(--ok) 14%, transparent);
+    --bad-soft: color-mix(in srgb, var(--danger) 13%, transparent);
+
+    /*
+     * Depth in two steps and no more. A panel this dense turns to soup if
+     * everything floats, so a card is barely lifted and only what overlays
+     * something — a menu, the one thing to do next — is lifted properly.
+     */
+    --lift-1: 0 1px 2px light-dark(rgba(16, 20, 32, 0.05), rgba(0, 0, 0, 0.30));
+    --lift-2: 0 4px 14px light-dark(rgba(16, 20, 32, 0.10), rgba(0, 0, 0, 0.42)),
+              0 1px 3px light-dark(rgba(16, 20, 32, 0.06), rgba(0, 0, 0, 0.30));
+    /* A hairline of light along the top of a raised surface. It is what stops a
+       card reading as a hole cut in the page. */
+    --edge: inset 0 1px 0 light-dark(rgba(255, 255, 255, 0.75), rgba(255, 255, 255, 0.045));
+  }
+
+  /* ── type ─────────────────────────────────────────────────────────────────
+     One scale, and numbers that line up. A review is read in columns — counts,
+     line numbers, +/− — and proportional digits make a column of them jitter. */
+
+  body { font-feature-settings: 'cv05' 1, 'ss01' 1; }
+  .n, .count, .stat .n, .stat-num, td.num, .chip .n { font-variant-numeric: tabular-nums; }
+
+  h2 {
+    font-size: 1.417rem;
+    font-weight: 650;
+    letter-spacing: -0.012em;
+    line-height: 1.25;
+    text-wrap: balance;
+    margin: 0 0 var(--s2);
+  }
+  h3 {
+    font-size: 0.875rem;
+    font-weight: 600;
+    letter-spacing: 0.085em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin: var(--s5) 0 var(--s2);
+  }
+  .page { padding: var(--s5) var(--s5) 56px; }
+
+  /* ── surfaces ─────────────────────────────────────────────────────────── */
+
+  .card, .fold, .run, .finding, .entries {
+    border-radius: var(--r-md);
+    box-shadow: var(--lift-1), var(--edge);
+  }
+  .card { padding: var(--s4) var(--s4); }
+  .card + .card, .fold, .run + .run { margin-top: var(--s3); }
+  .card.hi { box-shadow: var(--lift-1), var(--edge), 0 0 0 1px var(--accent); }
+  .grid-cards { gap: var(--s4); }
+
+  .banner {
+    border-radius: var(--r-md);
+    padding: var(--s3) var(--s4);
+    box-shadow: var(--edge);
+    line-height: 1.5;
+  }
+  .banner.warn { border-color: color-mix(in srgb, var(--warn) 50%, var(--border)); background: color-mix(in srgb, var(--warn) 9%, var(--bg-panel)); }
+
+  /* ── the numbers across the top ───────────────────────────────────────────
+     These are the first thing anybody looks at and they were flat boxes. The
+     number leads, the label sits under it quietly, and the one that is waiting
+     on you is tinted rather than pin-striped. */
+
+  .stats { gap: var(--s3); margin-bottom: var(--s5); }
+  .stat {
+    padding: var(--s4) var(--s4) 11px;
+    border-radius: var(--r-md);
+    box-shadow: var(--lift-1), var(--edge);
+    transition: border-color 0.14s ease, background 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
+  }
+  .stat:hover { transform: translateY(-1px); box-shadow: var(--lift-2), var(--edge); }
+  .stat:active { transform: none; }
+  .stat .n { font-size: 2.167rem; font-weight: 640; letter-spacing: -0.02em; line-height: 1.05; }
+  .stat .l { font-size: 0.875rem; letter-spacing: 0.045em; text-transform: uppercase; color: var(--text-faint); margin-top: 3px; }
+  .stat.urgent { background: color-mix(in srgb, var(--warn) 7%, var(--bg-panel)); border-color: color-mix(in srgb, var(--warn) 32%, var(--border)); }
+  .stat.urgent::before { height: 3px; background: var(--warn); border-radius: var(--r-md) var(--r-md) 0 0; }
+  .stat.urgent .n { color: var(--warn); }
+  .stat.on { box-shadow: var(--lift-1), var(--edge), 0 0 0 1px var(--accent); }
+
+  /* ── the one thing to do next ─────────────────────────────────────────────
+     It is the only element on a page that is telling you something rather than
+     showing you something, so it is the only one allowed to float. */
+
+  .next {
+    border-radius: var(--r-md);
+    padding: var(--s4);
+    gap: var(--s4);
+    box-shadow: var(--lift-2), var(--edge);
+    border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 5%, var(--bg-elevated)), var(--bg-elevated));
+  }
+  .next .icon { width: 28px; height: 28px; font-size: 1.167rem; box-shadow: var(--edge); }
+  .next .words strong { font-size: 1.125rem; font-weight: 600; letter-spacing: -0.005em; }
+  .next .words span { line-height: 1.45; }
+  .next.wait { border-color: var(--border); background: var(--bg-elevated); box-shadow: var(--lift-1), var(--edge); }
+  .next.warn { border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: linear-gradient(180deg, color-mix(in srgb, var(--warn) 8%, var(--bg-elevated)), var(--bg-elevated)); }
+  .next.warn .icon { background: var(--warn-soft); color: var(--warn); }
+  .next.done { border-color: color-mix(in srgb, var(--ok) 34%, var(--border)); background: linear-gradient(180deg, color-mix(in srgb, var(--ok) 6%, var(--bg-elevated)), var(--bg-elevated)); }
+
+  /* ── buttons ──────────────────────────────────────────────────────────────
+     One height, so a row of them is a row and not a skyline. */
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: var(--s2);
+    min-height: 26px; padding: 0 11px;
+    border-radius: var(--r-sm);
+    font-weight: 500;
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  }
+  .btn.small { min-height: 22px; padding: 0 8px; font-size: 0.917rem; }
+  .btn.big { min-height: 32px; padding: 0 16px; border-radius: var(--r-md); }
+  .btn.big.primary { box-shadow: var(--lift-1), inset 0 1px 0 rgba(255, 255, 255, 0.18); }
+  .btn.primary { background: var(--accent-soft); }
+  .btn.primary:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .group-btns { gap: var(--s1); padding-right: var(--s3); margin-right: var(--s2); }
+
+  /* ── chips and severities ────────────────────────────────────────────────
+     A chip was an outline in the text colour, which made every chip on a row
+     look like the same chip. They are tinted now: the colour is the label. */
+
+  .chip {
+    padding: 2px 8px;
+    border-radius: var(--r-pill);
+    font-size: 0.875rem;
+    font-weight: 500;
+    letter-spacing: 0.012em;
+    background: color-mix(in srgb, var(--text-faint) 8%, transparent);
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  }
+  .chip.on { background: var(--accent-soft); }
+  .chip.mine { border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); color: var(--warn); background: var(--warn-soft); }
+  .chip.okc { background: var(--ok-soft); }
+  .chip.badc { background: var(--bad-soft); }
+  .chip.accent { background: var(--accent-soft); }
+
+  .sev {
+    padding: 1px 7px;
+    border-radius: var(--r-sm);
+    font-size: 0.792rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+  }
+  .sev.major { background: var(--warn-soft); color: var(--warn); }
+  .count {
+    min-width: 16px; padding: 0 5px;
+    border-radius: var(--r-pill);
+    background: color-mix(in srgb, var(--text-faint) 14%, transparent);
+    font-size: 0.833rem; font-weight: 600; line-height: 15px;
+  }
+  .tab.on .count { background: var(--accent-soft); color: var(--accent); }
+
+  /* ── findings ─────────────────────────────────────────────────────────────
+     The severity runs down the edge as it always did, only now it is wide
+     enough to see out of the corner of an eye, and the title has room. */
+
+  .finding {
+    border-left-width: 4px;
+    padding: var(--s4) var(--s4) var(--s4) var(--s4);
+    transition: box-shadow 0.14s ease, border-color 0.14s ease;
+  }
+  .finding:hover { box-shadow: var(--lift-2), var(--edge); }
+  .finding .ftitle { font-size: 1.167rem; font-weight: 620; letter-spacing: -0.008em; line-height: 1.4; margin: var(--s2) 0 var(--s1); text-wrap: pretty; }
+  .finding .meta { gap: var(--s2); font-size: 0.875rem; color: var(--text-faint); margin-top: var(--s2); }
+  .finding.sev-major, .finding-line.sev-major { border-left-color: var(--warn); }
+  .finding.settled { opacity: 0.62; box-shadow: none; }
+  .finding.settled:hover { opacity: 1; box-shadow: var(--lift-1), var(--edge); }
+  .finding-line {
+    border-left-width: 4px;
+    border-radius: var(--r-md);
+    padding: var(--s2) var(--s4);
+    opacity: 0.68;
+    transition: opacity 0.12s ease, box-shadow 0.12s ease;
+  }
+  .finding-line:hover { box-shadow: var(--lift-1), var(--edge); }
+
+  .verdict { border-radius: var(--r-sm); padding: var(--s2) var(--s4); border-left: 3px solid var(--border-strong); background: color-mix(in srgb, var(--bg-elevated) 70%, transparent); }
+  .suggestion { border-left-width: 4px; border-radius: 0 var(--r-sm) var(--r-sm) 0; background: var(--accent-soft); padding: var(--s2) var(--s3); margin-left: 0; }
+
+  /* ── folds ───────────────────────────────────────────────────────────────
+     A fold that is shut should look shut. The head gets the hover, the chevron
+     gets the movement, and the summary stops competing with the title. */
+
+  .fold > .fold-head { padding: 9px var(--s4); border-radius: var(--r-md); transition: background 0.12s ease; }
+  .fold.open > .fold-head { border-radius: var(--r-md) var(--r-md) 0 0; border-bottom: 1px solid var(--border); }
+  .fold > .fold-head:hover { background: color-mix(in srgb, var(--text-faint) 7%, transparent); }
+  .fold > .fold-body { padding: var(--s4); }
+  .fold.warn-fold { border-color: color-mix(in srgb, var(--warn) 42%, var(--border)); }
+
+  /* ── tables ──────────────────────────────────────────────────────────────
+     The header becomes a label rather than a small heading, and the row
+     separator stops being as strong as the box it is inside. */
+
+  table.list th {
+    font-size: 0.792rem; font-weight: 600; letter-spacing: 0.085em; text-transform: uppercase;
+    padding: var(--s2) var(--s3); color: var(--text-faint);
+    border-bottom: 1px solid var(--border-strong);
+  }
+  table.list td { padding: 9px var(--s3); border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+  table.list tr.click { transition: background 0.1s ease; }
+  table.list tr.click:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  table.list tr:last-child td { border-bottom: 0; }
+  .title-cell .t { font-weight: 550; letter-spacing: -0.005em; }
+  .title-cell .s { margin-top: 3px; line-height: 1.4; }
+
+  /* ── chrome ──────────────────────────────────────────────────────────────
+     The bar at the top and the tabs under it: quieter, and clearly a layer
+     above the page rather than the first row of it. */
+
+  .top { padding: var(--s3) var(--s4); gap: var(--s3); box-shadow: var(--lift-1); position: relative; z-index: 3; }
+  .top .brand { letter-spacing: -0.01em; }
+  .tab { min-height: 25px; display: inline-flex; align-items: center; border-radius: var(--r-sm); font-weight: 500; transition: background 0.12s ease, color 0.12s ease; }
+  .subtabs { padding: 0 var(--s5); gap: var(--s1); box-shadow: var(--lift-1); }
+  .subtabs .tab { border-radius: 0; padding: 8px 11px; font-weight: 550; }
+  .subtabs .tab.on { border-bottom-width: 2px; }
+  .prhead { padding: var(--s4) var(--s5); }
+  .prhead h2 { font-size: 1.5rem; margin: var(--s1) 0; }
+  .crumbs { gap: var(--s2); font-size: 0.958rem; }
+
+  .bar { height: 7px; border-radius: var(--r-pill); }
+  .bar > span:first-child { border-radius: var(--r-pill) 0 0 var(--r-pill); }
+  .bar > span:last-child { border-radius: 0 var(--r-pill) var(--r-pill) 0; }
+
+  .kbd { padding: 1px 5px; border-radius: var(--r-sm); background: color-mix(in srgb, var(--text-faint) 9%, transparent); font-size: 0.792rem; letter-spacing: 0.02em; }
+
+  .run .lines { border-radius: var(--r-sm); background: color-mix(in srgb, var(--bg) 60%, transparent); padding: var(--s2) var(--s3); line-height: 1.5; }
+
+  /* Amber, wherever it was written out by hand. */
+  .warn { color: var(--warn); }
+  .dot.busy { background: var(--warn); }
+  .status-badge.modified { background: var(--warn); }
+  .status-badge { border-radius: var(--r-sm); box-shadow: var(--edge); }
+
+  /* ── the measure ──────────────────────────────────────────────────────────
+     The one thing that made a finding read as a wall.
+
+     A finding's body ran the full width of the pane. On a maximised window that
+     is a hundred and forty characters a line, and the eye loses its place on the
+     way back to the left margin — so the text was skimmed and the "Show all" at
+     the bottom of it never pressed. Prose is held near seventy-five characters;
+     code is not, because a wrapped line of Java is worse than a scrolled one. */
+
+  /*
+   * The card is held in as well as the text, and that is the half that matters
+   * for how the page looks. Capping only the prose left a column of words down
+   * the left of a card half a screen wide, which reads as something failing to
+   * fill its box. Capping the card means the measure and the composition are the
+   * same decision.
+   */
+  /*
+   * The cap is for things that are *read*, and `.fold` is not one of them — it
+   * is a container, and on the dashboard it holds a table. Capping it left the
+   * board ragged: a 900px fold under a 1148px row of numbers, which reads as a
+   * mistake rather than as a measure. The reading elements keep the cap; the
+   * structure takes the column.
+   */
+  .finding, .finding-line, .verdict, .entries { max-width: 900px; }
+  .page > .banner, .prhead .banner { max-width: 900px; }
+  .finding .ftitle,
+  .finding .md,
+  .finding .clamp,
+  .cmt-body .md,
+  .verdict .md {
+    max-width: 86ch;
+  }
+  .finding .md { line-height: 1.62; }
+  .finding .md p + p { margin-top: var(--s3); }
+  /* Code is the exception: a wrapped line of Java is worse than a scrolled one. */
+  .finding .md pre, .finding .md table { max-width: none; }
+
+  /* The way out of a clamped body, made a thing you can see and hit. */
+  .more {
+    display: inline-flex; align-items: center; gap: var(--s1);
+    margin-top: var(--s2); padding: 2px 8px;
+    border: 1px solid var(--border); border-radius: var(--r-pill);
+    color: var(--text-dim); font-size: 0.875rem; font-weight: 500;
+    transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+  }
+  .more:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); text-decoration: none; }
+  .clamp::after { height: 2.6em; }
+
+  /* Inline code inside prose: enough contrast to be a token, not enough to be a
+     second colour of text. */
+  .md code, .ftitle code, .cmt-title code, .finding-line .t code {
+    background: color-mix(in srgb, var(--text-faint) 13%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    padding: 0 4px; border-radius: var(--r-sm);
+  }
+  .md pre { border: 1px solid var(--border); border-radius: var(--r-sm); padding: var(--s3) var(--s4); line-height: 1.55; }
+  .md pre code { border: 0; background: none; }
+
+  /* A progress bar at zero still has to show where the road is. */
+  .bar { background: color-mix(in srgb, var(--text-faint) 16%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 60%, transparent); }
+
+  /* The row of actions under a finding belongs to it, so it is separated from
+     the body by a rule rather than by hope. */
+  .finding > .row:last-child {
+    margin-top: var(--s4); padding-top: var(--s3);
+    border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  }
+
+  .conflict-banner { display: block; }
+  .conflict-list { margin: var(--s2) 0 0; padding-left: 1.4em; max-height: 11em; overflow: auto; }
+  .conflict-list li { color: var(--text-dim); line-height: 1.5; }
+
+  /* The number beside the A− A+ pair: fixed width so it does not shuffle the
+     buttons either side of it as the digits change. */
+  .size-now { min-width: 3.4em; text-align: center; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     Ten passes, and the first of them is the one a wide screen needs.
+     ═══════════════════════════════════════════════════════════════════════════ */
+
+  /* ── 1. One column, centred ───────────────────────────────────────────────
+     On a 2180px pane the page was capped at 1280 and pinned to the left, so a
+     third of the screen was void — while the bars above it stretched the whole
+     width, which put a pull request's title and its buttons nine hundred pixels
+     apart. Content and chrome now agree: the column is centred and every bar
+     pads itself to start where the column starts, keeping its background full
+     width because a bar that stops short reads as a broken bar. */
+
+  :root { --col: 1180px; }
+  .page { max-width: var(--col); margin-inline: auto; }
+  .top, .subtabs, .prhead, .file-head .file-row {
+    padding-inline: max(var(--s4), calc((100% - var(--col)) / 2));
+  }
+  /* The diff is the exception and stays edge to edge: code wants the room, and
+     a reviewer widened the pane precisely to see more of it. */
+  .split { max-width: none; }
+  .split .page { max-width: none; margin-inline: 0; }
+
+  /* ── 2. Things that belong together stay together ────────────────────────
+     `.spacer` pushed the destructive end of the action row to the far edge of
+     the screen. Inside a column that is a deliberate gap; outside one it was
+     just distance. */
+  .prhead .row { max-width: var(--col); }
+
+  /* ── 3. The numbers stop becoming banners ─────────────────────────────────
+     `repeat(auto-fit, minmax(130px, 1fr))` gave six stats a sixth of 2180px
+     each — a 26px number adrift in a 360px box. They keep a sensible size and
+     the row stops growing. */
+  .stats { grid-template-columns: repeat(auto-fit, minmax(130px, 200px)); justify-content: start; }
+
+  /* ── 4. A table column gets what it needs, not what is left ──────────────
+     The title cell took every spare pixel, so a pull request's name ran the
+     width of the screen while AGE kept forty. Titles wrap at a readable measure
+     and the rest of the row sits where the eye can take it in at once. */
+  table.list .title-cell { max-width: 620px; }
+  table.list .title-cell .t { text-wrap: pretty; }
+  table.list td:not(.title-cell) { white-space: nowrap; }
+
+  /* ── 5. The reply box belongs to the thread it answers ───────────────────
+     It was as wide as the pane while the message above it was not, so the box
+     looked like it belonged to the page rather than to the conversation. */
+  .cmt-msg textarea, .thread textarea, .answer-box { max-width: 78ch; }
+
+  /* ── 6. Everything that can be clicked is big enough to click ────────────
+     A 2px-tall link in a banner and an 18px chip are the same gesture with very
+     different odds. Nothing interactive is under 22px of height any more. */
+  .link { min-height: 18px; }
+  .chip.click, .more, [data-act] { min-height: 22px; }
+  .chip.click, .more { display: inline-flex; align-items: center; }
+  td[data-act], tr[data-act] { min-height: 0; }
+
+  /* ── 7. Focus is visible on everything, not on the things we remembered ── */
+  a:focus-visible, button:focus-visible, select:focus-visible,
+  input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--r-sm);
+  }
+
+  /* ── 8. Nothing at all is said properly ──────────────────────────────────
+     An empty list was a sentence at the top left of an acre of nothing. */
+  .empty, .loading {
+    display: grid; place-items: center; gap: var(--s2);
+    min-height: 180px; padding: var(--s6);
+    color: var(--text-faint); text-align: center;
+  }
+  .empty strong { color: var(--text-dim); font-weight: 600; font-size: 1.083rem; }
+  .empty p { margin: 0; max-width: 46ch; line-height: 1.55; }
+
+  /* ── 9. Numbers line up wherever they are columns ────────────────────────
+     Cost, age, findings: three columns of digits that jittered because the
+     figures were proportional. */
+  table.list td, table.list th { font-variant-numeric: tabular-nums; }
+
+  /* ── 10. The details that were merely nearly right ──────────────────────── */
+  /* A branch name long enough to push a row sideways is trimmed, not obeyed. */
+  .title-cell .mono { display: inline-block; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+  /* A sticky header that scrolls under the tabs above it showed through them. */
+  .subtabs { background: var(--bg-panel); }
+  /* Two chips of the same kind, different lengths, no longer jump their row. */
+  .row > .chip { align-self: center; }
+  /* A textarea in this panel is always for prose, never for a single line. */
+  textarea { min-height: 4.2em; line-height: 1.55; }
+  /* The scroll container gets its own bottom, so the last card is not flush. */
+  main#main { scroll-padding-bottom: var(--s6); }
+
+  /* Six columns of mostly digits do not need the whole column to themselves:
+     stretched to 1148px the headings drifted so far from their numbers that the
+     eye had to travel back along an empty row to pair them up. */
+  .usage-table { max-width: 760px; }
+  .usage-table th.num, .usage-table td.num { text-align: right; }
+  .usage-table th:first-child, .usage-table td:first-child { width: 40%; }
+  .usage-table .dot { vertical-align: baseline; }
+
+  /* Nothing moves for anybody who has asked for that. */
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    .stat:hover { transform: none; }
+  }
 </style>
 
 <div id="app">
@@ -685,7 +1132,10 @@
     else if (view === 'repos') promise = call('repos').then(function (r) { state.repos = r.repos; });
     else if (view === 'prs') promise = call('prs', { repoId: state.repoId, states: state.prStates }).then(function (r) { state.prList = r; });
     else if (view === 'pr') promise = loadPrView();
-    else if (view === 'settings') promise = Promise.all([call('guidelines', { repoId: null }), call('usage')]).then(function (r) { state.globalGuidelines = r[0].guidelines; state.usage = r[1].usage; });
+    // Usage has a tab, so it fetches its own numbers rather than riding along
+    // with the settings page that used to show a corner of them.
+    else if (view === 'usage') promise = call('usage').then(function (r) { state.usage = r.usage; });
+    else if (view === 'settings') promise = call('guidelines', { repoId: null }).then(function (r) { state.globalGuidelines = r.guidelines; });
     else if (view === 'import') promise = call('importInspect').then(function (r) { state.importInfo = r; });
     else if (view === 'bus') promise = call('bus').then(function (r) { state.bus = r; });
     else promise = Promise.resolve();
@@ -771,7 +1221,7 @@
     var autoText = !state.overview ? '' : !(state.overview.settings && state.overview.settings.autoEnabled)
       ? 'automatic off'
       : auto && auto.running ? 'sweeping…' : auto && auto.lastRunAt ? 'last sweep ' + when(auto.lastRunAt) : 'automatic on';
-    var tabs = [['dashboard', 'Dashboard'], ['repos', 'Repositories'], ['bus', 'Coordination'], ['settings', 'Settings']];
+    var tabs = [['dashboard', 'Dashboard'], ['repos', 'Repositories'], ['bus', 'Coordination'], ['usage', 'Usage'], ['settings', 'Settings']];
     var html = '<span class="brand">Code Reviewer</span>';
     tabs.forEach(function (tab) {
       var on = state.view === tab[0] || (tab[0] === 'repos' && (state.view === 'prs' || state.view === 'repoForm' || state.view === 'import')) ||
@@ -804,8 +1254,16 @@
     return parts.length ? '<span class="crumbs">› ' + parts.join(' › ') + '</span>' : '';
   }
 
+  function uiFont() { var s = state.overview && state.overview.settings; return (s && s.uiFont) || 12; }
+
   function draw() {
     if (!state.started) return;
+    /*
+     * The one number every size in this panel is measured against. Set on the
+     * root because that is what `rem` means, and set on every draw because a
+     * change to it has to show without reloading the frame.
+     */
+    document.documentElement.style.setProperty('--ui-font', uiFont() + 'px');
     drawTop();
     var main = $('main');
     var scroll = main.scrollTop;
@@ -816,6 +1274,7 @@
       else if (state.view === 'repoForm') html = drawRepoForm();
       else if (state.view === 'prs') html = drawPrList();
       else if (state.view === 'pr') html = drawPr();
+      else if (state.view === 'usage') html = drawUsagePage();
       else if (state.view === 'settings') html = drawSettings();
       else if (state.view === 'import') html = drawImport();
       else if (state.view === 'bus') html = drawBus();
@@ -955,15 +1414,78 @@
       html += fold('dash-' + g[0], '<strong>' + g[1] + '</strong><span class="count">' + g[2].length + '</span>', '', drawPrTable(g[2], true), g[0] !== 'others' || groups[0][2].length + groups[1][2].length === 0);
     });
 
-    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px;margin-top:10px">';
+    /*
+     * Recent reviews used to share a two-column row with Usage, which gave a
+     * table of twelve rows half the width it wanted and put a spending summary
+     * where somebody is looking for work. Usage has a tab of its own now, and
+     * this has the column to itself.
+     */
+    html += '<div style="margin-top:10px">';
     // A dozen is what anyone reads; the rest is one click away.
     var recentAll = isOpen('recent-all', false);
     var recent = recentAll ? d.recent : d.recent.slice(0, 12);
     html += '<div><h3>Recent reviews</h3>' + (d.recent.length ? '<table class="list">' + recent.map(function (item) {
       return '<tr class="click" data-act="open-pr" data-repo="' + esc(item.repoId) + '" data-pr="' + item.prId + '"' + (item.error ? ' title="' + esc(item.error) + '"' : '') + '><td class="faint nowrap">' + esc(when(item.at)) + '</td><td>' + esc(item.repoName) + ' #' + item.prId + ' <span class="dim">' + esc(item.title) + '</span></td><td class="nowrap">' + statusChip(item.status) + (item.trigger === 'AUTO' ? ' <span class="chip">auto</span>' : '') + '</td><td class="faint nowrap num">' + (item.costUsd ? money(item.costUsd) : '—') + '</td></tr>';
     }).join('') + '</table>' + (d.recent.length > 12 ? '<button class="link" data-act="fold" data-key="recent-all" style="margin-top:6px">' + (recentAll ? 'Show fewer' : 'Show all ' + d.recent.length) + '</button>' : '') : '<div class="faint">Nothing yet.</div>') + '</div>';
-    html += '<div><h3>Usage</h3>' + drawUsage(d.usage) + '</div>';
     html += '</div></div>';
+    return html;
+  }
+
+  /**
+   * Spending, on a page of its own.
+   *
+   * It was two cards in a corner of the dashboard, which is the screen for
+   * "what needs me now" — and a cost is never that. Given a tab it can say the
+   * thing the cards could not: where the money went, by kind of run and by
+   * repository, and what a review of yours typically costs.
+   */
+  function drawUsagePage() {
+    var u = state.usage;
+    if (!u) return '<div class="loading">Loading…</div>';
+    var html = '<div class="page"><h2>Usage</h2>';
+    html += '<p class="faint" style="max-width:62ch;margin:0 0 14px">An API-price equivalent, not a charge. With a subscription what is actually consumed is tokens — this is what the same work would have cost had it been billed by the API, which is the only number that compares one run to another.</p>';
+
+    html += usageWindow('Last 5 hours', u.fiveHours || [], 'The window a Claude account is limited over.');
+    html += usageWindow('Last 7 days', u.week || [], 'Long enough to see a habit rather than an afternoon.');
+    return html + '</div>';
+  }
+
+  /** One window of spending: the total, then where it went. */
+  function usageWindow(title, list, note) {
+    var total = list.reduce(function (acc, row) {
+      acc.runs += row.runs; acc.billable += row.billable; acc.cache += row.cache; acc.cost += row.costUsd; return acc;
+    }, { runs: 0, billable: 0, cache: 0, cost: 0 });
+
+    var html = '<div class="section"><div class="section-title"><h3>' + esc(title) + '</h3><span class="faint">' + esc(note) + '</span></div>';
+    if (!total.runs) return html + '<div class="empty"><strong>Nothing ran</strong><p>No reviews, verifications or answers in this window.</p></div></div>';
+
+    html += '<div class="stats" style="margin-bottom:10px">' +
+      '<div class="stat" style="cursor:default"><div class="n">' + money(total.cost) + '</div><div class="l">Spent</div></div>' +
+      '<div class="stat" style="cursor:default"><div class="n">' + total.runs + '</div><div class="l">Runs</div></div>' +
+      '<div class="stat" style="cursor:default"><div class="n">' + tokens(total.billable) + '</div><div class="l">Tokens in + out</div></div>' +
+      '<div class="stat" style="cursor:default"><div class="n">' + tokens(total.cache) + '</div><div class="l">From cache</div></div>' +
+      '</div>';
+
+    /*
+     * A bar before the table, because the question is nearly always "what is
+     * taking the money" and that is a shape rather than a list of numbers.
+     */
+    var sorted = list.slice().sort(function (a, b) { return b.costUsd - a.costUsd; });
+    var palette = ['var(--accent)', 'var(--ok)', 'var(--warn)', 'var(--danger)', 'var(--text-faint)'];
+    html += '<div class="bar" style="height:9px;margin-bottom:8px">' + sorted.map(function (row, i) {
+      var share = total.cost ? (row.costUsd / total.cost) * 100 : 0;
+      return '<span style="width:' + share.toFixed(2) + '%;background:' + palette[i % palette.length] + '" title="' + esc(row.kind + ' · ' + money(row.costUsd)) + '"></span>';
+    }).join('') + '</div>';
+
+    html += '<table class="list usage-table"><thead><tr><th>Kind</th><th class="num">Runs</th><th class="num">Tokens in + out</th><th class="num">Cache</th><th class="num">Cost</th><th class="num">Each</th></tr></thead><tbody>' +
+      sorted.map(function (row, i) {
+        return '<tr><td><span class="dot" style="background:' + palette[i % palette.length] + ';margin-right:6px"></span>' + esc(row.kind) + '</td>' +
+          '<td class="num">' + row.runs + '</td>' +
+          '<td class="num faint">' + tokens(row.billable) + '</td>' +
+          '<td class="num faint">' + tokens(row.cache) + '</td>' +
+          '<td class="num">' + money(row.costUsd) + '</td>' +
+          '<td class="num faint">' + (row.runs ? money(row.costUsd / row.runs) : '—') + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
     return html;
   }
 
@@ -973,16 +1495,32 @@
     return '<span class="chip ' + cls + '">' + esc(label) + '</span>';
   }
 
-  function drawUsage(usage) {
-    if (!usage) return '';
-    function block(title, list) {
-      var total = list.reduce(function (acc, row) { acc.runs += row.runs; acc.billable += row.billable; acc.cache += row.cache; acc.cost += row.costUsd; return acc; }, { runs: 0, billable: 0, cache: 0, cost: 0 });
-      return '<div class="card"><div class="row"><strong>' + title + '</strong><span class="spacer"></span><span>' + money(total.cost) + '</span></div>' +
-        '<div class="faint">' + total.runs + ' run(s) · ' + tokens(total.billable) + ' tokens in+out · ' + tokens(total.cache) + ' cache</div>' +
-        (list.length ? '<div class="dim" style="margin-top:4px">' + list.map(function (row) { return esc(row.kind) + ' ' + row.runs + ' · ' + money(row.costUsd); }).join(' — ') + '</div>' : '') + '</div>';
-    }
-    return block('Last 5 hours', usage.fiveHours || []) + block('Last 7 days', usage.week || []) +
-      '<div class="faint" style="margin-top:4px">API-price equivalent, not a charge: with a subscription what is consumed is tokens.</div>';
+  /**
+   * What is known about this branch landing on its target.
+   *
+   * Three answers and they are not two. `null` is nobody could tell — a clone
+   * that was never fetched, a git too old — and it is drawn as nothing rather
+   * than as clean, because "clean" is the one thing this must not invent.
+   * Empty is clean and also drawn as nothing: a branch that merges is the
+   * expected case and does not need saying. Only the trouble speaks.
+   *
+   * Stale is its own state. The answer was true of the commits it was asked
+   * about, and a push since then can have created the conflict or cleared it —
+   * so it still warns, and says the warning is older than the branch.
+   */
+  function conflictState(row) {
+    var pr = row.pr || row;
+    var list = pr.conflicts;
+    if (!list || !list.length) return null;
+    var stale = pr.conflictsAt && pr.updatedOn && pr.conflictsAt < pr.updatedOn;
+    return { paths: list, stale: Boolean(stale) };
+  }
+
+  function conflictChip(row) {
+    var c = conflictState(row);
+    if (!c) return '';
+    return '<span class="chip badc" title="' + esc(c.paths.slice(0, 12).join('\n') + (c.paths.length > 12 ? '\n… and ' + (c.paths.length - 12) + ' more' : '')) +
+      '">' + (c.stale ? 'Conflicts?' : 'Conflicts') + ' ' + c.paths.length + '</span>';
   }
 
   function drawPrTable(rows, withRepo) {
@@ -995,7 +1533,7 @@
         '<td class="title-cell"><div class="t">#' + pr.id + ' ' + esc(pr.title) + '</div><div class="s">' + (withRepo ? '<span class="chip">' + esc(row.repoName) + '</span> ' : '') + esc(pr.author) + (pr.sourceBranch ? ' · <span class="mono">' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch) + '</span>' : '') +
         (row.pendingReturn ? ' · <span class="warn">' + row.pendingReturn + ' fix(es) to hand back</span>' : '') + '</div></td>' +
         '<td class="faint" title="' + esc(pr.createdOn) + '">' + (row.ageDays != null ? row.ageDays + 'd ' : '') + '<span class="' + (row.ageDays >= 14 ? 'bad' : row.ageDays >= 7 ? 'warn' : '') + '">' + ageMark(row.ageDays) + '</span></td>' +
-        '<td><div class="row">' + row.flags.map(flagChip).join('') + '</div></td>' +
+        '<td><div class="row">' + conflictChip(row) + row.flags.map(flagChip).join('') + '</div></td>' +
         '<td class="faint">' + (row.findings.total ? row.findings.published + '/' + row.findings.total + (row.findings.unresolved ? ' <span class="warn">· ' + row.findings.unresolved + ' open</span>' : '') : '') + '</td>' +
         '<td class="faint">' + (row.costUsd ? money(row.costUsd) : '') + '</td></tr>';
     });
@@ -1261,6 +1799,22 @@
         return '<li class="' + (i.done ? 'done' : '') + '">' + esc(i.label) + (i.detail ? ' <span class="faint">' + esc(i.detail) + '</span>' : '') + ' <span class="faint">· ' + i.weight + '</span></li>';
       }).join('') + '</ul>';
     }
+    var conflict = conflictState(v);
+    if (conflict) {
+      /*
+       * A banner rather than a chip, in the header rather than in a tab. The
+       * findings are about the code; this is about whether any of it can land,
+       * and somebody who reads four findings and presses Merge has spent the
+       * time for nothing.
+       */
+      html += '<div class="banner bad conflict-banner"><strong>This branch does not merge into ' + esc(v.pr.targetBranch) + '.</strong> ' +
+        conflict.paths.length + ' file' + (conflict.paths.length === 1 ? '' : 's') + ' conflict' + (conflict.paths.length === 1 ? 's' : '') + '. ' +
+        (conflict.stale ? '<span class="faint">Checked before the newest commits arrived — it may have been resolved since.</span> ' : '') +
+        '<button class="link" data-act="fold" data-key="conflict-files">' + (isOpen('conflict-files') ? 'hide' : 'which') + '</button>' +
+        ' <button class="link" data-act="recheck-conflicts"' + busyAttr('recheck-conflicts') + '>check again</button>' +
+        (isOpen('conflict-files') ? '<ul class="conflict-list">' + conflict.paths.map(function (path) { return '<li class="mono">' + esc(path) + '</li>'; }).join('') + '</ul>' : '') +
+        '</div>';
+    }
     if (state.decline) {
       html += '<div class="card" style="margin-top:8px"><strong>Decline #' + v.pr.id + '</strong><div class="faint">The reason is posted as a comment first; then the PR is closed.</div>' +
         '<textarea rows="3" data-edit="decline-reason" style="margin-top:6px">' + esc(edit('decline-reason')) + '</textarea><div class="row" style="margin-top:6px"><button class="btn danger" data-act="decline"' + busyAttr('decline') + '>Decline</button><button class="btn" data-act="decline-close">Cancel</button></div></div>';
@@ -1268,6 +1822,7 @@
     if (state.merge) {
       var strategy = edit('merge-strategy', v.settings.mergeStrategy || 'MERGE_COMMIT');
       html += '<div class="card" style="margin-top:8px"><strong>Merge #' + v.pr.id + ' into ' + esc(v.pr.targetBranch) + '</strong>' +
+        (conflict ? '<div class="banner bad"><strong>It does not merge.</strong> ' + conflict.paths.length + ' file' + (conflict.paths.length === 1 ? '' : 's') + ' conflict with ' + esc(v.pr.targetBranch) + ', so the forge will refuse this. Resolve them on the branch first.</div>' : '') +
         (v.mergeBlocker ? '<div class="banner warn">Merging with something still pending: ' + esc(v.mergeBlocker) + '</div>' : '') +
         '<div class="row" style="margin-top:6px"><span class="faint">Strategy</span><select data-edit-select="merge-strategy">' + [['MERGE_COMMIT', 'Merge commit'], ['SQUASH', 'Squash'], ['FAST_FORWARD', v.repo.provider === 'GITHUB' ? 'Rebase' : 'Fast forward']].map(function (o) {
           return '<option value="' + o[0] + '"' + (strategy === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
@@ -2319,8 +2874,30 @@
     html += '<div class="field"><label>Remind after</label><div class="row"><input type="number" min="1" data-setting="followUpDays" data-edit="set-followUpDays" value="' + esc(edit('set-followUpDays', val('followUpDays'))) + '" style="width:80px"> days without an answer</div></div>';
     var auto = state.auto || o.auto;
     html += '<div class="row"><button class="btn" data-act="auto-now">Sweep now</button><span class="faint">' + esc(auto && auto.lastMessage ? (auto.lastRunAt ? when(auto.lastRunAt) + ': ' : '') + auto.lastMessage : 'No sweep yet.') + '</span></div></div>';
+    /*
+     * Two numbers, not one. The panel is prose and the diff is code, they are
+     * read differently, and somebody who wants the interface bigger very often
+     * wants the code left exactly where it is.
+     */
+    html += '<div class="section"><h3>Appearance</h3>';
+    html += '<div class="field"><label>Interface</label><div><div class="row">' +
+      '<button class="btn small" data-act="ui-font" data-delta="-1" title="Smaller">A\u2212</button>' +
+      '<span class="size-now">' + uiFont() + 'px</span>' +
+      '<button class="btn small" data-act="ui-font" data-delta="1" title="Larger">A+</button>' +
+      (uiFont() === 12 ? '' : '<button class="link" data-act="ui-font" data-delta="0" style="margin-left:6px">reset</button>') +
+      '</div><div class="help">Everything the panel draws \u2014 headings, labels, chips, buttons, tables \u2014 in proportion. Between 10 and 20.</div></div></div>';
+    html += '<div class="field"><label>Code</label><div><div class="row">' +
+      '<button class="btn small" data-act="font" data-delta="-1" title="Smaller">A\u2212</button>' +
+      '<span class="size-now">' + diffFont() + 'px</span>' +
+      '<button class="btn small" data-act="font" data-delta="1" title="Larger">A+</button>' +
+      '</div><div class="help">The diff only. The same pair sits over the diff itself, where you can see what you are changing.</div></div></div>';
+    html += '<div class="field"><label>Long lines</label><div><label class="check"><input type="checkbox" data-setting="wrapLines"' + (val('wrapLines') !== false ? ' checked' : '') + '> Wrap them instead of scrolling sideways</label></div></div>';
+    html += '</div>';
+
     html += '<div class="section"><h3>Global conventions</h3>' + drawGuidelines(state.globalGuidelines, null) + '</div>';
-    html += '<div class="section"><h3>Usage</h3>' + drawUsage(state.usage) + '</div>';
+    // Spending has a tab now. Two places to read the same number is two places
+    // to keep in step, and one of them is always the stale one.
+    html += '<div class="section"><h3>Usage</h3><p class="faint" style="margin:0">What runs have cost is on its own tab. <button class="link" data-act="nav" data-view="usage">Open Usage</button></p></div>';
     html += '<div class="section"><h3>History</h3><button class="btn" data-act="nav" data-view="import">Import from AI Code Reviewer</button></div>';
     return html + '</div>';
   }
@@ -2573,6 +3150,22 @@
       if (state.overview) state.overview.settings.diffLayout = next;
       draw();
       call('saveSettings', { settings: { diffLayout: next } }).catch(function () {});
+    },
+    'recheck-conflicts': function () {
+      act('recheck-conflicts', function () { return call('checkConflicts', prArgs()); }, function (paths) {
+        if (paths === null) say('Could not tell: the clone could not be read.', true);
+        else if (!paths.length) say('It merges cleanly.');
+        else say(paths.length + ' file' + (paths.length === 1 ? '' : 's') + ' still conflict.', true);
+        load();
+      });
+    },
+    'ui-font': function (el) {
+      var delta = Number(el.getAttribute('data-delta'));
+      // A delta of nothing is the way back: the size the panel was designed at.
+      var next = delta === 0 ? 12 : Math.min(20, Math.max(10, uiFont() + delta));
+      if (state.overview) state.overview.settings.uiFont = next;
+      draw();
+      call('saveSettings', { settings: { uiFont: next } }).catch(function () {});
     },
     font: function (el) {
       var next = Math.min(16, Math.max(10, diffFont() + Number(el.getAttribute('data-delta'))));

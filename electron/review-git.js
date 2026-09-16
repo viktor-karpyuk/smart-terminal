@@ -93,6 +93,52 @@ class ReviewGit {
     return (await this.run(dir, ['merge-base', '--is-ancestor', ancestor, descendant])).ok;
   }
 
+  /**
+   * Whether this branch would land on its target, and what stands in the way.
+   *
+   * `merge-tree --write-tree` performs the merge in the object database and
+   * writes nothing to the working tree, so this can be asked of a clone that
+   * somebody is using without disturbing them — no checkout, no index, no
+   * stash. It answers with the tree when the merge is clean and a non-zero code
+   * plus the conflicted paths when it is not.
+   *
+   * Asked of the fetched refs rather than of the provider, on purpose. GitHub
+   * answers `mergeable: null` while it works the same thing out in the
+   * background, and Bitbucket does not answer at all — while the clone has both
+   * sides of the merge already, because a review has just fetched them.
+   *
+   * `null` for "could not tell", which is a different answer from "no
+   * conflicts" and must never be shown as one: a git too old for
+   * `--write-tree` (it arrived in 2.38) or a ref that is not there says nothing
+   * rather than says clean.
+   */
+  async conflicts(dir, target, source) {
+    if (!target || !source) return null;
+    const res = await this.run(dir, ['merge-tree', '--write-tree', '--name-only', '--no-messages', target, source]);
+    if (res.ok) return [];
+
+    /*
+     * The exit code alone cannot be trusted here, and finding that out was the
+     * point of testing it: a branch that does not exist exits 1 as well, with
+     * `merge-tree: no-such-branch - not something we can merge` on stdout — so
+     * reading the code and parsing what follows reports a missing ref as a
+     * clean merge, which is the one answer this must never invent.
+     *
+     * What separates them is the first line. A merge that ran writes the tree
+     * it produced, forty hex characters, and lists the conflicted paths under
+     * it until a blank line. A merge that never ran writes a sentence.
+     */
+    const lines = res.stdout.split('\n');
+    if (!/^[0-9a-f]{40}$/.test(lines[0]?.trim() ?? '')) return null;
+
+    const paths = [];
+    for (const line of lines.slice(1)) {
+      if (!line.trim()) break;
+      paths.push(line.trim());
+    }
+    return paths;
+  }
+
   async numstat(dir, range) {
     const res = await this.run(dir, ['diff', '--numstat', range]);
     return res.ok ? parseNumstat(res.stdout) : [];
