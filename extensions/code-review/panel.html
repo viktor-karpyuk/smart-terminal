@@ -1687,13 +1687,13 @@
     var html = '<div class="page"><div class="row" style="margin-bottom:8px"><button class="btn small" data-act="nav" data-view="repos">← Repositories</button><h2 style="margin:0 6px">' + esc(list.repo.name) + '</h2>' +
       '<span class="faint mono">' + esc(list.repo.owner + '/' + list.repo.slug) + '</span><span class="spacer"></span>' +
       '<span class="faint">' + (list.fetchedAt ? 'read ' + esc(when(list.fetchedAt)) : '') + '</span>' +
-      '<button class="btn small" data-act="prs-refresh"' + busyAttr('prs-refresh') + '>Refresh</button>' +
+      '<button class="btn small" data-act="prs-refresh"' + busyAttr(repoKey('prs-refresh')) + '>Refresh</button>' +
       '<button class="btn small" data-act="repo-edit" data-repo="' + esc(list.repo.id) + '">Edit</button></div>';
     html += '<div class="row" style="margin-bottom:8px">';
     ['OPEN', 'MERGED', 'DECLINED'].forEach(function (s) {
       html += '<span class="chip click' + (state.prStates.indexOf(s) >= 0 ? ' on' : '') + '" data-act="prs-state" data-state="' + s + '">' + s.toLowerCase() + '</span>';
     });
-    html += '<button class="btn small" data-act="prs-history"' + busyAttr('prs-history') + ' title="Merged and declined PRs are only fetched when asked for">Search history</button>';
+    html += '<button class="btn small" data-act="prs-history"' + busyAttr(repoKey('prs-history')) + ' title="Merged and declined PRs are only fetched when asked for">Search history</button>';
     html += '<span class="spacer"></span><span class="faint">Sort</span><select data-bind="prs-sort">' + [['OLDEST', 'Oldest first'], ['NEWEST', 'Newest first'], ['STALE', 'Quiet longest'], ['ACTIVE', 'Recently active']].map(function (o) {
       return '<option value="' + o[0] + '"' + (state.prSort === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
     }).join('') + '</select></div>';
@@ -1712,7 +1712,7 @@
     var pr = v.pr;
     var repo = v.repo;
     if (!pr) {
-      return '<div class="page"><button class="btn small" data-act="back">← Back</button><div class="empty">PR #' + esc(state.prId) + ' is not loaded yet.<br><button class="btn primary" data-act="pr-load"' + busyAttr('pr-load') + '>Load from ' + (repo.provider === 'GITHUB' ? 'GitHub' : 'Bitbucket') + '</button></div></div>';
+      return '<div class="page"><button class="btn small" data-act="back">← Back</button><div class="empty">PR #' + esc(state.prId) + ' is not loaded yet.<br><button class="btn primary" data-act="pr-load"' + busyAttr(prKey('pr-load')) + '>Load from ' + (repo.provider === 'GITHUB' ? 'GitHub' : 'Bitbucket') + '</button></div></div>';
     }
     var open = pr.state === 'OPEN';
     var runs = v.running || [];
@@ -1730,7 +1730,7 @@
       (pr.url ? '<button class="btn small" data-act="open-url" data-url="' + esc(pr.url) + '" title="Open the pull request on ' + provider + '">' + provider + ' ↗</button>' : '') +
       '<button class="btn small" data-act="shell" data-where="clone" title="A terminal in the local clone">Terminal</button>' +
       '<button class="btn small" data-act="ask" title="A Claude session briefed on this pull request">Ask Claude</button>' +
-      '<button class="btn small" data-act="pr-load"' + busyAttr('pr-load') + ' title="Read the pull request, its stances and its thread again">Reload</button></div>' +
+      '<button class="btn small" data-act="pr-load"' + busyAttr(prKey('pr-load')) + ' title="Read the pull request, its stances and its thread again">Reload</button></div>' +
       (compact ? '' : '<h2>#' + pr.id + ' ' + esc(pr.title) + '</h2>') +
       '<div class="faint pr-meta">' + esc(pr.author) + (pr.sourceBranch ? ' · <span class="mono">' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch) + '</span>' : '') + (pr.headSha ? ' · head <span class="mono">' + sha7(pr.headSha) + '</span>' : '') +
       (pr.createdOn ? ' · opened ' + esc(when(pr.createdOn)) : '') + (pr.updatedOn ? ' · updated ' + esc(when(pr.updatedOn)) : '') + '</div>';
@@ -1766,7 +1766,7 @@
     var icon = { act: '→', wait: '…', warn: '!', done: '✓' }[step.kind] || '→';
     var button = '';
     if (step.action && step.kind !== 'wait' && step.kind !== 'done') {
-      var busyKey = { 'publish-all': 'publish-all', verify: 'verify', 'final-pass': 'final-pass', 'run-review': reviewKey() }[step.action];
+      var busyKey = { 'publish-all': prKey('publish-all'), verify: prKey('verify'), 'final-pass': prKey('final-pass'), 'run-review': reviewKey() }[step.action];
       var attrs = step.action === 'tab-conversation' ? 'data-act="pr-tab" data-tab="conversation"' : 'data-act="' + step.action + '"';
       button = '<button class="btn ' + (compact ? 'small' : 'big') + ' ' + (step.kind === 'warn' ? '' : 'primary') + '" ' + attrs + (busyKey ? busyAttr(busyKey) : '') + '>' + esc(NEXT_ACTIONS[step.action] || 'Go') + '</button>';
     }
@@ -1778,13 +1778,13 @@
     var publishedLive = (v.done ? v.findings : []).some(function (f) { return f.publishedId && !f.dismissedAt; });
     var html = '<div class="row" style="margin-top:10px">';
     html += '<span class="group-btns">';
-    html += '<button class="btn small" data-act="verify"' + busyAttr('verify') + (publishedLive ? '' : ' disabled') + ' title="Judge each published comment against the new code and the answers">Verify</button>';
-    html += '<button class="btn small" data-act="final-pass"' + busyAttr('final-pass') + (v.done ? '' : ' disabled') + ' title="The last look before merging: is there anything that must not go in?">Final pass</button>';
+    html += '<button class="btn small" data-act="verify"' + busyAttr(prKey('verify')) + (publishedLive ? '' : ' disabled') + ' title="Judge each published comment against the new code and the answers">Verify</button>';
+    html += '<button class="btn small" data-act="final-pass"' + busyAttr(prKey('final-pass')) + (v.done ? '' : ' disabled') + ' title="The last look before merging: is there anything that must not go in?">Final pass</button>';
     html += '</span><span class="group-btns">';
-    if (ours && ours.state === 'APPROVED') html += '<button class="btn small" data-act="stance" data-stance="unapprove"' + busyAttr('stance') + '>Withdraw approval</button>';
-    else html += '<button class="btn small go" data-act="stance" data-stance="approve"' + busyAttr('stance') + '>Approve</button>';
-    if (ours && ours.state === 'CHANGES_REQUESTED') html += '<button class="btn small" data-act="stance" data-stance="undoRequestChanges"' + busyAttr('stance') + '>Withdraw change request</button>';
-    else html += '<button class="btn small" data-act="stance" data-stance="requestChanges"' + busyAttr('stance') + '>Request changes</button>';
+    if (ours && ours.state === 'APPROVED') html += '<button class="btn small" data-act="stance" data-stance="unapprove"' + busyAttr(prKey('stance')) + '>Withdraw approval</button>';
+    else html += '<button class="btn small go" data-act="stance" data-stance="approve"' + busyAttr(prKey('stance')) + '>Approve</button>';
+    if (ours && ours.state === 'CHANGES_REQUESTED') html += '<button class="btn small" data-act="stance" data-stance="undoRequestChanges"' + busyAttr(prKey('stance')) + '>Withdraw change request</button>';
+    else html += '<button class="btn small" data-act="stance" data-stance="requestChanges"' + busyAttr(prKey('stance')) + '>Request changes</button>';
     html += '</span>';
     var r = v.readiness;
     if (r) {
@@ -1811,13 +1811,13 @@
         conflict.paths.length + ' file' + (conflict.paths.length === 1 ? '' : 's') + ' conflict' + (conflict.paths.length === 1 ? 's' : '') + '. ' +
         (conflict.stale ? '<span class="faint">Checked before the newest commits arrived — it may have been resolved since.</span> ' : '') +
         '<button class="link" data-act="fold" data-key="conflict-files">' + (isOpen('conflict-files') ? 'hide' : 'which') + '</button>' +
-        ' <button class="link" data-act="recheck-conflicts"' + busyAttr('recheck-conflicts') + '>check again</button>' +
+        ' <button class="link" data-act="recheck-conflicts"' + busyAttr(prKey('recheck-conflicts')) + '>check again</button>' +
         (isOpen('conflict-files') ? '<ul class="conflict-list">' + conflict.paths.map(function (path) { return '<li class="mono">' + esc(path) + '</li>'; }).join('') + '</ul>' : '') +
         '</div>';
     }
     if (state.decline) {
       html += '<div class="card" style="margin-top:8px"><strong>Decline #' + v.pr.id + '</strong><div class="faint">The reason is posted as a comment first; then the PR is closed.</div>' +
-        '<textarea rows="3" data-edit="decline-reason" style="margin-top:6px">' + esc(edit('decline-reason')) + '</textarea><div class="row" style="margin-top:6px"><button class="btn danger" data-act="decline"' + busyAttr('decline') + '>Decline</button><button class="btn" data-act="decline-close">Cancel</button></div></div>';
+        '<textarea rows="3" data-edit="decline-reason" style="margin-top:6px">' + esc(edit('decline-reason')) + '</textarea><div class="row" style="margin-top:6px"><button class="btn danger" data-act="decline"' + busyAttr(prKey('decline')) + '>Decline</button><button class="btn" data-act="decline-close">Cancel</button></div></div>';
     }
     if (state.merge) {
       var strategy = edit('merge-strategy', v.settings.mergeStrategy || 'MERGE_COMMIT');
@@ -1828,7 +1828,7 @@
           return '<option value="' + o[0] + '"' + (strategy === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
         }).join('') + '</select>' + (v.repo.provider === 'BITBUCKET' ? '<label class="check"><input type="checkbox" data-edit-check="merge-close"' + (edit('merge-close', true) ? ' checked' : '') + '> Close the source branch</label>' : '') + '</div>' +
         '<textarea rows="4" data-edit="merge-message" style="margin-top:6px">' + esc(edit('merge-message', 'Merged in ' + v.pr.sourceBranch + ' (pull request #' + v.pr.id + ')\n\n' + v.pr.title)) + '</textarea>' +
-        '<div class="row" style="margin-top:6px"><button class="btn primary" data-act="merge"' + busyAttr('merge') + '>Merge</button><button class="btn" data-act="merge-close">Cancel</button></div></div>';
+        '<div class="row" style="margin-top:6px"><button class="btn primary" data-act="merge"' + busyAttr(prKey('merge')) + '>Merge</button><button class="btn" data-act="merge-close">Cancel</button></div></div>';
     }
     return html;
   }
@@ -1933,8 +1933,8 @@
       html += '<div class="row" style="margin-bottom:8px">' + [['open', 'Open', openOnes.length], ['publish', 'To publish', waiting.length], ['closed', 'Done', closedOnes.length], ['all', 'All', findings.length]].map(function (o) {
         return '<span class="chip click' + (filter === o[0] ? ' on' : '') + '" data-act="finding-filter" data-filter="' + o[0] + '">' + o[1] + ' ' + o[2] + '</span>';
       }).join('') + '<span class="spacer"></span>';
-      if (open && (waiting.length || notes.length)) html += '<button class="btn small primary" data-act="publish-all"' + busyAttr('publish-all') + ' title="Every finding still waiting, then every note">Publish ' + (waiting.length + notes.length) + ' inline</button>';
-      if (open && v.repo.fixMode !== 'OFF' && fixable.length > 1) html += '<button class="btn small go" data-act="fix-all"' + busyAttr('fix-all') + ' title="One after another, in the workshop">Fix all ' + fixable.length + '</button>';
+      if (open && (waiting.length || notes.length)) html += '<button class="btn small primary" data-act="publish-all"' + busyAttr(prKey('publish-all')) + ' title="Every finding still waiting, then every note">Publish ' + (waiting.length + notes.length) + ' inline</button>';
+      if (open && v.repo.fixMode !== 'OFF' && fixable.length > 1) html += '<button class="btn small go" data-act="fix-all"' + busyAttr(prKey('fix-all')) + ' title="One after another, in the workshop">Fix all ' + fixable.length + '</button>';
       html += '</div>';
       if (!findings.length) html += '<div class="card faint">This review found nothing worth reporting.</div>';
       else if (!shown.length) html += '<div class="card faint">Nothing here. <button class="link" data-act="finding-filter" data-filter="all">Show all findings</button></div>';
@@ -2002,8 +2002,8 @@
     var ws = v.workshop;
     if (ws && (ws.exists || (v.fixes || []).length)) {
       var wsBody = '<div class="faint mono" style="font-size:11px">' + esc(ws.dir) + '</div>' +
-        '<div class="row" style="margin-top:6px">' + (ws.pendingReturn ? '<button class="btn small primary" data-act="give-back"' + busyAttr('give-back') + ' title="Push the workshop commits into your clone, on ' + esc(v.pr.sourceBranch) + '. Your clone must not have that branch checked out.">Hand ' + ws.pendingReturn + ' back to the clone</button>' : '<span class="faint">Nothing waiting to be handed back.</span>') +
-        (ws.exists ? '<button class="btn small" data-act="shell" data-where="workshop">Terminal in the workshop</button><span class="spacer"></span><button class="btn small danger" data-act="discard-workshop"' + busyAttr('discard') + '>Discard…</button>' : '') + '</div>' +
+        '<div class="row" style="margin-top:6px">' + (ws.pendingReturn ? '<button class="btn small primary" data-act="give-back"' + busyAttr(prKey('give-back')) + ' title="Push the workshop commits into your clone, on ' + esc(v.pr.sourceBranch) + '. Your clone must not have that branch checked out.">Hand ' + ws.pendingReturn + ' back to the clone</button>' : '<span class="faint">Nothing waiting to be handed back.</span>') +
+        (ws.exists ? '<button class="btn small" data-act="shell" data-where="workshop">Terminal in the workshop</button><span class="spacer"></span><button class="btn small danger" data-act="discard-workshop"' + busyAttr(prKey('discard')) + '>Discard…</button>' : '') + '</div>' +
         ((v.fixes || []).length ? '<table class="list" style="margin-top:6px">' + v.fixes.slice(0, 20).map(function (fix) {
           var finding = findings.filter(function (f) { return f.id === fix.findingId; })[0];
           return '<tr><td>' + statusChip(fix.state === 'COMMITTED' ? 'DONE' : fix.state) + '</td><td>' + esc(finding ? finding.title : 'a finding from an earlier review') + (fix.summary ? '<div class="faint">' + esc(fix.summary.slice(0, 200)) + '</div>' : '') + (fix.error ? '<div class="bad">' + esc(fix.error.slice(0, 200)) + '</div>' : '') + '</td>' +
@@ -2017,7 +2017,7 @@
       var key = 'body-' + done.id;
       html += fold('general', '<strong>General comment</strong>' + (done.publishedUrl ? '<span class="chip okc">published</span>' : '<span class="chip">draft</span>'), done.publishedUrl ? 'Published. Open to post it again.' : 'One comment with every finding, as an alternative to publishing them inline.',
         '<textarea rows="10" data-edit="' + key + '">' + esc(edit(key, done.body)) + '</textarea><div class="row" style="margin-top:6px">' +
-        (open ? '<button class="btn small primary" data-act="publish-review" data-id="' + esc(done.id) + '"' + busyAttr('publish-review') + '>' + (done.publishedUrl ? 'Publish again' : 'Publish comment') + '</button>' : '') +
+        (open ? '<button class="btn small primary" data-act="publish-review" data-id="' + esc(done.id) + '"' + busyAttr(prKey('publish-review')) + '>' + (done.publishedUrl ? 'Publish again' : 'Publish comment') + '</button>' : '') +
         '<button class="btn small" data-act="save-body" data-id="' + esc(done.id) + '">Save draft</button>' +
         (done.publishedUrl ? '<button class="btn small" data-act="open-url" data-url="' + esc(done.publishedUrl) + '">View published ↗</button>' : '') + '</div>', false);
     }
@@ -2723,7 +2723,7 @@
     if (d.note) html += '<div class="banner warn" style="margin:8px;font-size:11.5px">' + esc(d.note) + '</div>';
     if (!d.commits.length && !d.local.length) html += '<div class="empty" style="padding:16px">No commits between <span class="mono">' + esc(state.pr && state.pr.pr ? state.pr.pr.targetBranch : 'the target') + '</span> and <span class="mono">' + esc(d.branch) + '</span>.</div>';
     if (d.local.length) {
-      html += '<div class="group">In your clone, not on origin</div><div style="padding:4px 10px"><button class="btn small primary" data-act="push"' + busyAttr('push') + '>Push to origin/' + esc(d.branch) + '</button></div>' +
+      html += '<div class="group">In your clone, not on origin</div><div style="padding:4px 10px"><button class="btn small primary" data-act="push"' + busyAttr(prKey('push')) + '>Push to origin/' + esc(d.branch) + '</button></div>' +
         d.local.map(function (commit) { return commitItem(commit, true); }).join('');
     }
     html += '<div class="group">The pull request · ' + d.commits.length + '</div>';
@@ -2774,7 +2774,7 @@
     html += '<div class="row" style="margin-bottom:8px">' + (open ? [['yours', 'Your turn', yours.length], ['waiting', 'Waiting', waiting.length]] : [['left', 'Left open', left.length]]).concat([['closed', 'Closed', shut.length], ['all', 'All', threads.length]]).map(function (o) {
       return '<span class="chip click' + (filter === o[0] ? ' on' : '') + '" data-act="thread-filter" data-filter="' + o[0] + '">' + o[1] + ' ' + o[2] + '</span>';
     }).join('') + '<span class="spacer"></span>';
-    if (open && pendingReplies.length) html += '<button class="btn small primary" data-act="draft-all"' + busyAttr('draft-all') + ' title="Claude drafts an answer to every reply from the code; nothing is published">Draft ' + pendingReplies.length + ' answer' + (pendingReplies.length === 1 ? '' : 's') + '</button><button class="btn small" data-act="dismiss-all-replies">Dismiss all replies</button>';
+    if (open && pendingReplies.length) html += '<button class="btn small primary" data-act="draft-all"' + busyAttr(prKey('draft-all')) + ' title="Claude drafts an answer to every reply from the code; nothing is published">Draft ' + pendingReplies.length + ' answer' + (pendingReplies.length === 1 ? '' : 's') + '</button><button class="btn small" data-act="dismiss-all-replies">Dismiss all replies</button>';
     html += '</div>';
     if (!threads.length) html += '<div class="empty">No findings, so no threads yet.</div>';
     else if (!shown.length) html += '<div class="card faint">Nothing here. <button class="link" data-act="thread-filter" data-filter="all">Show every thread</button></div>';
@@ -3069,7 +3069,26 @@
    * every pull request — which is how a reviewer that can happily run several at
    * once came to allow exactly one.
    */
-  function reviewKey() { return 'review:' + state.repoId + ':' + state.prId; }
+  /**
+   * A busy key belongs to the thing being acted on, not to the panel.
+   *
+   * `act` refuses to start a second run under the same key and draws its button
+   * as busy meanwhile — which is right. What was wrong is that these keys were
+   * bare words: `verify`, `merge`, `publish-all`. Since the call resolves only
+   * when the work has *finished*, verifying one pull request greyed out Verify
+   * on every pull request, and the panel that can happily do two at once looked
+   * like one that cannot do two at all.
+   *
+   * It was fixed for `review` and left in fourteen other places, which is what
+   * a fix applied to a case rather than to a class looks like. These are keyed
+   * by what they act on: the pull request for the ones that take `prArgs()`,
+   * the repository for the ones that sweep a repository, and nothing for the
+   * ones that really are about the whole panel — refreshing every repository,
+   * importing a history, saving the form that is on screen.
+   */
+  function prKey(name) { return name + ':' + state.repoId + ':' + state.prId; }
+  function repoKey(name) { return name + ':' + state.repoId; }
+  function reviewKey() { return prKey('review'); }
 
   function runReview(el) {
     var full = el.getAttribute('data-full') === '1';
@@ -3152,7 +3171,7 @@
       call('saveSettings', { settings: { diffLayout: next } }).catch(function () {});
     },
     'recheck-conflicts': function () {
-      act('recheck-conflicts', function () { return call('checkConflicts', prArgs()); }, function (paths) {
+      act(prKey('recheck-conflicts'), function () { return call('checkConflicts', prArgs()); }, function (paths) {
         if (paths === null) say('Could not tell: the clone could not be read.', true);
         else if (!paths.length) say('It merges cleanly.');
         else say(paths.length + ' file' + (paths.length === 1 ? '' : 's') + ' still conflict.', true);
@@ -3265,9 +3284,9 @@
     'guide-claude': function (el) {
       call('importClaudeMd', { repoId: el.getAttribute('data-repo') }).then(function (r) { say(r.found ? 'Found ' + r.found + ' CLAUDE.md file(s), ' + r.added + ' new.' : 'No CLAUDE.md in the clone.'); return loadFormGuidelines(); }).catch(fail);
     },
-    'prs-refresh': function () { act('prs-refresh', function () { return call('refreshPrs', { repoId: state.repoId }); }, load); },
+    'prs-refresh': function () { act(repoKey('prs-refresh'), function () { return call('refreshPrs', { repoId: state.repoId }); }, load); },
     'prs-history': function () {
-      act('prs-history', function () { return call('searchHistory', { repoId: state.repoId }); }, function (r) {
+      act(repoKey('prs-history'), function () { return call('searchHistory', { repoId: state.repoId }); }, function (r) {
         say(r.found + ' closed PR(s) found.');
         if (state.prStates.indexOf('MERGED') < 0) state.prStates.push('MERGED');
         if (state.prStates.indexOf('DECLINED') < 0) state.prStates.push('DECLINED');
@@ -3280,7 +3299,7 @@
       if (list.indexOf(s) >= 0) { if (list.length > 1) list.splice(list.indexOf(s), 1); } else list.push(s);
       load();
     },
-    'pr-load': function () { act('pr-load', function () { return call('loadPr', prArgs()); }, function (r) { if (r.commentsError) say('The thread could not be read: ' + r.commentsError, true); load(); }); },
+    'pr-load': function () { act(prKey('pr-load'), function () { return call('loadPr', prArgs()); }, function (r) { if (r.commentsError) say('The thread could not be read: ' + r.commentsError, true); load(); }); },
     'pr-tab': function (el) {
       state.prTab = el.getAttribute('data-tab');
       remember();
@@ -3291,19 +3310,19 @@
     profile: function (el) { state.reviewProfile[el.getAttribute('data-field')] = el.getAttribute('data-value'); draw(); },
     'run-review': runReview,
     'rerun-cancel': function () { state.confirmRerun = null; draw(); },
-    verify: function () { act('verify', function () { return call('verify', prArgs()); }, function (r) { say(r.mergeable ? 'Verified: every comment was addressed.' : 'Verified.'); }); },
-    'final-pass': function () { act('final-pass', function () { return call('finalPass', prArgs()); }, function (r) { say(r.blockers ? r.blockers + ' blocker(s) found.' : 'Nothing blocks the merge.', r.blockers > 0); }); },
-    stance: function (el) { act('stance', function () { return call(el.getAttribute('data-stance'), prArgs()); }, load); },
+    verify: function () { act(prKey('verify'), function () { return call('verify', prArgs()); }, function (r) { say(r.mergeable ? 'Verified: every comment was addressed.' : 'Verified.'); }); },
+    'final-pass': function () { act(prKey('final-pass'), function () { return call('finalPass', prArgs()); }, function (r) { say(r.blockers ? r.blockers + ' blocker(s) found.' : 'Nothing blocks the merge.', r.blockers > 0); }); },
+    stance: function (el) { act(prKey('stance'), function () { return call(el.getAttribute('data-stance'), prArgs()); }, load); },
     'decline-open': function () { state.decline = true; state.merge = null; draw(); },
     'decline-close': function () { state.decline = null; draw(); },
     decline: function () {
-      act('decline', function () { return call('decline', prArgs({ reason: edit('decline-reason'), repoName: state.pr.repo.name })); }, function () { state.decline = null; delete state.edits['decline-reason']; say('Declined.'); load(); });
+      act(prKey('decline'), function () { return call('decline', prArgs({ reason: edit('decline-reason'), repoName: state.pr.repo.name })); }, function () { state.decline = null; delete state.edits['decline-reason']; say('Declined.'); load(); });
     },
     'merge-open': function () { state.merge = true; state.decline = null; draw(); },
     'merge-close': function () { state.merge = null; draw(); },
     merge: function () {
       var v = state.pr;
-      act('merge', function () {
+      act(prKey('merge'), function () {
         return call('merge', prArgs({
           message: edit('merge-message', 'Merged in ' + v.pr.sourceBranch + ' (pull request #' + v.pr.id + ')\n\n' + v.pr.title),
           strategy: edit('merge-strategy', v.settings.mergeStrategy || 'MERGE_COMMIT'),
@@ -3313,7 +3332,7 @@
       }, function () { state.merge = null; say('Merged.'); load(); });
     },
     'publish-finding': function (el) { var id = el.getAttribute('data-id'); act('publish-' + id, function () { return call('publishFinding', { findingId: id }); }); },
-    'publish-all': function () { act('publish-all', function () { return call('publishAll', prArgs()); }, function (r) { if (r.errors && r.errors.length) say(r.published + ' published; failed: ' + r.errors.join('; '), true); else say(r.published + ' published.'); }); },
+    'publish-all': function () { act(prKey('publish-all'), function () { return call('publishAll', prArgs()); }, function (r) { if (r.errors && r.errors.length) say(r.published + ' published; failed: ' + r.errors.join('; '), true); else say(r.published + ' published.'); }); },
     dismiss: function (el) { call('dismissFinding', { findingId: el.getAttribute('data-id'), dismissed: el.getAttribute('data-on') === '1' }).catch(fail); },
     'finding-edit': function (el) { var k = 'finding-open-' + el.getAttribute('data-id'); state.edits[k] = !state.edits[k]; draw(); },
     'finding-save': function (el) {
@@ -3323,13 +3342,13 @@
         .then(function () { ['open', 'title', 'body', 'sugg'].forEach(function (p) { delete state.edits['finding-' + p + '-' + id]; }); }).catch(fail);
     },
     fix: function (el) { var id = el.getAttribute('data-id'); call('fix', { findingId: id }).then(function (r) { say(!r.fix ? 'Already closed: there was nothing left to fix.' : r.fix.sha ? 'Fix committed in the workshop: ' + r.fix.sha.slice(0, 7) : 'The fix changed nothing: ' + (r.fix.summary || '')); }, fail); },
-    'fix-all': function () { act('fix-all', function () { return call('fixAll', prArgs()); }, function (r) { say(r.committed + ' fix(es) committed.' + (r.errors.length ? ' ' + r.errors.length + ' failed.' : ''), r.errors.length > 0); }); },
+    'fix-all': function () { act(prKey('fix-all'), function () { return call('fixAll', prArgs()); }, function (r) { say(r.committed + ' fix(es) committed.' + (r.errors.length ? ' ' + r.errors.length + ' failed.' : ''), r.errors.length > 0); }); },
     'retry-fix-reply': function (el) { var id = el.getAttribute('data-id'); act('fixreply-' + id, function () { return call('retryFixReply', { fixId: id }); }); },
-    'give-back': function () { act('give-back', function () { return call('giveBack', prArgs()); }, function (r) { say(r.count + ' fix(es) handed back to your clone.'); }); },
-    'discard-workshop': function () { act('discard', function () { return call('discardWorkshop', prArgs({ repoName: state.pr.repo.name })); }, function () { say('Workshop discarded.'); }); },
+    'give-back': function () { act(prKey('give-back'), function () { return call('giveBack', prArgs()); }, function (r) { say(r.count + ' fix(es) handed back to your clone.'); }); },
+    'discard-workshop': function () { act(prKey('discard'), function () { return call('discardWorkshop', prArgs({ repoName: state.pr.repo.name })); }, function () { say('Workshop discarded.'); }); },
     push: function () {
       var d = state.commits.data;
-      act('push', function () { return call('push', prArgs({ branch: d.branch, count: d.local.length })); }, function () { say('Pushed.'); state.commits.data = null; loadCommits(); });
+      act(prKey('push'), function () { return call('push', prArgs({ branch: d.branch, count: d.local.length })); }, function () { say('Pushed.'); state.commits.data = null; loadCommits(); });
     },
     adopt: function (el) {
       var id = el.getAttribute('data-comment');
@@ -3337,7 +3356,7 @@
     },
     'publish-review': function (el) {
       var id = el.getAttribute('data-id');
-      act('publish-review', function () { return call('publishReview', { reviewId: id, body: edit('body-' + id, state.pr.done.body) }); }, function () { delete state.edits['body-' + id]; say('Published.'); });
+      act(prKey('publish-review'), function () { return call('publishReview', { reviewId: id, body: edit('body-' + id, state.pr.done.body) }); }, function () { delete state.edits['body-' + id]; say('Published.'); });
     },
     'save-body': function (el) { var id = el.getAttribute('data-id'); call('saveReviewBody', { reviewId: id, body: edit('body-' + id, state.pr.done.body) }).then(function () { delete state.edits['body-' + id]; say('Saved.'); load(); }, fail); },
     jump: function (el) {
@@ -3382,7 +3401,7 @@
       call('commitDiff', { repoId: state.repoId, sha: sha, file: file }).then(function (r) { if (state.commits === commits && commits.sha === sha && commits.file === file) { commits.lines = r.lines; draw(); } }, fail);
     },
     'draft-reply': function (el) { var id = el.getAttribute('data-id'); delete state.edits['reply-' + id]; act('draft-' + id, function () { return call('draftReply', { replyId: id }); }); },
-    'draft-all': function () { act('draft-all', function () { return call('draftAll', prArgs()); }, function (r) { say(r.drafted + ' drafted' + (r.failed ? ', ' + r.failed + ' failed' : '') + '.', r.failed > 0); }); },
+    'draft-all': function () { act(prKey('draft-all'), function () { return call('draftAll', prArgs()); }, function (r) { say(r.drafted + ' drafted' + (r.failed ? ', ' + r.failed + ' failed' : '') + '.', r.failed > 0); }); },
     'save-reply': function (el) { var id = el.getAttribute('data-id'); call('saveReplyDraft', { replyId: id, body: edit('reply-' + id) }).then(function () { delete state.edits['reply-' + id]; say('Saved.'); }, fail); },
     'publish-reply': function (el) {
       var id = el.getAttribute('data-id');

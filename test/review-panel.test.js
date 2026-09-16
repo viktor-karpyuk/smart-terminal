@@ -154,3 +154,99 @@ test('the title line is dropped as the reviewer posts it, with its category in f
   const T = fromPanel(['withoutTitle']);
   assert.equal(T.withoutTitle('_diseño_ · **El bridge paga una query**\n\nEl cuerpo.', 'El bridge paga una query'), 'El cuerpo.');
 });
+
+// ---------------------------------------------------------------- one at a time, per what?
+
+/*
+ * `act(key, …)` refuses a second run under the same key and draws its button as
+ * busy meanwhile. That is right. What was wrong is that the keys were bare
+ * words — `verify`, `merge`, `publish-all` — and since those calls resolve only
+ * when the work has *finished*, verifying one pull request greyed out Verify on
+ * every pull request. A panel that can happily do two at once looked like one
+ * that cannot do two at all.
+ *
+ * It was fixed for `review` and left in fourteen other places, which is what a
+ * fix applied to a case rather than to a class looks like. This is the guard
+ * for the class: an action that acts on one pull request is busy for that pull
+ * request, and nothing else.
+ */
+
+/** What the panel does to one pull request, all of which take `prArgs()`. */
+const PER_PR = [
+  'verify', 'final-pass', 'stance', 'decline', 'merge', 'publish-all', 'publish-review',
+  'fix-all', 'give-back', 'pr-load', 'recheck-conflicts', 'push', 'draft-all', 'discard',
+];
+/** And what it does to one repository: two of those must not block each other. */
+const PER_REPO = ['prs-refresh', 'prs-history'];
+
+test('an action on one pull request does not mark every pull request busy', () => {
+  const offenders = [];
+  for (const name of PER_PR) {
+    // `act('verify', …)` and `busyAttr('verify')` — the bare key, either side.
+    if (source.includes(`act('${name}', `)) offenders.push(`act('${name}', …) is keyed on nothing`);
+    if (source.includes(`busyAttr('${name}')`)) offenders.push(`busyAttr('${name}') is keyed on nothing`);
+  }
+  assert.deepStrictEqual(
+    offenders,
+    [],
+    `These act on the open pull request but mark the whole panel busy:\n  ${offenders.join('\n  ')}\n\n` +
+      'Key them with prKey(name), so the button greys out on that pull request and no other.',
+  );
+});
+
+test('an action on one repository does not mark every repository busy', () => {
+  const offenders = PER_REPO.filter(
+    (name) => source.includes(`act('${name}', `) || source.includes(`busyAttr('${name}')`),
+  );
+  assert.deepStrictEqual(offenders, [], 'Key these with repoKey(name).');
+});
+
+test('the keys are built from what is being acted on, and differ between two of them', () => {
+  /*
+   * `prKey` reads the panel's `state`, which is a closure variable — so the two
+   * functions are lifted into a context of their own with a `state` this test
+   * can move, rather than pretending the panel's is reachable.
+   */
+  const context = vm.createContext({ state: {} });
+  const grab = (name) => {
+    const at = source.search(new RegExp(`\\n  function ${name}\\b`));
+    assert.ok(at >= 0, `the panel no longer defines ${name}`);
+    const end = source.indexOf('\n', at + 1);
+    return source.slice(at, end);
+  };
+  vm.runInContext(`${grab('prKey')}\n${grab('repoKey')}`, context);
+  const keyFor = (state, expr) => {
+    context.state = state;
+    return vm.runInContext(expr, context);
+  };
+
+  const here = { repoId: 'kubrik-erp-be', prId: 191 };
+  const nextDoor = { repoId: 'kubrik-erp-be', prId: 192 };
+  const elsewhere = { repoId: 'pds-be', prId: 191 };
+
+  assert.notStrictEqual(
+    keyFor(here, "prKey('verify')"),
+    keyFor(nextDoor, "prKey('verify')"),
+    'two pull requests in one repository are two keys',
+  );
+  assert.notStrictEqual(
+    keyFor(here, "prKey('verify')"),
+    keyFor(elsewhere, "prKey('verify')"),
+    'the same number in another repository is another key',
+  );
+  assert.notStrictEqual(
+    keyFor(here, "prKey('verify')"),
+    keyFor(here, "prKey('merge')"),
+    'and two actions on one pull request still differ',
+  );
+  assert.notStrictEqual(
+    keyFor(here, "repoKey('prs-refresh')"),
+    keyFor(here, "prKey('prs-refresh')"),
+    'a repository key is not a pull request key',
+  );
+  assert.strictEqual(
+    keyFor(here, "prKey('verify')"),
+    keyFor({ repoId: 'kubrik-erp-be', prId: 191 }, "prKey('verify')"),
+    'and the same pull request is the same key, or the button would never come back',
+  );
+});
