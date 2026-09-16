@@ -242,3 +242,93 @@ test('a session with nothing recorded falls back to when it was opened', { skip 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------- a name beats a mention
+
+/*
+ * The search looks inside conversations as well, which is most of what makes it
+ * worth having — and is also why typing a session's name returned a hundred rows
+ * with the one you meant somewhere in the middle. Measured on a real history:
+ * "ausencias" gave 118 results with the session actually named that at position
+ * 2, and "user-permissions" gave 65 with it at position 4. From the other side
+ * of the screen that is a search that does not search by name.
+ */
+
+/** A session with a conversation that mentions the word without being named it. */
+function mentions(db, id, text, at) {
+  open(db, id, at, { title: id });
+  db.ingestTranscript(id, [{ at, role: 'user', text }]);
+  db.updateSession(id, { storeTranscript: true });
+}
+
+test('the session named for what you typed comes first', { skip }, () => {
+  const { db, dir } = fresh();
+  try {
+    // Three that only mention it, and are more recent than the one that is it.
+    mentions(db, 'talks-about-it-1', 'we should look at ausencias again', now - 60_000);
+    mentions(db, 'talks-about-it-2', 'the ausencias report is wrong', now - 30_000);
+    open(db, 'ausencias', now - 9 * DAY, { title: 'ausencias' });
+    db.noteWork('ausencias', now - 9 * DAY);
+
+    const found = db.listSessions({ query: 'ausencias' }).map((row) => row.title);
+    assert.strictEqual(found[0], 'ausencias', 'the name, even though it is nine days older');
+    assert.ok(found.length > 1, 'and the mentions are still there, below it');
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a name that starts with it beats a name that merely contains it', { skip }, () => {
+  const { db, dir } = fresh();
+  try {
+    open(db, 'a', now, { title: 'my-TLB-thing' });
+    db.noteWork('a', now);
+    open(db, 'b', now - DAY, { title: 'TLB-projects' });
+    db.noteWork('b', now - DAY);
+    open(db, 'c', now - 2 * DAY, { title: 'TLB' });
+    db.noteWork('c', now - 2 * DAY);
+
+    assert.deepStrictEqual(
+      db.listSessions({ query: 'TLB' }).map((row) => row.title),
+      ['TLB', 'TLB-projects', 'my-TLB-thing'],
+      'exactly it, then starting with it, then containing it — and the newest of them last',
+    );
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('where it was and whose account it was on still match, below the names', { skip }, () => {
+  const { db, dir } = fresh();
+  try {
+    open(db, 'by-folder', now, { title: 'nothing like it', startCwd: '/work/billing' });
+    db.noteWork('by-folder', now);
+    open(db, 'by-name', now - DAY, { title: 'billing' });
+    db.noteWork('by-name', now - DAY);
+
+    assert.deepStrictEqual(
+      db.listSessions({ query: 'billing' }).map((row) => row.title),
+      ['billing', 'nothing like it'],
+      'the name first, then the folder — though the folder one was worked on more recently',
+    );
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('with nothing typed the order is untouched: whatever was worked on last', { skip }, () => {
+  const { db, dir } = fresh();
+  try {
+    open(db, 'older', now - 30 * DAY, { title: 'older' });
+    db.noteWork('older', now - 5 * DAY);
+    open(db, 'newer', now - 30 * DAY, { title: 'newer' });
+    db.noteWork('newer', now - DAY);
+    assert.deepStrictEqual(db.listSessions({}).map((row) => row.title), ['newer', 'older']);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
