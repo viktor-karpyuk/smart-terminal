@@ -250,3 +250,39 @@ test('the keys are built from what is being acted on, and differ between two of 
     'and the same pull request is the same key, or the button would never come back',
   );
 });
+
+// ---------------------------------------------------------------- one word, two meanings
+
+/*
+ * `.empty` meant two things a screen apart in this stylesheet: the placeholder
+ * shown when a list has nothing in it, and — in a split diff — the side of a row
+ * that has no line. An unqualified rule for the first gave every cell of the
+ * second a 180px floor, which in a table is a minimum *row* height. A file's
+ * diff came out with rows of six and nine hundred pixels, and it only showed on
+ * a view somebody has to open to see.
+ *
+ * So: the styles meant for a page's own blocks say which element they are for.
+ */
+test('a rule written for a page block cannot reach into a table cell', () => {
+  const style = /<style>([\s\S]*?)<\/style>/.exec(html)[1];
+
+  // The words the diff also uses as cell classes. A bare rule for any of these
+  // lands on `td.empty`, `td.add`, `td.del`, `td.n`, `td.c`, `td.m`.
+  const shared = ['empty', 'loading', 'add', 'del'];
+  const offenders = [];
+  for (const word of shared) {
+    // A selector that is only the class, at the start of a rule: `.empty {` or
+    // `.empty, .loading {`. Qualified ones — `div.empty`, `table.diff td.empty`
+    // — are exactly what this is asking for.
+    const bare = new RegExp(`(^|[,{}\\n])\\s*\\.${word}\\s*[,{]`, 'm');
+    if (bare.test(style)) offenders.push(`.${word}`);
+  }
+
+  assert.deepStrictEqual(
+    offenders,
+    [],
+    `These are styled by class alone, and the diff uses the same words on its cells:\n  ${offenders.join(
+      ', ',
+    )}\n\nQualify them — div.empty, not .empty — so a page's placeholder cannot set a row's height.`,
+  );
+});
