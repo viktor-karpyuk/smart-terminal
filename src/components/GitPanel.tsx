@@ -1133,7 +1133,13 @@ function History({ panelId }: { panelId: string }) {
         </div>
       </div>
 
-      {panel.selectedSha && <CommitDetail root={root} sha={panel.selectedSha} />}
+      {panel.selectedSha && (
+        <CommitDetail
+          root={root}
+          sha={panel.selectedSha}
+          commit={commits.find((entry) => entry.sha === panel.selectedSha) ?? null}
+        />
+      )}
     </div>
   );
 }
@@ -1179,8 +1185,17 @@ function Lanes({ commit, index, commits }: { commit: GitCommit; index: number; c
   );
 }
 
-function CommitDetail({ root, sha }: { root: string; sha: string }) {
+function CommitDetail({
+  root,
+  sha,
+  commit,
+}: {
+  root: string;
+  sha: string;
+  commit: import('../global').GitCommit | null;
+}) {
   const [files, setFiles] = useState<Array<{ path: string; name: string; added: number | null; removed: number | null }>>([]);
+  const [copied, setCopied] = useState(false);
   const gitDo = useStore((s) => s.gitDo);
   const refreshRepo = useStore((s) => s.refreshRepo);
 
@@ -1193,6 +1208,18 @@ function CommitDetail({ root, sha }: { root: string; sha: string }) {
       alive = false;
     };
   }, [root, sha]);
+
+  /*
+   * The whole message, subject and body.
+   *
+   * The detail showed a hash, a row of buttons and a list of files — everything
+   * about a commit except the one part somebody opens a history to read. The
+   * subject was in the row above, cut off at whatever width the pane happened to
+   * be, inside a div that takes a click; the body was nowhere at all. So "the
+   * commit message cannot be copied" was true, and the reason was that it was
+   * not on screen.
+   */
+  const message = commit ? [commit.subject, commit.body].filter(Boolean).join('\n\n') : '';
 
   return (
     <div className="git-detail">
@@ -1215,6 +1242,28 @@ function CommitDetail({ root, sha }: { root: string; sha: string }) {
           Copy SHA
         </button>
       </div>
+      {message && (
+        <div className="git-detail-message">
+          {/*
+            Selectable, wrapped, and with a copy of its own beside it. A message
+            can be worth taking whole — into a ticket, a changelog, a reply — and
+            selecting it by hand out of a panel is a drag across a box that also
+            scrolls.
+          */}
+          <pre>{message}</pre>
+          <button
+            className="ghost-btn tiny"
+            title="Copy the whole message, subject and body"
+            onClick={() => {
+              navigator.clipboard?.writeText(message);
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1400);
+            }}
+          >
+            {copied ? 'Copied' : 'Copy message'}
+          </button>
+        </div>
+      )}
       <div className="git-detail-files">
         {files.map((file) => (
           <div key={file.path} className="git-row">

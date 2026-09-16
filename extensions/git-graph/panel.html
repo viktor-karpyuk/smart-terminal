@@ -75,6 +75,9 @@
   .row.is-selected { background: var(--accent-soft); }
   .row.is-match { box-shadow: inset 2px 0 0 var(--accent); }
   .row.is-dim .subject, .row.is-dim .who, .row.is-dim .when { opacity: 0.45; }
+  /* The detail is read, not operated: its text is selectable by hand, whatever
+     the rows above it do with a click. */
+  .detail h2, .detail pre, .detail .meta span { user-select: text; -webkit-user-select: text; cursor: text; }
 
   .subject { flex: 1; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
   .row.is-wip .subject { color: var(--git-new); font-style: italic; }
@@ -855,6 +858,26 @@
       host.emit('notify', { text: 'Copied ' + commit.sha });
     });
     meta.appendChild(sha);
+
+    /*
+     * The message, whole, taken in one press.
+     *
+     * The hash had a copy and the message did not, which is backwards: a hash is
+     * ten characters anybody can retype and a message is the part worth carrying
+     * into a ticket or a changelog. A frame in an origin of its own has no
+     * clipboard, so this asks the app the same way the hash does.
+     */
+    var whole = [commit.subject, commit.body].filter(Boolean).join('\n\n');
+    if (whole) {
+      var copyMsg = h('button', 'chip', 'Copy message');
+      copyMsg.title = 'The subject and the body, as they were written';
+      copyMsg.addEventListener('click', function () {
+        host.emit('copy', { text: whole });
+        host.emit('notify', { text: 'Copied the message of ' + commit.sha.slice(0, 7) });
+      });
+      meta.appendChild(copyMsg);
+    }
+
     meta.appendChild(h('span', null, ' · ' + commit.author + ' · ' + new Date(commit.date).toLocaleString()));
     el.detail.appendChild(meta);
 
