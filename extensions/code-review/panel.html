@@ -387,6 +387,331 @@
   .readiness .bar { width: 160px; }
   .timeline .day { margin-top: 12px; font-weight: 600; color: var(--text-dim); font-size: 11.5px; }
   .timeline .ev { display: grid; grid-template-columns: 60px 110px minmax(0, 1fr); gap: 8px; padding: 4px 0; border-bottom: 1px dashed var(--border); }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     A visual pass over everything that is not the diff.
+     ───────────────────────────────────────────────────────────────────────────
+     The diff was already the considered part of this panel — syntax colours
+     chosen per theme, a split view, hunks that read. Everything around it had
+     grown a rule at a time: eleven different paddings, four hardcoded ambers,
+     headings a point and a half bigger than body text doing the work of a
+     hierarchy, and one box-shadow on one component.
+     What follows is the layer that makes it one thing. It overrides rather than
+     replaces, so every selector above still holds and nothing in the markup had
+     to move.
+     ═══════════════════════════════════════════════════════════════════════════ */
+
+  :root {
+    /* A scale, so a gap is chosen from six values instead of invented. */
+    --s1: 4px; --s2: 6px; --s3: 8px; --s4: 12px; --s5: 16px; --s6: 24px;
+    --r-sm: 5px; --r-md: 8px; --r-lg: 11px; --r-pill: 999px;
+
+    /*
+     * Amber was written out four times as #d9a441 and read differently against
+     * the two themes. One token, mixed toward the app's own so it belongs to
+     * the palette rather than sitting on top of it.
+     */
+    --warn: light-dark(#a8730c, #e0af68);
+    --warn-soft: color-mix(in srgb, var(--warn) 15%, transparent);
+    --ok-soft: color-mix(in srgb, var(--ok) 14%, transparent);
+    --bad-soft: color-mix(in srgb, var(--danger) 13%, transparent);
+
+    /*
+     * Depth in two steps and no more. A panel this dense turns to soup if
+     * everything floats, so a card is barely lifted and only what overlays
+     * something — a menu, the one thing to do next — is lifted properly.
+     */
+    --lift-1: 0 1px 2px light-dark(rgba(16, 20, 32, 0.05), rgba(0, 0, 0, 0.30));
+    --lift-2: 0 4px 14px light-dark(rgba(16, 20, 32, 0.10), rgba(0, 0, 0, 0.42)),
+              0 1px 3px light-dark(rgba(16, 20, 32, 0.06), rgba(0, 0, 0, 0.30));
+    /* A hairline of light along the top of a raised surface. It is what stops a
+       card reading as a hole cut in the page. */
+    --edge: inset 0 1px 0 light-dark(rgba(255, 255, 255, 0.75), rgba(255, 255, 255, 0.045));
+  }
+
+  /* ── type ─────────────────────────────────────────────────────────────────
+     One scale, and numbers that line up. A review is read in columns — counts,
+     line numbers, +/− — and proportional digits make a column of them jitter. */
+
+  body { font-feature-settings: 'cv05' 1, 'ss01' 1; }
+  .n, .count, .stat .n, .stat-num, td.num, .chip .n { font-variant-numeric: tabular-nums; }
+
+  h2 {
+    font-size: 17px;
+    font-weight: 650;
+    letter-spacing: -0.012em;
+    line-height: 1.25;
+    text-wrap: balance;
+    margin: 0 0 var(--s2);
+  }
+  h3 {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.085em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin: var(--s5) 0 var(--s2);
+  }
+  .page { padding: var(--s5) var(--s5) 56px; }
+
+  /* ── surfaces ─────────────────────────────────────────────────────────── */
+
+  .card, .fold, .run, .finding, .entries {
+    border-radius: var(--r-md);
+    box-shadow: var(--lift-1), var(--edge);
+  }
+  .card { padding: var(--s4) var(--s4); }
+  .card + .card, .fold, .run + .run { margin-top: var(--s3); }
+  .card.hi { box-shadow: var(--lift-1), var(--edge), 0 0 0 1px var(--accent); }
+  .grid-cards { gap: var(--s4); }
+
+  .banner {
+    border-radius: var(--r-md);
+    padding: var(--s3) var(--s4);
+    box-shadow: var(--edge);
+    line-height: 1.5;
+  }
+  .banner.warn { border-color: color-mix(in srgb, var(--warn) 50%, var(--border)); background: color-mix(in srgb, var(--warn) 9%, var(--bg-panel)); }
+
+  /* ── the numbers across the top ───────────────────────────────────────────
+     These are the first thing anybody looks at and they were flat boxes. The
+     number leads, the label sits under it quietly, and the one that is waiting
+     on you is tinted rather than pin-striped. */
+
+  .stats { gap: var(--s3); margin-bottom: var(--s5); }
+  .stat {
+    padding: var(--s4) var(--s4) 11px;
+    border-radius: var(--r-md);
+    box-shadow: var(--lift-1), var(--edge);
+    transition: border-color 0.14s ease, background 0.14s ease, transform 0.14s ease, box-shadow 0.14s ease;
+  }
+  .stat:hover { transform: translateY(-1px); box-shadow: var(--lift-2), var(--edge); }
+  .stat:active { transform: none; }
+  .stat .n { font-size: 26px; font-weight: 640; letter-spacing: -0.02em; line-height: 1.05; }
+  .stat .l { font-size: 10.5px; letter-spacing: 0.045em; text-transform: uppercase; color: var(--text-faint); margin-top: 3px; }
+  .stat.urgent { background: color-mix(in srgb, var(--warn) 7%, var(--bg-panel)); border-color: color-mix(in srgb, var(--warn) 32%, var(--border)); }
+  .stat.urgent::before { height: 3px; background: var(--warn); border-radius: var(--r-md) var(--r-md) 0 0; }
+  .stat.urgent .n { color: var(--warn); }
+  .stat.on { box-shadow: var(--lift-1), var(--edge), 0 0 0 1px var(--accent); }
+
+  /* ── the one thing to do next ─────────────────────────────────────────────
+     It is the only element on a page that is telling you something rather than
+     showing you something, so it is the only one allowed to float. */
+
+  .next {
+    border-radius: var(--r-md);
+    padding: var(--s4);
+    gap: var(--s4);
+    box-shadow: var(--lift-2), var(--edge);
+    border-color: color-mix(in srgb, var(--accent) 26%, var(--border));
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 5%, var(--bg-elevated)), var(--bg-elevated));
+  }
+  .next .icon { width: 28px; height: 28px; font-size: 14px; box-shadow: var(--edge); }
+  .next .words strong { font-size: 13.5px; font-weight: 600; letter-spacing: -0.005em; }
+  .next .words span { line-height: 1.45; }
+  .next.wait { border-color: var(--border); background: var(--bg-elevated); box-shadow: var(--lift-1), var(--edge); }
+  .next.warn { border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); background: linear-gradient(180deg, color-mix(in srgb, var(--warn) 8%, var(--bg-elevated)), var(--bg-elevated)); }
+  .next.warn .icon { background: var(--warn-soft); color: var(--warn); }
+  .next.done { border-color: color-mix(in srgb, var(--ok) 34%, var(--border)); background: linear-gradient(180deg, color-mix(in srgb, var(--ok) 6%, var(--bg-elevated)), var(--bg-elevated)); }
+
+  /* ── buttons ──────────────────────────────────────────────────────────────
+     One height, so a row of them is a row and not a skyline. */
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: var(--s2);
+    min-height: 26px; padding: 0 11px;
+    border-radius: var(--r-sm);
+    font-weight: 500;
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  }
+  .btn.small { min-height: 22px; padding: 0 8px; font-size: 11px; }
+  .btn.big { min-height: 32px; padding: 0 16px; border-radius: var(--r-md); }
+  .btn.big.primary { box-shadow: var(--lift-1), inset 0 1px 0 rgba(255, 255, 255, 0.18); }
+  .btn.primary { background: var(--accent-soft); }
+  .btn.primary:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .group-btns { gap: var(--s1); padding-right: var(--s3); margin-right: var(--s2); }
+
+  /* ── chips and severities ────────────────────────────────────────────────
+     A chip was an outline in the text colour, which made every chip on a row
+     look like the same chip. They are tinted now: the colour is the label. */
+
+  .chip {
+    padding: 2px 8px;
+    border-radius: var(--r-pill);
+    font-size: 10.5px;
+    font-weight: 500;
+    letter-spacing: 0.012em;
+    background: color-mix(in srgb, var(--text-faint) 8%, transparent);
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  }
+  .chip.on { background: var(--accent-soft); }
+  .chip.mine { border-color: color-mix(in srgb, var(--warn) 45%, var(--border)); color: var(--warn); background: var(--warn-soft); }
+  .chip.okc { background: var(--ok-soft); }
+  .chip.badc { background: var(--bad-soft); }
+  .chip.accent { background: var(--accent-soft); }
+
+  .sev {
+    padding: 1px 7px;
+    border-radius: var(--r-sm);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+  }
+  .sev.major { background: var(--warn-soft); color: var(--warn); }
+  .count {
+    min-width: 16px; padding: 0 5px;
+    border-radius: var(--r-pill);
+    background: color-mix(in srgb, var(--text-faint) 14%, transparent);
+    font-size: 10px; font-weight: 600; line-height: 15px;
+  }
+  .tab.on .count { background: var(--accent-soft); color: var(--accent); }
+
+  /* ── findings ─────────────────────────────────────────────────────────────
+     The severity runs down the edge as it always did, only now it is wide
+     enough to see out of the corner of an eye, and the title has room. */
+
+  .finding {
+    border-left-width: 4px;
+    padding: var(--s4) var(--s4) var(--s4) var(--s4);
+    transition: box-shadow 0.14s ease, border-color 0.14s ease;
+  }
+  .finding:hover { box-shadow: var(--lift-2), var(--edge); }
+  .finding .ftitle { font-size: 14px; font-weight: 620; letter-spacing: -0.008em; line-height: 1.4; margin: var(--s2) 0 var(--s1); text-wrap: pretty; }
+  .finding .meta { gap: var(--s2); font-size: 10.5px; color: var(--text-faint); margin-top: var(--s2); }
+  .finding.sev-major, .finding-line.sev-major { border-left-color: var(--warn); }
+  .finding.settled { opacity: 0.62; box-shadow: none; }
+  .finding.settled:hover { opacity: 1; box-shadow: var(--lift-1), var(--edge); }
+  .finding-line {
+    border-left-width: 4px;
+    border-radius: var(--r-md);
+    padding: var(--s2) var(--s4);
+    opacity: 0.68;
+    transition: opacity 0.12s ease, box-shadow 0.12s ease;
+  }
+  .finding-line:hover { box-shadow: var(--lift-1), var(--edge); }
+
+  .verdict { border-radius: var(--r-sm); padding: var(--s2) var(--s4); border-left: 3px solid var(--border-strong); background: color-mix(in srgb, var(--bg-elevated) 70%, transparent); }
+  .suggestion { border-left-width: 4px; border-radius: 0 var(--r-sm) var(--r-sm) 0; background: var(--accent-soft); padding: var(--s2) var(--s3); margin-left: 0; }
+
+  /* ── folds ───────────────────────────────────────────────────────────────
+     A fold that is shut should look shut. The head gets the hover, the chevron
+     gets the movement, and the summary stops competing with the title. */
+
+  .fold > .fold-head { padding: 9px var(--s4); border-radius: var(--r-md); transition: background 0.12s ease; }
+  .fold.open > .fold-head { border-radius: var(--r-md) var(--r-md) 0 0; border-bottom: 1px solid var(--border); }
+  .fold > .fold-head:hover { background: color-mix(in srgb, var(--text-faint) 7%, transparent); }
+  .fold > .fold-body { padding: var(--s4); }
+  .fold.warn-fold { border-color: color-mix(in srgb, var(--warn) 42%, var(--border)); }
+
+  /* ── tables ──────────────────────────────────────────────────────────────
+     The header becomes a label rather than a small heading, and the row
+     separator stops being as strong as the box it is inside. */
+
+  table.list th {
+    font-size: 9.5px; font-weight: 600; letter-spacing: 0.085em; text-transform: uppercase;
+    padding: var(--s2) var(--s3); color: var(--text-faint);
+    border-bottom: 1px solid var(--border-strong);
+  }
+  table.list td { padding: 9px var(--s3); border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+  table.list tr.click { transition: background 0.1s ease; }
+  table.list tr.click:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  table.list tr:last-child td { border-bottom: 0; }
+  .title-cell .t { font-weight: 550; letter-spacing: -0.005em; }
+  .title-cell .s { margin-top: 3px; line-height: 1.4; }
+
+  /* ── chrome ──────────────────────────────────────────────────────────────
+     The bar at the top and the tabs under it: quieter, and clearly a layer
+     above the page rather than the first row of it. */
+
+  .top { padding: var(--s3) var(--s4); gap: var(--s3); box-shadow: var(--lift-1); position: relative; z-index: 3; }
+  .top .brand { letter-spacing: -0.01em; }
+  .tab { min-height: 25px; display: inline-flex; align-items: center; border-radius: var(--r-sm); font-weight: 500; transition: background 0.12s ease, color 0.12s ease; }
+  .subtabs { padding: 0 var(--s5); gap: var(--s1); box-shadow: var(--lift-1); }
+  .subtabs .tab { border-radius: 0; padding: 8px 11px; font-weight: 550; }
+  .subtabs .tab.on { border-bottom-width: 2px; }
+  .prhead { padding: var(--s4) var(--s5); }
+  .prhead h2 { font-size: 18px; margin: var(--s1) 0; }
+  .crumbs { gap: var(--s2); font-size: 11.5px; }
+
+  .bar { height: 7px; border-radius: var(--r-pill); }
+  .bar > span:first-child { border-radius: var(--r-pill) 0 0 var(--r-pill); }
+  .bar > span:last-child { border-radius: 0 var(--r-pill) var(--r-pill) 0; }
+
+  .kbd { padding: 1px 5px; border-radius: var(--r-sm); background: color-mix(in srgb, var(--text-faint) 9%, transparent); font-size: 9.5px; letter-spacing: 0.02em; }
+
+  .run .lines { border-radius: var(--r-sm); background: color-mix(in srgb, var(--bg) 60%, transparent); padding: var(--s2) var(--s3); line-height: 1.5; }
+
+  /* Amber, wherever it was written out by hand. */
+  .warn { color: var(--warn); }
+  .dot.busy { background: var(--warn); }
+  .status-badge.modified { background: var(--warn); }
+  .status-badge { border-radius: var(--r-sm); box-shadow: var(--edge); }
+
+  /* ── the measure ──────────────────────────────────────────────────────────
+     The one thing that made a finding read as a wall.
+
+     A finding's body ran the full width of the pane. On a maximised window that
+     is a hundred and forty characters a line, and the eye loses its place on the
+     way back to the left margin — so the text was skimmed and the "Show all" at
+     the bottom of it never pressed. Prose is held near seventy-five characters;
+     code is not, because a wrapped line of Java is worse than a scrolled one. */
+
+  /*
+   * The card is held in as well as the text, and that is the half that matters
+   * for how the page looks. Capping only the prose left a column of words down
+   * the left of a card half a screen wide, which reads as something failing to
+   * fill its box. Capping the card means the measure and the composition are the
+   * same decision.
+   */
+  .finding, .finding-line, .fold, .banner, .verdict, .entries { max-width: 900px; }
+  .finding .ftitle,
+  .finding .md,
+  .finding .clamp,
+  .cmt-body .md,
+  .verdict .md {
+    max-width: 86ch;
+  }
+  .finding .md { line-height: 1.62; }
+  .finding .md p + p { margin-top: var(--s3); }
+  /* Code is the exception: a wrapped line of Java is worse than a scrolled one. */
+  .finding .md pre, .finding .md table { max-width: none; }
+
+  /* The way out of a clamped body, made a thing you can see and hit. */
+  .more {
+    display: inline-flex; align-items: center; gap: var(--s1);
+    margin-top: var(--s2); padding: 2px 8px;
+    border: 1px solid var(--border); border-radius: var(--r-pill);
+    color: var(--text-dim); font-size: 10.5px; font-weight: 500;
+    transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+  }
+  .more:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); text-decoration: none; }
+  .clamp::after { height: 2.6em; }
+
+  /* Inline code inside prose: enough contrast to be a token, not enough to be a
+     second colour of text. */
+  .md code, .ftitle code, .cmt-title code, .finding-line .t code {
+    background: color-mix(in srgb, var(--text-faint) 13%, transparent);
+    border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    padding: 0 4px; border-radius: var(--r-sm);
+  }
+  .md pre { border: 1px solid var(--border); border-radius: var(--r-sm); padding: var(--s3) var(--s4); line-height: 1.55; }
+  .md pre code { border: 0; background: none; }
+
+  /* A progress bar at zero still has to show where the road is. */
+  .bar { background: color-mix(in srgb, var(--text-faint) 16%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 60%, transparent); }
+
+  /* The row of actions under a finding belongs to it, so it is separated from
+     the body by a rule rather than by hope. */
+  .finding > .row:last-child {
+    margin-top: var(--s4); padding-top: var(--s3);
+    border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  }
+
+  /* Nothing moves for anybody who has asked for that. */
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+    .stat:hover { transform: none; }
+  }
 </style>
 
 <div id="app">
