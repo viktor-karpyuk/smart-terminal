@@ -99,6 +99,16 @@ class ReviewService {
       wrapLines: prefs['ui.wrapLines'] !== 'false',
       diffLayout: prefs['ui.diffLayout'] === 'split' ? 'split' : 'unified',
       diffFont: Number(prefs['ui.diffFont'] ?? 12) || 12,
+      /*
+       * How big the panel itself is drawn.
+       *
+       * Every size in the panel's stylesheet is a `rem`, so this one number
+       * moves all of it in proportion — headings, labels, chips, buttons,
+       * tables — rather than growing the text inside boxes built for smaller
+       * text. Held between 10 and 20: below ten the chips lose their shape and
+       * above twenty a pull request stops fitting in a pane.
+       */
+      uiFont: Math.min(20, Math.max(10, Number(prefs['ui.font'] ?? 12) || 12)),
     };
   }
 
@@ -639,7 +649,7 @@ class ReviewService {
       },
       saveSettings: (args) => {
         const input = args.settings ?? {};
-        const map = { language: 'review.language', me: 'me.author', profileId: 'claude.profileId', notify: 'notify.enabled', autoEnabled: 'auto.enabled', autoInterval: 'auto.interval.minutes', autoMax: 'auto.max.per.cycle', followUpDays: 'followup.days', asideWidth: 'ui.asideWidth', wrapLines: 'ui.wrapLines', diffLayout: 'ui.diffLayout', diffFont: 'ui.diffFont' };
+        const map = { language: 'review.language', me: 'me.author', profileId: 'claude.profileId', notify: 'notify.enabled', autoEnabled: 'auto.enabled', autoInterval: 'auto.interval.minutes', autoMax: 'auto.max.per.cycle', followUpDays: 'followup.days', asideWidth: 'ui.asideWidth', wrapLines: 'ui.wrapLines', diffLayout: 'ui.diffLayout', diffFont: 'ui.diffFont', uiFont: 'ui.font' };
         for (const [field, key] of Object.entries(map)) {
           if (!(field in input)) continue;
           const value = input[field];
