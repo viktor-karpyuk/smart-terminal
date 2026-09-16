@@ -673,7 +673,15 @@
    * fill its box. Capping the card means the measure and the composition are the
    * same decision.
    */
-  .finding, .finding-line, .fold, .banner, .verdict, .entries { max-width: 900px; }
+  /*
+   * The cap is for things that are *read*, and `.fold` is not one of them — it
+   * is a container, and on the dashboard it holds a table. Capping it left the
+   * board ragged: a 900px fold under a 1148px row of numbers, which reads as a
+   * mistake rather than as a measure. The reading elements keep the cap; the
+   * structure takes the column.
+   */
+  .finding, .finding-line, .verdict, .entries { max-width: 900px; }
+  .page > .banner, .prhead .banner { max-width: 900px; }
   .finding .ftitle,
   .finding .md,
   .finding .clamp,
@@ -724,6 +732,94 @@
   /* The number beside the A− A+ pair: fixed width so it does not shuffle the
      buttons either side of it as the digits change. */
   .size-now { min-width: 3.4em; text-align: center; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+  /* ═══════════════════════════════════════════════════════════════════════════
+     Ten passes, and the first of them is the one a wide screen needs.
+     ═══════════════════════════════════════════════════════════════════════════ */
+
+  /* ── 1. One column, centred ───────────────────────────────────────────────
+     On a 2180px pane the page was capped at 1280 and pinned to the left, so a
+     third of the screen was void — while the bars above it stretched the whole
+     width, which put a pull request's title and its buttons nine hundred pixels
+     apart. Content and chrome now agree: the column is centred and every bar
+     pads itself to start where the column starts, keeping its background full
+     width because a bar that stops short reads as a broken bar. */
+
+  :root { --col: 1180px; }
+  .page { max-width: var(--col); margin-inline: auto; }
+  .top, .subtabs, .prhead, .file-head .file-row {
+    padding-inline: max(var(--s4), calc((100% - var(--col)) / 2));
+  }
+  /* The diff is the exception and stays edge to edge: code wants the room, and
+     a reviewer widened the pane precisely to see more of it. */
+  .split { max-width: none; }
+  .split .page { max-width: none; margin-inline: 0; }
+
+  /* ── 2. Things that belong together stay together ────────────────────────
+     `.spacer` pushed the destructive end of the action row to the far edge of
+     the screen. Inside a column that is a deliberate gap; outside one it was
+     just distance. */
+  .prhead .row { max-width: var(--col); }
+
+  /* ── 3. The numbers stop becoming banners ─────────────────────────────────
+     `repeat(auto-fit, minmax(130px, 1fr))` gave six stats a sixth of 2180px
+     each — a 26px number adrift in a 360px box. They keep a sensible size and
+     the row stops growing. */
+  .stats { grid-template-columns: repeat(auto-fit, minmax(130px, 200px)); justify-content: start; }
+
+  /* ── 4. A table column gets what it needs, not what is left ──────────────
+     The title cell took every spare pixel, so a pull request's name ran the
+     width of the screen while AGE kept forty. Titles wrap at a readable measure
+     and the rest of the row sits where the eye can take it in at once. */
+  table.list .title-cell { max-width: 620px; }
+  table.list .title-cell .t { text-wrap: pretty; }
+  table.list td:not(.title-cell) { white-space: nowrap; }
+
+  /* ── 5. The reply box belongs to the thread it answers ───────────────────
+     It was as wide as the pane while the message above it was not, so the box
+     looked like it belonged to the page rather than to the conversation. */
+  .cmt-msg textarea, .thread textarea, .answer-box { max-width: 78ch; }
+
+  /* ── 6. Everything that can be clicked is big enough to click ────────────
+     A 2px-tall link in a banner and an 18px chip are the same gesture with very
+     different odds. Nothing interactive is under 22px of height any more. */
+  .link { min-height: 18px; }
+  .chip.click, .more, [data-act] { min-height: 22px; }
+  .chip.click, .more { display: inline-flex; align-items: center; }
+  td[data-act], tr[data-act] { min-height: 0; }
+
+  /* ── 7. Focus is visible on everything, not on the things we remembered ── */
+  a:focus-visible, button:focus-visible, select:focus-visible,
+  input:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--r-sm);
+  }
+
+  /* ── 8. Nothing at all is said properly ──────────────────────────────────
+     An empty list was a sentence at the top left of an acre of nothing. */
+  .empty, .loading {
+    display: grid; place-items: center; gap: var(--s2);
+    min-height: 180px; padding: var(--s6);
+    color: var(--text-faint); text-align: center;
+  }
+  .empty strong { color: var(--text-dim); font-weight: 600; font-size: 1.083rem; }
+  .empty p { margin: 0; max-width: 46ch; line-height: 1.55; }
+
+  /* ── 9. Numbers line up wherever they are columns ────────────────────────
+     Cost, age, findings: three columns of digits that jittered because the
+     figures were proportional. */
+  table.list td, table.list th { font-variant-numeric: tabular-nums; }
+
+  /* ── 10. The details that were merely nearly right ──────────────────────── */
+  /* A branch name long enough to push a row sideways is trimmed, not obeyed. */
+  .title-cell .mono { display: inline-block; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+  /* A sticky header that scrolls under the tabs above it showed through them. */
+  .subtabs { background: var(--bg-panel); }
+  /* Two chips of the same kind, different lengths, no longer jump their row. */
+  .row > .chip { align-self: center; }
+  /* A textarea in this panel is always for prose, never for a single line. */
+  textarea { min-height: 4.2em; line-height: 1.55; }
+  /* The scroll container gets its own bottom, so the last card is not flush. */
+  main#main { scroll-padding-bottom: var(--s6); }
 
   /* Nothing moves for anybody who has asked for that. */
   @media (prefers-reduced-motion: reduce) {
