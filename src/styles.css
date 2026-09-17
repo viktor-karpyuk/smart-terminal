@@ -909,6 +909,37 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .name-session input:focus { outline: none; border-color: var(--accent); }
 .name-session .confirm-actions { margin-top: 2px; }
 
+/* Where it opens, on one line: the label, the path that gives up room first,
+   and the way to change it. */
+.name-session-where { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.name-session-where .label { flex: none; font-size: 11px; color: var(--text-faint); }
+.name-session-where .path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.name-session-where .ghost-btn { flex: none; }
+
+.name-session-recent { display: flex; flex-wrap: wrap; gap: 4px; }
+.name-session-recent .chip-btn {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.name-session-recent .chip-btn:hover { border-color: var(--accent); color: var(--accent); }
+
 /* What is about to be closed, when it is more than one thing. */
 .confirm-list {
   margin: 10px 0 0;

@@ -517,10 +517,17 @@ interface State {
      */
     ask?: boolean;
   }): Promise<string | null>;
-  /** The name being asked for, while it is being asked. */
-  pendingSession: { suggested: string; options: Record<string, unknown> } | null;
-  /** Start it, under this name — or under the suggestion when nothing was typed. */
-  confirmNewSession(name: string): Promise<string | null>;
+  /**
+   * The question being asked, while it is being asked.
+   *
+   * `cwd` is the folder the session would actually open in, resolved the same
+   * way `newSession` resolves it — the option, then the account's own folder,
+   * then home. Shown rather than re-derived, so the dialog cannot say one thing
+   * while the session does another.
+   */
+  pendingSession: { suggested: string; cwd: string; options: Record<string, unknown> } | null;
+  /** Start it, under this name and in this folder — the suggestion when blank. */
+  confirmNewSession(name: string, cwd?: string): Promise<string | null>;
   cancelNewSession(): void;
   closeSession(sessionId: string): void;
   restartSession(sessionId: string, options?: { fresh?: boolean }): Promise<void>;
@@ -1202,6 +1209,7 @@ export const useStore = create<State>((set, get) => ({
     const cwd = options.cwd || profile.cwd || state.homedir;
     const kind = options.kind || 'claude';
 
+
     const targetLeafId = options.leafId || state.activeLeafId || allLeaves(state.layout)[0]?.id;
     const side = options.side || 'center';
 
@@ -1245,7 +1253,7 @@ export const useStore = create<State>((set, get) => ({
      * does anything with the id but focus it, which `confirmNewSession` does.
      */
     if (options.ask && !options.title && !options.resumeSessionId && state.settings.askSessionName) {
-      set({ pendingSession: { suggested: title ?? '', options: { ...options, ask: false } } });
+      set({ pendingSession: { suggested: title ?? '', cwd, options: { ...options, ask: false } } });
       return null;
     }
 
@@ -3666,12 +3674,19 @@ export const useStore = create<State>((set, get) => ({
    * Enter to get on with it rather than somebody asking for a session with no
    * name at all.
    */
-  async confirmNewSession(name) {
+  async confirmNewSession(name, cwd) {
     const pending = get().pendingSession;
     if (!pending) return null;
     set({ pendingSession: null });
     const chosen = name.trim() || pending.suggested;
-    return get().newSession({ ...(pending.options as Parameters<State['newSession']>[0]), title: chosen });
+    return get().newSession({
+      ...(pending.options as Parameters<State['newSession']>[0]),
+      title: chosen,
+      // Passed explicitly even when unchanged: the folder shown is the folder
+      // used, and leaving it to be resolved a second time is how those two come
+      // apart.
+      cwd: (cwd ?? pending.cwd) || undefined,
+    });
   },
 
   /** Changed your mind: nothing was started, so there is nothing to undo. */
