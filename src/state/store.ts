@@ -67,6 +67,7 @@ const DEFAULT_SETTINGS: Settings = {
   // What the editor's stylesheet had been falling back to all along, so nobody's
   // editors change size the first time they run a build that has this in it.
   editorFontSize: 12.5,
+  askSessionName: true,
   fontFamily: '"JetBrains Mono", "SF Mono", Menlo, "Fira Code", ui-monospace, monospace',
   sidebarVisible: true,
   sidebarWidth: 260,
@@ -506,7 +507,21 @@ interface State {
     handoffFrom?: { profileId: string; at: number } | null;
     lastCommand?: string | null;
     resumeCommand?: boolean;
+    /**
+     * Whether this is somebody asking for a session, or the app making one.
+     *
+     * Only the first is worth interrupting with a question. A duplicate, a
+     * restart, a handoff, a session an extension opens for its own panel — all
+     * of those already know what they are for, and several pass a title saying
+     * so.
+     */
+    ask?: boolean;
   }): Promise<string | null>;
+  /** The name being asked for, while it is being asked. */
+  pendingSession: { suggested: string; options: Record<string, unknown> } | null;
+  /** Start it, under this name — or under the suggestion when nothing was typed. */
+  confirmNewSession(name: string): Promise<string | null>;
+  cancelNewSession(): void;
   closeSession(sessionId: string): void;
   restartSession(sessionId: string, options?: { fresh?: boolean }): Promise<void>;
   /** Stop it where it is, keeping everything, so it can be picked up later. */
@@ -754,6 +769,7 @@ export const useStore = create<State>((set, get) => ({
   appearanceOpen: false,
   update: null,
   updatePanelOpen: false,
+  pendingSession: null,
   pendingClose: null,
   minimized: [],
   minimizedSections: [],
@@ -1214,6 +1230,24 @@ export const useStore = create<State>((set, get) => ({
       (options.resumeSessionId
         ? null
         : generateSessionName(Object.values(state.sessions).map((s) => s.customTitle)));
+
+    /*
+     * Ask, when there is something to ask about.
+     *
+     * Only for a session somebody asked for, only when no name was handed in,
+     * and only while the setting says so. The generated name is what the field
+     * is filled with, so the fastest way through is the key you were already
+     * going to press — and what it produces is what the app would have chosen
+     * anyway.
+     *
+     * It returns null here, which every caller of `newSession` already handles:
+     * a session that could not be started returns null too, and none of them
+     * does anything with the id but focus it, which `confirmNewSession` does.
+     */
+    if (options.ask && !options.title && !options.resumeSessionId && state.settings.askSessionName) {
+      set({ pendingSession: { suggested: title ?? '', options: { ...options, ask: false } } });
+      return null;
+    }
 
     await spawnInto(set, get, {
       sessionId,
@@ -3623,6 +3657,26 @@ export const useStore = create<State>((set, get) => ({
 
   setAppearanceOpen(open) {
     set({ appearanceOpen: open });
+  },
+
+  /**
+   * Start the session that was waiting on a name.
+   *
+   * Blank means the suggestion, because an empty field is somebody pressing
+   * Enter to get on with it rather than somebody asking for a session with no
+   * name at all.
+   */
+  async confirmNewSession(name) {
+    const pending = get().pendingSession;
+    if (!pending) return null;
+    set({ pendingSession: null });
+    const chosen = name.trim() || pending.suggested;
+    return get().newSession({ ...(pending.options as Parameters<State['newSession']>[0]), title: chosen });
+  },
+
+  /** Changed your mind: nothing was started, so there is nothing to undo. */
+  cancelNewSession() {
+    set({ pendingSession: null });
   },
 
   setUpdatePanelOpen(open) {

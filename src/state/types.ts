@@ -352,6 +352,16 @@ export interface Settings {
   sidebarWidth: number;
   cursorBlink: boolean;
   scrollback: number;
+  /**
+   * Ask what a new session should be called before starting it.
+   *
+   * The app has always named them itself — `moraine`, `spindle`, `wren` — which
+   * is a fine answer to "it needs *a* name" and a poor one to "which of these
+   * nineteen tabs is the billing work". The generated name is offered as the
+   * suggestion, so accepting it is one keystroke and nothing is slower than it
+   * was for anybody who does not care.
+   */
+  askSessionName: boolean;
   /** Move a session to another account by itself when its own runs out. */
   autoHandoff: boolean;
   /** Account new sessions belong to unless one is chosen explicitly. */

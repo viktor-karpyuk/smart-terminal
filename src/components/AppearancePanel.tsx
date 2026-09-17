@@ -312,6 +312,15 @@ export function AppearancePanel() {
             <label className="checkbox">
               <input
                 type="checkbox"
+                checked={settings.askSessionName}
+                onChange={(event) => updateSettings({ askSessionName: event.target.checked })}
+              />
+              <span>Ask what to call a new session — otherwise the app names it</span>
+            </label>
+
+            <label className="checkbox">
+              <input
+                type="checkbox"
                 checked={settings.cursorBlink}
                 onChange={(event) => updateSettings({ cursorBlink: event.target.checked })}
               />

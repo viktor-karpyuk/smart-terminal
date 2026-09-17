@@ -129,6 +129,7 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
       cwd: activeSession?.cwd,
       leafId: leaf.id,
       side: 'center',
+      ask: true,
     });
   }
 
@@ -500,7 +501,7 @@ function EmptyPane({ leafId }: { leafId: string }) {
       <p>Nothing here yet.</p>
       <p className="form-hint">A section can hold a terminal, or a folder and its files.</p>
       <div className="empty-pane-actions">
-        <button className="primary-btn" onClick={() => newSession({ leafId, kind: 'claude' })}>
+        <button className="primary-btn" onClick={() => newSession({ leafId, kind: 'claude', ask: true })}>
           Start a session
         </button>
         <button ref={buttonRef} className="ghost-btn" onClick={() => setOpen((o) => !o)}>

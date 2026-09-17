@@ -15,6 +15,7 @@ import { AppearancePanel } from './components/AppearancePanel';
 import { UpdatePanel } from './components/UpdatePanel';
 import { HistoryPanel } from './components/HistoryPanel';
 import { CloseConfirm } from './components/CloseConfirm';
+import { NameSession } from './components/NameSession';
 import { MinimizedDock } from './components/MinimizedDock';
 
 export function App() {
@@ -92,6 +93,7 @@ export function App() {
       {appearanceOpen && <AppearancePanel />}
       {updatePanelOpen && <UpdatePanel />}
       <CloseConfirm />
+      <NameSession />
     </div>
   );
 }
@@ -171,10 +173,10 @@ export function handleMenuAction(id: string) {
 
   switch (id) {
     case 'new-claude':
-      store.newSession({ kind: 'claude' });
+      store.newSession({ kind: 'claude', ask: true });
       break;
     case 'new-shell':
-      store.newSession({ kind: 'shell' });
+      store.newSession({ kind: 'shell', ask: true });
       break;
     case 'duplicate':
       if (sessionId) store.duplicateSession(sessionId);

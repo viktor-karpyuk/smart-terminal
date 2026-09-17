@@ -892,6 +892,23 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .history-pick input { margin: 0; cursor: pointer; }
 .history-row.is-picked { background: var(--accent-soft); }
 
+/* Naming a session before it starts. Sized to its question, not to the dialog
+   that happens to share its shell. */
+.name-session { width: 340px; display: grid; gap: 8px; }
+.name-session h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.name-session .usage-note { margin: 0; }
+.name-session input {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+}
+.name-session input:focus { outline: none; border-color: var(--accent); }
+.name-session .confirm-actions { margin-top: 2px; }
+
 /* What is about to be closed, when it is more than one thing. */
 .confirm-list {
   margin: 10px 0 0;
