@@ -179,6 +179,20 @@ class ReviewService {
     });
   }
 
+  /**
+   * Which files you have looked at — here, and only here.
+   *
+   * Worth stating because the tick looks like the one on the pull request page
+   * and is not it. Neither forge offers a way to set theirs: GitHub keeps a
+   * viewed state of its own and Bitbucket Cloud's is a feature of its interface
+   * with no documented endpoint behind it. So this is the app's own record, and
+   * the labels on it say so rather than letting somebody find out by opening
+   * Bitbucket and seeing nothing ticked.
+   *
+   * It is kept against each file's blob id rather than its path, which is the
+   * part that earns its keep: a new push un-views exactly the files that
+   * changed and leaves the rest alone.
+   */
   async setViewedNow(repoId, prId, file, viewed) {
     const current = await this.viewed(repoId, prId);
     const marks = { ...current.marks };
