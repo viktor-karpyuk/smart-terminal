@@ -2123,7 +2123,7 @@
 
     var html = '<div class="split"' + splitStyle() + '><aside>';
     html += '<div class="tools"><input type="text" placeholder="Filter files" data-bind="code-filter" data-edit="code-filter" value="' + esc(c.filter || '') + '">' +
-      '<span class="faint" title="Files marked as viewed, for this commit">' + seen + '/' + c.files.length + '</span><button class="btn small" data-act="code-fetch" title="Fetch the branches and read the diff again">Fetch</button></div>';
+      '<span class="faint" title="Files you have marked as viewed here, for this commit. Kept in this app and against this exact version of each file, so a new push un-views whatever changed.">' + seen + '/' + c.files.length + '</span><button class="btn small" data-act="code-fetch" title="Fetch the branches and read the diff again">Fetch</button></div>';
     html += '<div class="viewed-bar" title="' + seen + ' of ' + c.files.length + ' files viewed"><span style="width:' + (c.files.length ? Math.round((seen / c.files.length) * 100) : 0) + '%"></span></div>';
     var lastDir = null;
     shown.forEach(function (file) {
@@ -2683,7 +2683,7 @@
         '<span class="seg"><button class="btn small" data-act="font" data-delta="-1" title="Smaller text">A−</button><span class="faint">' + diffFont() + '</span><button class="btn small" data-act="font" data-delta="1" title="Larger text">A+</button></span>' +
         '<span class="spacer"></span>' +
         '<button class="btn small" data-act="note-file" data-file="' + esc(file) + '" title="A note on the whole file. For a line, click its number.">+ Note</button>' +
-        '<button class="btn small' + (viewed ? ' go' : '') + '" data-act="toggle-viewed" data-file="' + esc(file) + '" title="Mark this file as looked at, and go to the next one not viewed ( v )">' + (viewed ? '✓ Viewed' : 'Viewed') + '</button>' +
+        '<button class="btn small' + (viewed ? ' go' : '') + '" data-act="toggle-viewed" data-file="' + esc(file) + '" title="Mark this file as looked at and go to the next one not viewed ( v ). The mark lives here, not on the forge — Bitbucket and GitHub keep their own, and neither offers a way to set it.">' + (viewed ? '✓ Viewed' : 'Viewed') + '</button>' +
       '</div></div>';
   }
 
