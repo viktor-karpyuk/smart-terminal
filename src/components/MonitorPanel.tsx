@@ -5,6 +5,15 @@ import { STORAGE } from '../state/types';
 import type { CompactionRecord, DbCell, DbHealth, DbPage, DbTable, HistorySample, Norms } from '../global';
 import type { Finding, SessionAnalysis } from '../state/types';
 
+/*
+ * Where Claude compacts itself if nobody compacts it first.
+ *
+ * Not a number this app chooses — it is Claude's, and it is drawn on the curve
+ * so the shape answers the question the curve is read for: not "how full is it"
+ * but "how close is it to the point where it stops being my decision".
+ */
+const AUTO_COMPACT_AT = 0.92;
+
 /**
  * The session monitor, as a section.
  *
@@ -84,7 +93,9 @@ export function MonitorPanel({ panelId }: { panelId: string }) {
                 : 'No conversation on disk for this session.'}
             </p>
           )}
-          {current?.ok && <Detail verdict={current} showSuggestions={showSuggestions} />}
+          {current?.ok && chosen && (
+            <Detail verdict={current} sessionId={chosen} showSuggestions={showSuggestions} />
+          )}
         </section>
       </div>
 
@@ -150,7 +161,146 @@ function ContextBar({ share }: { share: number }) {
   );
 }
 
-function Detail({ verdict, showSuggestions }: { verdict: SessionAnalysis; showSuggestions: boolean }) {
+/**
+ * The things worth doing to a session, from the place that can see it needs them.
+ *
+ * The monitor could say a session was running at 80% of its window and compacting
+ * itself in the middle of steps, and then leave you to go and type the fix into
+ * the tab yourself. Reading a diagnosis and acting on it are the same moment, so
+ * they are in the same place.
+ *
+ * These are typed into the session the way you would type them: `runCommandIn`
+ * focuses the tab, sends the line, and sends the return a beat later, because
+ * Claude's prompt is a program reading keystrokes and not an API. That is also
+ * why nothing here pretends to have "run" anything — the session is where it
+ * happens, and you watch it happen.
+ */
+function Actions({ sessionId, verdict }: { sessionId: string; verdict: SessionAnalysis }) {
+  const run = useStore((s) => s.runCommandIn);
+  const send = useStore((s) => s.sendInput);
+  const focus = useStore((s) => s.focusSession);
+  const live = useStore((s) => Boolean(s.sessions[sessionId]));
+  const [noting, setNoting] = useState(false);
+  const [note, setNote] = useState('');
+  const [confirming, setConfirming] = useState<string | null>(null);
+
+  /*
+   * Nothing can be typed into a session that is not running. The monitor reads
+   * transcripts, so it can report on a session that has since been closed — and
+   * offering Compact on one of those is a button whose only outcome is silence.
+   */
+  if (!live) {
+    return (
+      <p className="usage-note monitor-actions-gone">
+        This session is not running, so there is nothing to type into it. What is below is the
+        record it left.
+      </p>
+    );
+  }
+
+  const share = verdict.context.share;
+
+  return (
+    <div className="monitor-actions">
+      <button
+        className={`ghost-btn tiny${share >= AUTO_COMPACT_AT ? ' is-primary' : ''}`}
+        title="Type /compact. Claude summarises the conversation so far and carries on from the summary."
+        onClick={() => run(sessionId, '/compact')}
+      >
+        Compact
+      </button>
+      <button
+        className="ghost-btn tiny"
+        title="Compact, saying what to keep — the decisions, the file it is working on, whatever the summary must not lose"
+        onClick={() => {
+          setNoting((was) => !was);
+          setConfirming(null);
+        }}
+      >
+        Compact with a note…
+      </button>
+      <button
+        className="ghost-btn tiny"
+        title="Escape, the way you would press it: stop what it is doing without ending the session"
+        onClick={() => {
+          focus(sessionId);
+          send(sessionId, '\u001b');
+        }}
+      >
+        Interrupt
+      </button>
+      <button
+        className={`ghost-btn tiny${confirming === 'clear' ? ' is-danger' : ''}`}
+        title="Type /clear. The conversation starts over in this same tab — everything said so far is gone from its context."
+        onClick={() => {
+          if (confirming !== 'clear') {
+            setConfirming('clear');
+            return;
+          }
+          setConfirming(null);
+          run(sessionId, '/clear');
+        }}
+        onBlur={() => setConfirming((id) => (id === 'clear' ? null : id))}
+      >
+        {confirming === 'clear' ? 'Clear it? Everything is forgotten' : 'Clear'}
+      </button>
+      <span style={{ flex: 1 }} />
+      <button className="ghost-btn tiny" title="Bring this session into view" onClick={() => focus(sessionId)}>
+        Go to it
+      </button>
+
+      {noting && (
+        <div className="monitor-note">
+          <input
+            autoFocus
+            value={note}
+            placeholder="What the summary must keep — e.g. the migration plan and why V0553 was skipped"
+            onChange={(event) => setNote(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') setNoting(false);
+              if (event.key !== 'Enter') return;
+              const text = note.trim();
+              run(sessionId, text ? `/compact ${text}` : '/compact');
+              setNote('');
+              setNoting(false);
+            }}
+          />
+          <button
+            className="ghost-btn tiny is-primary"
+            onClick={() => {
+              const text = note.trim();
+              run(sessionId, text ? `/compact ${text}` : '/compact');
+              setNote('');
+              setNoting(false);
+            }}
+          >
+            Compact
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The fix a finding has, when it has one that is a keystroke.
+ *
+ * Only where the finding's own suggestion is already "compact at a point you
+ * choose". The rest are about how a session is being worked — a tool returning
+ * three hundred kilobytes, the same call five times — and there is no command
+ * that mends those, so offering one would be a button that lies.
+ */
+const FIXED_BY_COMPACTING = new Set(['high-context', 'auto-compaction', 'filling-up']);
+
+function Detail({
+  verdict,
+  sessionId,
+  showSuggestions,
+}: {
+  verdict: SessionAnalysis;
+  sessionId: string;
+  showSuggestions: boolean;
+}) {
   /**
    * The stretch of the session being reported on, as indices into the curve.
    *
@@ -249,6 +399,9 @@ function Detail({ verdict, showSuggestions }: { verdict: SessionAnalysis; showSu
         ))}
       </div>
 
+      {/* Above the curve, because the curve is the argument for pressing them. */}
+      <Actions sessionId={sessionId} verdict={verdict} />
+
       <Curve verdict={verdict} range={range} onRange={setRange} />
 
       <Compactions verdict={verdict} />
@@ -262,7 +415,7 @@ function Detail({ verdict, showSuggestions }: { verdict: SessionAnalysis; showSu
         <p className="usage-note">This session is working within its means.</p>
       )}
       {verdict.findings.map((finding) => (
-        <FindingRow key={finding.id} finding={finding} showSuggestion={showSuggestions} />
+        <FindingRow key={finding.id} finding={finding} sessionId={sessionId} showSuggestion={showSuggestions} />
       ))}
 
       <Advisor sessionId={verdict.sessionId} />
@@ -385,9 +538,19 @@ function Curve({
       })
       .filter(Boolean) as Array<{ x: number; trigger: string; dropped: number }>;
 
-    // Two lines worth drawing: where degradation starts, and the ceiling itself.
+    /*
+     * Three lines, and the middle one is the one that was missing.
+     *
+     * 60% is where answers start to get worse, and the ceiling is the window.
+     * Between them sits the line where Claude compacts *itself* — and that is
+     * the one the curve is actually read for. "How full is it" is a number; the
+     * question somebody opens this to ask is "how long until it stops being my
+     * decision what gets forgotten", and until this was drawn the shape could
+     * not answer it.
+     */
     const lines = [
       { value: ceiling * 0.6, label: '60%', kind: 'warn' as const },
+      { value: ceiling * AUTO_COMPACT_AT, label: 'compacts itself', kind: 'auto' as const },
       { value: ceiling, label: tokens(ceiling), kind: 'ceiling' as const },
     ].filter((tick) => tick.value <= scaleTop * 1.001);
 
@@ -1130,12 +1293,40 @@ function Advisor({ sessionId }: { sessionId: string }) {
   );
 }
 
-function FindingRow({ finding, showSuggestion }: { finding: Finding; showSuggestion: boolean }) {
+function FindingRow({
+  finding,
+  sessionId,
+  showSuggestion,
+}: {
+  finding: Finding;
+  sessionId: string;
+  showSuggestion: boolean;
+}) {
+  const run = useStore((s) => s.runCommandIn);
+  const live = useStore((s) => Boolean(s.sessions[sessionId]));
+  /*
+   * A finding gets a button only where its own suggestion is already a
+   * keystroke. Three of them say "compact at a point you choose"; the rest are
+   * about how a session is being worked — a tool returning three hundred
+   * kilobytes, the same call five times — and no command mends those, so a
+   * button there would be one that lies about what it does.
+   */
+  const fixable = live && FIXED_BY_COMPACTING.has(finding.id);
+
   return (
     <div className={`monitor-finding is-${finding.severity}`}>
       <header>
         <span className={`monitor-pip is-${finding.severity}`} />
         <strong>{finding.title}</strong>
+        {fixable && (
+          <button
+            className="ghost-btn tiny"
+            title="Type /compact into this session, now, rather than waiting for it to happen mid-step"
+            onClick={() => run(sessionId, '/compact')}
+          >
+            Compact now
+          </button>
+        )}
       </header>
       <p>{finding.detail}</p>
       {showSuggestion && <p className="monitor-suggestion">{finding.suggestion}</p>}
