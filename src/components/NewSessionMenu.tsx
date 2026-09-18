@@ -40,7 +40,7 @@ export function NewSessionMenu({ leafId, anchorEl, cwdHint, side = 'center', onC
 
   async function open(profileId: string, kind: 'claude' | 'shell') {
     onClose();
-    await newSession({ profileId, kind, cwd: cwd || undefined, leafId, side });
+    await newSession({ profileId, kind, cwd: cwd || undefined, leafId, side, ask: true });
   }
 
   async function browse() {

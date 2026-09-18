@@ -67,6 +67,7 @@ const DEFAULT_SETTINGS: Settings = {
   // What the editor's stylesheet had been falling back to all along, so nobody's
   // editors change size the first time they run a build that has this in it.
   editorFontSize: 12.5,
+  askSessionName: true,
   fontFamily: '"JetBrains Mono", "SF Mono", Menlo, "Fira Code", ui-monospace, monospace',
   sidebarVisible: true,
   sidebarWidth: 260,
@@ -506,7 +507,28 @@ interface State {
     handoffFrom?: { profileId: string; at: number } | null;
     lastCommand?: string | null;
     resumeCommand?: boolean;
+    /**
+     * Whether this is somebody asking for a session, or the app making one.
+     *
+     * Only the first is worth interrupting with a question. A duplicate, a
+     * restart, a handoff, a session an extension opens for its own panel — all
+     * of those already know what they are for, and several pass a title saying
+     * so.
+     */
+    ask?: boolean;
   }): Promise<string | null>;
+  /**
+   * The question being asked, while it is being asked.
+   *
+   * `cwd` is the folder the session would actually open in, resolved the same
+   * way `newSession` resolves it — the option, then the account's own folder,
+   * then home. Shown rather than re-derived, so the dialog cannot say one thing
+   * while the session does another.
+   */
+  pendingSession: { suggested: string; cwd: string; options: Record<string, unknown> } | null;
+  /** Start it, under this name and in this folder — the suggestion when blank. */
+  confirmNewSession(name: string, cwd?: string): Promise<string | null>;
+  cancelNewSession(): void;
   closeSession(sessionId: string): void;
   restartSession(sessionId: string, options?: { fresh?: boolean }): Promise<void>;
   /** Stop it where it is, keeping everything, so it can be picked up later. */
@@ -754,6 +776,7 @@ export const useStore = create<State>((set, get) => ({
   appearanceOpen: false,
   update: null,
   updatePanelOpen: false,
+  pendingSession: null,
   pendingClose: null,
   minimized: [],
   minimizedSections: [],
@@ -1186,6 +1209,7 @@ export const useStore = create<State>((set, get) => ({
     const cwd = options.cwd || profile.cwd || state.homedir;
     const kind = options.kind || 'claude';
 
+
     const targetLeafId = options.leafId || state.activeLeafId || allLeaves(state.layout)[0]?.id;
     const side = options.side || 'center';
 
@@ -1214,6 +1238,24 @@ export const useStore = create<State>((set, get) => ({
       (options.resumeSessionId
         ? null
         : generateSessionName(Object.values(state.sessions).map((s) => s.customTitle)));
+
+    /*
+     * Ask, when there is something to ask about.
+     *
+     * Only for a session somebody asked for, only when no name was handed in,
+     * and only while the setting says so. The generated name is what the field
+     * is filled with, so the fastest way through is the key you were already
+     * going to press — and what it produces is what the app would have chosen
+     * anyway.
+     *
+     * It returns null here, which every caller of `newSession` already handles:
+     * a session that could not be started returns null too, and none of them
+     * does anything with the id but focus it, which `confirmNewSession` does.
+     */
+    if (options.ask && !options.title && !options.resumeSessionId && state.settings.askSessionName) {
+      set({ pendingSession: { suggested: title ?? '', cwd, options: { ...options, ask: false } } });
+      return null;
+    }
 
     await spawnInto(set, get, {
       sessionId,
@@ -3623,6 +3665,33 @@ export const useStore = create<State>((set, get) => ({
 
   setAppearanceOpen(open) {
     set({ appearanceOpen: open });
+  },
+
+  /**
+   * Start the session that was waiting on a name.
+   *
+   * Blank means the suggestion, because an empty field is somebody pressing
+   * Enter to get on with it rather than somebody asking for a session with no
+   * name at all.
+   */
+  async confirmNewSession(name, cwd) {
+    const pending = get().pendingSession;
+    if (!pending) return null;
+    set({ pendingSession: null });
+    const chosen = name.trim() || pending.suggested;
+    return get().newSession({
+      ...(pending.options as Parameters<State['newSession']>[0]),
+      title: chosen,
+      // Passed explicitly even when unchanged: the folder shown is the folder
+      // used, and leaving it to be resolved a second time is how those two come
+      // apart.
+      cwd: (cwd ?? pending.cwd) || undefined,
+    });
+  },
+
+  /** Changed your mind: nothing was started, so there is nothing to undo. */
+  cancelNewSession() {
+    set({ pendingSession: null });
   },
 
   setUpdatePanelOpen(open) {
