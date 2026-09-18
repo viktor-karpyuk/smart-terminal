@@ -2816,7 +2816,17 @@
         (t.entries.length ? '<div class="entries">' + t.entries.map(entryHtml).join('') + '</div>' : '');
       if (draft && draft.status !== 'PUBLISHED' && !draft.dismissedAt && open) {
         var key = 'reply-' + draft.id;
-        var drafting = (v.running || []).some(function (run) { return run.kind === 'reply' && run.title.indexOf(draft.theirAuthor) >= 0; }) || state.busy['draft-' + draft.id];
+        /*
+         * Which answer is being drafted, by its id.
+         *
+         * This used to ask whether any reply run's *title* contained the
+         * author's name — and a title is "Reply to Braian Chavez". Two threads
+         * with the same person on one pull request are two runs with the same
+         * title, so drafting one marked both as drafting and replaced both
+         * buttons with a spinner, which read as the panel refusing to do the
+         * second until the first had finished.
+         */
+        var drafting = (v.running || []).some(function (run) { return run.kind === 'reply' && run.replyId === draft.id; }) || state.busy['draft-' + draft.id];
         html += '<div class="card" style="margin-top:6px"><div class="row"><strong>Answer to ' + esc(draft.theirAuthor) + '</strong>' + (draft.status === 'FAILED' ? '<span class="chip badc" title="' + esc(draft.error || '') + '">drafting failed</span>' : '') + '<span class="spacer"></span>' +
           (drafting ? '<span class="chip accent"><span class="dot busy"></span>drafting</span>' : '<button class="btn small" data-act="draft-reply" data-id="' + esc(draft.id) + '">' + (draft.body ? 'Draft again' : 'Draft with Claude') + '</button>') + '</div>' +
           '<textarea rows="4" data-edit="' + key + '" placeholder="Write the answer, or let Claude draft it from the code">' + esc(edit(key, draft.body || '')) + '</textarea>' +

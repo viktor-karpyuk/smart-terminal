@@ -286,3 +286,44 @@ test('a rule written for a page block cannot reach into a table cell', () => {
     )}\n\nQualify them — div.empty, not .empty — so a page's placeholder cannot set a row's height.`,
   );
 });
+
+// ---------------------------------------------------------------- which one is running
+
+/*
+ * A run in flight is matched to the thing on screen it belongs to. Fixes do it
+ * by `findingId` and that was always right; replies did it by asking whether the
+ * run's *title* contained the author's name — and a reply's title is "Reply to
+ * Braian Chavez". Two threads with the same person on one pull request are two
+ * runs with the same title, so drafting an answer to one showed both as drafting
+ * and replaced both buttons with a spinner. From the other side of the screen
+ * that is the panel refusing to draft the second until the first has finished.
+ *
+ * So: a run is identified by the id of the thing it is working on, never by
+ * words a human might share with somebody else.
+ */
+test('a run in flight is matched by id, not by what its title happens to say', () => {
+  const runs = /var (?:drafting|fixing|reviewing) = [^;]+;/g;
+  const matchers = source.match(runs) ?? [];
+  assert.ok(matchers.length >= 3, 'the three kinds of run are still matched somewhere');
+
+  const byTitle = matchers.filter((line) => /title\s*\.\s*indexOf|title\s*===|title\s*\.\s*includes/.test(line));
+  assert.deepStrictEqual(
+    byTitle,
+    [],
+    `These decide what is running from a run's title:\n  ${byTitle.join('\n  ')}\n\n` +
+      'Two people can share a name and one person can have two threads. Match on the id.',
+  );
+});
+
+test('the engine says which reply a drafting run is for', () => {
+  const engine = fs.readFileSync(path.join(__dirname, '..', 'electron', 'review-engine.js'), 'utf8');
+  const start = /this\.activity\.start\(key, \{[\s\S]{0,400}?kind: 'reply'[\s\S]{0,400?}?\}\)/.exec(engine);
+  assert.ok(/kind: 'reply'/.test(engine), 'there is still a reply run');
+  // The panel can only match on an id the engine actually puts there.
+  assert.match(
+    engine,
+    /kind: 'reply',[\s\S]{0,200}replyId/,
+    'a reply run carries the id of the reply it is drafting',
+  );
+  void start;
+});

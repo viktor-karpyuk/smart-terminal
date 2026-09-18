@@ -698,7 +698,22 @@ class ReviewEngine {
     return this.replySlots.use(async () => {
       const repo = this.requireRepo(draft.repoId);
       const pr = this.prOrThrow(draft.repoId, draft.prId);
-      this.activity.start(key, { kind: 'reply', repoId: repo.id, prId: pr.id, repoName: repo.name, title: `Reply to ${draft.theirAuthor}` });
+      /*
+       * `replyId` is on the run because the panel needs to know *which* answer
+       * is being drafted, and the only thing it had to go on was the title —
+       * "Reply to Braian Chavez" — matched by substring. Two threads with the
+       * same person on one pull request are the same title, so drafting one
+       * showed both as drafting and took both buttons away. A thread is a thing
+       * with an id; say the id.
+       */
+      this.activity.start(key, {
+        kind: 'reply',
+        repoId: repo.id,
+        prId: pr.id,
+        replyId,
+        repoName: repo.name,
+        title: `Reply to ${draft.theirAuthor}`,
+      });
       try {
         this.requireClone(repo);
         await this.inClone(repo.localPath, () => this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch));
