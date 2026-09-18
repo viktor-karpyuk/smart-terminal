@@ -892,6 +892,39 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .history-pick input { margin: 0; cursor: pointer; }
 .history-row.is-picked { background: var(--accent-soft); }
 
+/* What the monitor can do to the session it is reporting on. */
+.monitor-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-panel);
+}
+.monitor-actions .ghost-btn.is-danger { color: var(--danger); border-color: var(--danger); }
+.monitor-actions-gone { margin: 10px 0 4px; }
+.monitor-note { flex: 0 0 100%; display: flex; gap: 6px; margin-top: 2px; }
+.monitor-note input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+  font-size: 11.5px;
+}
+.monitor-note input:focus { outline: none; border-color: var(--accent); }
+
+/* The fix a finding carries, at the end of its own title row. */
+.monitor-finding header { display: flex; align-items: center; gap: 7px; }
+.monitor-finding header strong { flex: 1; min-width: 0; }
+.monitor-finding header .ghost-btn { flex: none; }
+
 /* What is about to be closed, when it is more than one thing. */
 .confirm-list {
   margin: 10px 0 0;
@@ -2608,10 +2641,16 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .monitor-rule { stroke-dasharray: 3 3; stroke-width: 1; }
 .monitor-rule.is-warn { stroke: color-mix(in srgb, #e0af68 55%, transparent); }
 .monitor-rule.is-ceiling { stroke: color-mix(in srgb, var(--danger) 60%, transparent); }
+/* The line where the choice stops being yours. Solid, because it is not a
+   caution like 60% — it is the edge, and the curve crossing it is the event. */
+.monitor-rule.is-auto { stroke: #bb9af7; stroke-dasharray: none; stroke-width: 1.2; opacity: 0.8; }
 
 .monitor-tick { font-size: 9.5px; fill: var(--text-dim); }
 .monitor-tick.is-warn { fill: #e0af68; }
 .monitor-tick.is-ceiling { fill: var(--danger); }
+/* Named in the same violet as the compaction marks, because they are the same
+   event: the marks are where it happened, the line is where it will. */
+.monitor-tick.is-auto { fill: #bb9af7; font-size: 9px; }
 .monitor-axis { font-size: 9.5px; fill: var(--text-faint, var(--text-dim)); }
 
 /* Where it compacted. Without these the drops look like the session recovering. */
