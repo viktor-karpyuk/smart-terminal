@@ -17,7 +17,7 @@ interface Props {
  */
 export function Popover({ anchorEl, anchorPoint, onClose, children }: Props) {
   const ref = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+  const [position, setPosition] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -46,9 +46,25 @@ export function Popover({ anchorEl, anchorPoint, onClose, children }: Props) {
           top = anchor.top - size.height - gap;
         }
       }
-      top = clamp(top, margin, window.innerHeight - size.height - margin);
-      left = clamp(left, margin, window.innerWidth - size.width - margin);
-      setPosition({ top, left });
+      /*
+       * A menu taller than the screen has to scroll, or its last item cannot be
+       * reached at all.
+       *
+       * Clamping alone cannot save it: with a menu taller than the viewport the
+       * lower bound passes the upper one, and whichever end wins, the other is
+       * off-screen with no way to get to it. On a laptop the session menu is
+       * long enough for that to be an ordinary Tuesday rather than an edge case.
+       *
+       * So the height is capped to the room there actually is — the whole
+       * viewport less its margins, since the position is clamped into that
+       * anyway — and the body scrolls inside it.
+       */
+      const room = window.innerHeight - margin * 2;
+      const height = Math.min(size.height, room);
+
+      top = clamp(top, margin, Math.max(margin, window.innerHeight - height - margin));
+      left = clamp(left, margin, Math.max(margin, window.innerWidth - size.width - margin));
+      setPosition({ top, left, maxHeight: room });
     }
 
     place();
@@ -84,6 +100,9 @@ export function Popover({ anchorEl, anchorPoint, onClose, children }: Props) {
       style={{
         top: position?.top ?? 0,
         left: position?.left ?? 0,
+        // Measured before it is capped: the cap is applied after the first
+        // layout, so the menu is sized by its content and then held to the room.
+        maxHeight: position?.maxHeight,
         visibility: position ? 'visible' : 'hidden',
       }}
     >

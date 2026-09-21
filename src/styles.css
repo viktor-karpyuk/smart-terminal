@@ -693,6 +693,19 @@ input:focus, textarea:focus { border-color: var(--accent); }
      whole menu past the width set above instead of being trimmed inside it. */
   grid-template-columns: minmax(0, 1fr);
   gap: 8px;
+  /* Taller than the screen, it scrolls. The cap itself is set from the measured
+     room; without the overflow the cap would only crop it. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* A scrolling menu needs an edge, or the last row looks like the last row. */
+.popover::-webkit-scrollbar { width: 8px; }
+.popover::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 4px;
 }
 
 .popover-header { display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: var(--text-dim); }
