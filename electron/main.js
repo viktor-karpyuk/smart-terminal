@@ -180,6 +180,16 @@ let pluginPath = null;
 let autopilot = null;
 /** Every pty this launch started, and the session it belongs to. */
 const sessionByPty = new Map();
+/**
+ * Every pty this launch started, and the window that started it.
+ *
+ * Output goes to that window alone. The renderer already threw away chunks for
+ * ptys it had not spawned — but only after the bytes had been serialised, sent
+ * across the process boundary and woken the window's main thread. With three
+ * windows open, every byte Claude printed anywhere did that three times, and
+ * the windows it did not concern paid as much as the one it did.
+ */
+const windowByPty = new Map();
 /** Mirrors the renderer's preference, so an adopted session starts recording too. */
 let recordByDefault = true;
 let context = null;
@@ -287,6 +297,19 @@ function send(channel, payload) {
   for (const win of windows.values()) {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);
   }
+}
+
+/**
+ * To the one window that shows this pty, when that is known.
+ *
+ * A pty nobody is on record as owning — the map is only written by `pty:spawn`,
+ * and a window can be gone by the time its last bytes arrive — falls back to
+ * everyone, which is what always happened and loses nothing but time.
+ */
+function sendToPtyOwner(channel, payload) {
+  const win = windows.get(windowByPty.get(payload.id));
+  if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+  else send(channel, payload);
 }
 
 /** The words for a file system refusal, when Node's are a code. */
@@ -518,6 +541,7 @@ function registerIpc() {
     });
 
     const claudeSessionId = options.resumeSessionId || options.claudeSessionId;
+    windowByPty.set(result.id, windowIdOf(_e));
     if (options.sessionId) {
       liveSessions.add(options.sessionId);
       sessionByPty.set(result.id, options.sessionId);
@@ -1844,7 +1868,8 @@ if (isPrimaryInstance) app.whenReady().then(() => {
         lastOutputBySession.set(owner, Date.now());
       }
     }
-    send(channel, payload);
+    sendToPtyOwner(channel, payload);
+    if (channel === 'pty:exit') windowByPty.delete(payload.id);
   });
 
   autopilot = new Autopilot({

@@ -55,3 +55,116 @@ test('what a shell runs on its way in, and anything under a Claude session, is n
   assert.equal(worthRemembering('node', 'node server.js'), true);
   assert.equal(worthRemembering('zsh', 'zsh'), false);
 });
+
+/**
+ * What a shell is running is asked about that shell, not read off a dump of
+ * every process on the machine. The trap in asking narrowly: `pgrep` reports
+ * "no children" as a failing exit status, and a tick that took that for a
+ * failure would throw away the `cd` it had just seen in the same breath.
+ */
+const { spawn } = require('node:child_process');
+const { childrenOf } = require('../electron/cwd-watcher');
+const posix = process.platform === 'darwin' || process.platform === 'linux';
+
+test(
+  'a shell running something is reported with what it runs, and nothing else',
+  { skip: !posix },
+  async () => {
+    const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+    try {
+      const children = await childrenOf(String(process.pid));
+      assert.deepEqual(children.get(process.pid), {
+        name: 'sleep',
+        command: 'sleep 30',
+      });
+      assert.equal(children.size, 1, 'only our own children are described');
+    } finally {
+      child.kill();
+    }
+  },
+);
+
+test(
+  'a shell running nothing is an empty answer, not a failed tick',
+  { skip: !posix },
+  async () => {
+    const child = spawn('sleep', ['30'], { stdio: 'ignore' });
+    try {
+      const children = await childrenOf(String(child.pid));
+      assert.equal(children.size, 0);
+    } finally {
+      child.kill();
+    }
+  },
+);
+
+/**
+ * The gap between ticks is measured from the end of one to the start of the
+ * next, whatever a tick costs. Measured from start to start — which is what an
+ * interval does — a tick slower than the interval is followed by the next one
+ * with no pause at all, and on a machine with a few thousand processes every
+ * tick was slower than the interval. The watcher then ran continuously, on the
+ * same thread that carries keystrokes to the shell.
+ */
+const { CwdWatcher } = require('../electron/cwd-watcher');
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** A watcher whose ticks cost what the test says, and never touch the OS. */
+function slowWatcher(tickMs) {
+  const watcher = new CwdWatcher(
+    () => [],
+    () => {},
+  );
+  watcher.supported = true;
+  watcher.starts = [];
+  watcher.poll = async () => {
+    watcher.starts.push(Date.now());
+    await sleep(tickMs);
+  };
+  return watcher;
+}
+
+test('a tick slower than the interval is still followed by a full interval of quiet', async () => {
+  const watcher = slowWatcher(120);
+  watcher.everyMs = 50;
+  watcher.start();
+  await sleep(600);
+  watcher.stop();
+  const gaps = watcher.starts.slice(1).map((at, i) => at - watcher.starts[i]);
+  assert.ok(
+    gaps.length >= 2,
+    `expected a few ticks, got ${watcher.starts.length}`,
+  );
+  for (const gap of gaps)
+    assert.ok(
+      gap >= 120 + 50 - 5,
+      `a tick started only ${gap}ms after the last one began`,
+    );
+});
+
+test('waking mid-tick changes the rate the tick re-arms at, and nothing else', async () => {
+  const watcher = slowWatcher(80);
+  watcher.everyMs = 30;
+  watcher.start();
+  await sleep(45); // inside the first tick
+  watcher.everyMs = 10000; // as though it had gone idle
+  watcher.wake();
+  assert.equal(watcher.timer, null, 'no timer is armed while a tick runs');
+  assert.equal(
+    watcher.everyMs,
+    2500,
+    'but the rate it will re-arm at is the fast one',
+  );
+  watcher.stop();
+});
+
+test('stopping mid-tick means no further tick', async () => {
+  const watcher = slowWatcher(60);
+  watcher.everyMs = 10;
+  watcher.start();
+  await sleep(30); // inside the first tick
+  watcher.stop();
+  await sleep(150);
+  assert.equal(watcher.starts.length, 1);
+  assert.equal(watcher.timer, null);
+});
