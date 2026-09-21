@@ -104,21 +104,33 @@ function compareVersions(a, b) {
  * stability. A version that was skipped stays skipped until something newer
  * than it appears, which is the behaviour that makes "not now" mean something.
  */
-function pickRelease(releases, { current, skipped = null, prereleases = false } = {}) {
+/**
+ * Every release newer than the running one, newest first.
+ *
+ * All of them, not only the newest: somebody four releases behind is offered
+ * the newest to install, but what they are about to get is everything since
+ * the one they have, and a panel that shows one set of notes for a jump of
+ * four is a panel that hides three quarters of the answer to "what changed".
+ */
+function newerReleases(releases, { current, skipped = null, prereleases = false } = {}) {
   const usable = (Array.isArray(releases) ? releases : [])
     .filter((release) => release && !release.draft)
     .filter((release) => prereleases || !release.prerelease)
     .map((release) => ({ release, version: parseVersion(release.tag_name) }))
     .filter((entry) => entry.version)
     .filter((entry) => compareVersions(entry.release.tag_name, current) > 0)
-    .sort((a, b) => compareVersions(b.release.tag_name, a.release.tag_name));
+    .sort((a, b) => compareVersions(b.release.tag_name, a.release.tag_name))
+    .map((entry) => entry.release);
 
-  const best = usable[0];
-  if (!best) return null;
   // Skipping is about one version, not about updating: something newer than
-  // what was waved away is a fresh offer.
-  if (skipped && compareVersions(best.release.tag_name, skipped) <= 0) return null;
-  return best.release;
+  // what was waved away is a fresh offer — and with it, everything since.
+  if (skipped && usable.length && compareVersions(usable[0].tag_name, skipped) <= 0) return [];
+  return usable;
+}
+
+/** The one to install: the newest of them. */
+function pickRelease(releases, options = {}) {
+  return newerReleases(releases, options)[0] ?? null;
 }
 
 /** What this machine would install, which is not always what it can download. */
@@ -376,6 +388,8 @@ class Updates extends EventEmitter {
       phase: 'idle',
       current,
       release: null,
+      /** Everything newer than this copy, newest first; `release` is the first of them. */
+      releases: [],
       progress: null,
       file: null,
       error: null,
@@ -548,11 +562,12 @@ class Updates extends EventEmitter {
     this.#set({ phase: 'checking', error: null });
     try {
       const releases = await this.#api(`https://api.github.com/repos/${this.slug}/releases?per_page=20`);
-      const release = pickRelease(releases, {
+      const newer = newerReleases(releases, {
         current: this.current.version,
         skipped: force ? null : this.state.skipped,
         prereleases: this.state.prereleases,
       });
+      const release = newer[0] ?? null;
       const checkedAt = Date.now();
       this.#remember({ checkedAt });
       /*
@@ -569,7 +584,7 @@ class Updates extends EventEmitter {
       }
 
       if (!release) {
-        this.#set({ phase: 'idle', release: null, checkedAt, progress: null, file: null });
+        this.#set({ phase: 'idle', release: null, releases: [], checkedAt, progress: null, file: null });
         return this.snapshot();
       }
 
@@ -581,6 +596,8 @@ class Updates extends EventEmitter {
       this.#set({
         phase: ready ? 'ready' : 'available',
         release: described,
+        // The rest are notes to read, not files to fetch: described without an asset.
+        releases: newer.map((one, index) => (index === 0 ? described : describeRelease(one, null))),
         file: ready,
         progress: null,
         checkedAt,
@@ -918,7 +935,7 @@ class Updates extends EventEmitter {
     const skipped = this.state.release?.version ?? null;
     if (!skipped) return this.snapshot();
     this.#remember({ skipped });
-    this.#set({ skipped, phase: 'idle', release: null, progress: null, file: null });
+    this.#set({ skipped, phase: 'idle', release: null, releases: [], progress: null, file: null });
     return this.snapshot();
   }
 
@@ -965,6 +982,7 @@ module.exports = {
   parseVersion,
   compareVersions,
   pickRelease,
+  newerReleases,
   pickAsset,
   installKind,
   repoSlug,

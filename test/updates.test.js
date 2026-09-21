@@ -18,6 +18,7 @@ const {
   parseVersion,
   compareVersions,
   pickRelease,
+  newerReleases,
   pickAsset,
   installKind,
   repoSlug,
@@ -87,6 +88,33 @@ test('two versions that cannot both be read are not ordered at all', () => {
 test('the newest published release above the running one', () => {
   const found = pickRelease([release('v0.6.6'), release('v0.7.1'), release('v0.7.0')], { current: '0.6.6' });
   assert.strictEqual(found.tag_name, 'v0.7.1');
+});
+
+/*
+ * Somebody four releases behind is about to get four releases' worth of
+ * changes, and one set of notes describes a quarter of that. So the check
+ * keeps every release above the running one, newest first, and the panel
+ * shows them all — the first is the one that gets installed.
+ */
+test('every release above the running one, newest first, and the first is the one to install', () => {
+  const releases = [release('v0.8.6'), release('v0.8.9'), release('v0.8.7'), release('v0.8.10'), release('v0.8.8')];
+  assert.deepStrictEqual(
+    newerReleases(releases, { current: '0.8.6' }).map((r) => r.tag_name),
+    ['v0.8.10', 'v0.8.9', 'v0.8.8', 'v0.8.7'],
+  );
+  assert.strictEqual(pickRelease(releases, { current: '0.8.6' }).tag_name, 'v0.8.10');
+  assert.deepStrictEqual(newerReleases(releases, { current: '0.8.10' }), []);
+});
+
+test('a skipped version silences everything up to it, and something newer brings it all back', () => {
+  const releases = [release('v0.8.7'), release('v0.8.8')];
+  assert.deepStrictEqual(newerReleases(releases, { current: '0.8.6', skipped: '0.8.8' }), []);
+  const more = [...releases, release('v0.8.9')];
+  assert.deepStrictEqual(
+    newerReleases(more, { current: '0.8.6', skipped: '0.8.8' }).map((r) => r.tag_name),
+    ['v0.8.9', 'v0.8.8', 'v0.8.7'],
+    'the skipped one is shown again as part of what the newer one brings',
+  );
 });
 
 test('nothing newer is nothing, not the newest thing there is', () => {

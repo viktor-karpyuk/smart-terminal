@@ -481,6 +481,8 @@ export interface UpdateState {
   phase: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'installing' | 'handed-off' | 'error';
   current: { version: string; build: number | null };
   release: UpdateRelease | null;
+  /** Everything newer than this copy, newest first; `release` is the first of them. */
+  releases: UpdateRelease[];
   progress: { received: number; total: number } | null;
   /** The downloaded file, once there is one. */
   file: string | null;
