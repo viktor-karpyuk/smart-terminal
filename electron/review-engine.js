@@ -24,6 +24,19 @@ const prompts = require('./review-prompts');
  */
 
 const PR_TTL = 60 * 1000;
+
+/** How long an answer about merging is trusted while nothing about the PR has changed: the target branch moves on its own. */
+const CONFLICTS_TTL = 10 * 60 * 1000;
+
+/** Never asked, asked before the newest commits, or asked long enough ago that the target may have moved. */
+function conflictsWantChecking(pr, at = Date.now()) {
+  if (!pr) return false;
+  if (!pr.conflictsAt) return true;
+  const checked = Date.parse(pr.conflictsAt);
+  if (!Number.isFinite(checked)) return true;
+  if (pr.updatedOn && Date.parse(pr.updatedOn) > checked) return true;
+  return at - checked > CONFLICTS_TTL;
+}
 const REPLY_SLOTS = 3;
 /*
  * How many reviews may be reading at once.
@@ -187,6 +200,8 @@ class ReviewEngine {
      * fails for a reason that has nothing to do with the code it was reading.
      */
     this.fetching = new Map();
+    /** One conflict sweep per repository at a time; a second ask joins the first. */
+    this.conflictSweeps = new Map();
     /** Reviews claimed from the moment `review()` starts, not from when the CLI exists: fetch and planning take a minute under rate limiting. */
     this.inFlight = new Set();
     /** A cancel pressed before the process existed, applied when it does. */
@@ -245,6 +260,8 @@ class ReviewEngine {
     const stamp = new Date().toISOString();
     if (result.notModified) {
       this.store.setPrMeta(repoId, { fetchedAt: stamp });
+      // The list is the same; the target branch may not be. Whether each one still lands is asked again.
+      this.checkRepoConflicts(repoId).catch(() => {});
       return { prs: cachedRows, cached: false, notModified: true };
     }
     const fresh_ = [];
@@ -257,7 +274,49 @@ class ReviewEngine {
       for (const pr of fresh_) this.notify(`New PR · ${repo.name} #${pr.id}`, `${pr.title} — ${pr.author}`);
     }
     this.changed(repoId);
+    this.checkRepoConflicts(repoId).catch(() => {});
     return { prs: this.store.prs(repoId, { states: ['OPEN'] }), cached: false, fresh: fresh_ };
+  }
+
+  /**
+   * Whether each open pull request of a repository would land, refreshed with
+   * the list rather than with a review.
+   *
+   * It used to be asked only when a review ran, so a pull request nobody had
+   * reviewed said nothing about it, and one reviewed on Monday still showed
+   * Monday's answer after Thursday's commits. The list is what people look at,
+   * so the answer is kept as fresh as the list: one fetch of every branch the
+   * open pull requests name, then one `merge-tree` per pull request — the
+   * fetch is the only part that costs anything, and it is paid once.
+   *
+   * Not awaited by the refresh that starts it. The list comes back at once and
+   * the answers arrive through the change event as they are known.
+   */
+  checkRepoConflicts(repoId) {
+    const running = this.conflictSweeps.get(repoId);
+    if (running) return running;
+    const sweep = (async () => {
+      const repo = this.requireRepo(repoId);
+      if (!repo.localPath) return;
+      const prs = this.store.prs(repoId, { states: ['OPEN'] });
+      // A fork's branch is `owner:branch` and origin does not have it; it is left as "not checked".
+      const ours = prs.filter((pr) => pr.targetBranch && pr.sourceBranch && !/^[-+]|:/.test(pr.sourceBranch) && !/^[-+]|:/.test(pr.targetBranch));
+      const branches = [...new Set(ours.flatMap((pr) => [pr.targetBranch, pr.sourceBranch]))];
+      if (!branches.length) return;
+      const got = await this.inClone(repo.localPath, () => this.git.fetch(repo.localPath, ...branches));
+      if (!got.ok) {
+        // One branch gone on the remote fails the whole fetch; the rest are asked about one at a time.
+        for (const pr of ours) await this.checkConflicts(repoId, pr.id, { fetch: true }).catch(() => {});
+        return;
+      }
+      for (const pr of ours) {
+        const paths = await this.git.conflicts(repo.localPath, `origin/${pr.targetBranch}`, `origin/${pr.sourceBranch}`);
+        this.store.setConflicts(repoId, pr.id, paths);
+      }
+      this.changed(repoId);
+    })();
+    this.conflictSweeps.set(repoId, sweep.finally(() => this.conflictSweeps.delete(repoId)));
+    return sweep;
   }
 
   /** Merged and declined PRs are history: fetched only when asked for, three pages. */
@@ -276,6 +335,7 @@ class ReviewEngine {
     if (!pr) throw new Error(`PR #${prId} was not found.`);
     this.store.upsertPr(repoId, pr);
     if (!pr.stancesUnknown) this.store.syncApprovals(repoId, prId, pr);
+    if (conflictsWantChecking(this.store.pr(repoId, prId))) this.checkConflicts(repoId, prId, { fetch: true }).catch(() => {});
     try {
       await this.syncComments(repo, prId);
     } catch (error) {
@@ -969,4 +1029,4 @@ class ReviewEngine {
   }
 }
 
-module.exports = { ReviewEngine, Activity, Semaphore, describeEvent, PR_TTL };
+module.exports = { ReviewEngine, Activity, Semaphore, describeEvent, PR_TTL, conflictsWantChecking };
