@@ -44,6 +44,16 @@ function UpdateBody({ update }: { update: UpdateState }) {
   const api = window.api.updates;
   const release = update.release;
   const running = `${update.current.version}${update.current.build ? ` · build ${update.current.build}` : ''}`;
+  const releases = release ? (update.releases?.length ? update.releases : [release]) : [];
+  // Which releases' notes are unfolded. The newest starts open; the rest start folded.
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const isOpen = (version: string) => open[version] ?? version === releases[0]?.version;
+  const toggle = (version: string) => setOpen((prev) => ({ ...prev, [version]: !isOpen(version) }));
+  const show = (version: string) => {
+    setOpen((prev) => ({ ...prev, [version]: true }));
+    // After the open has rendered, so there is a body to scroll to.
+    window.setTimeout(() => document.getElementById(`update-release-${version}`)?.scrollIntoView({ block: 'start' }), 0);
+  };
 
   return (
     <>
@@ -53,6 +63,21 @@ function UpdateBody({ update }: { update: UpdateState }) {
           You are running <strong>{running}</strong>
           {release && <> · this update is {release.asset ? formatBytes(release.asset.size) : 'an unknown size'}</>}
         </p>
+        {/*
+          Every release between here and there, where it can be seen without
+          scrolling the notes: the notes box shows one release at a time, and a
+          jump of four that looked like a jump of one was the whole complaint.
+        */}
+        {releases.length > 1 && (
+          <p className="update-since">
+            <span className="update-quiet">Since {update.current.version}:</span>
+            {releases.map((one) => (
+              <button key={one.version} type="button" className="chip-btn" onClick={() => show(one.version)}>
+                {one.version}
+              </button>
+            ))}
+          </p>
+        )}
         {update.error && <p className="update-error">{update.error}</p>}
         <Actions update={update} />
         {update.phase === 'downloading' && <Progress update={update} />}
@@ -62,7 +87,7 @@ function UpdateBody({ update }: { update: UpdateState }) {
         )}
       </section>
 
-      {release && <Notes release={release} />}
+      {release && <Notes releases={releases} isOpen={isOpen} toggle={toggle} />}
 
       <ExtensionUpdates />
 
@@ -95,15 +120,21 @@ function UpdateBody({ update }: { update: UpdateState }) {
   );
 }
 
+/** " — 4 releases since 0.8.6", when the jump is more than one. */
+function behind(update: UpdateState) {
+  const count = update.releases?.length ?? 0;
+  return count > 1 ? ` — ${count} releases since ${update.current.version}` : '';
+}
+
 /** The one line somebody reads before deciding whether to read anything else. */
 function Headline({ update }: { update: UpdateState }) {
   const version = update.release?.version;
   const line = {
     idle: 'Smart Terminal is up to date.',
     checking: 'Looking for a newer version…',
-    available: `Smart Terminal ${version} is available.`,
+    available: `Smart Terminal ${version} is available${behind(update)}.`,
     downloading: `Downloading Smart Terminal ${version}…`,
-    ready: `Smart Terminal ${version} is downloaded and checked.`,
+    ready: `Smart Terminal ${version} is downloaded and checked${behind(update)}.`,
     installing: 'Closing to finish the update…',
     'handed-off': 'The installer is in the folder that just opened.',
     error: 'Could not check for updates.',
@@ -308,17 +339,67 @@ function ExtensionUpdates() {
 }
 
 /** What changed, drawn as elements rather than parsed into markup. See `releaseNotes`. */
-function Notes({ release }: { release: NonNullable<UpdateState['release']> }) {
-  const blocks = useMemo(() => parseNotes(release.notes), [release.notes]);
-  if (!blocks.length) return null;
-
+/**
+ * What is new — in every release since the one that is running, not only in
+ * the one about to be installed.
+ *
+ * Somebody on 0.8.6 offered 0.8.10 is getting four releases' worth of
+ * changes, and the notes of 0.8.10 alone describe a quarter of them. Each
+ * release is its own block, newest first and open; the earlier ones are
+ * folded under their version and date so the list is scannable, and open
+ * with a click. `releases` may be missing on a snapshot from an older main
+ * process, in which case the one release is shown as before.
+ */
+function Notes({
+  releases,
+  isOpen,
+  toggle,
+}: {
+  releases: NonNullable<UpdateState['release']>[];
+  isOpen: (version: string) => boolean;
+  toggle: (version: string) => void;
+}) {
   return (
     <section className="form-section update-notes">
-      <h3>What is new in {release.version}</h3>
-      {blocks.map((block, index) => (
-        <Block key={index} block={block} />
+      {releases.map((one) => (
+        <ReleaseNotes key={one.version} release={one} open={isOpen(one.version)} onToggle={() => toggle(one.version)} />
       ))}
     </section>
+  );
+}
+
+function ReleaseNotes({
+  release,
+  open,
+  onToggle,
+}: {
+  release: NonNullable<UpdateState['release']>;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const blocks = useMemo(() => parseNotes(release.notes), [release.notes]);
+  const when = release.publishedAt ? new Date(release.publishedAt).toLocaleDateString() : null;
+  return (
+    <div id={`update-release-${release.version}`} className={`update-release${open ? ' is-open' : ''}`}>
+      <button type="button" className="update-release-head" onClick={onToggle} aria-expanded={open}>
+        <span className="update-release-chevron" aria-hidden="true">
+          {open ? '▾' : '▸'}
+        </span>
+        <h3>What is new in {release.version}</h3>
+        {when && <span className="update-release-when">{when}</span>}
+        {release.prerelease && <span className="update-release-pre">pre-release</span>}
+      </button>
+      {open &&
+        (blocks.length ? (
+          <div className="update-release-body">
+            {blocks.map((block, index) => (
+              <Block key={index} block={block} />
+            ))}
+          </div>
+        ) : (
+          <p className="update-quiet">No notes were written for this one.</p>
+        ))}
+    </div>
   );
 }
 
