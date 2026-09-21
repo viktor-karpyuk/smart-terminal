@@ -2,12 +2,14 @@
 const { execFile } = require('node:child_process');
 
 const LSOF = '/usr/sbin/lsof';
+const PGREP = '/usr/bin/pgrep';
+const PS = '/bin/ps';
 
 /**
  * How often to ask, when something is actually happening.
  *
- * Every tick spawns two processes — `lsof` over the session pids, and a `ps`
- * that walks every process on the machine. At 2.5s that is forty-eight process
+ * Every tick spawns processes — `lsof` over the session pids, `pgrep` for
+ * their children, and a `ps` over those. At 2.5s that is over fifty process
  * spawns a minute, for ever, whether or not anything has moved.
  */
 const INTERVAL = 2500;
@@ -49,6 +51,7 @@ class CwdWatcher {
     this.known = new Map();
     this.timer = null;
     this.running = false;
+    this.stopped = true;
     this.everyMs = INTERVAL;
     this.lastChange = Date.now();
     this.supported = process.platform === 'darwin' || process.platform === 'linux';
@@ -58,21 +61,44 @@ class CwdWatcher {
     if (this.timer || !this.supported) return;
     // A watcher that starts after a long stop must start responsive, not carry
     // in the quiet it was stopped during.
+    this.stopped = false;
     this.lastChange = Date.now();
-    this.#schedule(INTERVAL);
+    // `everyMs` is INTERVAL here — `stop()` puts it back — unless a test has
+    // set it smaller to watch ticks happen in less than a lifetime.
+    this.#schedule(this.everyMs);
   }
 
-  /** Re-arm at a given rate, replacing whatever was running. */
+  /**
+   * Re-arm at a given rate, replacing whatever was pending.
+   *
+   * One timeout at a time, set again when a tick has *finished*, rather than an
+   * interval. An interval measures from start to start, so a tick that takes
+   * longer than the interval is followed by the next one immediately: on a
+   * machine with a few thousand processes the old `ps` took longer than the
+   * interval every time, and the watcher ran without a pause for as long as
+   * the app was open. Measured from the end, the gap is the gap whatever a
+   * tick costs.
+   */
   #schedule(everyMs) {
-    if (this.timer) clearInterval(this.timer);
+    if (this.timer) clearTimeout(this.timer);
     this.everyMs = everyMs;
-    this.timer = setInterval(() => this.poll(), everyMs);
+    this.timer = setTimeout(() => this.#tick(), everyMs);
     this.timer.unref?.();
   }
 
-  stop() {
-    if (this.timer) clearInterval(this.timer);
+  #tick() {
     this.timer = null;
+    this.poll().finally(() => {
+      // Stopped, or re-armed by the tick itself, while this one was running.
+      if (this.stopped || this.timer) return;
+      this.#schedule(this.everyMs);
+    });
+  }
+
+  stop() {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    this.stopped = true;
     this.everyMs = INTERVAL;
     this.known.clear();
   }
@@ -90,24 +116,25 @@ class CwdWatcher {
    */
   wake() {
     this.lastChange = Date.now();
-    if (this.timer && this.everyMs !== INTERVAL) this.#schedule(INTERVAL);
+    if (this.stopped || this.everyMs === INTERVAL) return;
+    // Mid-tick there is no timer to replace; the tick re-arms at `everyMs`
+    // when it finishes, so the rate is enough. Between ticks, re-arm now.
+    if (this.timer) this.#schedule(INTERVAL);
+    else this.everyMs = INTERVAL;
   }
 
+  /** @returns {Promise<void>} settled when the tick has said what it has to say */
   poll() {
-    if (this.running) return;
+    if (this.running) return Promise.resolve();
     const sessions = this.listSessions().filter((s) => s.pid);
-    if (!sessions.length) return;
+    if (!sessions.length) return Promise.resolve();
 
     this.running = true;
     const pids = sessions.map((s) => s.pid).join(',');
 
-    Promise.all([
-      run(LSOF, ['-a', '-p', pids, '-d', 'cwd', '-Fpn']),
-      run('/bin/ps', ['-axo', 'ppid=,args=']),
-    ])
-      .then(([lsofOut, psOut]) => {
+    return Promise.all([run(LSOF, ['-a', '-p', pids, '-d', 'cwd', '-Fpn']), childrenOf(pids)])
+      .then(([lsofOut, children]) => {
         const byPid = parseLsof(lsofOut);
-        const children = parseChildren(psOut);
 
         const changes = [];
         for (const session of sessions) {
@@ -131,7 +158,7 @@ class CwdWatcher {
         }
         if (changes.length) {
           this.lastChange = Date.now();
-          if (this.everyMs !== INTERVAL) this.#schedule(INTERVAL);
+          this.everyMs = INTERVAL;
           /*
            * Whatever the consumer does with a change is the consumer's problem,
            * and it must not be reported as this tick having failed. The catch
@@ -148,7 +175,7 @@ class CwdWatcher {
             console.error('[cwd-watcher] the consumer threw on a change:', error);
           }
         } else if (this.everyMs === INTERVAL && Date.now() - this.lastChange > QUIET_BEFORE_IDLE) {
-          this.#schedule(IDLE_INTERVAL);
+          this.everyMs = IDLE_INTERVAL;
         }
       })
       .catch(() => {
@@ -160,13 +187,38 @@ class CwdWatcher {
   }
 }
 
+/**
+ * `pgrep` and `ps` answer "nothing matched" with this status and no output. That
+ * is an answer — a shell with nothing running — not a failure, and a tick that
+ * treated it as one would drop every `cd` it had just seen alongside it.
+ */
+const NOTHING_MATCHED = 1;
+
 function run(command, args) {
   return new Promise((resolve, reject) => {
     execFile(command, args, { timeout: 4000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
-      if (error && !stdout) reject(error);
+      if (error && !stdout && error.code !== NOTHING_MATCHED) reject(error);
       else resolve(stdout || '');
     });
   });
+}
+
+/**
+ * What each session's shell is running, asked about those shells and nothing else.
+ *
+ * This used to be `ps -axo ppid=,args=`: every process on the machine, eight
+ * hundred lines a tick, printed and parsed to find the handful whose parent is
+ * one of ours. `pgrep -P` names the children of the session pids and nothing
+ * else, `ps -p` describes just those, and when no shell is running anything
+ * there is nothing to describe and `ps` is not spawned at all.
+ *
+ * @param {string} pids comma-separated shell pids
+ * @returns {Promise<Map<number, {name: string, command: string}>>} by parent pid
+ */
+async function childrenOf(pids) {
+  const children = (await run(PGREP, ['-P', pids])).split('\n').filter((line) => /^\d+$/.test(line));
+  if (!children.length) return new Map();
+  return parseChildren(await run(PS, ['-o', 'ppid=,args=', '-p', children.join(',')]));
 }
 
 /**
@@ -266,4 +318,4 @@ function worthRemembering(foreground, command, { kind = null, ageMs = null } = {
   return !NOT_WORTH_REMEMBERING.has(name);
 }
 
-module.exports = { CwdWatcher, worthRemembering, asTyped };
+module.exports = { CwdWatcher, worthRemembering, asTyped, childrenOf };
