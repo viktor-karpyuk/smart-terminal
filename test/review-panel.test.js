@@ -381,3 +381,27 @@ test('Enter is wired to the Code tab and leaves a focused button its own Enter',
   assert.match(source, /event\.key === 'Enter' && state\.code\.file[\s\S]{0,200}viewedAndOn\(state\.code\.file\)/);
   assert.match(source, /event\.key === 'Enter'[^\n]*tagName === 'BUTTON'/, 'a focused button keeps Enter for itself');
 });
+
+// ---------------------------------------------------------------- does it merge
+
+/*
+ * Three answers, three chips. There used to be one chip, for conflicts, and no
+ * chip for anything else — which made "nobody has checked" look exactly like
+ * "it merges", on the one column people read before pressing Merge.
+ */
+const M = fromPanel(['esc', 'parseTime', 'when', 'mergeState', 'conflictChip']);
+
+test('conflicts, clean and not-checked are three different chips', () => {
+  const row = (pr) => ({ pr: { updatedOn: '2026-09-20T10:00:00.000Z', ...pr } });
+  assert.match(M.conflictChip(row({ conflicts: ['a.js', 'b.js'], conflictsAt: '2026-09-21T10:00:00.000Z' })), /badc[^>]*>Conflicts 2</);
+  assert.match(M.conflictChip(row({ conflicts: [], conflictsAt: '2026-09-21T10:00:00.000Z' })), /okc[^>]*>✓ merges</);
+  assert.match(M.conflictChip(row({ conflicts: null, conflictsAt: null })), />merge \?</);
+  assert.doesNotMatch(M.conflictChip(row({ conflicts: null, conflictsAt: null })), /okc|badc/, 'not knowing is not green and not red');
+});
+
+test('an answer older than the newest commits is a question, whichever way it went', () => {
+  const row = (pr) => ({ pr: { updatedOn: '2026-09-21T12:00:00.000Z', conflictsAt: '2026-09-21T10:00:00.000Z', ...pr } });
+  assert.match(M.conflictChip(row({ conflicts: ['a.js'] })), />Conflicts\? 1</);
+  assert.match(M.conflictChip(row({ conflicts: [] })), />merges\?</);
+  assert.strictEqual(M.mergeState(row({ conflicts: [] })).stale, true);
+});

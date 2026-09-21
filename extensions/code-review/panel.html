@@ -1552,19 +1552,54 @@
    * about, and a push since then can have created the conflict or cleared it —
    * so it still warns, and says the warning is older than the branch.
    */
-  function conflictState(row) {
+  /**
+   * Whether this branch lands on its target: `conflicts`, `clean`, or `unknown`
+   * when nobody has asked yet — a clone that could not be read, a fork's
+   * branch, a repository with no clone. `stale` when the answer is older than
+   * the newest commits, which is a different thing from no answer at all.
+   */
+  function mergeState(row) {
     var pr = row.pr || row;
     var list = pr.conflicts;
-    if (!list || !list.length) return null;
-    var stale = pr.conflictsAt && pr.updatedOn && pr.conflictsAt < pr.updatedOn;
-    return { paths: list, stale: Boolean(stale) };
+    var stale = Boolean(pr.conflictsAt && pr.updatedOn && pr.conflictsAt < pr.updatedOn);
+    if (list == null) return { kind: 'unknown', paths: [], stale: false, at: pr.conflictsAt || null };
+    return { kind: list.length ? 'conflicts' : 'clean', paths: list, stale: stale, at: pr.conflictsAt || null };
   }
 
+  /**
+   * "Does it merge", said in the pull request's own header, whatever the answer.
+   * The banner below shouts when it does not; this is the line that also says
+   * when it does, when that was checked, and how to check again.
+   */
+  function mergeLine(v) {
+    if (!v || !v.pr || v.pr.state !== 'OPEN') return '';
+    var m = mergeState(v);
+    var again = ' <button class="link" data-act="recheck-conflicts"' + busyAttr(prKey('recheck-conflicts')) + '>check again</button>';
+    if (m.kind === 'clean') return ' · <span class="ok">' + (m.stale ? 'merged cleanly before the newest commits' : 'merges cleanly into ' + esc(v.pr.targetBranch)) + '</span>' + (m.at ? ' <span class="faint">checked ' + esc(when(m.at)) + '</span>' : '') + again;
+    // The banner right below says the same and carries the check; here it is said once.
+    if (m.kind === 'conflicts') return ' · <span class="bad">' + m.paths.length + ' conflicting file' + (m.paths.length === 1 ? '' : 's') + (m.stale ? ', before the newest commits' : '') + '</span>';
+    return ' · <span class="faint">merge not checked</span>' + again;
+  }
+
+  /** The conflicts, when there are some — for the banner and the merge card, which are about those alone. */
+  function conflictState(row) {
+    var m = mergeState(row);
+    return m.kind === 'conflicts' ? m : null;
+  }
+
+  /**
+   * One chip for each of the three answers, because "no chip" was read as
+   * "no conflicts" — and half the time it meant nobody had looked. Clean is
+   * said quietly and conflicts loudly; not knowing is said in grey.
+   */
   function conflictChip(row) {
-    var c = conflictState(row);
-    if (!c) return '';
-    return '<span class="chip badc" title="' + esc(c.paths.slice(0, 12).join('\n') + (c.paths.length > 12 ? '\n… and ' + (c.paths.length - 12) + ' more' : '')) +
-      '">' + (c.stale ? 'Conflicts?' : 'Conflicts') + ' ' + c.paths.length + '</span>';
+    var m = mergeState(row);
+    if (m.kind === 'conflicts') {
+      return '<span class="chip badc" title="' + esc(m.paths.slice(0, 12).join('\n') + (m.paths.length > 12 ? '\n… and ' + (m.paths.length - 12) + ' more' : '')) +
+        '">' + (m.stale ? 'Conflicts?' : 'Conflicts') + ' ' + m.paths.length + '</span>';
+    }
+    if (m.kind === 'clean') return '<span class="chip okc" title="Merges into its target without conflicts' + (m.at ? ', checked ' + esc(when(m.at)) : '') + (m.stale ? ' — before the newest commits' : '') + '">' + (m.stale ? 'merges?' : '✓ merges') + '</span>';
+    return '<span class="chip" title="Whether it merges has not been checked yet: the repository has no clone here, or the branch is on a fork">merge ?</span>';
   }
 
   function drawPrTable(rows, withRepo) {
@@ -1777,7 +1812,8 @@
       '<button class="btn small" data-act="pr-load"' + busyAttr(prKey('pr-load')) + ' title="Read the pull request, its stances and its thread again">Reload</button></div>' +
       (compact ? '' : '<h2>#' + pr.id + ' ' + esc(pr.title) + '</h2>') +
       '<div class="faint pr-meta">' + esc(pr.author) + (pr.sourceBranch ? ' · <span class="mono">' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch) + '</span>' : '') + (pr.headSha ? ' · head <span class="mono">' + sha7(pr.headSha) + '</span>' : '') +
-      (pr.createdOn ? ' · opened ' + esc(when(pr.createdOn)) : '') + (pr.updatedOn ? ' · updated ' + esc(when(pr.updatedOn)) : '') + '</div>';
+      (pr.createdOn ? ' · opened ' + esc(when(pr.createdOn)) : '') + (pr.updatedOn ? ' · updated ' + esc(when(pr.updatedOn)) : '') +
+      mergeLine(v) + '</div>';
     html += drawNextStep(v, compact);
     if (open) html += drawActions(v);
     html += '</div>';
