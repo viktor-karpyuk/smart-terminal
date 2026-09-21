@@ -48,6 +48,20 @@
   .btn.big { padding: 6px 14px; font-weight: 600; }
   /* The one call to action on a page is filled; every other button stays an outline. */
   .btn.big.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  /*
+   * The two buttons that were being looked for and not found. Refresh all is
+   * the one thing in the top bar that does something, and it was drawn like the
+   * tabs around it. Merge is where a pull request ends; grey and at the far end
+   * of a wide row it read as one more utility. Filled when nothing stands in
+   * its way; in the warning colour, not in grey, when something does — merging
+   * past a pending item is a choice, and a choice is not drawn as disabled.
+   */
+  .btn.refresh { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+  .btn.refresh:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .btn.merge { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .btn.merge:hover { background: color-mix(in srgb, var(--accent) 85%, #fff); border-color: color-mix(in srgb, var(--accent) 85%, #fff); color: #fff; }
+  .btn.merge.blocked { background: transparent; color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--border)); }
+  .btn.merge.blocked:hover { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
   .btn.big.primary:hover { background: color-mix(in srgb, var(--accent) 85%, #fff); }
   /* Keyboard focus is visible on everything that can take it; a mouse click draws no ring. */
   .btn:focus-visible, .tab:focus-visible, .link:focus-visible, .chip.click:focus-visible, .expand-btn:focus-visible, [data-act]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -1256,7 +1270,7 @@
       html += '<span class="' + (rr.failed.length ? 'warn' : 'faint') + '" title="' + esc(rr.failed.map(function (f) { return f.repoName + ': ' + f.message; }).join('\n')) + '">' + rr.read + ' read' + (rr.failed.length ? ' · ' + rr.failed.length + ' failed' : '') + '</span>';
     }
     html += '<span class="faint auto-state" title="' + esc(auto && auto.lastMessage || '') + '">' + esc(autoText) + '</span>';
-    html += '<button class="btn small" data-act="refresh-all"' + busyAttr('refresh-all') + ' title="Read the open pull requests of every repository">' + (state.busy['refresh-all'] ? 'Refreshing' : 'Refresh all') + '</button>';
+    html += '<button class="btn small refresh" data-act="refresh-all"' + busyAttr('refresh-all') + ' title="Read the open pull requests of every repository">' + (state.busy['refresh-all'] ? 'Refreshing…' : '↻ Refresh all') + '</button>';
     $('top').innerHTML = html;
   }
 
@@ -1822,8 +1836,10 @@
       html += '<span class="readiness" style="margin:0 0 0 4px" title="' + esc(left.map(function (i) { return '• ' + i.label + (i.detail ? ' (' + i.detail + ')' : ''); }).join('\n')) + '"><span class="bar"><span style="width:' + r.percent + '%;background:' + (r.percent === 100 ? 'var(--ok)' : r.percent > 60 ? 'var(--accent)' : '#d9a441') + '"></span></span><strong>' + r.percent + '%</strong>' +
         '<button class="link" data-act="fold" data-key="readiness" style="font-size:11px">' + (isOpen('readiness') ? 'hide' : left.length + ' left') + '</button></span>';
     }
-    html += '<span class="spacer"></span><button class="btn small danger" data-act="decline-open">Decline…</button>';
-    html += '<button class="btn small ' + (v.mergeBlocker ? '' : 'primary') + '" data-act="merge-open" title="' + esc(v.mergeBlocker || 'Nothing is pending') + '">' + (v.mergeBlocker ? 'Merge anyway…' : 'Merge…') + '</button></div>';
+    // The outcome, next to the bar that says whether it is time for it — not at the far end of a row that can be two thousand pixels wide.
+    html += '<span class="group-btns" style="margin-left:6px;padding-left:8px;border-left:1px solid var(--border);border-right:0">';
+    html += '<button class="btn small merge' + (v.mergeBlocker ? ' blocked' : '') + '" data-act="merge-open" title="' + esc(v.mergeBlocker || 'Nothing is pending') + '">' + (v.mergeBlocker ? 'Merge anyway…' : 'Merge…') + '</button>';
+    html += '<button class="btn small danger" data-act="decline-open">Decline…</button></span></div>';
     if (r && isOpen('readiness')) {
       html += '<ul class="check-list">' + r.items.slice().sort(function (a, b) { return Number(a.done) - Number(b.done) || b.weight - a.weight; }).map(function (i) {
         return '<li class="' + (i.done ? 'done' : '') + '">' + esc(i.label) + (i.detail ? ' <span class="faint">' + esc(i.detail) + '</span>' : '') + ' <span class="faint">· ' + i.weight + '</span></li>';
