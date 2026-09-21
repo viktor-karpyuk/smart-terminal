@@ -1287,6 +1287,9 @@
     drawTop();
     var main = $('main');
     var scroll = main.scrollTop;
+    // The file list is rebuilt with everything else and would come back at the top.
+    var aside = main.querySelector('aside');
+    var asideScroll = aside ? aside.scrollTop : 0;
     var html;
     try {
       if (state.view === 'dashboard') html = drawDashboard();
@@ -1307,6 +1310,13 @@
     var selection = focus ? { start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection, scroll: active.scrollTop } : null;
     main.innerHTML = html;
     main.scrollTop = scroll;
+    aside = main.querySelector('aside');
+    if (aside) {
+      aside.scrollTop = asideScroll;
+      // The file in front stays in sight as Enter walks down the list; nothing moves if it already is.
+      var on = aside.querySelector('.item.on');
+      if (on) on.scrollIntoView({ block: 'nearest' });
+    }
     state.drawPending = false;
     if (focus) {
       // Keys carry file paths and comment ids: escaped, a quote in one does not break the selector.
@@ -2185,6 +2195,33 @@
     if (next) { openFile(next); $('main').scrollTop = 0; }
   }
 
+  /**
+   * Viewed, and on to the next file nobody has looked at — the way a review is
+   * read: look, nod, next.
+   *
+   * This marks and never unmarks. On a file already seen it simply moves on, so
+   * Enter can be leaned on from the first file to the last without ever undoing
+   * a mark on the way. The next file is the next one *not viewed*, wrapping
+   * round, since one already looked at is not what "next" means mid-review;
+   * `[` and `]` are there for walking the list in order. With nothing left
+   * unviewed it stays put, and the bar above the list shows why.
+   */
+  function viewedAndOn(file) {
+    var code = state.code;
+    var already = (code.viewed || []).indexOf(file) >= 0;
+    var marked = already
+      ? Promise.resolve({ files: code.viewed })
+      : call('setViewed', { repoId: state.repoId, prId: state.prId, file: file, viewed: true });
+    marked.then(function (r) {
+      if (state.code !== code) return;
+      state.code.viewed = r.files;
+      var files = (code.files || []).map(function (f) { return f.path; });
+      var from = files.indexOf(file);
+      var next = files.slice(from + 1).concat(files.slice(0, from)).filter(function (path) { return r.files.indexOf(path) < 0; })[0];
+      if (next) { openFile(next); $('main').scrollTop = 0; } else draw();
+    }, fail);
+  }
+
   /** The next finding after the one in focus, across files, wrapping around. */
   function stepFinding(direction) {
     if (!state.pr) return;
@@ -2683,7 +2720,7 @@
         '<span class="seg"><button class="btn small" data-act="font" data-delta="-1" title="Smaller text">A−</button><span class="faint">' + diffFont() + '</span><button class="btn small" data-act="font" data-delta="1" title="Larger text">A+</button></span>' +
         '<span class="spacer"></span>' +
         '<button class="btn small" data-act="note-file" data-file="' + esc(file) + '" title="A note on the whole file. For a line, click its number.">+ Note</button>' +
-        '<button class="btn small' + (viewed ? ' go' : '') + '" data-act="toggle-viewed" data-file="' + esc(file) + '" title="Mark this file as looked at and go to the next one not viewed ( v ). The mark lives here, not on the forge — Bitbucket and GitHub keep their own, and neither offers a way to set it.">' + (viewed ? '✓ Viewed' : 'Viewed') + '</button>' +
+        '<button class="btn small' + (viewed ? ' go' : '') + '" data-act="toggle-viewed" data-file="' + esc(file) + '" title="Mark this file as looked at and go to the next one not viewed ( Enter, or v ). The mark lives here, not on the forge — Bitbucket and GitHub keep their own, and neither offers a way to set it.">' + (viewed ? '✓ Viewed' : 'Viewed') + '</button>' +
       '</div></div>';
   }
 
@@ -3014,6 +3051,10 @@
       if (tab) { event.preventDefault(); actions['pr-tab']({ getAttribute: function () { return tab; } }); return; }
     }
     if (state.view === 'pr' && state.prTab === 'code') {
+      // A focused button or link takes its own Enter; this is for Enter with nothing in particular focused.
+      if (event.key === 'Enter' && state.code.file && !(target && (target.tagName === 'BUTTON' || target.tagName === 'A' || target.isContentEditable))) {
+        event.preventDefault(); viewedAndOn(state.code.file); return;
+      }
       if (event.key === ']') { event.preventDefault(); stepFile(1); return; }
       if (event.key === '[') { event.preventDefault(); stepFile(-1); return; }
       if (event.key === 'n') { event.preventDefault(); stepFinding(1); return; }
@@ -3031,7 +3072,7 @@
   var KEYS = [
     ['Anywhere', [['?', 'This list'], ['/', 'Search the board']]],
     ['A pull request', [['1 – 5', 'Review, Code, Commits, Conversation, History'], ['Esc', 'Back']]],
-    ['Code', [['[  ]', 'Previous or next file'], ['n  p', 'Next or previous finding'], ['v', 'Mark the file viewed and go to the next'], ['c', 'Show or hide comments']]]
+    ['Code', [['[  ]', 'Previous or next file'], ['n  p', 'Next or previous finding'], ['⏎', 'Viewed, and on to the next file not yet viewed'], ['v', 'Viewed on or off, moving on when it marks'], ['c', 'Show or hide comments']]]
   ];
   function toggleKeys(show) {
     var open = $('keys');
@@ -3153,17 +3194,12 @@
     'toggle-viewed': function (el) {
       var file = el.getAttribute('data-file');
       var marking = (state.code.viewed || []).indexOf(file) < 0;
+      // Marking the file in front moves on to the next one nobody has looked at; a checkbox in the list just marks.
+      if (marking && state.code.file === file) { viewedAndOn(file); return; }
       var code = state.code;
       call('setViewed', { repoId: state.repoId, prId: state.prId, file: file, viewed: marking }).then(function (r) {
         if (state.code !== code) return;
         state.code.viewed = r.files;
-        // Marking the file in front as viewed moves on to the next one nobody has looked at, the way a review is read.
-        if (marking && state.code.file === file) {
-          var files = (state.code.files || []).map(function (f) { return f.path; });
-          var from = files.indexOf(file);
-          var next = files.slice(from + 1).concat(files.slice(0, from)).filter(function (path) { return r.files.indexOf(path) < 0; })[0];
-          if (next) { openFile(next); return; }
-        }
         draw();
       }, fail);
     },

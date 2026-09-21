@@ -327,3 +327,57 @@ test('the engine says which reply a drafting run is for', () => {
   );
   void start;
 });
+
+// ---------------------------------------------------------------- Enter in the Code tab
+
+/*
+ * Reading a review is look, nod, next. Enter is the nod: it marks the file in
+ * front as viewed and opens the next one nobody has looked at. It never unmarks
+ * — leaning on it from the first file to the last must not undo a mark on the
+ * way — and on a file already seen it just moves on.
+ */
+function codeTab({ files, viewed, file }) {
+  const V = fromPanel(['viewedAndOn']);
+  const log = [];
+  V.state = { repoId: 'r', prId: 1, code: { files: files.map((path) => ({ path })), viewed: viewed.slice(), file } };
+  V.call = (name, args) => {
+    log.push([name, args.file, args.viewed]);
+    const now = V.state.code.viewed.filter((p) => p !== args.file).concat(args.viewed ? [args.file] : []);
+    return Promise.resolve({ files: now });
+  };
+  V.openFile = (path) => log.push(['open', path]);
+  V.draw = () => log.push(['draw']);
+  V.$ = () => ({});
+  V.fail = (error) => { throw error; };
+  return { V, log };
+}
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+test('Enter marks the file in front as viewed and opens the next one not viewed', async () => {
+  const { V, log } = codeTab({ files: ['a', 'b', 'c'], viewed: [], file: 'a' });
+  V.viewedAndOn('a');
+  await tick();
+  assert.deepStrictEqual(log, [['setViewed', 'a', true], ['open', 'b']]);
+});
+
+test('Enter skips files already viewed, wrapping round to the start', async () => {
+  const { V, log } = codeTab({ files: ['a', 'b', 'c'], viewed: ['a', 'c'], file: 'b' });
+  V.viewedAndOn('b');
+  await tick();
+  // b was the last one; nothing is left to open, and the list redraws to say so.
+  assert.deepStrictEqual(log, [['setViewed', 'b', true], ['draw']]);
+  assert.deepStrictEqual(V.state.code.viewed.slice().sort(), ['a', 'b', 'c']);
+});
+
+test('Enter on a file already viewed moves on and does not unmark it', async () => {
+  const { V, log } = codeTab({ files: ['a', 'b', 'c'], viewed: ['a', 'b'], file: 'b' });
+  V.viewedAndOn('b');
+  await tick();
+  assert.deepStrictEqual(log, [['open', 'c']], 'no setViewed call at all — the mark stays');
+});
+
+test('Enter is wired to the Code tab and leaves a focused button its own Enter', () => {
+  assert.match(source, /event\.key === 'Enter' && state\.code\.file[\s\S]{0,200}viewedAndOn\(state\.code\.file\)/);
+  assert.match(source, /event\.key === 'Enter'[^\n]*tagName === 'BUTTON'/, 'a focused button keeps Enter for itself');
+});
