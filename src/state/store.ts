@@ -4041,6 +4041,21 @@ async function spawnInto(
   },
 ) {
   const { sessionId, profile, kind, cwd, customTitle } = args;
+  /*
+   * Where it started, which is not where it is.
+   *
+   * Both `restartSession` and `resumeSession` hand this in — the folder the
+   * session was first opened in — and it was being thrown away and replaced
+   * with wherever the session happens to be now. So a session opened in a
+   * project and moved with `cd` forgot the project the first time it was
+   * restarted, and the two facts the app keeps about a session's folder
+   * collapsed into one.
+   *
+   * Nothing downstream depended on the old behaviour: the restart itself uses
+   * `cwd`, which is the moved-to folder and is what comes back. This is about
+   * `startCwd` continuing to mean what it says.
+   */
+  const startedIn = args.startCwd ?? cwd;
   const terminal = getTerminal(sessionId);
   // Recording only makes sense for a Claude session — a shell has no conversation.
   args.record = kind === 'claude' && (args.record ?? get().settings.recordConversations);
@@ -4060,7 +4075,7 @@ async function spawnInto(
         customTitle,
         profileId: profile.id,
         cwd,
-        startCwd: cwd,
+        startCwd: startedIn,
         kind,
         pid: null,
         ptyId: null,
