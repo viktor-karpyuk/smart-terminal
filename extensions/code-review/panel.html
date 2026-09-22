@@ -1920,10 +1920,41 @@
     return Boolean(f.dismissedAt || f.closedAt || (f.publishedId && (f.resolution === 'RESOLVED' || f.resolution === 'WONT_FIX')));
   }
 
+  /** Settled by a person reading the answer, rather than by the verifier reading the code. */
+  function settledByYou(f) {
+    return f.resolutionBy === 'YOU' && f.resolution === 'WONT_FIX';
+  }
+
   function findingStatus(f) {
     var res = f.resolution ? RESOLUTION_LABELS[f.resolution] : null;
+    // "Settled" rather than "closed" and "won't fix" twice: one decision, said once.
+    if (settledByYou(f)) {
+      return (f.publishedId ? '<span class="chip okc">published</span>' : '') +
+        '<span class="chip okc" title="' + esc(f.resolutionNote || 'Settled in the conversation') + '">✓ settled</span>';
+    }
     return (f.publishedId ? '<span class="chip okc">published</span>' : '') + (f.dismissedAt ? '<span class="chip">dismissed</span>' : '') + (f.closedAt && !f.dismissedAt ? '<span class="chip okc">closed</span>' : '') +
       (res ? '<span class="chip ' + res[1] + '" title="' + esc(f.resolutionNote || '') + '">' + res[0] + '</span>' : f.publishedId && !f.closedAt && !f.dismissedAt ? '<span class="chip mine">not verified</span>' : '');
+  }
+
+  /**
+   * The button, and the reason box it opens.
+   *
+   * Asked for rather than typed straight in, because most of the time the
+   * reason is one line and the box in the way of it is the whole cost. The
+   * note is what the review says about this comment for ever after, so it is
+   * worth a sentence — and it is optional, because "they are right" is
+   * sometimes the whole of it and demanding prose gets you "ok".
+   */
+  function settleBox(findingId) {
+    var key = 'settle-' + findingId;
+    if (state.edits[key] == null) {
+      return '<button class="btn small go" data-act="settle-open" data-id="' + esc(findingId) + '" title="The author answered and the answer stands: it will not be fixed, and it stops counting against this PR">Settled…</button>';
+    }
+    return '<div class="card" style="margin-top:6px"><strong>Settle this comment</strong>' +
+      '<div class="faint">The author argued it away and you agree. It stops waiting for a change in the code, counts as done, and any answer still drafted under it is dropped.</div>' +
+      '<textarea rows="2" data-edit="' + key + '" placeholder="Why — their reason, in a line. Optional.">' + esc(edit(key, '')) + '</textarea>' +
+      '<div class="row" style="margin-top:4px"><button class="btn small primary" data-act="settle" data-id="' + esc(findingId) + '"' + busyAttr('settle-' + findingId) + '>Settle</button>' +
+      '<button class="btn small" data-act="settle-close" data-id="' + esc(findingId) + '">Cancel</button></div></div>';
   }
 
   function findingCard(f, v) {
@@ -1962,6 +1993,9 @@
       if (!editing) html += '<button class="btn small" data-act="finding-edit" data-id="' + esc(f.id) + '">Edit</button>';
     }
     if (f.dismissedAt) html += '<button class="btn small" data-act="dismiss" data-id="' + esc(f.id) + '" data-on="0">Undo dismiss</button>';
+    // Published, alive, and nobody has decided it: the one case where the author's answer is the answer.
+    if (v.pr.state === 'OPEN' && f.publishedId && !f.dismissedAt && !findingDone(f)) html += settleBox(f.id);
+    if (settledByYou(f) && v.pr.state === 'OPEN') html += '<button class="btn small" data-act="settle" data-id="' + esc(f.id) + '" data-on="0"' + busyAttr('settle-' + f.id) + ' title="It is not settled after all — put it back on the list">Unsettle</button>';
     if (f.publishedUrl) html += '<button class="btn small" data-act="open-url" data-url="' + esc(f.publishedUrl) + '">View on PR ↗</button>';
     if (fixOn) {
       if (fixing) html += '<span class="chip accent"><span class="dot busy"></span>fixing</span>';
@@ -2925,7 +2959,7 @@
       html += '<div class="row" style="margin-top:6px">';
       // A question that was never asked cannot be settled in conversation: it is published or dismissed.
       if (open && t.state === 'UNPUBLISHED' && t.findingId) html += '<button class="btn small primary" data-act="publish-finding" data-id="' + esc(t.findingId) + '"' + busyAttr('publish-' + t.findingId) + '>Publish</button><button class="btn small" data-act="dismiss" data-id="' + esc(t.findingId) + '" data-on="1">Dismiss</button>';
-      else if (open && t.state !== 'OK' && t.findingId) html += '<button class="btn small" data-act="close-thread" data-id="' + esc(t.findingId) + '" data-on="1" title="Settled in conversation: it waits for no change in the code">Close thread</button>';
+      else if (open && t.state !== 'OK' && t.findingId) html += settleBox(t.findingId) + '<button class="btn small" data-act="close-thread" data-id="' + esc(t.findingId) + '" data-on="1" title="Close it without saying why. Settled… records the reason, which is what anybody reading this later needs.">Close thread</button>';
       if (t.state === 'OK' && t.findingId) html += '<button class="btn small" data-act="close-thread" data-id="' + esc(t.findingId) + '" data-on="0">Reopen</button>';
       if (open && t.waitingDays != null && t.waitingDays >= (v.followUpDays || 3) && !draft) {
         var fkey = 'follow-' + t.findingId;
@@ -3528,6 +3562,19 @@
     },
     'dismiss-reply': function (el) { call('dismissReply', { replyId: el.getAttribute('data-id') }).catch(fail); },
     'dismiss-all-replies': function () { call('dismissAllReplies', prArgs()).catch(fail); },
+    'settle-open': function (el) { state.edits['settle-' + el.getAttribute('data-id')] = ''; draw(); },
+    'settle-close': function (el) { delete state.edits['settle-' + el.getAttribute('data-id')]; draw(); },
+    settle: function (el) {
+      var id = el.getAttribute('data-id');
+      var on = el.getAttribute('data-on') !== '0';
+      act('settle-' + id, function () {
+        return call('settleFinding', { findingId: id, settled: on, note: on ? edit('settle-' + id, '') : '' });
+      }, function () {
+        delete state.edits['settle-' + id];
+        say(on ? 'Settled. It no longer counts against this PR.' : 'Back on the list.');
+        load();
+      });
+    },
     'close-thread': function (el) { call('closeFinding', { findingId: el.getAttribute('data-id'), closed: el.getAttribute('data-on') === '1' }).catch(fail); },
     'follow-open': function (el) {
       var id = el.getAttribute('data-id');

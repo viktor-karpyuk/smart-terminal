@@ -147,6 +147,18 @@ const MIGRATIONS = [
    */
   `ALTER TABLE cr_pr ADD COLUMN conflicts TEXT;
    ALTER TABLE cr_pr ADD COLUMN conflicts_at TEXT`,
+
+  /*
+   * 5 — who decided a finding was settled.
+   *
+   * The resolution alone cannot say. A `WONT_FIX` written by the verifier is a
+   * judgement about the code; a `WONT_FIX` written by the person reading the
+   * thread is "the author argued this away and I agree" — and those must not
+   * be drawn as the same thing, because only one of them was a person taking
+   * responsibility for it. Null is every finding decided before this column
+   * existed, which is the verifier's work by definition.
+   */
+  `ALTER TABLE cr_finding ADD COLUMN resolution_by TEXT`,
 ];
 
 const now = () => new Date().toISOString();
@@ -243,6 +255,7 @@ const findingRow = (row) =>
     dismissedAt: row.dismissed_at,
     publishError: row.publish_error,
     resolution: row.resolution,
+    resolutionBy: row.resolution_by ?? null,
     resolutionNote: row.resolution_note,
     followedUpAt: row.followed_up_at,
     closedAt: row.closed_at,
@@ -802,8 +815,28 @@ class ReviewStore {
     this.run('UPDATE cr_finding SET review_id = ?, line_no = COALESCE(?, line_no) WHERE id = ?', reviewId, line ?? null, findingId);
   }
 
-  setResolution(findingId, resolution, note) {
-    this.run('UPDATE cr_finding SET resolution = ?, resolution_note = ? WHERE id = ?', resolution, note ?? null, findingId);
+  setResolution(findingId, resolution, note, by = 'VERIFY') {
+    this.run('UPDATE cr_finding SET resolution = ?, resolution_note = ?, resolution_by = ? WHERE id = ?', resolution, note ?? null, by, findingId);
+  }
+
+  /**
+   * A finding the author argued away, settled by hand.
+   *
+   * Three things at once because they are one decision: it will not be fixed,
+   * why not, and that the thread is over. Written together so a finding can
+   * never be left closed without a reason or resolved without being closed —
+   * and undone the same way, since "I settled that too early" is a thing that
+   * happens the moment somebody pushes a commit that proves it.
+   */
+  settleFinding(findingId, { settled = true, note = null } = {}) {
+    if (!settled) {
+      this.run('UPDATE cr_finding SET resolution = NULL, resolution_note = NULL, resolution_by = NULL, closed_at = NULL WHERE id = ?', findingId);
+      return;
+    }
+    this.run(
+      'UPDATE cr_finding SET resolution = ?, resolution_note = ?, resolution_by = ?, closed_at = COALESCE(closed_at, ?) WHERE id = ?',
+      'WONT_FIX', nul(note), 'YOU', now(), findingId,
+    );
   }
 
   closeFinding(findingId, closedFlag) {
@@ -953,6 +986,29 @@ class ReviewStore {
   }
 
   // --- reply drafts ----------------------------------------------------------
+
+  /**
+   * Drafts answering a comment that sits under one of ours, dismissed together.
+   *
+   * Used when a comment is settled: the decision is that the thread is over,
+   * and a draft left pending under it goes on counting as an answer somebody
+   * owes — so settling would not settle anything. Published ones are history
+   * and are left alone.
+   */
+  dismissDraftsUnder(repoId, prId, ourCommentIds) {
+    const ids = [...new Set(ourCommentIds.filter(Boolean).map(String))];
+    if (!ids.length) return 0;
+    const marks = ids.map(() => '?').join(',');
+    const rows = this.all(
+      `SELECT r.id FROM cr_reply_draft r
+         JOIN cr_pr_comment c ON c.comment_id = r.their_comment_id AND c.repo_id = r.repo_id AND c.pr_id = r.pr_id
+        WHERE r.repo_id = ? AND r.pr_id = ? AND r.status <> 'PUBLISHED' AND r.dismissed_at IS NULL
+          AND c.parent_id IN (${marks})`,
+      repoId, Number(prId), ...ids,
+    );
+    for (const row of rows) this.dismissReply(row.id, true);
+    return rows.length;
+  }
 
   replies(repoId, prId) {
     return this.all('SELECT * FROM cr_reply_draft WHERE repo_id = ? AND pr_id = ? ORDER BY created_at', repoId, prId).map(replyRow);

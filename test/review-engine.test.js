@@ -792,3 +792,61 @@ test('a branch is told apart as merging, conflicting, or unanswerable', async ()
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/*
+ * The author answers "no, and here is why", the reason holds, and you say so.
+ *
+ * Before this the only ways out of a published comment were a fix or a verify
+ * run deciding for you — so a comment that was argued away stayed open for
+ * ever, the readiness never reached 100%, and a number that can never be
+ * reached is a number nobody reads. Settling it is one decision written as
+ * one: it will not be fixed, here is why, and the thread is over.
+ */
+test('a published comment the author argued away can be settled, and that raises the readiness', { skip }, async () => {
+  const { service, repo, forgeState } = setup([
+    async () => ({ structured: { summary: 'One real bug.', findings: [finding()] } }),
+  ]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  await service.call('publishAll', { repoId: repo.id, prId: 7 });
+
+  forgeState.comments.push({
+    commentId: '901', author: 'Ana', body: 'It is deliberate: callers pass b negated.',
+    inlinePath: 'app.js', inlineLine: 2, deleted: false, createdOn: new Date(Date.now() + 1e6).toISOString(), parentId: '100',
+  });
+  await service.call('loadPr', { repoId: repo.id, prId: 7 });
+
+  const before = await service.call('pr', { repoId: repo.id, prId: 7 });
+  const findingId = before.findings[0].id;
+  assert.ok(before.readiness.percent < 100);
+
+  const settled = await service.call('settleFinding', { findingId, note: 'Callers pass b negated — deliberate.' });
+  assert.equal(settled.ok, true);
+
+  const after = await service.call('pr', { repoId: repo.id, prId: 7 });
+  const one = after.findings[0];
+  assert.equal(one.resolution, 'WONT_FIX');
+  assert.equal(one.resolutionBy, 'YOU', 'a person decided it, not the verifier');
+  assert.equal(one.resolutionNote, 'Callers pass b negated — deliberate.');
+  assert.ok(one.closedAt, 'and the thread is over');
+  assert.ok(after.readiness.percent > before.readiness.percent, `${after.readiness.percent}% should be above ${before.readiness.percent}%`);
+  assert.equal(after.mergeBlocker, null, 'nothing is waiting on it any more');
+  assert.equal(after.threads[0].state, 'OK');
+
+  // And it is reversible: a commit that proves the answer wrong puts it back.
+  await service.call('settleFinding', { findingId, settled: false });
+  const back = await service.call('pr', { repoId: repo.id, prId: 7 });
+  assert.equal(back.findings[0].resolution, null);
+  assert.equal(back.findings[0].closedAt, null);
+  assert.equal(back.readiness.percent, before.readiness.percent);
+});
+
+test('a finding that was never published is dismissed, not settled', { skip }, async () => {
+  const { service, repo } = setup([async () => ({ structured: { summary: 'x', findings: [finding()] } })]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  const view = await service.call('pr', { repoId: repo.id, prId: 7 });
+  const refused = await service.call('settleFinding', { findingId: view.findings[0].id });
+  assert.equal(refused.ok, false);
+  assert.match(refused.error, /dismiss it instead/);
+});

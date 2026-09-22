@@ -1,7 +1,7 @@
 {
   "id": "code-review",
   "name": "Code Reviewer",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "author": "Smart Terminal",
   "summary": "Review GitHub and Bitbucket pull requests with your own Claude Code: findings, conversation, fixes and merge.",
   "description": "A pull request reviewer that runs on your Claude Code login — no API key, ever. Add a repository with its local clone and a token, and every open pull request is listed with what it is waiting for: not reviewed, new commits, findings to publish, a reply to answer, comments to verify. A review reads the diff with read-only tools only, sized automatically from what the PR touches — light, intermediate or deep, backend, frontend, mobile or fullstack — and the second time it looks only at the commits that arrived since, ruling on every finding it left open. Findings are drafts until you publish them, inline on their file and line, or as one general comment. When someone answers, a reply is drafted for you to check; verification judges each published comment against the new code and against what the author said; a final pass asks the one question that matters before merging. A finding can be fixed with a click: the fix is written and committed in a workshop copy of the repository, never in your clone, the finding is closed and its thread is told the commit exists and is not on the branch yet. You hand the commits back to your clone and push them yourself. A readiness score and a merge gate say exactly what is still missing. Automatic mode reviews new commits on its own, capped per cycle, and never publishes a finding. Your AI Code Reviewer history — repositories, tokens, reviews, findings, threads and fixes — can be imported in one step.",

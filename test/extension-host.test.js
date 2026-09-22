@@ -387,3 +387,42 @@ test('the reviewer\'s bus is readable from its panel and nothing more', () => {
   assert.equal(H.route('review.bus'), 'review');
   assert.equal(H.needsConsent('review.bus', {}), null);
 });
+
+/*
+ * Every verb a shipped panel calls must be one the router knows.
+ *
+ * The router is an allow-list and there is no default channel, so a call it
+ * does not recognise goes nowhere — and it goes nowhere *quietly*: the panel
+ * gets a rejection it reports as a failed action, and from the outside the
+ * button simply does nothing. That is exactly how `settleFinding` shipped
+ * working end to end in the service, the store and the panel, and dead in the
+ * one list nobody thought to add it to.
+ */
+const fs = require('node:fs');
+const path = require('node:path');
+
+test('nothing a panel calls is blocked by the router', () => {
+  const dir = path.join(__dirname, '..', 'extensions');
+  const missing = [];
+  for (const id of fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name)) {
+    for (const file of fs.readdirSync(path.join(dir, id)).filter((name) => name.endsWith('.html'))) {
+      const source = fs.readFileSync(path.join(dir, id, file), 'utf8');
+      // `call('name'` — the panels' own helper, which prefixes its subsystem.
+      const prefix = /function call\(name, args\) \{\s*return host\.call\('([a-z]+)\.'/.exec(source)?.[1] ?? '';
+      for (const [, name] of source.matchAll(/(?<!host\.)\bcall\(\s*'([A-Za-z][\w.]+)'/g)) {
+        const full = name.includes('.') || !prefix ? name : `${prefix}.${name}`;
+        if (!H.allowed(full)) missing.push(`${id}/${file}: ${full}`);
+      }
+      for (const [, name] of source.matchAll(/host\.call\(\s*'([A-Za-z][\w.]*)'/g)) {
+        // `host.call('review.' + name)` — the helper itself, and the comment describing it.
+        if (name.endsWith('.')) continue;
+        if (!H.allowed(name)) missing.push(`${id}/${file}: ${name}`);
+      }
+    }
+  }
+  assert.deepStrictEqual(
+    [...new Set(missing)],
+    [],
+    'These panel calls are not in the router\'s lists, so they do nothing at all:\n  ' + [...new Set(missing)].join('\n  '),
+  );
+});

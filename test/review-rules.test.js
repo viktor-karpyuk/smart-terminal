@@ -338,3 +338,35 @@ test('a finding already on the PR is recognised, whoever published it', () => {
   assert.equal(R.matchPublished(wholeFile, [{ commentId: '5', body: '`src/a.ts`\n\n_diseño_ · **Naming**\n\nx', inlinePath: null }]).commentId, '5');
   assert.equal(R.matchPublished(finding, [{ commentId: '6', body: '`src/a.ts`\n\n**Null check**', inlinePath: null }]), null, 'a finding with a line is not a general comment');
 });
+
+// ---------------------------------------------------------------- a comment argued away
+
+/*
+ * The case this exists for: the reviewer said something, the author answered
+ * "no, and here is why", and the answer is right. That comment is finished —
+ * it waits for no change in the code — and a review whose published comments
+ * can only be closed by a fix is one that never reaches 100% and so never
+ * means anything.
+ */
+const settled = (extra = {}) => ({ publishedId: 'c1', filePath: 'src/a.ts', lineNo: 4, resolution: 'WONT_FIX', resolutionBy: 'YOU', closedAt: '2026-09-22T10:00:00.000Z', ...extra });
+const openOne = (extra = {}) => ({ publishedId: 'c2', filePath: 'src/b.ts', lineNo: 9, ...extra });
+
+test('settling a comment the author argued away raises the readiness', () => {
+  const pr = { state: 'OPEN', headSha: 'h1' };
+  const review = { headSha: 'h1' };
+  const base = { pr, review, threads: [], finalPassDone: true, finalPassBlockers: 0 };
+
+  const before = R.readiness({ ...base, findings: [openOne(), openOne({ publishedId: 'c3' })] });
+  const after = R.readiness({ ...base, findings: [settled({ publishedId: 'c2' }), openOne({ publishedId: 'c3' })] });
+  assert.ok(after.percent > before.percent, `${after.percent}% should be above ${before.percent}%`);
+
+  const all = R.readiness({ ...base, findings: [settled(), settled({ publishedId: 'c3' })] });
+  assert.strictEqual(all.percent, 100, 'every comment answered, one way or the other, is a finished review');
+});
+
+test('a settled comment is not sent to be verified again', () => {
+  assert.strictEqual(R.needsVerdict(openOne()), true);
+  assert.strictEqual(R.needsVerdict(settled()), false, 'the person already decided; a run must not overwrite them');
+  assert.strictEqual(R.closed(settled()), true);
+  assert.strictEqual(R.openForCarry(settled()), false, 'and it is not carried into the next review');
+});

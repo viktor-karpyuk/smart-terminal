@@ -763,6 +763,28 @@ class ReviewService {
         e.changed(finding.repoId, finding.prId);
         return { ok: true };
       },
+      /**
+       * The author argued it away and you agree: it will not be fixed, here is
+       * why, and the thread is over — one decision, written as one.
+       *
+       * This is the answer to a comment that was refuted. Before it, the only
+       * ways out of a published finding were the verifier deciding for you,
+       * which costs a run and a wait, or "Close thread", which shut it without
+       * recording a word about why — and a review whose open comments never
+       * empty is one nobody reads twice.
+       */
+      settleFinding: (args) => {
+        const finding = findingOf(args);
+        if (!finding.publishedId && args.settled !== false) {
+          throw new Error('Nothing was published for this one; dismiss it instead.');
+        }
+        const settling = args.settled !== false;
+        s.store.settleFinding(finding.id, { settled: settling, note: String(args.note ?? '').trim().slice(0, 2000) });
+        // The thread is over, so an answer nobody is going to send no longer counts as one owed.
+        const dropped = settling && finding.publishedId ? s.store.dismissDraftsUnder(finding.repoId, finding.prId, [finding.publishedId]) : 0;
+        e.changed(finding.repoId, finding.prId);
+        return { ok: true, draftsDropped: dropped };
+      },
       closeFinding: (args) => {
         const finding = findingOf(args);
         s.store.closeFinding(finding.id, args.closed !== false);

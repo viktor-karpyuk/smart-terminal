@@ -405,3 +405,29 @@ test('an answer older than the newest commits is a question, whichever way it we
   assert.match(M.conflictChip(row({ conflicts: [] })), />merges\?</);
   assert.strictEqual(M.mergeState(row({ conflicts: [] })).stale, true);
 });
+
+// ---------------------------------------------------------------- a comment argued away
+
+/*
+ * A comment the author refuted and the person settled is not the verifier's
+ * "won't fix": one is a judgement about the code, the other is somebody taking
+ * responsibility for a decision, and the panel must not draw them alike.
+ */
+const S = fromPanel(['esc', 'RESOLUTION_LABELS', 'settledByYou', 'findingStatus']);
+
+test('settled by you reads as settled, not as the verifier deciding not to fix', () => {
+  const mine = { publishedId: 'c1', resolution: 'WONT_FIX', resolutionBy: 'YOU', resolutionNote: 'Deliberate: callers negate b.', closedAt: 'x' };
+  const theirs = { publishedId: 'c1', resolution: 'WONT_FIX', resolutionBy: 'VERIFY', resolutionNote: 'out of scope' };
+  assert.strictEqual(S.settledByYou(mine), true);
+  assert.strictEqual(S.settledByYou(theirs), false);
+  assert.match(S.findingStatus(mine), /✓ settled/);
+  assert.match(S.findingStatus(mine), /Deliberate: callers negate b\./, 'the reason is on it, for whoever reads this later');
+  assert.doesNotMatch(S.findingStatus(mine), /closed/, 'one decision, said once');
+  assert.match(S.findingStatus(theirs), /Won&#39;t fix|Won't fix/);
+});
+
+test('settling is offered on a published comment and never on an unpublished one', () => {
+  // The card offers it only where there is a thread to have been argued in.
+  assert.match(source, /f\.publishedId && !f\.dismissedAt && !findingDone\(f\)\) html \+= settleBox\(f\.id\)/);
+  assert.match(source, /settleFinding'[\s\S]{0,120}settled: on/, 'and it can be undone');
+});
