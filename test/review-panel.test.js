@@ -405,3 +405,42 @@ test('an answer older than the newest commits is a question, whichever way it we
   assert.match(M.conflictChip(row({ conflicts: [] })), />merges\?</);
   assert.strictEqual(M.mergeState(row({ conflicts: [] })).stale, true);
 });
+
+// ---------------------------------------------------------------- tables stay in their panel
+
+/*
+ * `table.list` was written for the board, where every column but the title is
+ * a number or a date, so nowrap was imposed on all of them. The Fix workshop
+ * reuses that table with a column of prose — a finding's title, the summary of
+ * a fix, the words of an error — and a two-hundred-character cell that cannot
+ * wrap makes the table wider than the panel holding it. Measured: a 1146px
+ * panel around a 1563px table, and the horizontal scroll went to the page.
+ */
+test('a table cell holding prose is allowed to wrap', () => {
+  // The rules live in the <style> block; `source` is only the script.
+  const style = /<style>([\s\S]*?)<\/style>/.exec(html)[1];
+  assert.match(style, /table\.list td\.wrap \{[^}]*white-space: normal/, 'there is a way to say "this cell is prose"');
+  assert.match(
+    style,
+    /table\.list td:not\(\.title-cell\):not\(\.wrap\) \{ white-space: nowrap/,
+    'and nowrap no longer reaches it',
+  );
+});
+
+test('every cell that carries a summary or an error says it wraps', () => {
+  // For each place prose is put in a row, the cell it lands in is the nearest <td before it.
+  const fields = [...source.matchAll(/fix\.summary|fix\.error|e\.message/g)];
+  const bare = [];
+  let found = 0;
+  for (const field of fields) {
+    const opens = source.lastIndexOf('<td', field.index);
+    const closes = source.lastIndexOf('</td>', field.index);
+    // Outside a row — a chip's title, a card — is not this test's business.
+    if (opens < 0 || closes > opens) continue;
+    found++;
+    const tag = source.slice(opens, source.indexOf('>', opens) + 1);
+    if (!/class="[^"]*\bwrap\b/.test(tag)) bare.push(`${field[0]} in ${tag}`);
+  }
+  assert.ok(found >= 2, 'the workshop and the read errors are both still drawn as table cells');
+  assert.deepStrictEqual(bare, [], 'a prose cell without the wrap class grows the table past its panel');
+});
