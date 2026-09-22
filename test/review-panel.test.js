@@ -431,3 +431,37 @@ test('settling is offered on a published comment and never on an unpublished one
   assert.match(source, /f\.publishedId && !f\.dismissedAt && !findingDone\(f\)\) html \+= settleBox\(f\.id\)/);
   assert.match(source, /settleFinding'[\s\S]{0,120}settled: on/, 'and it can be undone');
 });
+
+/*
+ * The fixes table is drawn newest first; the branch holds them oldest first.
+ * Reason about "what sits under this commit" in the table's order and "hand
+ * back to here" hands back the lot — which is what it did, measured against a
+ * real workshop: picking the first commit pushed both.
+ */
+test('the workshop reasons about its commits in the order the branch holds them', () => {
+  const at = source.indexOf('function workshopBody');
+  assert.ok(at > 0, 'workshopBody is still there');
+  const body = source.slice(at, at + 600);
+  assert.match(
+    body,
+    /filter\(pendingFix\)[\s\S]{0,200}sort\([\s\S]{0,200}createdAt/,
+    'the pending fixes are sorted by when they were made before anything counts positions in them',
+  );
+});
+
+/*
+ * A field drawn on the repository form and left out of what Save sends is a
+ * field that silently does nothing — which is how `checkCommand` first shipped
+ * in this panel, saving nothing while looking saved.
+ */
+test('every field on the repository form is in what Save sends', () => {
+  const at = source.indexOf('function formPayload');
+  assert.ok(at > 0, 'formPayload is still there');
+  const payload = source.slice(at, source.indexOf('\n  }', at));
+  const drawn = [...source.matchAll(/data-form="([A-Za-z][\w]*)"/g)].map((m) => m[1]);
+  const named = [...source.matchAll(/(?:radio|input|select|check)\('([A-Za-z][\w]*)'/g)].map((m) => m[1]);
+  const missing = [...new Set([...drawn, ...named])]
+    .filter((field) => !field.startsWith('dash-') && field !== 'import-pick')
+    .filter((field) => !new RegExp(`\\b${field}:`).test(payload));
+  assert.deepStrictEqual(missing, [], `Drawn on the form and never sent:\n  ${missing.join('\n  ')}`);
+});

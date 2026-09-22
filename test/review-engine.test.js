@@ -850,3 +850,146 @@ test('a finding that was never published is dismissed, not settled', { skip }, a
   assert.equal(refused.ok, false);
   assert.match(refused.error, /dismiss it instead/);
 });
+
+// ---------------------------------------------------------------- judging a fix before taking it
+
+/*
+ * A fix is committed the moment the working tree is dirty. That answers "did
+ * anything change" and nothing at all about whether it is any good — and the
+ * commit message the tool writes ends with "revisá el diff antes de subirlo",
+ * which the app then gave you nowhere to do. These are the four things a
+ * person needs between a fix being written and it reaching their branch.
+ */
+
+/** A review, a published-less finding, and a fix that rewrites app.js. */
+async function fixed(service, repo, { checkCommand } = {}) {
+  if (checkCommand !== undefined) service.store.saveRepo({ ...service.store.repo(repo.id), token: '', checkCommand });
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  const [f] = service.store.findingsForReview(service.store.latestDone(repo.id, 7).id);
+  return { finding: f, fix: (await service.call('fix', { findingId: f.id })).fix };
+}
+
+const writes = (text) => async (options) => {
+  fs.writeFileSync(path.join(options.cwd, 'app.js'), text);
+  return { structured: { fixed: true, summary: 'Put the plus back.', files: ['app.js'] } };
+};
+const reviewRun = async () => ({ structured: { summary: 's', findings: [finding()] } });
+
+test('the diff of a fix can be read in the app, file by file', { skip }, async () => {
+  const { service, repo } = setup([reviewRun, writes('function add(a, b) {\n  return a + b;\n}\n')]);
+  const { fix } = await fixed(service, repo);
+
+  const diff = await service.call('fixDiff', { fixId: fix.id });
+  assert.equal(diff.ok, true, diff.error);
+  assert.equal(diff.files.length, 1);
+  assert.equal(diff.files[0].path, 'app.js');
+  assert.ok(diff.files[0].lines.length, 'parsed into the lines the panel draws, not a raw patch');
+  assert.ok(diff.files[0].lines.some((line) => line.kind === 'ADDED' && /a \+ b/.test(line.text)));
+  assert.ok(diff.files[0].lines.some((line) => line.kind === 'REMOVED' && /a - b/.test(line.text)));
+
+  // And the same thing asked as "what does my clone not have yet".
+  const all = await service.call('workshopDiff', { repoId: repo.id, prId: 7 });
+  assert.equal(all.ok, true, all.error);
+  assert.deepEqual(all.files.map((file) => file.path), ['app.js']);
+});
+
+test('a repository can name a check, and a fix that fails it says so', { skip }, async () => {
+  const { service, repo } = setup([reviewRun, writes('function add(a, b) {\n  return a + b;\n}\n')]);
+  const { fix } = await fixed(service, repo, { checkCommand: 'grep -q "a + b" app.js' });
+  const passed = service.store.fix(fix.id);
+  assert.equal(passed.check.state, 'PASSED');
+
+  const second = setup([reviewRun, writes('function add(a, b) {\n  return a * b;\n}\n')]);
+  const bad = await fixed(second.service, second.repo, { checkCommand: 'grep -q "a + b" app.js' });
+  assert.equal(second.service.store.fix(bad.fix.id).check.state, 'FAILED');
+});
+
+test('a fix with no check command says nothing ran, which is not the same as passing', { skip }, async () => {
+  const { service, repo } = setup([reviewRun, writes('function add(a, b) {\n  return a + b;\n}\n')]);
+  const { fix } = await fixed(service, repo);
+  assert.equal(service.store.fix(fix.id).check, null);
+});
+
+test('a fix can be taken back out of the workshop, and its finding comes back', { skip }, async () => {
+  const { service, repo, w } = setup([reviewRun, writes('function add(a, b) {\n  return a + b;\n}\n')]);
+  const { finding: f, fix } = await fixed(service, repo);
+  const workshop = fix.workspace;
+  const before = git(workshop, 'rev-parse', 'HEAD~1');
+
+  const dropped = await service.call('dropFix', { fixId: fix.id });
+  assert.equal(dropped.ok, true, dropped.error);
+  assert.equal(dropped.how, 'reset', 'it was the tip, so the commit simply goes');
+  assert.equal(git(workshop, 'rev-parse', 'HEAD'), before);
+
+  const row = service.store.fix(fix.id);
+  assert.equal(row.state, 'DROPPED');
+  assert.ok(row.droppedAt);
+  assert.equal(service.store.pendingReturn(repo.id, 7).length, 0, 'nothing is waiting to be handed back any more');
+
+  const back = service.store.finding(f.id);
+  assert.equal(back.closedAt, null, 'the finding was closed because of that commit');
+  assert.equal(back.resolution, null);
+
+  // And the clone never saw any of it.
+  assert.throws(() => git(w.clone, 'rev-parse', '--verify', '--quiet', 'refs/heads/feature'));
+});
+
+test('fixes are handed back up to one commit, and the rest stay in the workshop', { skip }, async () => {
+  const { service, repo, w } = setup([
+    async () => ({ structured: { summary: 's', findings: [finding(), finding({ line: 1, title: 'name it better' })] } }),
+    writes('function add(a, b) {\n  return a + b;\n}\n'),
+    writes('function add(first, second) {\n  return first + second;\n}\n'),
+  ]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  const found = service.store.findingsForReview(service.store.latestDone(repo.id, 7).id);
+  const first = (await service.call('fix', { findingId: found[0].id })).fix;
+  const second = (await service.call('fix', { findingId: found[1].id })).fix;
+  assert.equal(service.store.pendingReturn(repo.id, 7).length, 2);
+
+  const given = await service.call('giveBack', { repoId: repo.id, prId: 7, upToFixId: first.id });
+  assert.equal(given.ok, true, given.error);
+  assert.equal(given.count, 1);
+  assert.equal(given.left, 1, 'the one on top of it stays behind');
+  assert.equal(git(w.clone, 'rev-parse', 'refs/heads/feature'), first.sha, 'the clone has the first commit and not the second');
+  assert.deepEqual(service.store.pendingReturn(repo.id, 7).map((row) => row.id), [second.id]);
+
+  // The rest follow later, and then the branches agree.
+  const rest = await service.call('giveBack', { repoId: repo.id, prId: 7 });
+  assert.equal(rest.count, 1);
+  assert.equal(git(w.clone, 'rev-parse', 'refs/heads/feature'), second.sha);
+});
+
+test('a retry is told what to do differently, and what the last attempt did', { skip }, async () => {
+  let secondPrompt = null;
+  const { service, repo } = setup([
+    reviewRun,
+    writes('function add(a, b) {\n  return a + b;\n}\n'),
+    async (options) => { secondPrompt = options.prompt; return { structured: { fixed: false, reason: 'nothing left' } }; },
+  ]);
+  const { finding: f, fix } = await fixed(service, repo);
+  await service.call('dropFix', { fixId: fix.id });
+  await service.call('fix', { findingId: f.id, note: 'No toques el DTO; el mapeo va en el servicio.' });
+
+  assert.match(secondPrompt, /LO QUE TE PIDIERON ESTA VEZ[\s\S]*No toques el DTO/);
+  assert.match(secondPrompt, /UN INTENTO ANTERIOR[\s\S]*Put the plus back/);
+  assert.equal(service.store.fixesForFinding(f.id)[0].note, 'No toques el DTO; el mapeo va en el servicio.');
+});
+
+test('the check command is kept on the repository, and an edit that omits it leaves it alone', { skip }, async () => {
+  const { service, repo } = setup([]);
+  const saved = await service.call('saveRepo', { repo: { ...service.store.repo(repo.id), token: '', checkCommand: 'npm run lint && npm test' } });
+  assert.equal(saved.repo.checkCommand, 'npm run lint && npm test');
+  assert.equal(service.store.repo(repo.id).checkCommand, 'npm run lint && npm test');
+
+  // An older form, or another caller, that does not carry the field must not erase it.
+  const { checkCommand, ...without } = service.store.repo(repo.id);
+  void checkCommand;
+  await service.call('saveRepo', { repo: { ...without, token: '' } });
+  assert.equal(service.store.repo(repo.id).checkCommand, 'npm run lint && npm test');
+
+  // Emptied on purpose, it goes.
+  await service.call('saveRepo', { repo: { ...service.store.repo(repo.id), token: '', checkCommand: '' } });
+  assert.equal(service.store.repo(repo.id).checkCommand, null);
+});

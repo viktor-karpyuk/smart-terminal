@@ -159,6 +159,27 @@ const MIGRATIONS = [
    * existed, which is the verifier's work by definition.
    */
   `ALTER TABLE cr_finding ADD COLUMN resolution_by TEXT`,
+
+  /*
+   * 6 — what happened to a fix after it was written.
+   *
+   * `check_*` is the answer to "does it still build": the command a repository
+   * names, run in the workshop on the commit, with its tail kept. Nothing ran
+   * is NULL, which is not the same as passing and must never be drawn as one.
+   *
+   * `dropped_at` is a fix taken back out of the workshop. The row stays because
+   * it was paid for and its thread was answered; what it no longer is, is a
+   * commit waiting to be handed back.
+   *
+   * `note` is what was asked of the retry, kept so the next reader can see why
+   * the second attempt differs from the first.
+   */
+  `ALTER TABLE cr_finding_fix ADD COLUMN check_state TEXT;
+   ALTER TABLE cr_finding_fix ADD COLUMN check_output TEXT;
+   ALTER TABLE cr_finding_fix ADD COLUMN check_seconds INTEGER;
+   ALTER TABLE cr_finding_fix ADD COLUMN dropped_at TEXT;
+   ALTER TABLE cr_finding_fix ADD COLUMN note TEXT;
+   ALTER TABLE cr_repo ADD COLUMN check_command TEXT`,
 ];
 
 const now = () => new Date().toISOString();
@@ -198,6 +219,7 @@ function repoRow(row, decrypt) {
     replyMode: row.reply_mode || 'DRAFT',
     hidden: Boolean(row.hidden),
     fixMode: row.fix_mode || 'MANUAL',
+    checkCommand: row.check_command ?? null,
   };
 }
 
@@ -358,6 +380,9 @@ const fixRow = (row) =>
     createdAt: row.created_at,
     finishedAt: row.finished_at,
     returnedAt: row.returned_at,
+    droppedAt: row.dropped_at ?? null,
+    note: row.note ?? null,
+    check: row.check_state ? { state: row.check_state, output: row.check_output ?? '', seconds: row.check_seconds ?? null } : null,
     replyId: row.reply_id,
     replyUrl: row.reply_url,
     replyError: row.reply_error,
@@ -474,11 +499,13 @@ class ReviewStore {
       // The edit form does not carry it: an edit leaves a hidden repository hidden.
       input.hidden === undefined ? (existing?.hidden ?? 0) : bool(input.hidden),
       input.fixMode ?? 'MANUAL',
+      // Undefined leaves what is stored: the edit form may not carry it.
+      input.checkCommand === undefined ? (existing?.check_command ?? null) : nul(String(input.checkCommand).trim()),
     ];
     if (existing) {
       this.run(
         `UPDATE cr_repo SET name=?, local_path=?, token_cipher=?, project_kind=?, default_depth=?, default_model=?, auto_review=?,
-           skip_drafts=?, skip_titles=?, skip_authors=?, only_targets=?, reply_mode=?, hidden=?, fix_mode=? WHERE id=?`,
+           skip_drafts=?, skip_titles=?, skip_authors=?, only_targets=?, reply_mode=?, hidden=?, fix_mode=?, check_command=? WHERE id=?`,
         ...values,
         existing.id,
       );
@@ -487,8 +514,8 @@ class ReviewStore {
     const repoId = input.id || id();
     this.run(
       `INSERT INTO cr_repo (name, local_path, token_cipher, project_kind, default_depth, default_model, auto_review, skip_drafts,
-         skip_titles, skip_authors, only_targets, reply_mode, hidden, fix_mode, id, provider, owner, slug, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         skip_titles, skip_authors, only_targets, reply_mode, hidden, fix_mode, check_command, id, provider, owner, slug, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       ...values,
       repoId,
       input.provider,
@@ -1070,14 +1097,30 @@ class ReviewStore {
     return fixRow(this.get('SELECT * FROM cr_finding_fix WHERE id = ?', fixId));
   }
 
+  /** Every attempt on one finding, newest first. */
+  fixesForFinding(findingId) {
+    return this.all('SELECT * FROM cr_finding_fix WHERE finding_id = ? ORDER BY created_at DESC', findingId).map(fixRow);
+  }
+
   fixesForPr(repoId, prId) {
     return this.all('SELECT * FROM cr_finding_fix WHERE repo_id = ? AND pr_id = ? ORDER BY created_at DESC', repoId, prId).map(fixRow);
   }
 
-  startFix({ findingId, reviewId, repoId, prId, branch, workspace }) {
+  startFix({ findingId, reviewId, repoId, prId, branch, workspace, note = null }) {
     const fixId = id();
-    this.run("INSERT INTO cr_finding_fix (id, finding_id, review_id, repo_id, pr_id, branch, state, workspace, created_at) VALUES (?,?,?,?,?,?,'RUNNING',?,?)", fixId, findingId, reviewId, repoId, prId, branch, workspace, now());
+    this.run("INSERT INTO cr_finding_fix (id, finding_id, review_id, repo_id, pr_id, branch, state, workspace, created_at, note) VALUES (?,?,?,?,?,?,'RUNNING',?,?,?)", fixId, findingId, reviewId, repoId, prId, branch, workspace, now(), nul(note));
     return fixId;
+  }
+
+  /** What the repository's own check said about this commit, in the workshop. */
+  fixChecked(fixId, { state, output, seconds }) {
+    this.run('UPDATE cr_finding_fix SET check_state = ?, check_output = ?, check_seconds = ? WHERE id = ?',
+      state, String(output ?? '').slice(-4000), Number.isFinite(seconds) ? Math.round(seconds) : null, fixId);
+  }
+
+  /** Taken back out of the workshop: the row stays, the commit is no longer waiting. */
+  dropFix(fixId) {
+    this.run("UPDATE cr_finding_fix SET dropped_at = ?, state = 'DROPPED' WHERE id = ?", now(), fixId);
   }
 
   fixCommitted(fixId, sha, summary, sessionId, costUsd) {
@@ -1100,12 +1143,30 @@ class ReviewStore {
     this.run('UPDATE cr_finding_fix SET reply_error = ? WHERE id = ?', String(message).slice(0, 1000), fixId);
   }
 
+  /** Committed, still in the workshop, not dropped — oldest first, which is the order they sit in the branch. */
   pendingReturn(repoId, prId) {
-    return this.all("SELECT * FROM cr_finding_fix WHERE repo_id = ? AND pr_id = ? AND state = 'COMMITTED' AND returned_at IS NULL", repoId, prId).map(fixRow);
+    return this.all("SELECT * FROM cr_finding_fix WHERE repo_id = ? AND pr_id = ? AND state = 'COMMITTED' AND returned_at IS NULL AND dropped_at IS NULL ORDER BY created_at", repoId, prId).map(fixRow);
   }
 
-  markReturned(repoId, prId) {
-    this.run("UPDATE cr_finding_fix SET returned_at = ? WHERE repo_id = ? AND pr_id = ? AND state = 'COMMITTED' AND returned_at IS NULL", now(), repoId, prId);
+  /**
+   * Handed back — all of them, or only those up to and including one commit.
+   *
+   * Only a prefix can be chosen, and that is not a limitation of this function
+   * but of what handing back *is*: it pushes a branch, so everything under the
+   * commit you choose goes with it. Offering to hand back the third and not the
+   * first would be a promise git cannot keep.
+   */
+  markReturned(repoId, prId, upToFixId = null) {
+    const stamp = now();
+    if (!upToFixId) {
+      this.run("UPDATE cr_finding_fix SET returned_at = ? WHERE repo_id = ? AND pr_id = ? AND state = 'COMMITTED' AND returned_at IS NULL AND dropped_at IS NULL", stamp, repoId, prId);
+      return;
+    }
+    const pending = this.pendingReturn(repoId, prId);
+    const cut = pending.findIndex((fix) => fix.id === upToFixId);
+    for (const fix of pending.slice(0, cut < 0 ? pending.length : cut + 1)) {
+      this.run('UPDATE cr_finding_fix SET returned_at = ? WHERE id = ?', stamp, fix.id);
+    }
   }
 
   fixReplyIds(repoId, prId) {
@@ -1261,7 +1322,7 @@ class ReviewStore {
         if (row.by_us) fact.changesRequestedByUs = true;
       }
     }
-    for (const row of this.all(`SELECT repo_id, pr_id, COUNT(*) AS n FROM cr_finding_fix ${repoId ? 'WHERE repo_id = ? AND' : 'WHERE'} state = 'COMMITTED' AND returned_at IS NULL GROUP BY repo_id, pr_id`, ...params)) {
+    for (const row of this.all(`SELECT repo_id, pr_id, COUNT(*) AS n FROM cr_finding_fix ${repoId ? 'WHERE repo_id = ? AND' : 'WHERE'} state = 'COMMITTED' AND returned_at IS NULL AND dropped_at IS NULL GROUP BY repo_id, pr_id`, ...params)) {
       factFor(row).pendingReturn = row.n;
     }
     return facts;

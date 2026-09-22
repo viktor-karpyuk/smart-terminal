@@ -171,6 +171,72 @@ class ReviewGit {
     return (await this.run(dir, ['diff', '--unified=5', range, '--', file])).stdout;
   }
 
+  /**
+   * Whether `sha` is the branch's own tip, which is what decides how a fix can
+   * be taken back out: the tip can simply be dropped, anything under it has to
+   * be reverted, because rewriting a commit somebody may already have pulled is
+   * how a workshop starts lying about what is in it.
+   */
+  async isTip(dir, branch, sha) {
+    const head = await this.branchHead(dir, branch);
+    return Boolean(head && sha && head === sha);
+  }
+
+  /**
+   * Take one commit back out of the workshop.
+   *
+   * The tip is dropped outright. An older one is reverted, which leaves both
+   * commits in the branch and is the honest thing: the history that was there
+   * stays there, and what handing back delivers is the sum of the two, which is
+   * nothing. Refuses on a dirty tree rather than sweeping somebody's edits away.
+   */
+  async dropCommit(dir, branch, sha) {
+    if (await this.isDirty(dir)) return { ok: false, how: null, output: 'The workshop has uncommitted changes; commit or discard them first.' };
+    if (await this.isTip(dir, branch, sha)) {
+      const res = await this.run(dir, ['reset', '--hard', `${sha}^`]);
+      return { ok: res.ok, how: 'reset', output: res.output };
+    }
+    const res = await this.run(dir, ['revert', '--no-edit', sha]);
+    if (!res.ok) await this.run(dir, ['revert', '--abort']);
+    return { ok: res.ok, how: 'revert', output: res.output };
+  }
+
+  /**
+   * Everything one commit changed, as files with their patches.
+   *
+   * Not to be confused with `commitDiff`, which is one file of a commit as raw
+   * text: that one answers "show me this file", this one answers "show me this
+   * commit", and they are different enough to be worth different names.
+   */
+  async commitFileDiffs(dir, sha) {
+    return this.rangeDiff(dir, `${sha}^`, sha);
+  }
+
+  /**
+   * The diff between two refs, with a patch per file.
+   *
+   * One call per file rather than one big patch, because that is the shape the
+   * panel already renders — and a fix touching forty files would otherwise be
+   * one string nobody can fold.
+   */
+  async rangeDiff(dir, from, to) {
+    const range = `${from}..${to}`;
+    const stats = await this.numstat(dir, range);
+    const status = await this.nameStatus(dir, range);
+    const files = [];
+    for (const stat of stats) {
+      files.push({
+        path: stat.path,
+        added: stat.added,
+        deleted: stat.deleted,
+        status: status[stat.path]?.status ?? 'M',
+        from: status[stat.path]?.from ?? null,
+        patch: await this.diffFile(dir, range, stat.path),
+      });
+    }
+    return files;
+  }
+
   async logRange(dir, range) {
     const res = await this.run(dir, ['log', '--date=short', `--format=${LOG_FORMAT}`, range]);
     return res.ok ? parseLog(res.stdout) : [];
@@ -237,6 +303,33 @@ class ReviewGit {
 
   pushToLocal(workshop, dest, branch) {
     return this.run(workshop, ['push', dest, headRefspec(branch)]);
+  }
+
+  /** One commit of the workshop's branch, rather than its tip: what a partial hand-back delivers. */
+  pushRefToLocal(workshop, dest, sha, branch) {
+    const name = String(branch ?? '');
+    if (!name || name.startsWith('-') || name.includes(':')) throw new Error(`Not a branch that can be pushed: ${name.slice(0, 60)}`);
+    if (!/^[0-9a-f]{7,40}$/.test(String(sha ?? ''))) throw new Error('Not a commit that can be pushed.');
+    return this.run(workshop, ['push', dest, `${sha}:refs/heads/${name}`]);
+  }
+
+  /**
+   * A command the repository named, run in the workshop.
+   *
+   * Through a shell, because what people write is `npm test && npm run build`,
+   * and through a login shell's PATH, because the tools are on it. It is the
+   * project's own command and runs with the app's reach — the same reach the
+   * fix already has — so it is taken from the repository's settings and never
+   * from anything a model or a pull request said.
+   */
+  async shell(dir, command, { timeout = 15 * 60 * 1000 } = {}) {
+    const env = { ...process.env, PATH: await this.resolvePath(), CI: '1', GIT_TERMINAL_PROMPT: '0' };
+    return new Promise((resolve) => {
+      execFile('/bin/sh', ['-lc', command], { cwd: dir, env, timeout, maxBuffer: 8 * 1024 * 1024 }, (error, stdout, stderr) => {
+        const output = `${stdout ?? ''}${stderr ? `${stdout ? '\n' : ''}${stderr}` : ''}`.trim();
+        resolve({ ok: !error, output, timedOut: Boolean(error && error.killed), code: error?.code ?? 0 });
+      });
+    });
   }
 
   /**

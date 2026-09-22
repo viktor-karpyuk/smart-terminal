@@ -593,6 +593,8 @@ class ReviewService {
       if (!text) throw new Error(`${what} is needed.`);
       return text;
     };
+    // The panel draws a diff from parsed lines, not from a patch; every diff it is given arrives in that shape.
+    const withLines = (files) => files.map((file) => ({ ...file, patch: undefined, lines: rules.parseDiff(file.patch) }));
     const findingOf = (args) => {
       const finding = s.store.finding(str(args.findingId, 'A finding'));
       if (!finding) throw new Error('That finding is gone.');
@@ -869,7 +871,36 @@ class ReviewService {
         e.changed(repoId, prId);
         return { ok: true, finding };
       },
-      fix: async (args) => ({ ok: true, fix: await f.fix(findingOf(args).id) }),
+      fix: async (args) => ({ ok: true, fix: await f.fix(findingOf(args).id, { note: String(args.note ?? '').slice(0, 2000) }) }),
+      /** What one fix changed, or everything waiting to be handed back, as the panel's diff wants it. */
+      fixDiff: async (args) => {
+        const fix = s.store.fix(str(args.fixId, 'A fix'));
+        if (!fix) throw new Error('That fix is gone.');
+        if (!fix.sha) throw new Error('That attempt left no commit, so there is nothing to show.');
+        const repo = s.engine.requireRepo(fix.repoId);
+        const dir = f.dirFor(repo, fix.prId);
+        if (!s.git.isRepo(dir)) throw new Error(`There is no workshop for PR #${fix.prId}.`);
+        return { ok: true, sha: fix.sha, files: withLines(await s.git.commitFileDiffs(dir, fix.sha)) };
+      },
+      /**
+       * Everything the workshop holds that the clone does not: the diff a person
+       * is being asked to approve before handing it back, read as one change
+       * rather than as a pile of commits.
+       */
+      workshopDiff: async (args) => {
+        const repoId = str(args.repoId, 'A repository');
+        const prId = num(args.prId);
+        const repo = s.engine.requireRepo(repoId);
+        const pr = s.engine.prOrThrow(repoId, prId);
+        const dir = f.dirFor(repo, prId);
+        if (!s.git.isRepo(dir)) throw new Error(`There is no workshop for PR #${prId}.`);
+        const theirs = (await s.git.branchHead(repo.localPath, pr.sourceBranch)) ?? (await s.git.revParse(repo.localPath, `origin/${pr.sourceBranch}`));
+        const ours = await s.git.branchHead(dir, pr.sourceBranch);
+        if (!theirs || !ours) throw new Error('The branch could not be read on both sides.');
+        if (theirs === ours) return { ok: true, files: [], from: theirs, to: ours };
+        return { ok: true, from: theirs, to: ours, files: withLines(await s.git.rangeDiff(dir, theirs, ours)) };
+      },
+      dropFix: (args) => f.dropFix(str(args.fixId, 'A fix')),
       fixAll: async (args) => {
         const repoId = str(args.repoId, 'A repository');
         const prId = num(args.prId);
@@ -879,7 +910,7 @@ class ReviewService {
         return { ok: true, ...(await f.fixAll(open.map((finding) => finding.id))) };
       },
       retryFixReply: (args) => f.retryReply(str(args.fixId, 'A fix')),
-      giveBack: (args) => f.giveBack(str(args.repoId, 'A repository'), num(args.prId)),
+      giveBack: (args) => f.giveBack(str(args.repoId, 'A repository'), num(args.prId), { upToFixId: args.upToFixId ? String(args.upToFixId) : null }),
       discardWorkshop: (args) => f.discard(str(args.repoId, 'A repository'), num(args.prId)),
       push: (args) => f.push(str(args.repoId, 'A repository'), num(args.prId)),
 
