@@ -628,6 +628,8 @@
   .fold.open > .fold-head { border-radius: var(--r-md) var(--r-md) 0 0; border-bottom: 1px solid var(--border); }
   .fold > .fold-head:hover { background: color-mix(in srgb, var(--text-faint) 7%, transparent); }
   .fold > .fold-body { padding: var(--s4); }
+  /* A table that still cannot fit scrolls inside its own panel; the page does not. */
+  .fold > .fold-body { overflow-x: auto; }
   .fold.warn-fold { border-color: color-mix(in srgb, var(--warn) 42%, var(--border)); }
 
   /* ── tables ──────────────────────────────────────────────────────────────
@@ -796,7 +798,17 @@
      and the rest of the row sits where the eye can take it in at once. */
   table.list .title-cell { max-width: 620px; }
   table.list .title-cell .t { text-wrap: pretty; }
-  table.list td:not(.title-cell) { white-space: nowrap; }
+  /*
+   * Nowrap is for the short columns — an age, a count, a date — and it has to
+   * be asked for cell by cell rather than imposed on every cell that is not
+   * the board's title. A cell holding prose, like the summary of a fix or the
+   * words of a read error, is hundreds of characters on one line: the table
+   * grows past the panel that holds it and takes the page's horizontal scroll
+   * with it. Measured in the Fix workshop: a 1146px panel holding a 1563px
+   * table.
+   */
+  table.list td.wrap { white-space: normal; overflow-wrap: anywhere; }
+  table.list td:not(.title-cell):not(.wrap) { white-space: nowrap; }
 
   /* ── 5. The reply box belongs to the thread it answers ───────────────────
      It was as wide as the pane while the message above it was not, so the box
@@ -1412,7 +1424,7 @@
       html += fold('read-errors', '<span class="warn">⚠</span><strong>' + d.readErrors.length + ' repositor' + (d.readErrors.length === 1 ? 'y' : 'ies') + ' could not be read</strong>',
         esc(d.readErrors.map(function (e) { return e.repoName; }).join(', ')),
         '<table class="list">' + d.readErrors.map(function (e) {
-          return '<tr><td><strong>' + esc(e.repoName) + '</strong></td><td>' + esc(e.message) + '<div class="faint mono" style="font-size:10.5px;margin-top:2px" title="' + esc(e.detail) + '">' + esc(String(e.detail).slice(0, 140)) + '</div></td><td class="faint">' + esc(when(e.at)) + '</td>' +
+          return '<tr><td><strong>' + esc(e.repoName) + '</strong></td><td class="wrap">' + esc(e.message) + '<div class="faint mono" style="font-size:10.5px;margin-top:2px" title="' + esc(e.detail) + '">' + esc(String(e.detail).slice(0, 140)) + '</div></td><td class="faint">' + esc(when(e.at)) + '</td>' +
             '<td style="text-align:right"><button class="btn small" data-act="repo-edit" data-repo="' + esc(e.repoId) + '">Edit</button></td></tr>';
         }).join('') + '</table>', false, 'warn-fold');
     }
@@ -2121,7 +2133,7 @@
         var finding = findings.filter(function (f) { return f.id === fix.findingId; })[0];
         var where = fix.droppedAt ? 'taken out' : fix.returnedAt ? 'handed back' : fix.state === 'COMMITTED' ? 'in the workshop' : '';
         var rows = '<tr><td>' + statusChip(fix.state === 'COMMITTED' ? 'DONE' : fix.state) + '</td>' +
-          '<td>' + esc(finding ? finding.title : 'a finding from an earlier review') +
+          '<td class="wrap">' + esc(finding ? finding.title : 'a finding from an earlier review') +
           (fix.note ? '<div class="faint">asked: ' + esc(fix.note.slice(0, 160)) + '</div>' : '') +
           (fix.summary ? '<div class="faint">' + esc(fix.summary.slice(0, 200)) + '</div>' : '') +
           (fix.error ? '<div class="bad">' + esc(fix.error.slice(0, 200)) + '</div>' : '') + '</td>' +
