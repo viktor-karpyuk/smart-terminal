@@ -191,6 +191,15 @@ export interface FilePanel {
   selectedBranch: string | null;
   /** Which session's folder this followed, if it was opened from one. */
   followsSessionId: string | null;
+  /**
+   * What is typed in the tree's search box.
+   *
+   * Not kept across a restart on purpose: a folder that opens into the middle
+   * of a search nobody remembers making is a folder that looks empty. The
+   * tree's own shape below is untouched while this is set, so clearing it puts
+   * everything back exactly as it was.
+   */
+  find?: string;
   /** Folders opened in the tree, so it keeps its shape across a restart. */
   expanded: string[];
   /** How wide the tree is. Per panel, because two folders are not equally deep. */

@@ -224,6 +224,25 @@ export interface DirEntry {
   repo?: boolean;
   /** Build output, dot-files, node_modules — shown, but dimmed. */
   noise: boolean;
+  /**
+   * Set when the entry is a symbolic link. `to` is where it points, resolved
+   * to a full path; `broken` when nothing is there any more. Null for an
+   * ordinary file or folder — two folders with similar names, one of them a
+   * link somewhere else, is how an afternoon goes missing.
+   */
+  link?: { to: string | null; broken: boolean } | null;
+}
+
+/** One answer from a search over names under a folder. */
+export interface FoundEntry {
+  name: string;
+  path: string;
+  /** Where it is, relative to the folder that was searched. */
+  relative: string;
+  /** The folders above it, relative to the root; empty at the top. */
+  dir: string;
+  isDirectory: boolean;
+  link: boolean;
 }
 
 export interface FileRead {
@@ -945,6 +964,12 @@ declare global {
       };
       files: {
         list(dir: string): Promise<{ ok: boolean; entries?: DirEntry[]; error?: string }>;
+        /** Names under `root` that match. Bounded: `cut` says the answer is partial. */
+        find(
+          root: string,
+          query: string,
+          options?: { hidden?: boolean },
+        ): Promise<{ ok: boolean; results?: FoundEntry[]; scanned?: number; cut?: boolean; error?: string }>;
         read(file: string): Promise<FileRead>;
         write(
           file: string,

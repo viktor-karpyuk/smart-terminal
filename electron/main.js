@@ -35,6 +35,7 @@ const { tabsInLayout, minimizedIds, sectionIds, sessionsToRestore, unaccountedTa
 const { MessageBridge } = require('./message-bridge');
 const {
   listDir,
+  findInTree,
   readTextFile,
   writeTextFile,
   FileWatcher,
@@ -1130,6 +1131,21 @@ function registerIpc() {
   ipcMain.handle('files:list', async (_e, dir) => {
     try {
       return { ok: true, entries: await listDir(dir) };
+    } catch (error) {
+      return { ok: false, error: error.code === 'ENOENT' ? 'That folder is not there any more.' : error.message };
+    }
+  });
+
+  /**
+   * Find a file or a folder by name, under the folder a panel is showing.
+   *
+   * Bounded in the main process rather than trusted to stop on its own: a root
+   * somebody points at a home folder, or at a synced drive that fetches what it
+   * is asked for, is a walk that would otherwise run until the window is closed.
+   */
+  ipcMain.handle('files:find', async (_e, { root, query, hidden } = {}) => {
+    try {
+      return await findInTree(String(root ?? ''), String(query ?? ''), { hidden: Boolean(hidden) });
     } catch (error) {
       return { ok: false, error: error.code === 'ENOENT' ? 'That folder is not there any more.' : error.message };
     }

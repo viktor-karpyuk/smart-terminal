@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { asFilePanel, isDarkAppearance, useStore } from '../state/store';
-import type { DirEntry } from '../global';
+import type { DirEntry, FoundEntry } from '../global';
 import { GIT_TAB } from '../state/types';
 import { leafOfTab } from '../state/layout';
 import { Editor } from './Editor';
@@ -72,10 +72,14 @@ export function FilesPanel({ panelId }: { panelId: string }) {
       {/* The tree never moves, whatever is open on the right. */}
       <div className="files-tree" style={{ flexBasis: panel.treeWidth ?? 236 }}>
         <TreeHeader panelId={panelId} root={panel.root} homedir={homedir} />
-        <DropZone panelId={panelId} dir={panel.root} className="files-tree-scroll">
-          <UpRow panelId={panelId} root={panel.root} />
-          <Dir panelId={panelId} path={panel.root} depth={0} />
-        </DropZone>
+        {panel.find?.trim() ? (
+          <FindResults panelId={panelId} root={panel.root} query={panel.find} />
+        ) : (
+          <DropZone panelId={panelId} dir={panel.root} className="files-tree-scroll">
+            <UpRow panelId={panelId} root={panel.root} />
+            <Dir panelId={panelId} path={panel.root} depth={0} />
+          </DropZone>
+        )}
         {notice && (
           <div className="git-notice is-floating is-bad" onClick={() => setNotice(null)}>
             {notice}
@@ -441,6 +445,7 @@ function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string;
         <TerminalButton panelId={panelId} />
         <ExtensionButtons panelId={panelId} />
       </div>
+      <FindBox panelId={panelId} root={root} />
       {open && (
         <Popover anchorEl={buttonRef.current} onClose={() => setOpen(false)}>
           <div className="popover-header"><span>Show the folder of</span></div>
@@ -1071,6 +1076,147 @@ function GitTab({ panelId, selected }: { panelId: string; selected: boolean }) {
 }
 
 /** One folder's children. Each level subscribes only to its own listing. */
+/**
+ * Finding a file by name, without leaving the folder you are in.
+ *
+ * A file tree answers "what is in here" and, until now, nothing else — the
+ * question people actually arrive with is "where is that thing", and answering
+ * it meant Finder, or a terminal, or knowing. The box sits in the header, which
+ * does not scroll, so it is never somewhere you have to scroll back up to.
+ */
+function FindBox({ panelId, root }: { panelId: string; root: string }) {
+  const query = useStore((s) => asFilePanel(s.panels[panelId])?.find ?? '');
+  const patch = useStore((s) => s.patchPanel);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // The folder changed under it: an answer about the last one is worse than none.
+  useEffect(() => {
+    if (query) patch(panelId, { find: '' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [root]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'p' && !event.shiftKey) {
+        // Only the folder somebody is actually in: several are often open, and
+        // every one of them is listening.
+        const { layout, activeLeafId } = useStore.getState();
+        const leaf = leafOfTab(layout, panelId);
+        if (!leaf || leaf.id !== activeLeafId || leaf.active !== panelId) return;
+        event.preventDefault();
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [panelId]);
+
+  return (
+    <div className="files-find">
+      <svg className="files-find-icon" width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+        <circle cx="6.2" cy="6.2" r="3.9" />
+        <path d="M9.2 9.2L12 12" />
+      </svg>
+      <input
+        ref={inputRef}
+        type="search"
+        className="files-find-input"
+        placeholder="Find a file or folder"
+        aria-label="Find a file or folder in this folder"
+        value={query}
+        onChange={(event) => patch(panelId, { find: event.target.value })}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            patch(panelId, { find: '' });
+            event.currentTarget.blur();
+          }
+        }}
+      />
+      {query && (
+        <button className="files-find-clear" aria-label="Stop searching" onClick={() => patch(panelId, { find: '' })}>
+          ×
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * What the search found, in place of the tree.
+ *
+ * In place of it rather than beside it: a narrow strip has no room for two
+ * lists, and while you are looking for something the tree is not what you are
+ * reading. Clearing the box puts it back exactly as it was, because the tree's
+ * own state was never touched.
+ *
+ * The walk happens in the main process and is bounded there. Here the only job
+ * is to not ask on every keystroke, and to ignore an answer to a question that
+ * has already been retyped.
+ */
+function FindResults({ panelId, root, query }: { panelId: string; root: string; query: string }) {
+  const [state, setState] = useState<{ rows: FoundEntry[]; cut: boolean; error: string | null } | null>(null);
+  const openFile = useStore((s) => s.openFile);
+  const setPanelRoot = useStore((s) => s.setPanelRoot);
+  const patch = useStore((s) => s.patchPanel);
+
+  useEffect(() => {
+    let alive = true;
+    setState(null);
+    const at = window.setTimeout(() => {
+      window.api.files.find(root, query).then(
+        (result) => {
+          if (!alive) return;
+          setState({ rows: result.results ?? [], cut: Boolean(result.cut), error: result.ok ? null : (result.error ?? 'It could not look.') });
+        },
+        (error) => alive && setState({ rows: [], cut: false, error: String(error?.message ?? error) }),
+      );
+    }, 180);
+    return () => {
+      alive = false;
+      window.clearTimeout(at);
+    };
+  }, [root, query]);
+
+  if (!state) return <div className="files-find-note">Looking…</div>;
+  if (state.error) return <div className="files-find-note is-bad">{state.error}</div>;
+  if (!state.rows.length) {
+    return <div className="files-find-note">Nothing here is called that.{state.cut ? ' It stopped before reaching the end.' : ''}</div>;
+  }
+
+  return (
+    <div className="files-tree-scroll files-find-results">
+      {state.rows.map((row) => (
+        <button
+          key={row.path}
+          className="files-row files-find-row"
+          title={row.path}
+          onClick={() => {
+            if (row.isDirectory) {
+              // A folder is where you wanted to be, so go there and stop searching.
+              setPanelRoot(panelId, row.path);
+              patch(panelId, { find: '' });
+            } else {
+              openFile(panelId, row.path);
+            }
+          }}
+        >
+          <FileIcon name={row.name} isDirectory={row.isDirectory} open={false} style="colour" />
+          <span className="files-find-name">{row.name}</span>
+          {row.link && <span className="files-find-link" title="a link">→</span>}
+          <span className="files-find-dir">{row.dir || '.'}</span>
+        </button>
+      ))}
+      {state.cut && (
+        <div className="files-find-note">
+          Showing the first {state.rows.length}. It stopped before reaching the end of this folder — a few more words will narrow it.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Dir({ panelId, path, depth }: { panelId: string; path: string; depth: number }) {
   const listing = useStore((s) => s.dirs[path]);
   const expanded = useStore(
@@ -1213,6 +1359,25 @@ function Row({
             <circle cx="10.4" cy="6.4" r="1.7" />
             <path d="M3.6 4.9v4.2M5.2 3.9c2.6.4 3.8 1.3 4 2.3" />
           </svg>
+        )}
+        {/*
+          A link, and where it goes. Two folders with nearly the same name, one
+          of them a link into somewhere else entirely, is how somebody spends an
+          afternoon reading a copy that stopped syncing weeks ago. The tree
+          followed links already; it simply never said that it had.
+        */}
+        {entry.link && (
+          <span
+            className={`files-link${entry.link.broken ? ' is-broken' : ''}`}
+            title={entry.link.broken
+              ? `A link to ${entry.link.to ?? 'somewhere'} — nothing is there any more`
+              : `A link to ${entry.link.to ?? 'somewhere else'}`}
+          >
+            <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+              <path d="M6 8a2.6 2.6 0 0 0 3.9.3l2-2a2.6 2.6 0 0 0-3.7-3.7l-1.1 1.1" />
+              <path d="M8 6a2.6 2.6 0 0 0-3.9-.3l-2 2a2.6 2.6 0 0 0 3.7 3.7l1.1-1.1" />
+            </svg>
+          </span>
         )}
         {dirty && <span className="files-dirty" title="unsaved" />}
     </>
