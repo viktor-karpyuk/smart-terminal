@@ -208,3 +208,29 @@ test('a launcher is only for a view that needs no folder, and wears only an icon
   const shipped = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'extensions', 'code-review', 'extension.json'), 'utf8'));
   assert.equal(shipped.contributes.panels[0].launcher, true, 'the Code Reviewer asks for its button');
 });
+
+/*
+ * Every icon a shipped extension asks for is one the app can actually draw.
+ *
+ * The vocabulary is an allow-list, and an unknown name is silently dropped —
+ * which is the right answer for an extension somebody else wrote and the wrong
+ * one for ours. Teams asked for its own mark, nobody added it here, and the
+ * button quietly wore the generic three-box glyph instead. Asking every shipped
+ * manifest at once is cheaper than noticing it in a screenshot.
+ */
+test('every shipped extension asks for an icon the app knows how to draw', () => {
+  const root = path.join(__dirname, '..', 'extensions');
+  const drawn = [];
+  for (const name of fs.readdirSync(root)) {
+    const file = path.join(root, name, 'extension.json');
+    if (!fs.existsSync(file)) continue;
+    const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+    for (const panel of manifest.contributes?.panels ?? []) {
+      if (!panel.icon) continue;
+      const views = panelViews([{ id: manifest.id, status: 'installed', enabled: true, dir: __dirname, contributes: { panels: [{ ...panel, needs: null, launcher: true }] } }]);
+      assert.equal(views[0].icon, panel.icon, `${name} asks for the icon "${panel.icon}", which the app drops`);
+      drawn.push(panel.icon);
+    }
+  }
+  assert.ok(drawn.length >= 2, 'at least the Code Reviewer and Teams ask for one');
+});

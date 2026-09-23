@@ -23,19 +23,40 @@ const { TeamsService } = sqlite ? require('../electron/teams-service') : {};
 /** A Wednesday at 10:00 — inside any working hours these tests set. */
 const WEDNESDAY_10 = new Date('2026-09-23T10:00:00').getTime();
 
-function setup({ at = WEDNESDAY_10, fail = null } = {}) {
+function setup({ at = WEDNESDAY_10, fail = null, known = ['b@kubrik.com', 'braian@kubrik.com', 'me@kubrik.com'] } = {}) {
+  const knownSet = new Set(known.map((one) => one.toLowerCase()));
   const db = new sqlite.DatabaseSync(':memory:');
   const calls = [];
   const notices = [];
   let now = at;
+  /*
+   * A fake that refuses what the real thing refuses.
+   *
+   * The first version answered every request with yes, which is how a chat with
+   * the same person in both seats — something Graph rejects outright — passed a
+   * green suite and shipped unable to send a single message. A fake that cannot
+   * say no tests the code around a call and not the call.
+   */
   const fetch = async (url, init) => {
     calls.push({ url: String(url), body: init?.body ? String(init.body) : null });
     if (fail && fail(String(url))) return { ok: false, status: 500, json: async () => ({}) };
     if (String(url).includes('/oauth2/v2.0/token')) {
       return { ok: true, status: 200, json: async () => ({ access_token: 'tok', expires_in: 3600 }) };
     }
-    if (String(url).includes('/v1.0/users/')) return { ok: true, status: 200, json: async () => ({ id: 'user-1' }) };
-    if (String(url).endsWith('/v1.0/chats')) return { ok: true, status: 201, json: async () => ({ id: 'chat-1' }) };
+    if (String(url).includes('/v1.0/users/')) {
+      const who = decodeURIComponent(String(url).split('/v1.0/users/')[1]);
+      if (!knownSet.has(who.toLowerCase())) return { ok: false, status: 404, json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => ({ id: 'id-of-' + who }) };
+    }
+    if (String(url).endsWith('/v1.0/chats')) {
+      const body = JSON.parse(init.body);
+      const seats = (body.members || []).map((one) => one['user@odata.bind']);
+      // Graph's own rule: a one-to-one chat is between two people.
+      if (new Set(seats).size < 2) {
+        return { ok: false, status: 400, json: async () => ({ error: { message: 'oneOnOne chat needs two distinct members' } }) };
+      }
+      return { ok: true, status: 201, json: async () => ({ id: 'chat-1' }) };
+    }
     return { ok: true, status: 201, json: async () => ({ id: 'msg-1' }) };
   };
   const service = new TeamsService({
@@ -48,8 +69,8 @@ function setup({ at = WEDNESDAY_10, fail = null } = {}) {
   return { service, calls, notices, db, setNow: (value) => { now = value; } };
 }
 
-const graph = (service) =>
-  service.saveConnection({ way: 'graph', tenantId: 't', clientId: 'c', clientSecret: 's' });
+const graph = (service, sender = 'me@kubrik.com') =>
+  service.saveConnection({ way: 'graph', tenantId: 't', clientId: 'c', clientSecret: 's', sender: sender });
 
 const note = (extra = {}) => ({
   to: { handle: 'bitbucket:bchavez' },
@@ -247,7 +268,7 @@ test('a webhook URL that is not https is refused before it is stored', { skip },
  */
 test('nothing a panel is given contains a secret', { skip }, async () => {
   const { service } = setup();
-  service.saveConnection({ way: 'graph', tenantId: 'tenant-1', clientId: 'client-1', clientSecret: 'THE-SECRET' });
+  service.saveConnection({ way: 'graph', tenantId: 'tenant-1', clientId: 'client-1', clientSecret: 'THE-SECRET', sender: 'me@kubrik.com' });
   service.saveConnection({ way: 'webhook', webhookUrl: 'https://outlook.office.com/webhook/SECRET-PATH' });
 
   const text = JSON.stringify(service.overview());
@@ -259,8 +280,101 @@ test('nothing a panel is given contains a secret', { skip }, async () => {
 
 test('an empty secret means “leave it alone”, not “erase it”', { skip }, async () => {
   const { service } = setup();
-  service.saveConnection({ way: 'graph', tenantId: 't', clientId: 'c', clientSecret: 's' });
+  service.saveConnection({ way: 'graph', tenantId: 't', clientId: 'c', clientSecret: 's', sender: 'me@kubrik.com' });
   service.saveConnection({ way: 'graph', tenantId: 't2', clientId: 'c', clientSecret: '' });
   assert.strictEqual(service.connection().hasGraph, true, 'still set up');
   assert.strictEqual(service.connection().tenantId, 't2');
+});
+
+// ---------------------------------------------------------------- a chat has two people in it
+
+/*
+ * The bug this file shipped with. A one-to-one chat takes two members and an
+ * app is not a person, so a direct message is between the person being told and
+ * somebody it is from. The first version filled the second seat with the
+ * recipient, and the fake it was tested against said yes to everything.
+ */
+test('a direct message is between two people, and names them both', { skip }, async () => {
+  const { service, calls } = setup();
+  graph(service, 'me@kubrik.com');
+  service.store.setAppStance('code-review', 'ALLOW');
+  service.store.matchPerson('bitbucket:bchavez', 'b@kubrik.com');
+
+  const out = await service.send('code-review', 'Code Reviewer', note());
+  assert.strictEqual(out.ok, true, JSON.stringify(out));
+
+  const chat = calls.find((call) => call.url.endsWith('/v1.0/chats'));
+  const seats = JSON.parse(chat.body).members.map((one) => one['user@odata.bind']);
+  assert.strictEqual(seats.length, 2);
+  assert.strictEqual(new Set(seats).size, 2, 'two distinct people, which is what Graph requires');
+  assert.ok(seats.some((seat) => seat.includes('id-of-me@kubrik.com')), 'the one it is from');
+  assert.ok(seats.some((seat) => seat.includes('id-of-b@kubrik.com')), 'the one being told');
+});
+
+test('an app registration with nobody to send from is not ready', { skip }, () => {
+  const { service } = setup();
+  service.saveConnection({ way: 'graph', tenantId: 't', clientId: 'c', clientSecret: 's' });
+  assert.strictEqual(service.connection().ready, false, 'a green light in front of a failure is worse than a red one');
+  service.saveConnection({ way: 'graph', sender: 'me@kubrik.com' });
+  assert.strictEqual(service.connection().ready, true);
+});
+
+test('sending to the account it is sent from is refused in words', { skip }, async () => {
+  const { service } = setup();
+  graph(service, 'me@kubrik.com');
+  service.store.setAppStance('code-review', 'ALLOW');
+  service.store.matchPerson('bitbucket:bchavez', 'me@kubrik.com');
+
+  const out = await service.send('code-review', 'Code Reviewer', note());
+  assert.strictEqual(out.ok, false);
+  assert.match(out.detail, /cannot be sent to me@kubrik.com/);
+});
+
+test('somebody Teams has never heard of is said by name', { skip }, async () => {
+  const { service } = setup({ known: ['me@kubrik.com'] });
+  graph(service, 'me@kubrik.com');
+  service.store.setAppStance('code-review', 'ALLOW');
+  service.store.matchPerson('bitbucket:bchavez', 'gone@kubrik.com');
+
+  const out = await service.send('code-review', 'Code Reviewer', note());
+  assert.strictEqual(out.ok, false);
+  assert.match(out.detail, /Teams has nobody at gone@kubrik.com/);
+});
+
+/*
+ * A choice outranks a guess.
+ *
+ * Sending works an address out of the handle when it can, and that guess used
+ * to be written straight over one somebody had picked by hand in the People
+ * screen — while the row went on saying it was matched by you. Mail then went
+ * to whoever the handle happened to spell.
+ */
+test('an address chosen by hand is not overwritten by a guess', { skip }, () => {
+  const { service } = setup();
+  const store = service.store;
+  store.rememberPerson({ handle: 'bitbucket:bchavez', display: 'Braian', address: 'braian@kubrik.com', matchedBy: 'HAND' });
+  store.rememberPerson({ handle: 'bitbucket:bchavez', address: 'bchavez@kubrik.com', matchedBy: 'GUESS' });
+  const person = store.person('bitbucket:bchavez');
+  assert.strictEqual(person.address, 'braian@kubrik.com', 'the hand-made match stands');
+  assert.strictEqual(person.matchedBy, 'HAND');
+});
+
+test('a guess still fills an address nobody has chosen', { skip }, () => {
+  const { service } = setup();
+  const store = service.store;
+  store.rememberPerson({ handle: 'bitbucket:nobody', display: 'Nobody' });
+  store.rememberPerson({ handle: 'bitbucket:nobody', address: 'nobody@kubrik.com', matchedBy: 'GUESS' });
+  const person = store.person('bitbucket:nobody');
+  assert.strictEqual(person.address, 'nobody@kubrik.com');
+  assert.strictEqual(person.matchedBy, 'GUESS');
+});
+
+test('a hand-made match can still be changed by hand', { skip }, () => {
+  const { service } = setup();
+  const store = service.store;
+  store.rememberPerson({ handle: 'bitbucket:bchavez', address: 'old@kubrik.com', matchedBy: 'HAND' });
+  store.matchPerson('bitbucket:bchavez', 'new@kubrik.com');
+  const person = store.person('bitbucket:bchavez');
+  assert.strictEqual(person.address, 'new@kubrik.com', 'the People screen still decides');
+  assert.strictEqual(person.matchedBy, 'HAND');
 });

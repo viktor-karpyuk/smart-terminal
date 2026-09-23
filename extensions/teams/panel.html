@@ -179,8 +179,12 @@
     $('top').innerHTML = html;
   }
 
+  /* The same mark the rail wears, so the panel and its button are one thing. */
   function plane() {
-    return '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>';
+    return '<svg width="12" height="12" viewBox="0 0 24 24" fill="var(--accent)">'
+      + '<path fill-rule="evenodd" d="M11.5 4h8a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5h-8a2.5 2.5 0 0 1-2.5-2.5v-11a2.5 2.5 0 0 1 2.5-2.5zM12.3 7.5h6.4v1.8h-2.3v7.2h-1.8v-7.2h-2.3z"/>'
+      + '<circle cx="5.7" cy="5.9" r="3.1"/>'
+      + '<path d="M1.1 18.9v-3a4.7 4.7 0 0 1 4.7-4.7h3.2v7.7z"/></svg>';
   }
 
   /* ---------------------------------------------------------------- connection */
@@ -211,6 +215,17 @@
         '<label class="field"><span>Tenant ID</span><input type="text" class="mono" data-edit="tenantId" value="' + esc(edit('tenantId', c.tenantId)) + '"></label>' +
         '<label class="field"><span>Client ID</span><input type="text" class="mono" data-edit="clientId" value="' + esc(edit('clientId', c.clientId)) + '"></label>' +
         '</div>' +
+        /*
+         * Who the message is from.
+         *
+         * A one-to-one chat in Teams has two people in it, and an app is not a
+         * person — so a direct message is between whoever is being told and a
+         * real account it comes from. It is also why a message arrives with a
+         * face on it rather than from something nameless.
+         */
+        '<label class="field" style="margin-bottom:10px"><span>Sent from</span>' +
+        '<input type="text" data-edit="sender" placeholder="you@yourcompany.com" value="' + esc(edit('sender', c.sender)) + '"></label>' +
+        '<div class="help" style="margin:-6px 0 10px">The account these messages come from. A chat has two people in it, so without one there is nobody at the other end of it.</div>' +
         '<label class="field"><span>Client secret</span>' +
         '<input type="password" data-edit="clientSecret" placeholder="' + (c.hasGraph ? '•••••••• kept encrypted; type a new one to replace it' : 'the secret from the app registration') + '" value="' + esc(edit('clientSecret', '')) + '"></label>' +
         '<div class="help">Kept encrypted beside the repository tokens, and never shown again. Left empty, whatever is stored stays.</div>';
@@ -218,7 +233,7 @@
     html += '<div class="row" style="margin-top:12px">' +
       '<button class="btn primary" data-act="save-connection"' + busyAttr('save-connection') + '>Save</button>' +
       '<label class="field" style="flex-direction:row;align-items:center;gap:7px">' +
-      '<input type="text" data-edit="testTo" placeholder="your address, to try it" value="' + esc(edit('testTo', '')) + '" style="width:220px"></label>' +
+      '<input type="text" data-edit="testTo" placeholder="' + (webhook ? 'not needed — it goes to the channel' : 'somebody to send it to') + '" value="' + esc(edit('testTo', '')) + '" style="width:230px"' + (webhook ? ' disabled' : '') + '></label>' +
       '<button class="btn" data-act="test"' + busyAttr('test') + '>Send a test message</button>' +
       '<span class="spacer"></span>' + connectionState(c) + '</div>';
     html += '</div>';
@@ -338,7 +353,7 @@
       '<input type="number" min="0" max="23" data-edit="hoursFrom" value="' + esc(edit('hoursFrom', s.hoursFrom)) + '"> and' +
       '<input type="number" min="0" max="24" data-edit="hoursTo" value="' + esc(edit('hoursTo', s.hoursTo)) + '">' +
       '<label class="check"><input type="checkbox" data-act="weekdays"' + (s.weekdaysOnly ? ' checked' : '') + '> weekdays only</label></div>' +
-      '<div class="help">Anything raised outside these hours waits for the morning rather than being dropped. A message an extension marks urgent goes anyway.</div></div>' +
+      '<div class="help">Anything raised outside these hours waits for the morning rather than being dropped. A message an extension marks urgent goes anyway. Two equal hours mean the whole day.</div></div>' +
 
       '<div class="card"><strong>How often one person hears from us</strong>' +
       '<div class="row" style="margin-top:9px">At most' +
@@ -390,6 +405,7 @@
   function messageState(row) {
     if (row.state === 'SENT') return '<span class="chip okc">delivered</span>';
     if (row.state === 'WAITING') return '<span class="chip warnc">waiting for you</span>';
+    if (row.state === 'SENDING') return '<span class="chip">going now</span>';
     if (row.state === 'FAILED') return '<span class="chip badc" title="' + esc(row.reason || '') + '">failed</span>';
     if (row.state === 'HELD') return '<span class="chip" title="' + esc(row.reason || '') + '">held</span>';
     return '<span class="chip" title="' + esc(row.reason || '') + '">skipped</span>';
@@ -418,7 +434,7 @@
     'save-connection': function () {
       var connection = state.data.connection.way === 'webhook'
         ? { way: 'webhook', webhookUrl: edit('webhookUrl', '') }
-        : { way: 'graph', tenantId: edit('tenantId', state.data.connection.tenantId), clientId: edit('clientId', state.data.connection.clientId), clientSecret: edit('clientSecret', '') };
+        : { way: 'graph', tenantId: edit('tenantId', state.data.connection.tenantId), clientId: edit('clientId', state.data.connection.clientId), sender: edit('sender', state.data.connection.sender), clientSecret: edit('clientSecret', '') };
       act('save-connection', function () { return call('saveConnection', { connection: connection }); }, function () {
         // A secret typed here is forgotten the moment it is stored.
         delete state.edits.webhookUrl; delete state.edits.clientSecret;

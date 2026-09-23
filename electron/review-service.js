@@ -80,7 +80,14 @@ class ReviewService {
     this.engine.onFinished = (repo, pr, review) => {
       if (repo.fixMode === 'AUTO') void this.fixer.autoFix(repo, pr, review).catch(() => {});
     };
-    this.auto = new AutoReviewer({ store: this.store, engine: this.engine, fixer: this.fixer, notify: notifier, emit: emitter });
+    this.auto = new AutoReviewer({
+      store: this.store,
+      engine: this.engine,
+      fixer: this.fixer,
+      remind: () => this.sweepReminders(),
+      notify: notifier,
+      emit: emitter,
+    });
   }
 
   /** Called once the app is up: runs left behind by a previous process are failed and queued, and the sweep starts. */
@@ -285,6 +292,13 @@ class ReviewService {
           lastStatus: fact.lastStatus ?? null,
           approvedByUs: Boolean(fact.approvedByUs),
           changesRequestedByUs: Boolean(fact.changesRequestedByUs),
+          /*
+           * How long the branch has sat since we asked for changes, and whether
+           * anything has arrived since. The rule that reads these could never
+           * fire before, because nothing put them here.
+           */
+          changesRequestedDays: fact.changesRequestedAt ? rules.daysBetween(fact.changesRequestedAt, new Date()) : null,
+          movedSinceReview: Boolean(fact.reviewedSha && pr.headSha && fact.reviewedSha !== pr.headSha),
           pendingReturn: fact.pendingReturn ?? 0,
           /*
            * What is happening on this pull request right now, in the row rather

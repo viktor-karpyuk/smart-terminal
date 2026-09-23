@@ -652,10 +652,21 @@ class ReviewStore {
         ...(pr.approvedBy ?? []).map((who) => [who, 'APPROVED']),
         ...(pr.changesRequestedBy ?? []).map((who) => [who, 'CHANGES_REQUESTED']),
       ];
-      const ours = new Set(this.all('SELECT approved_by FROM cr_pr_approval WHERE repo_id = ? AND pr_id = ? AND by_us = 1', repoId, prId).map((row) => row.approved_by));
+      const before = this.all('SELECT approved_by, by_us, approved_at, state FROM cr_pr_approval WHERE repo_id = ? AND pr_id = ?', repoId, prId);
+      const ours = new Set(before.filter((row) => row.by_us).map((row) => row.approved_by));
+      /*
+       * When somebody took this position, not when we last looked.
+       *
+       * Every sync rewrote the whole table with the current moment, so a stance
+       * held for a week always read as taken seconds ago — which made "changes
+       * requested five days ago and nothing has moved" a question nobody could
+       * answer. The stamp now moves only when the position itself changes.
+       */
+      const since = new Map(before.map((row) => [`${row.approved_by}\u0000${row.state}`, row.approved_at]));
       this.run('DELETE FROM cr_pr_approval WHERE repo_id = ? AND pr_id = ?', repoId, prId);
       for (const [who, state] of stances) {
-        this.run('INSERT OR REPLACE INTO cr_pr_approval (repo_id, pr_id, approved_by, by_us, approved_at, state) VALUES (?,?,?,?,?,?)', repoId, prId, who, bool(ours.has(who)), now(), state);
+        this.run('INSERT OR REPLACE INTO cr_pr_approval (repo_id, pr_id, approved_by, by_us, approved_at, state) VALUES (?,?,?,?,?,?)',
+          repoId, prId, who, bool(ours.has(who)), since.get(`${who}\u0000${state}`) ?? now(), state);
       }
     });
   }
@@ -1252,7 +1263,7 @@ class ReviewStore {
     const facts = new Map();
     const factFor = (row) => {
       const k = key(row);
-      if (!facts.has(k)) facts.set(k, { reviewedSha: null, reviewId: null, reviewCost: 0, reviewAt: null, lastStatus: null, findingCount: 0, publishedCount: 0, toPublish: false, unresolved: 0, replied: false, approved: false, changesRequested: false, approvedByUs: false, changesRequestedByUs: false, pendingFindings: 0, pendingNotes: 0, pendingReplies: 0, notVerified: 0, notResolved: 0, publishedLive: 0, finalPassHead: null, finalPassBlockers: 0, totalCost: 0, pendingReturn: 0 });
+      if (!facts.has(k)) facts.set(k, { reviewedSha: null, reviewId: null, reviewCost: 0, reviewAt: null, lastStatus: null, findingCount: 0, publishedCount: 0, toPublish: false, unresolved: 0, replied: false, approved: false, changesRequested: false, approvedByUs: false, changesRequestedByUs: false, changesRequestedAt: null, pendingFindings: 0, pendingNotes: 0, pendingReplies: 0, notVerified: 0, notResolved: 0, publishedLive: 0, finalPassHead: null, finalPassBlockers: 0, totalCost: 0, pendingReturn: 0 });
       return facts.get(k);
     };
     for (const row of this.all(`SELECT repo_id, pr_id, SUM(cost_usd) AS cost, MAX(created_at) AS at FROM cr_review ${where} GROUP BY repo_id, pr_id`, ...params)) {
@@ -1319,7 +1330,10 @@ class ReviewStore {
       }
       if (row.state === 'CHANGES_REQUESTED') {
         fact.changesRequested = true;
-        if (row.by_us) fact.changesRequestedByUs = true;
+        if (row.by_us) {
+          fact.changesRequestedByUs = true;
+          fact.changesRequestedAt = row.approved_at ?? null;
+        }
       }
     }
     for (const row of this.all(`SELECT repo_id, pr_id, COUNT(*) AS n FROM cr_finding_fix ${repoId ? 'WHERE repo_id = ? AND' : 'WHERE'} state = 'COMMITTED' AND returned_at IS NULL AND dropped_at IS NULL GROUP BY repo_id, pr_id`, ...params)) {
