@@ -371,6 +371,20 @@ export interface Settings {
    * was for anybody who does not care.
    */
   askSessionName: boolean;
+  /**
+   * Let a previewed HTML page run its own scripts.
+   *
+   * Off by default and worth keeping that way: a working tree is full of pages
+   * nobody wrote to be opened here — a scraped article, a fixture, a saved
+   * invoice — and a preview that runs them is a preview that can be made to
+   * phone home the moment somebody clicks a file. On, a page behaves as it does
+   * in a browser: its arrows, its tabs, its slides all work.
+   *
+   * Either way the frame has no origin of its own, so nothing it runs can read
+   * the disk, the app, or anything the app has. What scripts buy is behaviour;
+   * what they cost is that the page can talk to the network.
+   */
+  previewScripts: boolean;
   /** Move a session to another account by itself when its own runs out. */
   autoHandoff: boolean;
   /** Account new sessions belong to unless one is chosen explicitly. */

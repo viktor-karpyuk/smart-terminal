@@ -318,6 +318,27 @@ export function AppearancePanel() {
               <span>Ask what to call a new session — otherwise the app names it</span>
             </label>
 
+            {/*
+              The one preview decision worth a switch. Off, a page is drawn and
+              can do nothing; on, it behaves as it would in a browser. Neither
+              setting lets it reach the disk or the app — the frame has no origin
+              of its own — so what is being chosen is behaviour against reach.
+            */}
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={settings.previewScripts}
+                onChange={(event) => updateSettings({ previewScripts: event.target.checked })}
+              />
+              <span>Let previewed web pages run their own scripts</span>
+            </label>
+            <p className="usage-note">
+              A page's own arrows, tabs and slides only work with this on. It also lets the page
+              talk to the network, which is why it is off until you say so — a working tree is full
+              of pages nobody wrote to be opened here. Each preview can be run once from its own
+              footer without changing this.
+            </p>
+
             <label className="checkbox">
               <input
                 type="checkbox"

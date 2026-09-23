@@ -68,6 +68,7 @@ const DEFAULT_SETTINGS: Settings = {
   // editors change size the first time they run a build that has this in it.
   editorFontSize: 12.5,
   askSessionName: true,
+  previewScripts: false,
   fontFamily: '"JetBrains Mono", "SF Mono", Menlo, "Fira Code", ui-monospace, monospace',
   sidebarVisible: true,
   sidebarWidth: 260,
