@@ -204,6 +204,15 @@ export interface FilePanel {
   expanded: string[];
   /** How wide the tree is. Per panel, because two folders are not equally deep. */
   treeWidth: number;
+  /**
+   * How wide the changed-files list is inside Git, as a percentage of the pane.
+   *
+   * A percentage rather than pixels because this divider sits inside a pane
+   * that is itself resizable: a list pinned at 380px is a third of one window
+   * and the whole of another. Per panel, like the tree's own width — somebody
+   * reading a diff wants one thing, somebody staging forty files wants another.
+   */
+  gitListWidth?: number;
   /** Files open in the editor, in tab order. */
   open: string[];
   /** The one in front. */
