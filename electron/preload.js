@@ -161,6 +161,8 @@ contextBridge.exposeInMainWorld('api', {
 
   files: {
     list: (dir) => ipcRenderer.invoke('files:list', dir),
+    /** Files and folders whose name matches, under one root. Bounded; may come back cut short. */
+    find: (root, query, options) => ipcRenderer.invoke('files:find', { root, query, ...options }),
     read: (file) => ipcRenderer.invoke('files:read', file),
     // `expectedMtimeMs` is what the editor loaded; the main process refuses the
     // write if disk has moved on, unless `force` says to go over it anyway.

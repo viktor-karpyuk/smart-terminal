@@ -53,11 +53,31 @@ async function listDir(dirPath) {
     // A symlink is asked about rather than assumed: a link to a directory should
     // open like one, and a broken link should not stop the whole listing.
     let isDirectory = entry.isDirectory();
+    let link = null;
     if (entry.isSymbolicLink()) {
+      /*
+       * Where it goes, said out loud.
+       *
+       * Two folders with similar names, one of them a link into somewhere else
+       * entirely, is how somebody spends an afternoon looking at a copy that
+       * stopped syncing in September. The tree followed links already — it
+       * simply never mentioned that it had.
+       */
+      let target = null;
+      try {
+        target = await fsp.readlink(path.join(dirPath, entry.name));
+      } catch {
+        target = null;
+      }
+      const to = target && !path.isAbsolute(target) ? path.resolve(dirPath, target) : target;
       try {
         isDirectory = (await fsp.stat(path.join(dirPath, entry.name))).isDirectory();
+        link = { to, broken: false };
       } catch {
-        continue;
+        // A broken link is drawn rather than dropped: a name that is there and
+        // points at nothing is the one thing a tree that hides it can never say.
+        isDirectory = false;
+        link = { to, broken: true };
       }
     }
     const full = path.join(dirPath, entry.name);
@@ -65,6 +85,7 @@ async function listDir(dirPath) {
       name: entry.name,
       path: full,
       isDirectory,
+      link,
       // A folder holding a `.git` is a checkout of its own — a submodule, a
       // sibling repository, a vendored dependency. Saying so is the difference
       // between a tree of folders and a tree that knows what it is looking at.
@@ -79,6 +100,99 @@ async function listDir(dirPath) {
     return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
   });
   return out;
+}
+
+/* ------------------------------------------------------------------------ *
+ * Finding something by name, under one folder.
+ *
+ * Not a grep: this looks at names, which is the question people actually ask a
+ * file tree — "where is that pitch deck", not "which file says pitch deck". It
+ * walks breadth-first so the shallow answer arrives before the deep one, and it
+ * is bounded three ways: how many it looks at, how long it may take, and how
+ * many it returns. A search that has to be waited for is a search nobody uses,
+ * and one that walks into `node_modules` is a search that never comes back.
+ * ------------------------------------------------------------------------ */
+
+/** Never walked into: the folders that are all volume and no answer. */
+const NEVER_WALK = new Set(['.git', 'node_modules', '.next', '__pycache__', '.venv', 'venv', 'target', 'vendor', '.gradle', '.idea', 'Pods', 'DerivedData']);
+
+/**
+ * How well a name answers the query, or -1 for not at all.
+ *
+ * Every word must appear, which is what makes two words useful — `pitch deck`
+ * finds "Kubrik.io pitch deck.html" without also finding every pitch and every
+ * deck. The words may be spread across the folders above it, so `erp pitch`
+ * works on `KS-ERP/Kubrik.io pitch deck.html`; the ranking then puts matches in
+ * the name itself above matches that only the path made.
+ */
+function scoreName(name, relative, words) {
+  const lowerName = name.toLowerCase();
+  const lowerPath = relative.toLowerCase();
+  for (const word of words) if (!lowerPath.includes(word)) return -1;
+  const inName = words.filter((word) => lowerName.includes(word)).length;
+  if (inName === 0) return 0;
+  const first = words[0];
+  if (lowerName === first) return 100;
+  const stem = lowerName.replace(/\.[^.]+$/, '');
+  if (stem === first) return 95;
+  if (lowerName.startsWith(first)) return 80;
+  if (inName === words.length) return 60;
+  return 20 + inName;
+}
+
+/**
+ * @param {string} root the folder the panel is showing
+ * @param {string} query what was typed
+ */
+async function findInTree(root, query, { limit = 200, maxEntries = 40000, maxMs = 4000, hidden = false, now = Date.now } = {}) {
+  const words = String(query ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return { ok: true, results: [], scanned: 0, cut: false };
+
+  // Somebody typing a dotted name means it: `.env` is not a search for nothing.
+  const wantsHidden = hidden || words.some((word) => word.startsWith('.'));
+  const started = now();
+  const results = [];
+  const queue = [root];
+  let scanned = 0;
+  let cut = false;
+
+  while (queue.length) {
+    if (scanned >= maxEntries || now() - started > maxMs) { cut = true; break; }
+    const dir = queue.shift();
+    let entries = [];
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      continue; // unreadable is not a reason to stop looking everywhere else
+    }
+    for (const entry of entries) {
+      scanned += 1;
+      const isHidden = entry.name.startsWith('.');
+      if (isHidden && !wantsHidden) continue;
+      const full = path.join(dir, entry.name);
+      const relative = path.relative(root, full);
+      // A link is not followed while searching: two of them pointing at each
+      // other is a walk that never ends, and the link itself is still a result.
+      const isDirectory = entry.isDirectory();
+      const score = scoreName(entry.name, relative, words);
+      if (score >= 0) {
+        results.push({
+          name: entry.name,
+          path: full,
+          relative,
+          dir: path.dirname(relative) === '.' ? '' : path.dirname(relative),
+          isDirectory,
+          link: entry.isSymbolicLink(),
+          score,
+          depth: relative.split(path.sep).length,
+        });
+      }
+      if (isDirectory && !NEVER_WALK.has(entry.name) && !entry.isSymbolicLink()) queue.push(full);
+    }
+  }
+
+  results.sort((a, b) => b.score - a.score || a.depth - b.depth || a.relative.localeCompare(b.relative, undefined, { numeric: true, sensitivity: 'base' }));
+  return { ok: true, results: results.slice(0, limit), scanned, cut: cut || results.length > limit };
 }
 
 async function readTextFile(filePath) {
@@ -375,6 +489,8 @@ async function duplicatePath(fileValue) {
 
 module.exports = {
   listDir,
+  findInTree,
+  scoreName,
   renamePath,
   moveInto,
   createEntry,

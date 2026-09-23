@@ -810,7 +810,9 @@ export const useStore = create<State>((set, get) => ({
         // A panel's terminal did not survive the restart, whatever the saved id
         // says. Clearing it here is what lets the panel come back open and start
         // a fresh shell, instead of showing a slot with nothing behind it.
-        .map((panel) => [panel.id, panel.kind === 'files' ? { ...panel, terminalId: null } : panel]),
+        // A search is not restored either: a folder that opens into the middle of
+        // one nobody remembers making is a folder that looks empty.
+        .map((panel) => [panel.id, panel.kind === 'files' ? { ...panel, terminalId: null, find: '' } : panel]),
     );
     set({
       profiles,
