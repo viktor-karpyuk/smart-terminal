@@ -224,8 +224,9 @@ class ReviewService {
         const repo = reposById.get(pr.repoId);
         if (!repo) return null;
         const fact = facts.get(this.factsKey(pr.repoId, pr.id)) ?? {};
-        const reviewing = running.some((run) => run.repoId === pr.repoId && run.prId === pr.id && run.kind === 'review');
-        const fixing = running.some((run) => run.repoId === pr.repoId && run.prId === pr.id && run.kind === 'fix');
+        const runs = running.filter((run) => run.repoId === pr.repoId && run.prId === pr.id);
+        const reviewing = runs.some((run) => run.kind === 'review');
+        const fixing = runs.some((run) => run.kind === 'fix');
         const flags = rules.prFlags(pr, { ...fact, reviewing, fixing });
         const blocker = rules.mergeBlocker({
           prHeadSha: pr.headSha,
@@ -253,6 +254,19 @@ class ReviewService {
           approvedByUs: Boolean(fact.approvedByUs),
           changesRequestedByUs: Boolean(fact.changesRequestedByUs),
           pendingReturn: fact.pendingReturn ?? 0,
+          /*
+           * What is happening on this pull request right now, in the row rather
+           * than only in the count at the top of the window. The last line of
+           * the run is what it is doing; the rest of the log belongs to the
+           * pull request's own screen, not to a table.
+           */
+          runs: runs.map((run) => ({
+            key: run.key,
+            kind: run.kind,
+            startedAt: run.startedAt,
+            cancelled: Boolean(run.cancelled),
+            step: run.lines.length ? run.lines[run.lines.length - 1] : null,
+          })),
           mergeBlocker: blocker,
           ageDays: rules.daysBetween(pr.createdOn || pr.firstSeenAt || '', new Date()),
         };
