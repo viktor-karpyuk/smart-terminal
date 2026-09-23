@@ -3026,49 +3026,24 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .git-amending header small { color: var(--text-dim); font-size: 10.5px; white-space: nowrap; }
 
 /*
- * The files already in the commit, capped and scrolling.
- *
- * Uncapped this is one chip per file with nothing to stop it: a commit of sixty
- * files drew a 515px block inside a box that sits at the bottom of the panel and
- * takes whatever height it asks for. Measured in a 520px pane, that put Commit
- * and Commit and Push 341px below the panel, with no way to reach them — the
- * amend you are about to make is exactly when you cannot press the button.
- *
- * Capped by lines rather than by a count, because what costs height is how many
- * rows the chips wrap into, and that depends on how long the names are.
+ * The commit's own files live in the list above now, under "Already in the
+ * commit", so this box is its header and its warning — which is all a list
+ * cannot say. What was here was a strip of chips that answered half of "what
+ * will this commit contain" in a different shape, in a different place.
  */
-.git-amending-files {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  max-height: 7.5rem;
-  min-height: 2rem;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  align-content: flex-start;
-}
-.git-amending-none { color: var(--text-dim); }
-
-.git-amending-file {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 5px;
-  max-width: 100%;
-  padding: 2px 7px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 11px;
-  color: var(--text-dim);
-}
-
-.git-amending-file:hover { background: var(--bg-hover); color: var(--text); }
-.git-amending-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.git-amending-dir { font-size: 10px; opacity: 0.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.git-amending-file i { font-style: normal; font-size: 10px; }
-.git-amending-file .is-add { color: var(--ok); }
-.git-amending-file .is-del { color: var(--danger); }
-
 .git-amending-note { margin: 6px 0 0; font-size: 11px; line-height: 1.5; color: var(--text-dim); }
+
+/* Already in the commit an amend would rewrite: a mark where the checkbox goes,
+   because there is nothing here to stage, and a row toned down a little — it is
+   context for the commit rather than a decision waiting on you. */
+.git-row.is-in-commit { color: var(--text-dim); }
+.git-box.is-fixed {
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: repeating-linear-gradient(135deg, transparent, transparent 2px, var(--border) 2px, var(--border) 3px);
+  cursor: default;
+}
+.git-row.is-section.is-in-commit { color: var(--text-dim); }
 
 /* The monitor's reading, in the session menu: a number that carries its own alarm. */
 .menu-item kbd.is-high { color: var(--danger); }
