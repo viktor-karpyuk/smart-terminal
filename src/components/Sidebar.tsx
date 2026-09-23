@@ -882,12 +882,22 @@ function LauncherButton({ viewId, title, icon }: { viewId: string; title: string
       aria-pressed={showing}
       onClick={() => useStore.getState().launchExtensionView(viewId)}
     >
-      {icon === 'review' ? <ReviewIcon /> : <ExtensionsIcon />}
+      {icon === 'review' ? <ReviewIcon /> : icon === 'send' ? <SendIcon /> : <ExtensionsIcon />}
     </button>
   );
 }
 
 /** A pull request under a magnifying glass: two branches meeting, looked at. */
+/** A paper plane: something being sent somewhere, in the stroke the rest use. */
+function SendIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M22 2 11 13" />
+      <path d="M22 2 15 22l-4-9-9-4z" />
+    </svg>
+  );
+}
+
 function ReviewIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">

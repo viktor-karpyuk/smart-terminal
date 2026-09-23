@@ -954,6 +954,11 @@ declare global {
         onState(handler: (payload: SpringRun) => void): () => void;
       };
       /** Code Reviewer: every verb through one call; progress and changes through one event. */
+      teams: {
+        /** The Teams panel's own calls. Delivering is asked of the app, never of this. */
+        call(name: string, args?: unknown): Promise<{ ok: boolean; error?: string } & Record<string, unknown>>;
+        onEvent(handler: (event: { type: string }) => void): () => void;
+      };
       review: {
         call(name: string, args?: unknown): Promise<{ ok: boolean; error?: string; [key: string]: unknown }>;
         onEvent(handler: (payload: { type: string; repoId?: string; prId?: number | null; [key: string]: unknown }) => void): () => void;

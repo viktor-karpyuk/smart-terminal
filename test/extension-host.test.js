@@ -426,3 +426,22 @@ test('nothing a panel calls is blocked by the router', () => {
     'These panel calls are not in the router\'s lists, so they do nothing at all:\n  ' + [...new Set(missing)].join('\n  '),
   );
 });
+
+/*
+ * Delivering a message is the app's call, not a panel's.
+ *
+ * Any extension may ask for one — that is the whole point of a delivery
+ * extension — but it asks the *app*, which names the caller itself from the
+ * panel the request came from. A panel that could name a delivery extension's
+ * service by name could send under another extension's name, spend its
+ * ceiling, and appear as it in somebody's outbox.
+ */
+test('anything may ask the app to deliver, and nothing may send as somebody else', () => {
+  assert.equal(H.route('deliver'), 'app', 'every extension can ask');
+  assert.equal(H.allowed('teams.send'), false, 'but not by naming the service');
+  assert.equal(H.allowed('teams.deliverFor'), false, 'nor by naming the call the app makes');
+  // The panel's own screens are still its own.
+  assert.equal(H.route('teams.overview'), 'teams');
+  assert.equal(H.route('teams.approve'), 'teams');
+  assert.equal(H.allowed('teams.nonsense'), false);
+});

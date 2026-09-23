@@ -504,3 +504,42 @@ test('every cell that carries a summary or an error says it wraps', () => {
   assert.ok(found >= 2, 'the workshop and the read errors are both still drawn as table cells');
   assert.deepStrictEqual(bare, [], 'a prose cell without the wrap class grows the table past its panel');
 });
+
+// ---------------------------------------------------------------- reminders
+
+/*
+ * The reviewer's half of a reminder is *when*. Where a message goes once it
+ * leaves the pull request is a delivery extension's business, and this panel
+ * must not learn an address, a tenant or a channel — swap the delivery
+ * extension for a Slack one and none of this screen changes.
+ */
+test('the reminder screen names no delivery at all', () => {
+  const at = source.indexOf('function remindersSection');
+  assert.ok(at > 0, 'the section is still there');
+  const section = source.slice(at, at + 2600).toLowerCase();
+  for (const word of ['teams', 'slack', 'webhook', 'tenant', 'graph.', 'channel']) {
+    assert.ok(!section.includes(word), `the reviewer must not know about ${word}`);
+  }
+  // What it does say is what is installed, in the app's own words.
+  assert.match(source.slice(at, at + 2600), /delivery\.ready/);
+  assert.match(source.slice(at, at + 2600), /nothing installed that can deliver/);
+});
+
+/*
+ * A button that cannot do anything is worse than no button: the one that
+ * reaches somebody outside the pull request only exists when something is set
+ * up to carry it.
+ */
+test('the button that reaches somebody outside appears only when it can', () => {
+  assert.match(source, /if \(delivery\.ready\) \{[\s\S]{0,400}data-act="remind-out"/);
+});
+
+test('every answer the delivery gives is said in words, not swallowed', () => {
+  const at = source.indexOf("'remind-out': function");
+  const handler = source.slice(at, at + 1200);
+  for (const why of ['asks-first', 'no-address', 'already-sent', 'quiet-hours']) {
+    assert.ok(handler.includes(why), `${why} is explained rather than ignored`);
+  }
+  // And the thread is told first, whatever happens outside it.
+  assert.match(handler, /Posted in the thread/);
+});

@@ -3209,7 +3209,18 @@
       if (t.state === 'OK' && t.findingId) html += '<button class="btn small" data-act="close-thread" data-id="' + esc(t.findingId) + '" data-on="0">Reopen</button>';
       if (open && t.waitingDays != null && t.waitingDays >= (v.followUpDays || 3) && !draft) {
         var fkey = 'follow-' + t.findingId;
-        if (state.edits[fkey] == null) html += '<button class="btn small" data-act="follow-open" data-id="' + esc(t.findingId) + '">Remind</button>';
+        if (state.edits[fkey] == null) {
+          html += '<button class="btn small" data-act="follow-open" data-id="' + esc(t.findingId) + '">Remind in the thread</button>';
+          /*
+           * The same reminder, and a message where they will actually see it.
+           * Only offered when something is installed and set up to carry one —
+           * a button that cannot do anything is worse than no button.
+           */
+          var delivery = (v.settings && v.settings.delivery) || {};
+          if (delivery.ready) {
+            html += '<button class="btn small go" data-act="remind-out" data-days="' + esc(t.waitingDays) + '"' + busyAttr(prKey('remind')) + ' title="Post the follow-up and send them a message where they will see it">Remind ' + esc(shortName(v.pr.author)) + ' as well</button>';
+          }
+        }
       }
       if (t.publishedUrl) html += '<button class="btn small" data-act="open-url" data-url="' + esc(t.publishedUrl) + '">View on PR</button>';
       html += '</div>';
@@ -3272,6 +3283,7 @@
     html += '<div class="field"><label>At most per cycle</label><div class="row"><input type="number" min="1" data-setting="autoMax" data-edit="set-autoMax" value="' + esc(edit('set-autoMax', val('autoMax'))) + '" style="width:80px"> reviews and verifications<div class="help" style="width:100%">The spending cap of each sweep. Answers are drafted within the same cap, counted apart.</div></div></div>';
     html += '<div class="field"><label>Remind after</label><div class="row"><input type="number" min="1" data-setting="followUpDays" data-edit="set-followUpDays" value="' + esc(edit('set-followUpDays', val('followUpDays'))) + '" style="width:80px"> days without an answer</div></div>';
     var auto = state.auto || o.auto;
+    html += remindersSection(o);
     html += '<div class="row"><button class="btn" data-act="auto-now">Sweep now</button><span class="faint">' + esc(auto && auto.lastMessage ? (auto.lastRunAt ? when(auto.lastRunAt) + ': ' : '') + auto.lastMessage : 'No sweep yet.') + '</span></div></div>';
     /*
      * Two numbers, not one. The panel is prose and the diff is code, they are
@@ -3400,6 +3412,65 @@
       if (search) { event.preventDefault(); search.focus(); }
     }
   });
+
+  /**
+   * When somebody hears from us about a pull request nobody has answered.
+   *
+   * Each rule is one sentence you can read out loud, with its own number of
+   * days and its own answer to "who decides" — because "tell me" and "send on
+   * its own" are different promises and one switch for all three would make
+   * them the same promise.
+   *
+   * Where a message goes once it leaves the pull request is not decided here:
+   * this panel names a person the way Bitbucket does and says a sentence. The
+   * line at the bottom says what is installed to carry it, and says so plainly
+   * when nothing is.
+   */
+  /** Just the given name, so the button stays a button on a narrow pane. */
+  function shortName(value) {
+    return String(value || 'them').trim().split(/\s+/)[0];
+  }
+
+  function remindersSection(o) {
+    var settings = o.settings || {};
+    var rules = settings.reminders || [];
+    if (!rules.length) return '';
+    var delivery = settings.delivery || {};
+    var html = '<div class="section"><h3>Reminders</h3>' +
+      '<div class="help faint" style="margin-bottom:8px">Counted from the last thing anybody said in the thread, not from when the review ran.</div>';
+
+    rules.forEach(function (rule) {
+      var days = 'rule-days-' + rule.id;
+      html += '<div class="field"><label>' + esc(rule.label) + '</label><div>' +
+        '<div class="row">' +
+        ['OFF', 'ASK', 'AUTO'].map(function (mode) {
+          var label = mode === 'OFF' ? 'Off' : mode === 'ASK' ? 'Tell me, I decide' : 'Send on its own';
+          return '<button class="btn small' + (rule.mode === mode ? ' primary' : '') + '" data-act="rule-mode" data-id="' + esc(rule.id) + '" data-mode="' + mode + '"' + busyAttr('rule-' + rule.id) + '>' + label + '</button>';
+        }).join('') +
+        '<span class="faint">after</span>' +
+        '<input type="number" min="1" max="90" data-edit="' + esc(days) + '" value="' + esc(edit(days, rule.days)) + '" style="width:64px">' +
+        '<span class="faint">days · goes to ' + esc(rule.who) + '</span>' +
+        '</div></div></div>';
+    });
+
+    html += '<div class="field"><label>In the pull request</label><div>' +
+      '<label class="check"><input type="checkbox" data-act="remind-in-thread"' + (settings.remindInThread ? ' checked' : '') + '> Also post a follow-up in the thread</label>' +
+      '<div class="help">The thread is where the answer belongs; a message elsewhere is only what makes somebody go and look.</div></div></div>';
+
+    html += '<div class="field"><label>Outside the pull request</label><div>' +
+      (delivery.ready
+        ? '<span class="chip okc">' + esc(delivery.name || 'a delivery extension') + ' · connected</span>'
+        : delivery.installed
+          ? '<span class="chip mine">' + esc(delivery.name || 'a delivery extension') + ' · not set up yet</span>'
+          : '<span class="chip">nothing installed that can deliver</span>') +
+      '<div class="help">' + (delivery.ready
+        ? 'A reminder reaches the person outside the pull request as well. This panel never learns their address.'
+        : 'Reminders are only a comment in the thread until something is installed and set up to carry one.') +
+      '</div></div></div>';
+
+    html += '<div class="row" style="margin-top:6px"><button class="btn" data-act="rules-save"' + busyAttr('rules-save') + '>Save the days</button></div>';
+    return html + '</div>';
+  }
 
   /** Every shortcut on one card, so they can be found without reading the source. `?` opens and closes it. */
   var KEYS = [
@@ -3865,6 +3936,45 @@
     },
     'dismiss-reply': function (el) { call('dismissReply', { replyId: el.getAttribute('data-id') }).catch(fail); },
     'dismiss-all-replies': function () { call('dismissAllReplies', prArgs()).catch(fail); },
+    'remind-out': function () {
+      act(prKey('remind'), function () { return call('remind', prArgs()); }, function (result) {
+        var out = result.delivered || {};
+        if (out.ok) say('Posted in the thread, and sent to them.');
+        else if (out.why === 'asks-first') say('Posted in the thread. The message is waiting for you in Teams.');
+        else if (out.why === 'no-address') say('Posted in the thread. Nobody in Teams is matched to them yet.', true);
+        else if (out.why === 'already-sent') say('Posted in the thread. They were already told this today.');
+        else if (out.why === 'quiet-hours') say('Posted in the thread. The message goes in the morning.');
+        else say('Posted in the thread. It could not be delivered: ' + (out.detail || out.why || 'no reason given'), true);
+        load();
+      });
+    },
+    'rule-mode': function (el) {
+      var id = el.getAttribute('data-id');
+      var rules = {};
+      (state.overview.settings.reminders || []).forEach(function (rule) {
+        rules[rule.id] = { mode: rule.id === id ? el.getAttribute('data-mode') : rule.mode, days: Number(edit('rule-days-' + rule.id, rule.days)) };
+      });
+      act('rule-' + id, function () { return call('saveSettings', { settings: { reminders: rules } }); }, function (r) {
+        state.overview.settings = r.settings;
+        say('Saved.');
+      });
+    },
+    'rules-save': function () {
+      var rules = {};
+      (state.overview.settings.reminders || []).forEach(function (rule) {
+        rules[rule.id] = { mode: rule.mode, days: Number(edit('rule-days-' + rule.id, rule.days)) };
+      });
+      act('rules-save', function () { return call('saveSettings', { settings: { reminders: rules } }); }, function (r) {
+        state.overview.settings = r.settings;
+        (r.settings.reminders || []).forEach(function (rule) { delete state.edits['rule-days-' + rule.id]; });
+        say('Saved.');
+      });
+    },
+    'remind-in-thread': function (el) {
+      act('rules-save', function () { return call('saveSettings', { settings: { remindInThread: el.checked } }); }, function (r) {
+        state.overview.settings = r.settings;
+      });
+    },
     'settle-open': function (el) { state.edits['settle-' + el.getAttribute('data-id')] = ''; draw(); },
     'settle-close': function (el) { delete state.edits['settle-' + el.getAttribute('data-id')]; draw(); },
     settle: function (el) {

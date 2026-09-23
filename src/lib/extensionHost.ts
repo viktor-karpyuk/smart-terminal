@@ -193,7 +193,7 @@ const SPRING_VERBS = new Map<string, Channel>([
  * the app wrote.
  */
 const REVIEW_READ = [
-  'fixDiff', 'workshopDiff',
+  'fixDiff', 'workshopDiff', 'due',
   'overview', 'dashboard', 'repos', 'repo', 'prs', 'pr', 'files', 'diff', 'commits', 'commitFiles', 'commitDiff',
   'guidelines', 'usage', 'activity', 'viewed', 'fileText', 'importInspect', 'models', 'depths', 'rerunCheck', 'followUpText', 'brief', 'paths',
   'detectRemote', 'bus',
@@ -206,9 +206,37 @@ const REVIEW_WRITE = [
   'checkConflicts',
   'draftReply', 'draftAll', 'saveReplyDraft', 'publishReply', 'dismissReply', 'dismissAllReplies', 'followUp',
   'adopt', 'fix', 'fixAll', 'retryFixReply', 'giveBack', 'discardWorkshop', 'push', 'dropFix',
+  'remind', 'sweepReminders',
   'approve', 'unapprove', 'requestChanges', 'undoRequestChanges', 'decline', 'merge',
 ] as const;
 const REVIEW_APP = ['shell', 'ask'] as const;
+
+/**
+ * Something worth saying, to somebody, from any extension at all.
+ *
+ * Routed through the app rather than at a delivery extension by name: the
+ * caller says who and what, and the app decides which installed extension
+ * carries it. A panel that could name another extension's service would be a
+ * panel that can speak as somebody else — and a caller that named Teams would
+ * have to be rewritten the day a Slack one arrives.
+ */
+const DELIVER = 'deliver';
+
+/**
+ * The Teams panel's own calls.
+ *
+ * `send` is deliberately not among them. An extension asks the *app* to deliver
+ * something and the app decides which delivery extension answers — a panel that
+ * could call another extension's service by name is a panel that can speak as
+ * somebody else.
+ */
+const TEAMS_READ = ['overview'] as const;
+const TEAMS_WRITE = ['saveConnection', 'saveSettings', 'test', 'setAppStance', 'setAppCap', 'matchPerson', 'approve', 'skip', 'retry'] as const;
+// `deliverFor` is deliberately absent: the app makes that call, naming the
+// caller itself, so no panel can send under another extension's name.
+const TEAMS_VERBS = new Map<string, Channel>(
+  [...TEAMS_READ, ...TEAMS_WRITE].map((name) => [name, 'teams'] as [string, Channel]),
+);
 
 const REVIEW_VERBS = new Map<string, Channel>([
   ...REVIEW_READ.map((name) => [name, 'review'] as [string, Channel]),
@@ -224,7 +252,7 @@ const KUBE_VERBS = new Map<string, Channel>([
   ...KUBE_APP.map((name) => [name, 'app'] as [string, Channel]),
 ]);
 
-export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review';
+export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review' | 'teams';
 
 /**
  * Which door a call goes through, or none.
@@ -235,12 +263,14 @@ export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring'
  * does not run — there is no default channel.
  */
 export function route(name: string): Channel | null {
+  if (name === DELIVER) return 'app';
   if (GIT_VERBS.has(name)) return 'git';
   if (name.startsWith('kube.')) return KUBE_VERBS.get(name.slice(5)) ?? null;
   if (name.startsWith('helm.')) return HELM_VERBS.get(name.slice(5)) ?? null;
   if (name.startsWith('spring.')) return SPRING_VERBS.get(name.slice(7)) ?? null;
   if (name.startsWith('build.')) return BUILD_VERBS.get(name.slice(6)) ?? null;
   if (name.startsWith('review.')) return REVIEW_VERBS.get(name.slice(7)) ?? null;
+  if (name.startsWith('teams.')) return TEAMS_VERBS.get(name.slice(6)) ?? null;
   return null;
 }
 
