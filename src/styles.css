@@ -2236,35 +2236,19 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 }
 .files-find-clear:hover { color: var(--text); }
 .files-find-note { padding: 10px 12px; color: var(--text-dim); font-size: 11.5px; line-height: 1.55; }
+/* The row that actually matched, as against the folders kept to reach it.
+   A tint rather than a colour on the name: in colour-icon mode the name carries
+   the icon's own tint as an inline style, which would win and leave the mark
+   invisible on exactly the rows it is for. */
+.files-row.is-match {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.files-row.is-match .files-name { font-weight: 600; }
+/* An answer is on its way and the rows on screen are the last one's: dimmed
+   rather than replaced, so nothing blinks between one keystroke and the next. */
+.files-tree-scroll.is-behind { opacity: 0.55; transition: opacity 0.12s ease; }
 .files-find-note.is-bad { color: var(--danger); }
-.files-find-results { padding-top: 2px; }
-.files-find-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 3px 8px;
-  border: 0;
-  background: none;
-  text-align: left;
-  cursor: pointer;
-}
-.files-find-row:hover { background: var(--bg-elevated); }
-.files-find-name { color: var(--text); font-size: 11.5px; white-space: nowrap; }
-.files-find-link { color: var(--text-faint); font-size: 11px; flex: none; }
-/* Where it is, given the room that is left and trimmed from the front: the end
-   of a path is the part that tells two answers apart. */
-.files-find-dir {
-  flex: 1 1 auto;
-  min-width: 0;
-  color: var(--text-faint);
-  font-size: 10.5px;
-  text-align: right;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;
-}
 
 /* A link, and whether it still goes anywhere. */
 .files-link { display: inline-flex; flex: none; color: var(--text-faint); }

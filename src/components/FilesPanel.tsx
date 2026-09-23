@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { asFilePanel, isDarkAppearance, useStore } from '../state/store';
-import type { DirEntry, FoundEntry } from '../global';
+import type { DirEntry } from '../global';
 import { GIT_TAB } from '../state/types';
 import { leafOfTab } from '../state/layout';
 import { Editor } from './Editor';
@@ -73,7 +73,7 @@ export function FilesPanel({ panelId }: { panelId: string }) {
       <div className="files-tree" style={{ flexBasis: panel.treeWidth ?? 236 }}>
         <TreeHeader panelId={panelId} root={panel.root} homedir={homedir} />
         {panel.find?.trim() ? (
-          <FindResults panelId={panelId} root={panel.root} query={panel.find} />
+          <NarrowedTree panelId={panelId} root={panel.root} query={panel.find} />
         ) : (
           <DropZone panelId={panelId} dir={panel.root} className="files-tree-scroll">
             <UpRow panelId={panelId} root={panel.root} />
@@ -1081,9 +1081,26 @@ function GitTab({ panelId, selected }: { panelId: string; selected: boolean }) {
  *
  * A file tree answers "what is in here" and, until now, nothing else — the
  * question people actually arrive with is "where is that thing", and answering
- * it meant Finder, or a terminal, or knowing. The box sits in the header, which
- * does not scroll, so it is never somewhere you have to scroll back up to.
+ * it meant Finder, or a terminal, or knowing.
+ *
+ * It narrows the tree rather than replacing it. Typing takes rows away; the
+ * folders that still hold something stay, opened down to what matched, and
+ * everything else goes. That is what a search box does everywhere else, and the
+ * reason it matters here is that the shape of the tree is half the answer:
+ * seeing *where* the three files called `config` are is the thing being asked.
+ * Deleting the tree and printing a list instead throws that away and makes the
+ * panel blink on every keystroke.
  */
+
+/**
+ * What the tree may still draw while a search is on.
+ *
+ * `keep` is every match plus every folder above it, so a branch survives only
+ * because something inside it did. `matched` is the matches themselves, which
+ * are the rows worth marking. Null means no search: draw everything.
+ */
+const FindNarrowing = createContext<{ keep: Set<string>; matched: Set<string> } | null>(null);
+
 function FindBox({ panelId, root }: { panelId: string; root: string }) {
   const query = useStore((s) => asFilePanel(s.panels[panelId])?.find ?? '');
   const patch = useStore((s) => s.patchPanel);
@@ -1144,76 +1161,72 @@ function FindBox({ panelId, root }: { panelId: string; root: string }) {
 }
 
 /**
- * What the search found, in place of the tree.
+ * The tree, with everything that does not match taken out of it.
  *
- * In place of it rather than beside it: a narrow strip has no room for two
- * lists, and while you are looking for something the tree is not what you are
- * reading. Clearing the box puts it back exactly as it was, because the tree's
- * own state was never touched.
- *
- * The walk happens in the main process and is bounded there. Here the only job
- * is to not ask on every keystroke, and to ignore an answer to a question that
- * has already been retyped.
+ * The narrowing arrives from the main process, so it lags the keystroke by a
+ * moment. What is on screen meanwhile is the *previous* narrowing rather than
+ * nothing: a search that blanks between answers flickers once per letter, and
+ * the rows that are about to go are the ones already being looked past.
  */
-function FindResults({ panelId, root, query }: { panelId: string; root: string; query: string }) {
-  const [state, setState] = useState<{ rows: FoundEntry[]; cut: boolean; error: string | null } | null>(null);
-  const openFile = useStore((s) => s.openFile);
-  const setPanelRoot = useStore((s) => s.setPanelRoot);
-  const patch = useStore((s) => s.patchPanel);
+function NarrowedTree({ panelId, root, query }: { panelId: string; root: string; query: string }) {
+  const [found, setFound] = useState<{ query: string; keep: Set<string>; matched: Set<string>; cut: boolean; error: string | null } | null>(null);
 
   useEffect(() => {
+    if (!query.trim()) {
+      setFound(null);
+      return;
+    }
     let alive = true;
-    setState(null);
     const at = window.setTimeout(() => {
       window.api.files.find(root, query).then(
         (result) => {
           if (!alive) return;
-          setState({ rows: result.results ?? [], cut: Boolean(result.cut), error: result.ok ? null : (result.error ?? 'It could not look.') });
+          const keep = new Set<string>();
+          const matched = new Set<string>();
+          for (const row of result.results ?? []) {
+            matched.add(row.path);
+            // Every folder above it, so the branch it lives in survives with it.
+            let at = row.path;
+            while (at.length > root.length) {
+              keep.add(at);
+              const cut = at.lastIndexOf('/');
+              if (cut <= 0) break;
+              at = at.slice(0, cut);
+            }
+          }
+          setFound({ query, keep, matched, cut: Boolean(result.cut), error: result.ok ? null : (result.error ?? 'It could not look.') });
         },
-        (error) => alive && setState({ rows: [], cut: false, error: String(error?.message ?? error) }),
+        (error) => alive && setFound({ query, keep: new Set(), matched: new Set(), cut: false, error: String(error?.message ?? error) }),
       );
-    }, 180);
+    }, 140);
     return () => {
       alive = false;
       window.clearTimeout(at);
     };
   }, [root, query]);
 
-  if (!state) return <div className="files-find-note">Looking…</div>;
-  if (state.error) return <div className="files-find-note is-bad">{state.error}</div>;
-  if (!state.rows.length) {
-    return <div className="files-find-note">Nothing here is called that.{state.cut ? ' It stopped before reaching the end.' : ''}</div>;
-  }
+  const narrowing = useMemo(
+    () => (found ? { keep: found.keep, matched: found.matched } : null),
+    [found],
+  );
+  const behind = Boolean(found && found.query !== query);
 
   return (
-    <div className="files-tree-scroll files-find-results">
-      {state.rows.map((row) => (
-        <button
-          key={row.path}
-          className="files-row files-find-row"
-          title={row.path}
-          onClick={() => {
-            if (row.isDirectory) {
-              // A folder is where you wanted to be, so go there and stop searching.
-              setPanelRoot(panelId, row.path);
-              patch(panelId, { find: '' });
-            } else {
-              openFile(panelId, row.path);
-            }
-          }}
-        >
-          <FileIcon name={row.name} isDirectory={row.isDirectory} open={false} style="colour" />
-          <span className="files-find-name">{row.name}</span>
-          {row.link && <span className="files-find-link" title="a link">→</span>}
-          <span className="files-find-dir">{row.dir || '.'}</span>
-        </button>
-      ))}
-      {state.cut && (
-        <div className="files-find-note">
-          Showing the first {state.rows.length}. It stopped before reaching the end of this folder — a few more words will narrow it.
-        </div>
-      )}
-    </div>
+    <FindNarrowing.Provider value={narrowing}>
+      <DropZone panelId={panelId} dir={root} className={`files-tree-scroll${behind ? ' is-behind' : ''}`}>
+        <UpRow panelId={panelId} root={root} />
+        <Dir panelId={panelId} path={root} depth={0} />
+        {found?.error && <p className="files-find-note is-bad">{found.error}</p>}
+        {found && !found.error && found.matched.size === 0 && !behind && (
+          <p className="files-find-note">Nothing here is called that.</p>
+        )}
+        {found?.cut && (
+          <p className="files-find-note">
+            It stopped before reaching the end of this folder — a few more words will narrow it.
+          </p>
+        )}
+      </DropZone>
+    </FindNarrowing.Provider>
   );
 }
 
@@ -1226,6 +1239,7 @@ function Dir({ panelId, path, depth }: { panelId: string; path: string; depth: n
     }),
   );
   const loadDir = useStore((s) => s.loadDir);
+  const narrowing = useContext(FindNarrowing);
 
   useEffect(() => {
     if (!listing) loadDir(path);
@@ -1239,15 +1253,21 @@ function Dir({ panelId, path, depth }: { panelId: string; path: string; depth: n
     return <p className="files-note" style={{ paddingLeft: 10 + depth * 12 }}>empty</p>;
   }
 
+  // What survives the search, if one is on. A folder is kept because something
+  // inside it matched, and is then opened so that something can be seen.
+  const rows = narrowing ? listing.entries.filter((entry) => narrowing.keep.has(entry.path)) : listing.entries;
+  if (!rows.length) return null;
+
   return (
     <>
-      {listing.entries.map((entry) => (
+      {rows.map((entry) => (
         <Row
           key={entry.path}
           panelId={panelId}
           entry={entry}
           depth={depth}
-          expanded={expanded.includes(entry.path)}
+          expanded={narrowing ? entry.isDirectory : expanded.includes(entry.path)}
+          matched={narrowing ? narrowing.matched.has(entry.path) : false}
         />
       ))}
     </>
@@ -1259,11 +1279,14 @@ function Row({
   entry,
   depth,
   expanded,
+  matched = false,
 }: {
   panelId: string;
   entry: DirEntry;
   depth: number;
   expanded: boolean;
+  /** This row is what the search was looking for, rather than a folder on the way to it. */
+  matched?: boolean;
 }) {
   const toggleDir = useStore((s) => s.toggleDir);
   const openFile = useStore((s) => s.openFile);
@@ -1297,7 +1320,7 @@ function Row({
     if (problem) tell(panelId, problem);
   };
 
-  const rowClass = `files-row${isOpen ? ' is-open' : ''}${entry.noise ? ' is-noise' : ''}${dragging ? ' is-dragging' : ''}`;
+  const rowClass = `files-row${isOpen ? ' is-open' : ''}${entry.noise ? ' is-noise' : ''}${dragging ? ' is-dragging' : ''}${matched ? ' is-match' : ''}`;
   const rowStyle = { paddingLeft: 6 + depth * 12 };
   const onContextMenu = (event: React.MouseEvent) => {
     event.preventDefault();
