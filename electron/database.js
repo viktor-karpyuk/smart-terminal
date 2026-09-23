@@ -188,9 +188,13 @@ class Database {
         at         INTEGER,
         role       TEXT,
         text       TEXT,
+        -- This is the index on (session_id, seq) as well as the constraint:
+        -- SQLite builds one for every UNIQUE. A second index named
+        -- chunks_session sat beside it for years, on the same two columns in
+        -- the same order, so every row written maintained the same B-tree
+        -- twice and carried a second copy of it on disk.
         UNIQUE (session_id, seq)
       );
-      CREATE INDEX IF NOT EXISTS chunks_session ON transcript_chunks (session_id, seq);
 
       CREATE TABLE IF NOT EXISTS session_messages (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -272,6 +276,16 @@ class Database {
     }
     this.db.exec('CREATE INDEX IF NOT EXISTS sessions_worked ON sessions (last_worked_at DESC)');
     this.db.exec('CREATE INDEX IF NOT EXISTS sessions_group ON sessions (group_id)');
+    /*
+     * The same index, built twice.
+     *
+     * `UNIQUE (session_id, seq)` on transcript_chunks is already an index on
+     * those two columns, and `chunks_session` was the same columns in the same
+     * order again — fourteen megabytes of duplicate B-tree, maintained on every
+     * row of every conversation as it was written. Nothing changes plan: the
+     * planner is free to use the unique index, and does.
+     */
+    this.db.exec('DROP INDEX IF EXISTS chunks_session');
 
     const windowColumns = new Set(
       this.db.prepare('PRAGMA table_info(windows)').all().map((column) => column.name),
@@ -373,7 +387,6 @@ class Database {
       INSERT INTO transcript_chunks (session_id, seq, at, role, text)
         SELECT session_id, seq, at, role, text FROM transcript_chunks_old;
       DROP TABLE transcript_chunks_old;
-      CREATE INDEX IF NOT EXISTS chunks_session ON transcript_chunks (session_id, seq);
       PRAGMA user_version = 1;
     `);
   }
@@ -815,12 +828,24 @@ class Database {
 
   /**
    * Store a session's conversation text so it can be searched later. Only rows
-   * past what was already ingested are read, so this stays cheap as it grows.
+   * past what was already ingested are written, so this stays cheap as it grows.
+   *
+   * `from` is the sequence number of `lines[0]`, which is how a caller that read
+   * only the end of a transcript says where the end began. It used to be handed
+   * the whole conversation every time and left to find the new rows in it, which
+   * meant re-reading and re-parsing the entire file to write four rows.
+   *
+   * @returns {number} rows written, or -1 when `from` is past what is stored —
+   *   a gap, which only the caller can close, by reading from the start again.
    */
-  ingestTranscript(sessionId, lines) {
-    const start =
+  ingestTranscript(sessionId, lines, { from = 0 } = {}) {
+    const next =
       this.db.prepare('SELECT COALESCE(MAX(seq), -1) AS seq FROM transcript_chunks WHERE session_id = ?').get(sessionId)
         .seq + 1;
+    // Rows before `from` were never offered, so writing these would leave a hole
+    // in the sequence that nothing later would ever fill.
+    if (from > next) return -1;
+    const start = next - from;
     if (start >= lines.length) return 0;
 
     // The trigger mirrors each row into the search index, so this writes once.
@@ -830,10 +855,10 @@ class Database {
 
     this.db.exec('BEGIN');
     try {
-      for (let seq = start; seq < lines.length; seq += 1) {
-        const entry = lines[seq];
+      for (let i = start; i < lines.length; i += 1) {
+        const entry = lines[i];
         if (!entry) continue;
-        insertChunk.run(sessionId, seq, entry.at ?? null, entry.role ?? null, entry.text);
+        insertChunk.run(sessionId, from + i, entry.at ?? null, entry.role ?? null, entry.text);
       }
       this.db.exec('COMMIT');
     } catch (error) {
@@ -1504,7 +1529,26 @@ class Database {
       .all(cutoff, keepRows)
       .map((row) => row.id);
 
-    for (const id of doomed) this.#eraseSession(id);
+    if (!doomed.length) return doomed;
+
+    /*
+     * One transaction, not a few thousand.
+     *
+     * This runs before the first window exists, and each session erased is seven
+     * statements plus a row per chunk, every one of them firing the search
+     * index's delete trigger. Left loose, each is its own write to the log, and
+     * the launch that finally has ninety days of sessions to clear would open on
+     * a black screen for as long as that took. In one transaction it is a single
+     * commit, and a failure halfway leaves nothing half-deleted.
+     */
+    this.db.exec('BEGIN');
+    try {
+      for (const id of doomed) this.#eraseSession(id);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
     return doomed;
   }
 

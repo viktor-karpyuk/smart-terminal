@@ -1,7 +1,8 @@
 'use strict';
 
 const fs = require('node:fs');
-const { analyze, readRows, worstSeverity } = require('./session-analysis');
+const { analyze, worstSeverity } = require('./session-analysis');
+const { rowsSince } = require('./jsonl-tail');
 const { brief, worthCarrying } = require('./session-brief');
 
 /**
@@ -28,6 +29,19 @@ const GROWTH_BYTES = 8000;
 /** How many transcripts one sweep will parse, however many are due. */
 const PER_SWEEP = 3;
 
+/**
+ * How much conversation the monitor may keep parsed, across every session.
+ *
+ * Keeping the rows is what stops a sweep re-reading and re-parsing a whole
+ * transcript to look at the four turns that are new — a second of the main
+ * process every twenty, for a session that has run all day. But parsed rows
+ * weigh about one and a quarter times the file they came from, and a workbench
+ * that follows a dozen conversations cannot hold all of them, so this is a
+ * stated ceiling rather than an accident: the sessions looked at least recently
+ * are dropped first, and a dropped one costs what it used to cost, once.
+ */
+const KEEP_BYTES = 128 * 1024 * 1024;
+
 class SessionMonitor {
   /**
    * @param {object} deps
@@ -35,15 +49,27 @@ class SessionMonitor {
    * @param {{ saveStats(sessionId: string, verdict: object): void } | null} deps.db
    * @param {(sessionId: string, verdict: object) => void} deps.emit called when a verdict changes
    */
-  constructor({ context, db = null, emit = () => {}, conversationOf = null, intervalMs = INTERVAL_MS }) {
+  constructor({ context, db = null, emit = () => {}, conversationOf = null, intervalMs = INTERVAL_MS, keepBytes = KEEP_BYTES }) {
     this.context = context;
     this.db = db;
     this.emit = emit;
     /** Which conversation a session is on, so a restarted one starts its own record. */
     this.conversationOf = conversationOf;
     this.intervalMs = intervalMs;
+    this.keepBytes = keepBytes;
     /** sessionId -> { file, size, verdict } — the last reading, and what it came from. */
     this.readings = new Map();
+    /*
+     * sessionId -> { file, offset, rows } — the conversation, kept parsed.
+     *
+     * `analyze` genuinely wants every row, so unlike the snapshot loop this one
+     * cannot read only the tail and be done. What it can do is stop re-reading
+     * and re-parsing the rows it has already seen: a ninety-megabyte transcript
+     * was costing a second of the main process every twenty, and throwing away
+     * a hundred and ninety megabytes of parsed rows each time to build the same
+     * ones again. Kept, they cost what they weigh once.
+     */
+    this.parsed = new Map();
     /** sessionId -> the compaction times already written down. */
     this.filed = new Map();
     this.timer = null;
@@ -77,11 +103,55 @@ class SessionMonitor {
   forget(sessionId) {
     this.readings.delete(sessionId);
     this.filed.delete(sessionId);
+    this.parsed.delete(sessionId);
   }
 
   stop() {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+
+  /**
+   * The whole conversation, having read only the part of it that is new.
+   *
+   * The rows are kept between sweeps and appended to. A file that shrank is not
+   * the file those rows came from — a session restarted without its conversation
+   * gets a new, shorter one — so that starts again from nothing.
+   */
+  #rowsOf(sessionId, file) {
+    const held = this.parsed.get(sessionId);
+    const known = held?.file === file ? held : { file, offset: 0, rows: [], bytes: 0 };
+    const found = rowsSince(file, known.offset);
+    if (!found) return known.rows;
+    if (found.restarted) known.rows = found.rows;
+    else if (found.rows.length) known.rows = known.rows.concat(found.rows);
+    known.offset = found.offset;
+    known.bytes = found.size;
+    known.readAt = Date.now();
+    this.parsed.set(sessionId, known);
+    // Set before trimming, so a conversation too big to keep is still returned
+    // whole this time — it is only the *next* sweep that pays to read it again.
+    this.#trim(sessionId);
+    return known.rows;
+  }
+
+  /**
+   * Keep the ceiling. The session just read is never the one dropped: it is the
+   * one certainly being worked in, and dropping it would mean reading it again
+   * in twenty seconds.
+   */
+  #trim(keep) {
+    let total = 0;
+    for (const held of this.parsed.values()) total += held.bytes;
+    if (total <= this.keepBytes) return;
+    const order = [...this.parsed.entries()]
+      .filter(([sessionId]) => sessionId !== keep)
+      .sort((a, b) => (a[1].readAt ?? 0) - (b[1].readAt ?? 0));
+    for (const [sessionId, held] of order) {
+      this.parsed.delete(sessionId);
+      total -= held.bytes;
+      if (total <= this.keepBytes) return;
+    }
   }
 
   /** The last verdict, without reading anything. What a badge asks for. */
@@ -116,7 +186,7 @@ class SessionMonitor {
     const grewLittle = previous && size >= previous.size && size - previous.size < GROWTH_BYTES;
     if (!force && previous && sameFile && grewLittle) return previous.verdict;
 
-    const rows = readRows(file);
+    const rows = this.#rowsOf(sessionId, file);
     if (!rows.length) return { sessionId, ok: false, reason: 'empty' };
 
     const verdict = analyze(rows);
@@ -252,4 +322,4 @@ function worthAnnouncing(before, after) {
   return ids(before) !== ids(after);
 }
 
-module.exports = { SessionMonitor, worthAnnouncing, INTERVAL_MS, GROWTH_BYTES, PER_SWEEP, CONTEXT_DRIFT };
+module.exports = { SessionMonitor, worthAnnouncing, INTERVAL_MS, GROWTH_BYTES, PER_SWEEP, KEEP_BYTES, CONTEXT_DRIFT };

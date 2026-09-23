@@ -252,3 +252,139 @@ test('a verdict with no context at all is still judged on its findings', () => {
   assert.equal(worthAnnouncing(bare, { ...bare }), false);
   assert.equal(worthAnnouncing(bare, { ...bare, findings: [{ id: 'x', severity: 'low' }] }), true);
 });
+
+// ------------------------------------------------- reading a growing transcript
+
+/*
+ * The sweep used to read and parse the whole transcript every time it had grown,
+ * so following a conversation cost the conversation, every twenty seconds, for
+ * as long as it lived. It keeps the rows now — which is only safe if a verdict
+ * built from a dozen partial reads is the verdict a single full read would have
+ * given. Everything below is that one property, from a different angle each time.
+ */
+
+/** Append `count` more turns to a transcript that already exists. */
+function grow(file, from, count, { read = 1000, output = 100 } = {}) {
+  const lines = [];
+  for (let i = from; i < from + count; i += 1) {
+    lines.push(
+      JSON.stringify({
+        type: 'assistant',
+        timestamp: new Date(Date.parse('2026-09-01T10:00:00Z') + i * 60000).toISOString(),
+        message: {
+          model: 'claude-opus-5',
+          usage: {
+            input_tokens: 2,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: read + i,
+            output_tokens: output,
+            note: 'x'.repeat(400),
+          },
+          content: [],
+        },
+      }),
+    );
+  }
+  fs.appendFileSync(file, `${lines.join('\n')}\n`);
+}
+
+test('a verdict built up in pieces matches one read in a single go', () => {
+  const file = transcript('grown', 20);
+  const monitor = new SessionMonitor({ context: fakeContext({ a: file }) });
+  monitor.read('a', { force: true });
+  for (let round = 0; round < 6; round += 1) {
+    grow(file, 20 + round * 10, 10);
+    monitor.read('a', { force: true });
+  }
+  const built = monitor.read('a', { force: true });
+
+  const fresh = new SessionMonitor({ context: fakeContext({ a: file }) }).read('a', { force: true });
+  assert.equal(built.requests, fresh.requests);
+  assert.deepEqual(built.context, fresh.context);
+  assert.deepEqual(built.totals, fresh.totals);
+  assert.deepEqual(
+    built.findings.map((one) => one.id),
+    fresh.findings.map((one) => one.id),
+  );
+});
+
+test('a sweep that follows one only reads what was added to it', () => {
+  const file = transcript('tail', 40);
+  const monitor = new SessionMonitor({ context: fakeContext({ a: file }) });
+  monitor.read('a', { force: true });
+  const first = monitor.parsed.get('a');
+  assert.equal(first.rows.length, 40);
+  assert.equal(first.offset, fs.statSync(file).size, 'it read to the end');
+
+  grow(file, 40, 3);
+  monitor.read('a', { force: true });
+  assert.equal(monitor.parsed.get('a').rows.length, 43, 'three more rows, not forty-three read again');
+  assert.equal(monitor.parsed.get('a').offset, fs.statSync(file).size);
+});
+
+/*
+ * A session restarted without its conversation gets a new, shorter file. Reading
+ * on from the old offset would staple the new conversation onto the old one and
+ * report the two of them as a single enormous session.
+ */
+test('a transcript replaced by a shorter one is read from the start', () => {
+  const file = transcript('replaced', 30);
+  const monitor = new SessionMonitor({ context: fakeContext({ a: file }) });
+  monitor.read('a', { force: true });
+  assert.equal(monitor.parsed.get('a').rows.length, 30);
+
+  fs.writeFileSync(file, '');
+  grow(file, 0, 4);
+  const after = monitor.read('a', { force: true });
+  assert.equal(monitor.parsed.get('a').rows.length, 4, 'the old conversation is not carried into the new one');
+  assert.equal(after.requests, 4);
+});
+
+test('a half-written turn is not counted until it is whole', () => {
+  const file = transcript('midwrite', 10);
+  const monitor = new SessionMonitor({ context: fakeContext({ a: file }) });
+  assert.equal(monitor.read('a', { force: true }).requests, 10);
+
+  fs.appendFileSync(file, '{"type":"assistant","message":{"usage":{"output');
+  assert.equal(monitor.read('a', { force: true }).requests, 10, 'half a turn is not a turn');
+});
+
+test('what a session had read is dropped when the session goes', () => {
+  const file = transcript('gone', 5);
+  const monitor = new SessionMonitor({ context: fakeContext({ a: file }) });
+  monitor.read('a', { force: true });
+  assert.ok(monitor.parsed.has('a'));
+  monitor.forget('a');
+  assert.equal(monitor.parsed.has('a'), false);
+});
+
+/*
+ * Parsed rows weigh more than the file they came from, so a workbench following
+ * a dozen conversations cannot keep all of them. The ceiling is a decision, not
+ * an accident, and the session just read is never the one given up.
+ */
+test('the rows kept have a ceiling, and the busiest session is not what goes', () => {
+  const files = { a: transcript('cap-a', 30), b: transcript('cap-b', 30), c: transcript('cap-c', 30) };
+  const one = fs.statSync(files.a).size;
+  // Room for two conversations, not three.
+  const monitor = new SessionMonitor({ context: fakeContext(files), keepBytes: one * 2.5 });
+
+  monitor.read('a', { force: true });
+  monitor.read('b', { force: true });
+  assert.deepEqual([...monitor.parsed.keys()].sort(), ['a', 'b']);
+
+  monitor.read('c', { force: true });
+  assert.equal(monitor.parsed.has('c'), true, 'the one just read is kept');
+  assert.equal(monitor.parsed.has('a'), false, 'the one looked at least recently is dropped');
+  assert.equal(monitor.parsed.has('b'), true);
+});
+
+test('a conversation dropped for space is read again, whole, and reads the same', () => {
+  const files = { a: transcript('evict-a', 25), b: transcript('evict-b', 25) };
+  const monitor = new SessionMonitor({ context: fakeContext(files), keepBytes: 1 });
+  const first = monitor.read('a', { force: true });
+  monitor.read('b', { force: true });
+  const again = monitor.read('a', { force: true });
+  assert.equal(again.requests, first.requests);
+  assert.deepEqual(again.totals, first.totals);
+});
