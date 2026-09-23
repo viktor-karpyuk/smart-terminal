@@ -2190,7 +2190,35 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .git-numstat .is-add { color: var(--ok); }
 .git-numstat .is-del { color: var(--danger); }
 
-.git-commit { flex: 0 0 auto; border-top: 1px solid var(--border); padding: 9px 10px; background: var(--bg-panel); }
+/*
+ * Never taller than half the panel it sits in, whatever is inside it.
+ *
+ * The cap on the file list is the fix for the case that was measured; this is
+ * the floor under every other one — a long message, a wrapped warning, a pane
+ * shorter than anybody designed for. The actions are the last thing in here and
+ * the reason the box exists, so the box scrolls before they go out of reach.
+ */
+.git-commit {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  padding: 9px 10px;
+  background: var(--bg-panel);
+  max-height: 55%;
+}
+/* The message and the buttons keep their height; what is above them gives way. */
+.git-commit > .git-message,
+.git-commit > .git-commit-actions { flex: 0 0 auto; }
+/*
+ * The one thing in this box that gives way.
+ *
+ * It shrinks and scrolls as a whole — head, files, note — so that however
+ * little room is left, what is lost is the reading matter and never the
+ * buttons. The cap on the file list below keeps it from eating the panel in
+ * the ordinary case; this keeps it honest in the cramped one.
+ */
+.git-commit > .git-amending { flex: 0 1 auto; min-height: 2.2rem; overflow-y: auto; overscroll-behavior: contain; }
 .git-message { min-height: 58px; resize: vertical; font-size: 12px; line-height: 1.5; }
 .git-commit-actions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
 .git-commit-actions .checkbox { padding-top: 0; }
@@ -2933,7 +2961,28 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .git-amending-subject { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-amending header small { color: var(--text-dim); font-size: 10.5px; white-space: nowrap; }
 
-.git-amending-files { display: flex; flex-wrap: wrap; gap: 4px; }
+/*
+ * The files already in the commit, capped and scrolling.
+ *
+ * Uncapped this is one chip per file with nothing to stop it: a commit of sixty
+ * files drew a 515px block inside a box that sits at the bottom of the panel and
+ * takes whatever height it asks for. Measured in a 520px pane, that put Commit
+ * and Commit and Push 341px below the panel, with no way to reach them — the
+ * amend you are about to make is exactly when you cannot press the button.
+ *
+ * Capped by lines rather than by a count, because what costs height is how many
+ * rows the chips wrap into, and that depends on how long the names are.
+ */
+.git-amending-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 7.5rem;
+  min-height: 2rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  align-content: flex-start;
+}
 .git-amending-none { color: var(--text-dim); }
 
 .git-amending-file {
