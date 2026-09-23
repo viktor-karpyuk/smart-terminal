@@ -263,14 +263,25 @@ function TerminalButton({ panelId }: { panelId: string }) {
 /**
  * A document as it is meant to be read.
  *
- * In a frame with no origin and no scripts. A working tree is full of files
- * nobody wrote to be opened here, and a preview that runs them is a preview that
- * can be made to do things — so it renders and does not execute. The cost is
- * stated on screen rather than left to be discovered: a page's own scripts do
- * not run and the images beside it do not load.
+ * In a frame with no origin, and by default with no scripts. A working tree is
+ * full of files nobody wrote to be opened here, so the preview renders and does
+ * not execute — the cost is stated on screen rather than left to be discovered.
+ *
+ * But a page whose arrows do nothing is not a preview of that page. So scripts
+ * can be turned on for one file from its own footer, or for good in Appearance.
+ * The frame never gets an origin either way: `allow-scripts` without
+ * `allow-same-origin` leaves the page in an origin of its own, unable to read
+ * the disk, this app, or anything this app holds. What it buys is behaviour;
+ * what it costs is that the page can talk to the network, which is a thing
+ * worth being asked about rather than assumed.
  */
 function Preview({ path, text, kind }: { path: string; text: string; kind: NonNullable<PreviewKind> }) {
   const dark = useStore((s) => isDarkAppearance(s.settings.theme));
+  const always = useStore((s) => s.settings.previewScripts);
+  // Just this one, just this time: forgotten when the file changes or the tab closes.
+  const [justThisOne, setJustThisOne] = useState(false);
+  useEffect(() => setJustThisOne(false), [path]);
+  const scripts = always || justThisOne;
   // The rule that matched, so an extension's own renderer can be found. Only its
   // source matters here, and a string is a stable thing to select.
   const source = useStore(
@@ -314,18 +325,42 @@ function Preview({ path, text, kind }: { path: string; text: string; kind: NonNu
         </p>
       )}
       <iframe
+        // Remounted when scripts are turned on, or the page that was already
+        // drawn keeps the frame it was drawn in and nothing starts running.
+        key={scripts ? 'live' : 'inert'}
         className="file-preview-frame"
         title={`Preview of ${path.split('/').pop()}`}
-        // No allow-scripts and no allow-same-origin: it renders, and can do
-        // nothing else. Everything the preview cannot show follows from this —
-        // including that an extension's own output cannot act either.
-        sandbox=""
+        /*
+         * `allow-same-origin` is never here, whatever else is: without it the
+         * page sits in an origin of its own and cannot read this app, its
+         * storage or the disk. Adding scripts to that lets the page behave;
+         * it does not let it reach anything.
+         */
+        sandbox={scripts ? 'allow-scripts' : ''}
         srcDoc={doc}
       />
       {kind === 'html' && (
         <p className="file-preview-note">
-          Rendered without scripts, and it cannot read files from beside it — images and
-          stylesheets it loads from disk will be missing.
+          {scripts ? (
+            <>
+              Running this page&rsquo;s own scripts{always ? '' : ' — just this once'}. It still cannot
+              read files from beside it, so images and stylesheets it loads from disk are missing.
+              {!always && (
+                <button className="link-btn" onClick={() => setJustThisOne(false)}>
+                  Stop running them
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              Rendered without scripts, so its own buttons, arrows and slides do nothing. It cannot
+              read files from beside it either — images and stylesheets it loads from disk will be
+              missing.
+              <button className="link-btn" onClick={() => setJustThisOne(true)}>
+                Run this page&rsquo;s scripts
+              </button>
+            </>
+          )}
         </p>
       )}
     </div>
