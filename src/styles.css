@@ -2443,7 +2443,11 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 /* ---------- the diff: what changed inside one file ---------- */
 
 .git-changes-body { flex: 1; display: flex; min-height: 0; }
+/* The basis is set per panel by the divider beside it; this is the fallback for
+   a panel that has never been dragged. */
 .git-changes-body .git-list { flex: 0 0 40%; border-right: 1px solid var(--border); }
+.git-resizer { align-self: stretch; }
+.git-resizer:focus-visible { background: var(--accent-soft); outline: none; }
 .files-tree .git-changes-body { display: block; }
 .files-tree .git-changes-body .git-list { flex: none; border-right: none; }
 

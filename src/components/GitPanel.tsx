@@ -397,6 +397,68 @@ function allFolders(nodes: Node[]): string[] {
  * new folder of source arrives as thirty untracked files at once, and ticking
  * thirty boxes is thirty git processes and thirty refreshes.
  */
+/**
+ * The divider between the changed files and what changed in them.
+ *
+ * It was fixed at two fifths of the pane, which is the wrong fraction twice:
+ * too narrow to read a path in a deep tree, too wide when what you are doing is
+ * reading a diff. It drags, like the one beside the file tree, and remembers
+ * where you put it per panel.
+ *
+ * A percentage rather than pixels, because this divider lives inside a pane
+ * that is itself resizable — pinned at 380px it is a third of one window and
+ * the whole of another. Double-click puts it back to two fifths.
+ */
+function ListResizer({ panelId }: { panelId: string }) {
+  const patchPanel = useStore((s) => s.patchPanel);
+
+  const setFrom = (clientX: number, element: HTMLElement) => {
+    const body = element.parentElement;
+    if (!body) return;
+    const box = body.getBoundingClientRect();
+    if (box.width <= 0) return;
+    // Neither side may be squeezed to nothing: a list of ellipses is not a list,
+    // and a diff two words wide is not a diff.
+    const next = Math.round(Math.min(75, Math.max(15, ((clientX - box.left) / box.width) * 100)));
+    patchPanel(panelId, { gitListWidth: next });
+  };
+
+  return (
+    <div
+      className="tree-resizer git-resizer"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the list of changed files"
+      onDoubleClick={() => patchPanel(panelId, { gitListWidth: 40 })}
+      onKeyDown={(event) => {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+        event.preventDefault();
+        const now = asFilePanel(useStore.getState().panels[panelId])?.gitListWidth ?? 40;
+        patchPanel(panelId, { gitListWidth: Math.min(75, Math.max(15, now + (event.key === 'ArrowLeft' ? -2 : 2))) });
+      }}
+      tabIndex={0}
+      onPointerDown={(event) => {
+        event.preventDefault();
+        const element = event.currentTarget as HTMLElement;
+        try {
+          element.setPointerCapture(event.pointerId);
+        } catch {
+          /* no capture; the window listeners still see the whole drag */
+        }
+        const onMove = (move: PointerEvent) => setFrom(move.clientX, element);
+        const onUp = () => {
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+          document.body.classList.remove('resizing');
+        };
+        document.body.classList.add('resizing');
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+      }}
+    />
+  );
+}
+
 function SectionRows({
   section,
   named,
@@ -735,7 +797,7 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
       )}
 
       <div className="git-changes-body">
-      <div className="git-list">
+      <div className="git-list" style={compact ? undefined : { flexBasis: `${panel.gitListWidth ?? 40}%` }}>
         {files.length === 0 && <p className="files-note">Nothing changed.</p>}
         {parts.map((section) => (
           <SectionRows
@@ -766,6 +828,9 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
           />
         ))}
       </div>
+      {/* Not in the narrow column: there the list and the diff are stacked, and
+          a vertical divider between them would divide nothing. */}
+      {!compact && <ListResizer panelId={panelId} />}
       {!compact && <Diff root={root} panelId={panelId} />}
       </div>
 
