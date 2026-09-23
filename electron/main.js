@@ -54,6 +54,7 @@ const spring = require('./spring');
 const buildTools = require('./build-tools');
 const { Updates, repoSlug } = require('./updates');
 const { ReviewService } = require('./review-service');
+const { TeamsService } = require('./teams-service');
 const { resolvedPath } = require('./cli-env');
 
 /**
@@ -203,6 +204,7 @@ let db = null;
  * about it. Its tables live in this app's own database.
  */
 let reviewService = null;
+let teamsService = null;
 /** Where the bus's MCP server lives and the socket it talks to, once messaging has opened it. */
 let reviewBusServer = null;
 let monitor = null;
@@ -255,6 +257,48 @@ const USAGE_TTL = 5 * 60 * 1000;
  * tokens encrypted by the OS keychain through safeStorage, the accounts,
  * notifications and a folder picker. Nothing else of Electron reaches it.
  */
+/**
+ * What the Teams panel may ask for. `send` is not here: an extension asks the
+ * app to deliver, and the app decides which delivery extension answers.
+ */
+const TEAMS_VERBS = {
+  overview: (service) => ({ ok: true, ...service.overview() }),
+  saveConnection: (service, args) => ({ ok: true, connection: service.saveConnection(args.connection ?? {}) }),
+  saveSettings: (service, args) => ({ ok: true, settings: service.saveSettings(args.settings ?? {}) }),
+  test: (service, args) => service.test(String(args.to ?? '')),
+  setAppStance: (service, args) => ({ ok: true, app: service.store.setAppStance(String(args.id ?? ''), String(args.stance ?? 'ASK')) }),
+  setAppCap: (service, args) => ({ ok: true, app: service.store.setAppCap(String(args.id ?? ''), args.cap) }),
+  matchPerson: (service, args) => ({ ok: true, person: service.store.matchPerson(String(args.handle ?? ''), String(args.address ?? '')) }),
+  approve: (service, args) => service.approve(String(args.id ?? '')),
+  skip: (service, args) => service.skip(String(args.id ?? '')),
+  retry: (service, args) => service.retry(String(args.id ?? '')),
+};
+
+function createTeamsService() {
+  const secrets = {
+    encrypt: (text) => {
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('This system offers no encrypted storage, so the credentials cannot be kept safely.');
+      return safeStorage.encryptString(text).toString('base64');
+    },
+    decrypt: (cipher) => safeStorage.decryptString(Buffer.from(cipher, 'base64')),
+  };
+  try {
+    return new TeamsService({
+      db: db.db,
+      secrets,
+      fetch: (url, init) => net.fetch(url, init),
+      notify: (title, body) => {
+        if (Notification.isSupported()) new Notification({ title, body }).show();
+      },
+      emit: (event) => send('teams:event', event),
+    });
+  } catch (error) {
+    // Nothing else depends on it; an extension that cannot start says so and stays out of the way.
+    console.error('[teams] could not start:', error);
+    return null;
+  }
+}
+
 function createReviewService() {
   const secrets = {
     encrypt: (text) => {
@@ -285,6 +329,24 @@ function createReviewService() {
       DatabaseSync,
       // Known once messaging has opened its socket; a fix started before that runs without the bus.
       busServer: () => reviewBusServer,
+      /*
+       * How a reminder leaves the pull request, when anything can carry it.
+       *
+       * The reviewer is handed a way to deliver, not a Teams client: it names a
+       * person the way Bitbucket does and says a sentence. With nothing
+       * installed that can deliver, this answers `no-delivery` and the reviewer
+       * says so in its own screen rather than believing it sent something.
+       */
+      deliver: async (message) => {
+        if (!teamsService || !teamsService.connection().ready) return { ok: false, why: 'no-delivery' };
+        return teamsService.send('code-review', 'Code Reviewer', message);
+      },
+      deliveryState: () => ({
+        id: 'teams',
+        name: 'Teams',
+        installed: Boolean(teamsService),
+        ready: Boolean(teamsService && teamsService.connection().ready),
+      }),
     });
   } catch (error) {
     // The rest of the app does not depend on the reviewer; a reviewer that cannot start says so and stays out of the way.
@@ -1532,6 +1594,24 @@ function registerIpc() {
    * Code Reviewer. One door, a table of verbs on the other side of it; the
    * panel names repositories, PRs and findings, never paths or commands.
    */
+  /**
+   * Teams: one connection, many senders.
+   *
+   * Its verbs are the panel's; the one other extensions use is `send`, and they
+   * reach it through the app rather than through this channel — a panel cannot
+   * name another extension's service, and should not be able to.
+   */
+  ipcMain.handle('teams:call', async (_e, { name, args } = {}) => {
+    if (!teamsService) return { ok: false, error: 'Teams is not running.' };
+    try {
+      const handler = TEAMS_VERBS[String(name ?? '')];
+      if (!handler) return { ok: false, error: `No such Teams action: ${name}` };
+      return (await handler(teamsService, args ?? {})) ?? { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  });
+
   ipcMain.handle('review:call', async (_e, { name, args } = {}) => {
     if (!reviewService) return { ok: false, error: 'The Code Reviewer is not running.' };
     return reviewService.call(String(name ?? ''), args ?? {});
@@ -1869,6 +1949,7 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   const crashed = db.closeStaleSessions();
   if (crashed.length) console.log(`[db] closed ${crashed.length} session(s) left open by a previous run`);
   db.prune();
+  teamsService = createTeamsService();
   reviewService = createReviewService();
 
   workspace = new JsonStore('workspace.json', { layout: null, sessions: [], settings: {} });

@@ -268,6 +268,11 @@ contextBridge.exposeInMainWorld('api', {
     },
   },
 
+  teams: {
+    call: (name, args) => ipcRenderer.invoke('teams:call', { name, args }),
+    onEvent: (handler) => on('teams:event', handler),
+  },
+
   /** Maven and Gradle: read by the main process, run by a terminal. */
   build: {
     call: (name, args) => ipcRenderer.invoke('build:call', { name, args }),

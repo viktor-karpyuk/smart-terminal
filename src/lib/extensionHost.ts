@@ -193,7 +193,7 @@ const SPRING_VERBS = new Map<string, Channel>([
  * the app wrote.
  */
 const REVIEW_READ = [
-  'fixDiff', 'workshopDiff',
+  'fixDiff', 'workshopDiff', 'due',
   'overview', 'dashboard', 'repos', 'repo', 'prs', 'pr', 'files', 'diff', 'commits', 'commitFiles', 'commitDiff',
   'guidelines', 'usage', 'activity', 'viewed', 'fileText', 'importInspect', 'models', 'depths', 'rerunCheck', 'followUpText', 'brief', 'paths',
   'detectRemote', 'bus',
@@ -206,9 +206,24 @@ const REVIEW_WRITE = [
   'checkConflicts',
   'draftReply', 'draftAll', 'saveReplyDraft', 'publishReply', 'dismissReply', 'dismissAllReplies', 'followUp',
   'adopt', 'fix', 'fixAll', 'retryFixReply', 'giveBack', 'discardWorkshop', 'push', 'dropFix',
+  'remind', 'sweepReminders',
   'approve', 'unapprove', 'requestChanges', 'undoRequestChanges', 'decline', 'merge',
 ] as const;
 const REVIEW_APP = ['shell', 'ask'] as const;
+
+/**
+ * The Teams panel's own calls.
+ *
+ * `send` is deliberately not among them. An extension asks the *app* to deliver
+ * something and the app decides which delivery extension answers — a panel that
+ * could call another extension's service by name is a panel that can speak as
+ * somebody else.
+ */
+const TEAMS_READ = ['overview'] as const;
+const TEAMS_WRITE = ['saveConnection', 'saveSettings', 'test', 'setAppStance', 'setAppCap', 'matchPerson', 'approve', 'skip', 'retry'] as const;
+const TEAMS_VERBS = new Map<string, Channel>(
+  [...TEAMS_READ, ...TEAMS_WRITE].map((name) => [name, 'teams'] as [string, Channel]),
+);
 
 const REVIEW_VERBS = new Map<string, Channel>([
   ...REVIEW_READ.map((name) => [name, 'review'] as [string, Channel]),
@@ -224,7 +239,7 @@ const KUBE_VERBS = new Map<string, Channel>([
   ...KUBE_APP.map((name) => [name, 'app'] as [string, Channel]),
 ]);
 
-export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review';
+export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review' | 'teams';
 
 /**
  * Which door a call goes through, or none.
@@ -241,6 +256,7 @@ export function route(name: string): Channel | null {
   if (name.startsWith('spring.')) return SPRING_VERBS.get(name.slice(7)) ?? null;
   if (name.startsWith('build.')) return BUILD_VERBS.get(name.slice(6)) ?? null;
   if (name.startsWith('review.')) return REVIEW_VERBS.get(name.slice(7)) ?? null;
+  if (name.startsWith('teams.')) return TEAMS_VERBS.get(name.slice(6)) ?? null;
   return null;
 }
 

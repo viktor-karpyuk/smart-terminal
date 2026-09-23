@@ -4,6 +4,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const rules = require('./review-rules');
+const reminders = require('./review-reminders');
+
+/** A preference that holds an object, read back without letting a bad one throw. */
+function readJson(text) {
+  if (!text) return {};
+  try {
+    const value = JSON.parse(text);
+    return value && typeof value === 'object' ? value : {};
+  } catch {
+    return {};
+  }
+}
 const { ReviewStore } = require('./review-store');
 const { Forge, parseRemote } = require('./review-forge');
 const { ReviewGit } = require('./review-git');
@@ -30,7 +42,7 @@ const { ReviewBus } = require('./review-bus');
 const GUIDELINE_MAX = 60000;
 
 class ReviewService {
-  constructor({ db, secrets, fetch, profiles, resolvePath, notify, emit, dataDir, pickFolder, openExternal, DatabaseSync, importSource, busServer }) {
+  constructor({ db, secrets, fetch, profiles, resolvePath, notify, emit, dataDir, pickFolder, openExternal, DatabaseSync, importSource, busServer, deliver, deliveryState }) {
     this.emitRaw = emit ?? (() => {});
     this.store = new ReviewStore(db, secrets);
     this.profiles = profiles ?? { list: () => [] };
@@ -39,6 +51,16 @@ class ReviewService {
     this.openExternal = openExternal ?? (() => {});
     this.DatabaseSync = DatabaseSync;
     this.importSource = importSource;
+    /*
+     * How a reminder leaves the pull request, when anything can carry it.
+     *
+     * A function the app hands over, not a client: this service names a person
+     * the way Bitbucket does and says a sentence, and knows nothing about who
+     * delivers it. Without one, `no-delivery` — which is said in the panel
+     * rather than swallowed.
+     */
+    this.deliver = deliver ?? (async () => ({ ok: false, why: 'no-delivery' }));
+    this.deliveryState = deliveryState ?? (() => ({ installed: false, ready: false }));
     const emitter = (event) => this.emitRaw(event);
     const notifier = (title, body) => {
       if (this.store.pref('notify.enabled', 'true') === 'false') return;
@@ -93,6 +115,16 @@ class ReviewService {
       autoInterval: Number(prefs['auto.interval.minutes'] ?? 10),
       autoMax: Number(prefs['auto.max.per.cycle'] ?? 3),
       followUpDays: Number(prefs['followup.days'] ?? 3),
+      /*
+       * The reminder rules and where they can be delivered.
+       *
+       * Stored as one preference rather than one per rule: they are read and
+       * written together, and three keys per rule is three chances for a
+       * half-written set of rules to be acted on.
+       */
+      reminders: reminders.readRules(readJson(prefs['reminders.rules'])),
+      remindInThread: prefs['reminders.inThread'] !== 'false',
+      delivery: this.deliveryState(),
       mergeStrategy: prefs['merge.strategy'] ?? 'MERGE_COMMIT',
       // How the panel was laid out, so a restart does not undo a dragged divider.
       asideWidth: Number(prefs['ui.asideWidth'] ?? 0) || null,
@@ -272,6 +304,105 @@ class ReviewService {
         };
       })
       .filter(Boolean);
+  }
+
+  /**
+   * The threads of one pull request, without building the whole view.
+   *
+   * A sweep looks at every open pull request; building each one's full screen to
+   * ask "has anybody answered" would read findings, notes, fixes and commits for
+   * all of them to use one number.
+   */
+  threadsOf(repoId, prId) {
+    const done = this.store.latestDone(repoId, prId);
+    if (!done) return [];
+    return rules.buildConversation({
+      findings: this.store.findingsForReview(done.id),
+      comments: this.store.comments(repoId, prId),
+      replies: this.store.replies(repoId, prId),
+    });
+  }
+
+  /**
+   * Every pull request that has been quiet long enough to say something about.
+   *
+   * Read-only: it answers what is due and sends nothing. A sweep that decided
+   * and delivered in one step could not be shown to anybody before it ran, and
+   * "tell me, I will decide" would have nothing to show.
+   */
+  due() {
+    const settings = this.settings();
+    const active = settings.reminders.filter((rule) => rule.mode !== 'OFF');
+    if (!active.length) return [];
+    const repos = this.store.repos({ withHidden: false });
+    const byId = new Map(repos.map((repo) => [repo.id, repo]));
+    const rows = this.rows(this.store.openPrs(), byId, this.store.boardFacts());
+    const out = [];
+    for (const row of rows) {
+      const found = reminders.dueFor({
+        row,
+        threads: this.threadsOf(row.repoId, row.pr.id),
+        rules: active,
+        me: settings.me,
+      });
+      if (found) out.push({ ...found, repoId: row.repoId, prId: row.pr.id, row });
+    }
+    return out;
+  }
+
+  /**
+   * Say it: in the thread, outside the pull request, or both.
+   *
+   * The thread is where the answer belongs and is the part that survives — a
+   * message elsewhere is only what makes somebody go and look. So a failure to
+   * deliver outside never undoes the comment that was posted inside.
+   */
+  async remind(repoId, prId, { alsoThread = null } = {}) {
+    const found = this.due().find((one) => one.repoId === repoId && one.prId === prId);
+    if (!found) return { ok: false, error: 'Nothing on that pull request is waiting long enough.' };
+    const settings = this.settings();
+    const repo = this.engine.requireRepo(repoId);
+    const inThread = alsoThread === null ? settings.remindInThread : Boolean(alsoThread);
+
+    let posted = null;
+    if (inThread && found.rule.id !== 'UNREVIEWED') {
+      const threads = this.threadsOf(repoId, prId).filter((thread) => thread.state !== 'OK' && thread.findingId);
+      const oldest = threads.sort((a, b) => (b.waitingDays ?? 0) - (a.waitingDays ?? 0))[0];
+      if (oldest) {
+        try {
+          posted = await this.engine.followUp(oldest.findingId, '');
+        } catch (error) {
+          posted = { ok: false, error: String(error?.message ?? error) };
+        }
+      }
+    }
+
+    const delivered = await this.deliver(
+      reminders.asMessage(found, { row: found.row, provider: repo.provider, me: settings.me }),
+    );
+    this.engine.changed(repoId, prId);
+    return { ok: true, posted, delivered };
+  }
+
+  /**
+   * The rules that send on their own, run once.
+   *
+   * Only `AUTO`; anything on `ASK` is what `due()` shows you and waits. Nothing
+   * here throws: one pull request that cannot be reminded about must not stop
+   * the rest.
+   */
+  async sweepReminders() {
+    const sent = [];
+    for (const found of this.due()) {
+      if (found.rule.mode !== 'AUTO') continue;
+      try {
+        const out = await this.remind(found.repoId, found.prId, {});
+        sent.push({ repoId: found.repoId, prId: found.prId, ...out });
+      } catch (error) {
+        sent.push({ repoId: found.repoId, prId: found.prId, ok: false, error: String(error?.message ?? error) });
+      }
+    }
+    return { ok: true, sent };
   }
 
   dashboard() {
@@ -690,6 +821,14 @@ class ReviewService {
           else if (field === 'diffLayout') s.store.setPref(key, value === 'split' ? 'split' : 'unified');
           else s.store.setPref(key, String(value ?? ''));
         }
+        // The rules arrive as a set and are stored as one, so a half-written set
+        // is never what a sweep reads.
+        if (input.reminders && typeof input.reminders === 'object') {
+          const clean = {};
+          for (const rule of reminders.readRules(input.reminders)) clean[rule.id] = { mode: rule.mode, days: rule.days };
+          s.store.setPref('reminders.rules', JSON.stringify(clean));
+        }
+        if ('remindInThread' in input) s.store.setPref('reminders.inThread', input.remindInThread ? 'true' : 'false');
         s.emitRaw({ type: 'settings', settings: s.settings() });
         return { ok: true, settings: s.settings() };
       },
@@ -740,6 +879,10 @@ class ReviewService {
         await Promise.all(Array.from({ length: Math.min(4, repos.length) }, worker));
         return { ok: true, read: repos.length - failed.length, failed };
       },
+      /** What is waiting long enough to be worth saying something about. */
+      due: () => ({ ok: true, due: s.due().map(({ row, ...rest }) => ({ ...rest, repoName: row.repoName, author: row.pr.author, title: row.pr.title })) }),
+      remind: (args) => s.remind(str(args.repoId, 'A repository'), num(args.prId), { alsoThread: args.alsoThread }),
+      sweepReminders: () => s.sweepReminders(),
       searchHistory: async (args) => ({ ok: true, found: await e.searchHistory(str(args.repoId, 'A repository')) }),
       loadPr: async (args) => ({ ok: true, ...(await e.loadPr(str(args.repoId, 'A repository'), num(args.prId))) }),
 

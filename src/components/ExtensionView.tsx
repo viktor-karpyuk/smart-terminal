@@ -336,6 +336,11 @@ function Frame({
           // was configured with, named by id, and resolved on the other side.
           return reply(true, await window.api.review.call(name.slice(7), args), undefined);
         }
+        if (channel === 'teams') {
+          // Nothing of a folder's here either: the subjects are people, and the
+          // credentials never leave the main process.
+          return reply(true, await window.api.teams.call(name.slice(6), args), undefined);
+        }
         if (channel === 'kube-stream') {
           return reply(true, await stream(name.slice(5), args), undefined);
         }
