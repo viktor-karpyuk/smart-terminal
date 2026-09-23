@@ -886,6 +886,10 @@
     repoId: null,
     prId: null,
     prTab: 'review',
+    /** The workshop's diff, and one fix's, each loaded on demand and thrown away when the PR changes. */
+    wsDiff: null,
+    fixDiff: null,
+    fixOutput: null,
     overview: null,
     dashboard: null,
     dashFilter: { flags: [], mode: 'ALL', mine: false, authors: [], text: '' },
@@ -1662,7 +1666,7 @@
   }
 
   function blankForm() {
-    return { id: null, name: '', provider: 'BITBUCKET', owner: '', slug: '', localPath: '', token: '', projectKind: '', defaultDepth: '', defaultModel: '', autoReview: false, skipDrafts: true, skipTitles: 'DO NOT MERGE,WIP', skipAuthors: '', onlyTargets: '', replyMode: 'DRAFT', fixMode: 'MANUAL', hasToken: false };
+    return { id: null, name: '', provider: 'BITBUCKET', owner: '', slug: '', localPath: '', token: '', projectKind: '', defaultDepth: '', defaultModel: '', autoReview: false, skipDrafts: true, skipTitles: 'DO NOT MERGE,WIP', skipAuthors: '', onlyTargets: '', replyMode: 'DRAFT', fixMode: 'MANUAL', checkCommand: '', hasToken: false };
   }
 
   function drawRepoForm() {
@@ -1717,7 +1721,19 @@
     html += '</div>';
     html += '<div class="section"><h3>Fixing findings</h3>' + radio('fixMode', [['OFF', 'Off', 'no fix button'], ['MANUAL', 'On request', 'a fix starts when you press Fix'], ['AUTO', 'After every review', 'every open finding is fixed as soon as a review ends']]);
     if (f.fixMode === 'AUTO') html += '<div class="banner bad">Every finished review will spend a run per open finding. Commits stay in the workshop until you hand them back; nothing is pushed.</div>';
-    html += '<div class="help faint">A fix is written and committed in a separate copy of the repository, never in your clone.</div></div>';
+    html += '<div class="help faint">A fix is written and committed in a separate copy of the repository, never in your clone.</div>';
+    /*
+     * Whether the fix still builds, asked of the project itself.
+     *
+     * A fix is committed the moment the working tree is dirty, which answers
+     * "did anything change" and says nothing about whether it is any good. This
+     * is the project's own command — it runs in the workshop, on the commit,
+     * with the app's reach, so it is taken from here and never from anything a
+     * model or a pull request said.
+     */
+    html += '<div class="field"><label>Check each fix with</label><div>' + input('checkCommand', 'text', 'npm test   ·   mvn -q -DskipITs test   ·   ./gradlew check') +
+      '<div class="help faint">Run in the workshop after each fix, and its answer is shown beside the commit. Left empty, nothing runs and the fix says "not checked" — which is not the same as passing.</div></div></div>';
+    html += '</div>';
 
     if (editing) {
       html += '<div class="section"><h3>Conventions for this repository</h3>' + drawGuidelines(state.formGuidelines, f.id) + '</div>';
@@ -1915,15 +1931,65 @@
     return html;
   }
 
+  /**
+   * Fixing again, and saying what was wrong with the last go.
+   *
+   * A retry that repeats the same brief usually writes the same thing, which is
+   * an expensive way to learn nothing. The note is the one thing the model did
+   * not have: what a person saw in the attempt that the attempt could not.
+   */
+  function fixAgain(findingId, label, quiet) {
+    var key = 'fixnote-' + findingId;
+    if (state.edits[key] == null) {
+      return '<button class="btn small' + (quiet ? '' : ' go') + '" data-act="fix-note-open" data-id="' + esc(findingId) + '" title="Say what to do differently, then fix">' + label + '</button>';
+    }
+    return '<div class="card" style="margin-top:6px;width:100%"><strong>What should it do differently?</strong>' +
+      '<div class="faint">The last attempt and the thread are already in front of it. This is what only you know.</div>' +
+      '<textarea rows="2" data-edit="' + key + '" placeholder="e.g. do not touch the DTO, the mapping belongs in the service">' + esc(edit(key, '')) + '</textarea>' +
+      '<div class="row" style="margin-top:4px"><button class="btn small go" data-act="fix" data-id="' + esc(findingId) + '"' + busyAttr('fix-' + findingId) + '>Fix</button>' +
+      '<button class="btn small" data-act="fix-note-close" data-id="' + esc(findingId) + '">Cancel</button></div></div>';
+  }
+
   /** A finding nobody has to act on any more: dismissed, closed, or verified fixed. */
   function findingDone(f) {
     return Boolean(f.dismissedAt || f.closedAt || (f.publishedId && (f.resolution === 'RESOLVED' || f.resolution === 'WONT_FIX')));
   }
 
+  /** Settled by a person reading the answer, rather than by the verifier reading the code. */
+  function settledByYou(f) {
+    return f.resolutionBy === 'YOU' && f.resolution === 'WONT_FIX';
+  }
+
   function findingStatus(f) {
     var res = f.resolution ? RESOLUTION_LABELS[f.resolution] : null;
+    // "Settled" rather than "closed" and "won't fix" twice: one decision, said once.
+    if (settledByYou(f)) {
+      return (f.publishedId ? '<span class="chip okc">published</span>' : '') +
+        '<span class="chip okc" title="' + esc(f.resolutionNote || 'Settled in the conversation') + '">✓ settled</span>';
+    }
     return (f.publishedId ? '<span class="chip okc">published</span>' : '') + (f.dismissedAt ? '<span class="chip">dismissed</span>' : '') + (f.closedAt && !f.dismissedAt ? '<span class="chip okc">closed</span>' : '') +
       (res ? '<span class="chip ' + res[1] + '" title="' + esc(f.resolutionNote || '') + '">' + res[0] + '</span>' : f.publishedId && !f.closedAt && !f.dismissedAt ? '<span class="chip mine">not verified</span>' : '');
+  }
+
+  /**
+   * The button, and the reason box it opens.
+   *
+   * Asked for rather than typed straight in, because most of the time the
+   * reason is one line and the box in the way of it is the whole cost. The
+   * note is what the review says about this comment for ever after, so it is
+   * worth a sentence — and it is optional, because "they are right" is
+   * sometimes the whole of it and demanding prose gets you "ok".
+   */
+  function settleBox(findingId) {
+    var key = 'settle-' + findingId;
+    if (state.edits[key] == null) {
+      return '<button class="btn small go" data-act="settle-open" data-id="' + esc(findingId) + '" title="The author answered and the answer stands: it will not be fixed, and it stops counting against this PR">Settled…</button>';
+    }
+    return '<div class="card" style="margin-top:6px"><strong>Settle this comment</strong>' +
+      '<div class="faint">The author argued it away and you agree. It stops waiting for a change in the code, counts as done, and any answer still drafted under it is dropped.</div>' +
+      '<textarea rows="2" data-edit="' + key + '" placeholder="Why — their reason, in a line. Optional.">' + esc(edit(key, '')) + '</textarea>' +
+      '<div class="row" style="margin-top:4px"><button class="btn small primary" data-act="settle" data-id="' + esc(findingId) + '"' + busyAttr('settle-' + findingId) + '>Settle</button>' +
+      '<button class="btn small" data-act="settle-close" data-id="' + esc(findingId) + '">Cancel</button></div></div>';
   }
 
   function findingCard(f, v) {
@@ -1962,6 +2028,9 @@
       if (!editing) html += '<button class="btn small" data-act="finding-edit" data-id="' + esc(f.id) + '">Edit</button>';
     }
     if (f.dismissedAt) html += '<button class="btn small" data-act="dismiss" data-id="' + esc(f.id) + '" data-on="0">Undo dismiss</button>';
+    // Published, alive, and nobody has decided it: the one case where the author's answer is the answer.
+    if (v.pr.state === 'OPEN' && f.publishedId && !f.dismissedAt && !findingDone(f)) html += settleBox(f.id);
+    if (settledByYou(f) && v.pr.state === 'OPEN') html += '<button class="btn small" data-act="settle" data-id="' + esc(f.id) + '" data-on="0"' + busyAttr('settle-' + f.id) + ' title="It is not settled after all — put it back on the list">Unsettle</button>';
     if (f.publishedUrl) html += '<button class="btn small" data-act="open-url" data-url="' + esc(f.publishedUrl) + '">View on PR ↗</button>';
     if (fixOn) {
       if (fixing) html += '<span class="chip accent"><span class="dot busy"></span>fixing</span>';
@@ -1969,17 +2038,149 @@
         html += '<span class="chip okc" title="' + esc(fix.summary || '') + '">✔ ' + sha7(fix.sha) + (fix.returnedAt ? ' handed back' : ' in the workshop') + '</span>';
         if (!fix.replyId) html += '<button class="btn small" data-act="retry-fix-reply" data-id="' + esc(fix.id) + '"' + busyAttr('fixreply-' + fix.id) + ' title="' + esc(fix.replyError || '') + '">Answer the thread</button>';
       } else if (fix && fix.state === 'NOTHING' && !f.closedAt) {
-        html += '<span class="chip" title="' + esc(fix.summary || '') + '">nothing to change</span><button class="btn small" data-act="fix" data-id="' + esc(f.id) + '">Try again</button>';
+        html += '<span class="chip" title="' + esc(fix.summary || '') + '">nothing to change</span>' + fixAgain(f.id, 'Try again');
       } else if (fix && fix.state === 'FAILED' && !f.closedAt) {
-        html += '<span class="chip badc" title="' + esc(fix.error || '') + '">fix failed</span><button class="btn small" data-act="fix" data-id="' + esc(f.id) + '">Retry fix</button>';
+        html += '<span class="chip badc" title="' + esc(fix.error || '') + '">fix failed</span>' + fixAgain(f.id, 'Retry fix');
       } else if (!f.closedAt && !f.dismissedAt && f.resolution !== 'RESOLVED') {
-        html += '<button class="btn small go" data-act="fix" data-id="' + esc(f.id) + '" title="Write the fix in a separate copy of the repository and commit it there">Fix</button>';
+        html += '<button class="btn small go" data-act="fix" data-id="' + esc(f.id) + '" title="Write the fix in a separate copy of the repository and commit it there">Fix</button>' + fixAgain(f.id, 'Fix with a note…', true);
       }
     }
     html += '<span class="spacer"></span><button class="btn small" data-act="ask" data-finding="' + esc(f.id) + '" title="A Claude session briefed on this finding">Ask Claude</button></div>';
     if (fix && fix.state === 'NOTHING' && fix.summary) html += '<div class="faint" style="margin-top:4px">Fix: ' + esc(fix.summary) + '</div>';
     if (fix && fix.state === 'FAILED' && fix.error) html += '<div class="faint bad" style="margin-top:4px">Fix: ' + esc(fix.error.slice(0, 300)) + '</div>';
     return html + '</div>';
+  }
+
+  /* ---- the workshop -------------------------------------------------------
+   *
+   * Commits written by the app, sitting in a copy of the repository, waiting
+   * for somebody to say yes. Everything here exists because the commit message
+   * ends with "revisá el diff antes de subirlo" and until now the app gave you
+   * nowhere to do that: the answer was a terminal.
+   */
+
+  /** What the head line says before it is opened: what is waiting, and whether anything is red. */
+  function workshopChips(v, ws) {
+    var pending = (v.fixes || []).filter(pendingFix);
+    var failed = pending.filter(function (fix) { return fix.check && fix.check.state !== 'PASSED'; }).length;
+    return (ws.pendingReturn ? '<span class="chip mine">' + ws.pendingReturn + ' to hand back</span>' : '') +
+      (failed ? '<span class="chip badc" title="The repository\'s own check did not pass on ' + failed + ' of them">' + failed + ' failed the check</span>' : '');
+  }
+
+  function pendingFix(fix) {
+    return fix.state === 'COMMITTED' && !fix.returnedAt && !fix.droppedAt;
+  }
+
+  /** Passed, failed, timed out — or nothing ran, which is said as nothing ran. */
+  function checkChip(fix) {
+    if (!fix.check) return fix.state === 'COMMITTED' && !fix.droppedAt ? '<span class="chip" title="No check command is set for this repository, so nothing was run">not checked</span>' : '';
+    var secs = fix.check.seconds ? ' in ' + fix.check.seconds + 's' : '';
+    if (fix.check.state === 'PASSED') return '<span class="chip okc" title="The repository\'s check passed' + esc(secs) + '">✓ check</span>';
+    var label = fix.check.state === 'TIMEOUT' ? 'check timed out' : 'check failed';
+    return '<span class="chip badc click" data-act="fix-output" data-id="' + esc(fix.id) + '" title="Click to read the output">' + label + '</span>';
+  }
+
+  function workshopBody(v, ws, findings) {
+    var open = v.pr.state === 'OPEN';
+    // Oldest first, which is the order they sit in the branch — the table above lists them newest
+    // first, and reasoning about "what is under this commit" in that order hands back the wrong set.
+    var pending = (v.fixes || []).filter(pendingFix).slice().sort(function (a, b) {
+      return String(a.createdAt).localeCompare(String(b.createdAt));
+    });
+    var html = '<div class="faint mono" style="font-size:11px">' + esc(ws.dir) + '</div>';
+
+    if (!v.repo.checkCommand) {
+      html += '<div class="help faint" style="margin-top:4px">No check command for this repository, so a fix is committed without anything being run. Set one in the repository\'s settings and every fix is checked before you are asked to take it.</div>';
+    }
+
+    /*
+     * The whole of what the clone does not have yet, as one diff.
+     *
+     * Read before handing back rather than commit by commit, because that is
+     * the question being answered — "do I want this in my branch" — and four
+     * commits touching one file are one change to judge, not four.
+     */
+    html += '<div class="row" style="margin-top:6px">';
+    if (ws.pendingReturn) {
+      html += '<button class="btn small" data-act="workshop-diff" title="Everything the workshop has that your clone does not, as one diff">' +
+        (state.wsDiff && state.wsDiff.open ? 'Hide the diff' : 'Review the ' + ws.pendingReturn + ' waiting') + '</button>';
+      html += '<button class="btn small primary" data-act="give-back"' + busyAttr(prKey('give-back')) + ' title="Push the workshop commits into your clone, on ' + esc(v.pr.sourceBranch) + '. Your clone must not have that branch checked out.">Hand ' + ws.pendingReturn + ' back</button>';
+    } else {
+      html += '<span class="faint">Nothing waiting to be handed back.</span>';
+    }
+    if (ws.exists) {
+      html += '<button class="btn small" data-act="shell" data-where="workshop">Terminal in the workshop</button>' +
+        '<span class="spacer"></span><button class="btn small danger" data-act="discard-workshop"' + busyAttr(prKey('discard')) + '>Discard…</button>';
+    }
+    html += '</div>';
+
+    if (state.wsDiff && state.wsDiff.open) html += diffPanel(state.wsDiff, 'ws');
+
+    if ((v.fixes || []).length) {
+      html += '<table class="list" style="margin-top:6px">' + v.fixes.slice(0, 20).map(function (fix) {
+        var finding = findings.filter(function (f) { return f.id === fix.findingId; })[0];
+        var where = fix.droppedAt ? 'taken out' : fix.returnedAt ? 'handed back' : fix.state === 'COMMITTED' ? 'in the workshop' : '';
+        var rows = '<tr><td>' + statusChip(fix.state === 'COMMITTED' ? 'DONE' : fix.state) + '</td>' +
+          '<td>' + esc(finding ? finding.title : 'a finding from an earlier review') +
+          (fix.note ? '<div class="faint">asked: ' + esc(fix.note.slice(0, 160)) + '</div>' : '') +
+          (fix.summary ? '<div class="faint">' + esc(fix.summary.slice(0, 200)) + '</div>' : '') +
+          (fix.error ? '<div class="bad">' + esc(fix.error.slice(0, 200)) + '</div>' : '') + '</td>' +
+          '<td class="mono">' + sha7(fix.sha) + '</td>' +
+          '<td>' + checkChip(fix) + '</td>' +
+          '<td class="faint">' + where + (fix.replyUrl ? ' · answered' : fix.replyError ? ' · <span class="bad">not answered</span>' : '') + '</td>' +
+          '<td class="faint">' + esc(when(fix.createdAt)) + '</td>' +
+          '<td class="row" style="justify-content:flex-end">' + fixRowActions(fix, pending, open) + '</td></tr>';
+        // The diff of one commit, under its own row.
+        if (state.fixDiff && state.fixDiff.fixId === fix.id) {
+          rows += '<tr><td colspan="7">' + diffPanel(state.fixDiff, 'fix') + '</td></tr>';
+        }
+        if (state.edits['drop-' + fix.id] != null) {
+          rows += '<tr><td colspan="7"><div class="card"><strong>Take ' + sha7(fix.sha) + ' out of the workshop</strong>' +
+            '<div class="faint">The commit goes and the finding comes back on the list. The answer already posted in its thread stays — it said the commit existed, and correcting that is worth a word from you.</div>' +
+            '<div class="row" style="margin-top:4px"><button class="btn small danger" data-act="drop-fix" data-id="' + esc(fix.id) + '"' + busyAttr('drop-' + fix.id) + '>Take it out</button>' +
+            '<button class="btn small" data-act="drop-close" data-id="' + esc(fix.id) + '">Cancel</button></div></div></td></tr>';
+        }
+        if (state.fixOutput === fix.id && fix.check) {
+          rows += '<tr><td colspan="7"><pre class="mono" style="max-height:260px;overflow:auto;white-space:pre-wrap">' + esc(fix.check.output || 'It said nothing.') + '</pre></td></tr>';
+        }
+        return rows;
+      }).join('') + '</table>';
+    }
+    return html;
+  }
+
+  /** What can be done to one attempt, given where its commit is. */
+  function fixRowActions(fix, pending, open) {
+    if (!fix.sha || fix.droppedAt) return '';
+    var html = '<button class="btn small" data-act="fix-diff" data-id="' + esc(fix.id) + '"' + busyAttr('fixdiff-' + fix.id) + '>' +
+      (state.fixDiff && state.fixDiff.fixId === fix.id ? 'Hide' : 'Diff') + '</button>';
+    if (!open || fix.returnedAt) return html;
+    var index = pending.map(function (x) { return x.id; }).indexOf(fix.id);
+    // Handing back pushes a branch, so anything under this commit goes with it — said, not hidden.
+    if (index >= 0 && index < pending.length - 1) {
+      html += '<button class="btn small" data-act="give-back" data-up-to="' + esc(fix.id) + '"' + busyAttr(prKey('give-back')) + ' title="Hand back this commit and the ' + index + ' under it, leaving the rest in the workshop">Hand back to here</button>';
+    }
+    if (index >= 0) html += '<button class="btn small danger" data-act="drop-open" data-id="' + esc(fix.id) + '">Take out</button>';
+    return html;
+  }
+
+  /**
+   * A diff nobody can comment on: the workshop's own changes, drawn with the
+   * same table as the Code tab so it reads the same, and without the anchors,
+   * notes and threads, which belong to the pull request and not to a commit the
+   * app has not handed over yet.
+   */
+  function diffPanel(box, kind) {
+    if (box.error) return '<div class="banner bad">' + esc(box.error) + '</div>';
+    if (!box.files) return '<div class="loading">Reading the diff…</div>';
+    if (!box.files.length) return '<div class="empty">Nothing: the workshop and your clone are at the same commit.</div>';
+    var current = box.file || box.files[0].path;
+    var file = box.files.filter(function (f) { return f.path === current; })[0] || box.files[0];
+    var act = kind === 'ws' ? 'ws-diff-file' : 'fix-diff-file';
+    return '<div class="ws-diff"><div class="row" style="padding:6px 0">' + box.files.map(function (one) {
+      return '<span class="chip click' + (one.path === file.path ? ' on' : '') + '" data-act="' + act + '" data-file="' + esc(one.path) + '" title="' + esc(one.path) + '">' +
+        esc(one.path.split('/').pop()) + ' <span class="added">+' + one.added + '</span> <span class="removed">−' + one.deleted + '</span></span>';
+    }).join('') + '</div>' + diffTable(file.lines || [], { file: file.path, status: file.status, layout: diffLayout() }) + '</div>';
   }
 
   /**
@@ -2083,15 +2284,7 @@
     // --- the workshop
     var ws = v.workshop;
     if (ws && (ws.exists || (v.fixes || []).length)) {
-      var wsBody = '<div class="faint mono" style="font-size:11px">' + esc(ws.dir) + '</div>' +
-        '<div class="row" style="margin-top:6px">' + (ws.pendingReturn ? '<button class="btn small primary" data-act="give-back"' + busyAttr(prKey('give-back')) + ' title="Push the workshop commits into your clone, on ' + esc(v.pr.sourceBranch) + '. Your clone must not have that branch checked out.">Hand ' + ws.pendingReturn + ' back to the clone</button>' : '<span class="faint">Nothing waiting to be handed back.</span>') +
-        (ws.exists ? '<button class="btn small" data-act="shell" data-where="workshop">Terminal in the workshop</button><span class="spacer"></span><button class="btn small danger" data-act="discard-workshop"' + busyAttr(prKey('discard')) + '>Discard…</button>' : '') + '</div>' +
-        ((v.fixes || []).length ? '<table class="list" style="margin-top:6px">' + v.fixes.slice(0, 20).map(function (fix) {
-          var finding = findings.filter(function (f) { return f.id === fix.findingId; })[0];
-          return '<tr><td>' + statusChip(fix.state === 'COMMITTED' ? 'DONE' : fix.state) + '</td><td>' + esc(finding ? finding.title : 'a finding from an earlier review') + (fix.summary ? '<div class="faint">' + esc(fix.summary.slice(0, 200)) + '</div>' : '') + (fix.error ? '<div class="bad">' + esc(fix.error.slice(0, 200)) + '</div>' : '') + '</td>' +
-            '<td class="mono">' + sha7(fix.sha) + '</td><td class="faint">' + (fix.returnedAt ? 'handed back' : fix.state === 'COMMITTED' ? 'in the workshop' : '') + (fix.replyUrl ? ' · answered' : fix.replyError ? ' · <span class="bad">not answered</span>' : '') + '</td><td class="faint">' + esc(when(fix.createdAt)) + '</td></tr>';
-        }).join('') + '</table>' : '');
-      html += fold('workshop', '<strong>Fix workshop</strong>' + (ws.pendingReturn ? '<span class="chip mine">' + ws.pendingReturn + ' to hand back</span>' : ''), (v.fixes || []).length + ' fix attempt(s)', wsBody, ws.pendingReturn > 0);
+      html += fold('workshop', '<strong>Fix workshop</strong>' + workshopChips(v, ws), (v.fixes || []).length + ' fix attempt(s)', workshopBody(v, ws, findings), ws.pendingReturn > 0);
     }
 
     // --- the general comment
@@ -2925,7 +3118,7 @@
       html += '<div class="row" style="margin-top:6px">';
       // A question that was never asked cannot be settled in conversation: it is published or dismissed.
       if (open && t.state === 'UNPUBLISHED' && t.findingId) html += '<button class="btn small primary" data-act="publish-finding" data-id="' + esc(t.findingId) + '"' + busyAttr('publish-' + t.findingId) + '>Publish</button><button class="btn small" data-act="dismiss" data-id="' + esc(t.findingId) + '" data-on="1">Dismiss</button>';
-      else if (open && t.state !== 'OK' && t.findingId) html += '<button class="btn small" data-act="close-thread" data-id="' + esc(t.findingId) + '" data-on="1" title="Settled in conversation: it waits for no change in the code">Close thread</button>';
+      else if (open && t.state !== 'OK' && t.findingId) html += settleBox(t.findingId) + '<button class="btn small" data-act="close-thread" data-id="' + esc(t.findingId) + '" data-on="1" title="Close it without saying why. Settled… records the reason, which is what anybody reading this later needs.">Close thread</button>';
       if (t.state === 'OK' && t.findingId) html += '<button class="btn small" data-act="close-thread" data-id="' + esc(t.findingId) + '" data-on="0">Reopen</button>';
       if (open && t.waitingDays != null && t.waitingDays >= (v.followUpDays || 3) && !draft) {
         var fkey = 'follow-' + t.findingId;
@@ -3080,7 +3273,8 @@
 
   function openPr(repoId, prId) {
     var same = state.view === 'pr' && state.repoId === repoId && state.prId === Number(prId);
-    if (!same) { state.findingFilter = null; state.threadFilter = null; Object.keys(state.folds).forEach(function (key) { if (key !== 'readiness' && key.indexOf('dash-') !== 0 && key !== 'read-errors') delete state.folds[key]; }); }
+    // A diff belongs to the workshop of the PR it was read from; it does not follow into another.
+    if (!same) { state.wsDiff = null; state.fixDiff = null; state.fixOutput = null; state.findingFilter = null; state.threadFilter = null; Object.keys(state.folds).forEach(function (key) { if (key !== 'readiness' && key.indexOf('dash-') !== 0 && key !== 'read-errors') delete state.folds[key]; }); }
     go('pr', { repoId: repoId, prId: Number(prId), prTab: same ? state.prTab : 'review', backTo: state.view === 'pr' ? state.backTo : state.view === 'prs' ? 'prs' : 'dashboard' });
   }
 
@@ -3153,7 +3347,7 @@
         id: repo.id, name: repo.name, provider: repo.provider, owner: repo.owner, slug: repo.slug, localPath: repo.localPath, token: '',
         projectKind: repo.projectKind || '', defaultDepth: repo.defaultDepth || '', defaultModel: repo.defaultModel || '', autoReview: repo.autoReview,
         skipDrafts: repo.skipDrafts, skipTitles: repo.skipTitles, skipAuthors: repo.skipAuthors, onlyTargets: repo.onlyTargets,
-        replyMode: repo.replyMode, fixMode: repo.fixMode, hasToken: repo.hasToken
+        replyMode: repo.replyMode, fixMode: repo.fixMode, checkCommand: repo.checkCommand || '', hasToken: repo.hasToken
       };
       go('repoForm');
       return loadFormGuidelines();
@@ -3174,7 +3368,8 @@
     return {
       id: f.id || undefined, name: f.name, provider: f.provider, owner: f.owner, slug: f.slug, localPath: f.localPath, token: f.token,
       projectKind: f.projectKind || null, defaultDepth: f.defaultDepth || null, defaultModel: f.defaultModel || '', autoReview: f.autoReview,
-      skipDrafts: f.skipDrafts, skipTitles: f.skipTitles, skipAuthors: f.skipAuthors, onlyTargets: f.onlyTargets, replyMode: f.replyMode, fixMode: f.fixMode
+      skipDrafts: f.skipDrafts, skipTitles: f.skipTitles, skipAuthors: f.skipAuthors, onlyTargets: f.onlyTargets, replyMode: f.replyMode, fixMode: f.fixMode,
+      checkCommand: f.checkCommand || ''
     };
   }
 
@@ -3459,10 +3654,65 @@
       call('editFinding', { findingId: id, title: edit('finding-title-' + id, f.title), body: edit('finding-body-' + id, f.body), suggestion: edit('finding-sugg-' + id, f.suggestion || '') })
         .then(function () { ['open', 'title', 'body', 'sugg'].forEach(function (p) { delete state.edits['finding-' + p + '-' + id]; }); }).catch(fail);
     },
-    fix: function (el) { var id = el.getAttribute('data-id'); call('fix', { findingId: id }).then(function (r) { say(!r.fix ? 'Already closed: there was nothing left to fix.' : r.fix.sha ? 'Fix committed in the workshop: ' + r.fix.sha.slice(0, 7) : 'The fix changed nothing: ' + (r.fix.summary || '')); }, fail); },
+    fix: function (el) {
+      var id = el.getAttribute('data-id');
+      var note = state.edits['fixnote-' + id] || '';
+      delete state.edits['fixnote-' + id];
+      call('fix', { findingId: id, note: note }).then(function (r) {
+        say(!r.fix ? 'Already closed: there was nothing left to fix.' : r.fix.sha ? 'Fix committed in the workshop: ' + r.fix.sha.slice(0, 7) : 'The fix changed nothing: ' + (r.fix.summary || ''));
+      }, fail);
+    },
+    'fix-note-open': function (el) { state.edits['fixnote-' + el.getAttribute('data-id')] = ''; draw(); },
+    'fix-note-close': function (el) { delete state.edits['fixnote-' + el.getAttribute('data-id')]; draw(); },
     'fix-all': function () { act(prKey('fix-all'), function () { return call('fixAll', prArgs()); }, function (r) { say(r.committed + ' fix(es) committed.' + (r.errors.length ? ' ' + r.errors.length + ' failed.' : ''), r.errors.length > 0); }); },
     'retry-fix-reply': function (el) { var id = el.getAttribute('data-id'); act('fixreply-' + id, function () { return call('retryFixReply', { fixId: id }); }); },
-    'give-back': function () { act(prKey('give-back'), function () { return call('giveBack', prArgs()); }, function (r) { say(r.count + ' fix(es) handed back to your clone.'); }); },
+    'give-back': function (el) {
+      var upTo = el && el.getAttribute('data-up-to');
+      act(prKey('give-back'), function () { return call('giveBack', prArgs(upTo ? { upToFixId: upTo } : {})); }, function (r) {
+        state.wsDiff = null;
+        say(r.count + ' fix(es) handed back to your clone.' + (r.left ? ' ' + r.left + ' still in the workshop.' : ''));
+        load();
+      });
+    },
+
+    // ---- judging what is in the workshop before taking it ----
+    'workshop-diff': function () {
+      if (state.wsDiff && state.wsDiff.open) { state.wsDiff = null; draw(); return; }
+      var box = { open: true, files: null, file: null, error: null };
+      state.wsDiff = box;
+      state.fixDiff = null;
+      draw();
+      call('workshopDiff', prArgs()).then(function (r) {
+        if (state.wsDiff !== box) return;
+        box.files = r.files; box.file = r.files.length ? r.files[0].path : null; draw();
+      }, function (error) { if (state.wsDiff !== box) return; box.error = error.message; draw(); });
+    },
+    'ws-diff-file': function (el) { if (state.wsDiff) { state.wsDiff.file = el.getAttribute('data-file'); draw(); } },
+    'fix-diff': function (el) {
+      var id = el.getAttribute('data-id');
+      if (state.fixDiff && state.fixDiff.fixId === id) { state.fixDiff = null; draw(); return; }
+      var box = { fixId: id, files: null, file: null, error: null };
+      state.fixDiff = box;
+      state.wsDiff = null;
+      act('fixdiff-' + id, function () { return call('fixDiff', { fixId: id }); }, function (r) {
+        if (state.fixDiff !== box) return;
+        box.files = r.files; box.file = r.files.length ? r.files[0].path : null;
+      });
+    },
+    'fix-diff-file': function (el) { if (state.fixDiff) { state.fixDiff.file = el.getAttribute('data-file'); draw(); } },
+    'fix-output': function (el) { var id = el.getAttribute('data-id'); state.fixOutput = state.fixOutput === id ? null : id; draw(); },
+    'drop-open': function (el) { state.edits['drop-' + el.getAttribute('data-id')] = ''; draw(); },
+    'drop-close': function (el) { delete state.edits['drop-' + el.getAttribute('data-id')]; draw(); },
+    'drop-fix': function (el) {
+      var id = el.getAttribute('data-id');
+      act('drop-' + id, function () { return call('dropFix', { fixId: id }); }, function (r) {
+        delete state.edits['drop-' + id];
+        state.fixDiff = null;
+        state.wsDiff = null;
+        say(r.how === 'revert' ? 'Reverted in the workshop: another commit sits on top of it, so both stay in the branch and cancel out.' : 'Taken out of the workshop.');
+        load();
+      });
+    },
     'discard-workshop': function () { act(prKey('discard'), function () { return call('discardWorkshop', prArgs({ repoName: state.pr.repo.name })); }, function () { say('Workshop discarded.'); }); },
     push: function () {
       var d = state.commits.data;
@@ -3528,6 +3778,19 @@
     },
     'dismiss-reply': function (el) { call('dismissReply', { replyId: el.getAttribute('data-id') }).catch(fail); },
     'dismiss-all-replies': function () { call('dismissAllReplies', prArgs()).catch(fail); },
+    'settle-open': function (el) { state.edits['settle-' + el.getAttribute('data-id')] = ''; draw(); },
+    'settle-close': function (el) { delete state.edits['settle-' + el.getAttribute('data-id')]; draw(); },
+    settle: function (el) {
+      var id = el.getAttribute('data-id');
+      var on = el.getAttribute('data-on') !== '0';
+      act('settle-' + id, function () {
+        return call('settleFinding', { findingId: id, settled: on, note: on ? edit('settle-' + id, '') : '' });
+      }, function () {
+        delete state.edits['settle-' + id];
+        say(on ? 'Settled. It no longer counts against this PR.' : 'Back on the list.');
+        load();
+      });
+    },
     'close-thread': function (el) { call('closeFinding', { findingId: el.getAttribute('data-id'), closed: el.getAttribute('data-on') === '1' }).catch(fail); },
     'follow-open': function (el) {
       var id = el.getAttribute('data-id');

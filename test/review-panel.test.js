@@ -405,3 +405,63 @@ test('an answer older than the newest commits is a question, whichever way it we
   assert.match(M.conflictChip(row({ conflicts: [] })), />merges\?</);
   assert.strictEqual(M.mergeState(row({ conflicts: [] })).stale, true);
 });
+
+// ---------------------------------------------------------------- a comment argued away
+
+/*
+ * A comment the author refuted and the person settled is not the verifier's
+ * "won't fix": one is a judgement about the code, the other is somebody taking
+ * responsibility for a decision, and the panel must not draw them alike.
+ */
+const S = fromPanel(['esc', 'RESOLUTION_LABELS', 'settledByYou', 'findingStatus']);
+
+test('settled by you reads as settled, not as the verifier deciding not to fix', () => {
+  const mine = { publishedId: 'c1', resolution: 'WONT_FIX', resolutionBy: 'YOU', resolutionNote: 'Deliberate: callers negate b.', closedAt: 'x' };
+  const theirs = { publishedId: 'c1', resolution: 'WONT_FIX', resolutionBy: 'VERIFY', resolutionNote: 'out of scope' };
+  assert.strictEqual(S.settledByYou(mine), true);
+  assert.strictEqual(S.settledByYou(theirs), false);
+  assert.match(S.findingStatus(mine), /✓ settled/);
+  assert.match(S.findingStatus(mine), /Deliberate: callers negate b\./, 'the reason is on it, for whoever reads this later');
+  assert.doesNotMatch(S.findingStatus(mine), /closed/, 'one decision, said once');
+  assert.match(S.findingStatus(theirs), /Won&#39;t fix|Won't fix/);
+});
+
+test('settling is offered on a published comment and never on an unpublished one', () => {
+  // The card offers it only where there is a thread to have been argued in.
+  assert.match(source, /f\.publishedId && !f\.dismissedAt && !findingDone\(f\)\) html \+= settleBox\(f\.id\)/);
+  assert.match(source, /settleFinding'[\s\S]{0,120}settled: on/, 'and it can be undone');
+});
+
+/*
+ * The fixes table is drawn newest first; the branch holds them oldest first.
+ * Reason about "what sits under this commit" in the table's order and "hand
+ * back to here" hands back the lot — which is what it did, measured against a
+ * real workshop: picking the first commit pushed both.
+ */
+test('the workshop reasons about its commits in the order the branch holds them', () => {
+  const at = source.indexOf('function workshopBody');
+  assert.ok(at > 0, 'workshopBody is still there');
+  const body = source.slice(at, at + 600);
+  assert.match(
+    body,
+    /filter\(pendingFix\)[\s\S]{0,200}sort\([\s\S]{0,200}createdAt/,
+    'the pending fixes are sorted by when they were made before anything counts positions in them',
+  );
+});
+
+/*
+ * A field drawn on the repository form and left out of what Save sends is a
+ * field that silently does nothing — which is how `checkCommand` first shipped
+ * in this panel, saving nothing while looking saved.
+ */
+test('every field on the repository form is in what Save sends', () => {
+  const at = source.indexOf('function formPayload');
+  assert.ok(at > 0, 'formPayload is still there');
+  const payload = source.slice(at, source.indexOf('\n  }', at));
+  const drawn = [...source.matchAll(/data-form="([A-Za-z][\w]*)"/g)].map((m) => m[1]);
+  const named = [...source.matchAll(/(?:radio|input|select|check)\('([A-Za-z][\w]*)'/g)].map((m) => m[1]);
+  const missing = [...new Set([...drawn, ...named])]
+    .filter((field) => !field.startsWith('dash-') && field !== 'import-pick')
+    .filter((field) => !new RegExp(`\\b${field}:`).test(payload));
+  assert.deepStrictEqual(missing, [], `Drawn on the form and never sent:\n  ${missing.join('\n  ')}`);
+});

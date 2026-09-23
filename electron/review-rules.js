@@ -707,6 +707,7 @@ function buildConversation({ findings, comments, replies, today = new Date() }) 
       draft,
       resolution: finding.resolution,
       resolutionNote: finding.resolutionNote,
+      resolutionBy: finding.resolutionBy ?? null,
       publishedUrl: finding.publishedUrl,
       state,
       waitingDays: waitingSince ? daysBetween(waitingSince, today) : null,

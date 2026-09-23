@@ -7,6 +7,9 @@ const prompts = require('./review-prompts');
 const { describeEvent } = require('./review-engine');
 const { busSection, TOOL_NAMES } = require('./review-bus');
 
+/** How long a repository's own check may take before it is called a timeout rather than an answer. */
+const CHECK_TIMEOUT = 15 * 60 * 1000;
+
 /**
  * Code Reviewer: fixing a finding, in a workshop, never in anybody's clone.
  *
@@ -73,7 +76,7 @@ class FixEngine {
   }
 
   /** Fix one finding. Resolves with the fix row; a failure is written on the row and thrown. */
-  async fix(findingId) {
+  async fix(findingId, { note = '' } = {}) {
     const finding = this.store.finding(findingId);
     if (!finding) throw new Error('That finding is gone.');
     const repo = this.engine.requireRepo(finding.repoId);
@@ -87,14 +90,14 @@ class FixEngine {
     activity.line(key, 'Waiting for the workshop…');
     this.engine.changed(repo.id, pr.id);
     try {
-      return await this.serial(`${repo.id}#${pr.id}`, () => this.fixNow(repo, pr, finding, key));
+      return await this.serial(`${repo.id}#${pr.id}`, () => this.fixNow(repo, pr, finding, key, note));
     } finally {
       activity.end(key);
       this.engine.changed(repo.id, pr.id);
     }
   }
 
-  async fixNow(repo, pr, queued, key) {
+  async fixNow(repo, pr, queued, key, note = '') {
     const activity = this.engine.activity;
     // Read again now that it is this fix's turn: another run may have closed it while this one waited.
     if (activity.cancelled(key)) throw new Error('Cancelled before it started.');
@@ -115,7 +118,7 @@ class FixEngine {
     if (await this.git.isDirty(dir)) {
       throw new Error('The workshop has uncommitted changes left by an earlier fix whose commit failed. Discard the workshop, or commit them there, before fixing again.');
     }
-    const fixId = this.store.startFix({ findingId: finding.id, reviewId: finding.reviewId, repoId: repo.id, prId: pr.id, branch: pr.sourceBranch, workspace: dir });
+    const fixId = this.store.startFix({ findingId: finding.id, reviewId: finding.reviewId, repoId: repo.id, prId: pr.id, branch: pr.sourceBranch, workspace: dir, note: String(note ?? '').trim() || null });
     const language = this.engine.language();
     const label = `Fix #${pr.id}: ${finding.title}`.slice(0, 80);
     const attached = this.attach({ repo, pr, dir, label });
@@ -124,7 +127,17 @@ class FixEngine {
       const result = await this.claude.run({
         kind: 'fix',
         cwd: dir,
-        prompt: prompts.fixPrompt({ finding, prTitle: pr.title, branch: pr.sourceBranch, language, guidelines: prompts.guidelinesSection(this.store.guidelinesForReview(repo.id)), bus: attached?.section ?? '' }),
+        prompt: prompts.fixPrompt({
+          finding,
+          prTitle: pr.title,
+          branch: pr.sourceBranch,
+          language,
+          guidelines: prompts.guidelinesSection(this.store.guidelinesForReview(repo.id)),
+          bus: attached?.section ?? '',
+          thread: this.threadFor(repo.id, pr.id, finding),
+          note,
+          previous: this.lastAttempt(finding.id, fixId),
+        }),
         model: repo.defaultModel || rules.DEPTHS.INTERMEDIATE.model,
         mcpConfig: attached?.config,
         allowedTools: attached ? [...rules.FIX_TOOLS, ...attached.tools] : rules.FIX_TOOLS,
@@ -150,6 +163,7 @@ class FixEngine {
         this.store.setResolution(finding.id, 'RESOLVED', rules.fixResolutionNote(commit, outcome.summary));
         this.store.closeFinding(finding.id, true);
         activity.line(key, `Committed ${commit.slice(0, 7)} in the workshop.`);
+        await this.check({ repo, dir, fixId, log: (text) => activity.line(key, text) });
         await this.recordTouch({ repo, pr, dir, commit, before, label, log: (text) => activity.line(key, text) });
         await this.answer(repo, pr, finding, fixId, commit, outcome.summary, (text) => activity.line(key, text));
         this.notify(`Fix ready in ${repo.name}`, `${finding.title.slice(0, 80)} — commit ${commit.slice(0, 7)} in the workshop.`);
@@ -165,6 +179,78 @@ class FixEngine {
       // Leaving releases its claims: a fix that is over holds nothing up.
       if (attached) this.bus.close(attached.token);
     }
+  }
+
+  /** What was said under this finding's comment, oldest first: the author's own words. */
+  threadFor(repoId, prId, finding) {
+    if (!finding.publishedId) return [];
+    return this.store.comments(repoId, prId)
+      .filter((comment) => !comment.deleted && (comment.parentId === finding.publishedId || comment.commentId === finding.publishedId))
+      .sort((a, b) => String(a.createdOn).localeCompare(String(b.createdOn)))
+      .map((comment) => ({ author: comment.author, body: comment.body, ours: comment.ours }));
+  }
+
+  /** What the last attempt on this finding did, so a retry is told not to repeat it. */
+  lastAttempt(findingId, exceptFixId) {
+    const previous = this.store.fixesForFinding(findingId).filter((fix) => fix.id !== exceptFixId);
+    const last = previous[0];
+    if (!last) return null;
+    return last.summary || last.error || null;
+  }
+
+  /**
+   * Whether the repository still builds, asked of the repository itself.
+   *
+   * A fix commits whatever changed the moment `git status` is dirty — which is
+   * the right rule for "did anything happen" and no rule at all for "is it any
+   * good". The command is the project's own (`npm test`, `mvn -q test`), run in
+   * the workshop on the commit that was just made, and its answer is written on
+   * the fix so nobody hands back a red build without being told.
+   *
+   * Nothing configured means nothing ran, which is recorded as nothing ran: a
+   * check that did not happen must never read as one that passed.
+   */
+  async check({ repo, dir, fixId, log }) {
+    const command = String(repo.checkCommand ?? '').trim();
+    if (!command) return null;
+    log(`Checking: ${command}`);
+    const started = Date.now();
+    const result = await this.git.shell(dir, command, { timeout: CHECK_TIMEOUT });
+    const seconds = (Date.now() - started) / 1000;
+    const state = result.timedOut ? 'TIMEOUT' : result.ok ? 'PASSED' : 'FAILED';
+    this.store.fixChecked(fixId, { state, output: result.output, seconds });
+    log(state === 'PASSED' ? `Check passed in ${Math.round(seconds)}s.` : `Check ${state.toLowerCase()} after ${Math.round(seconds)}s.`);
+    return state;
+  }
+
+  /**
+   * Take one fix back out of the workshop.
+   *
+   * The commit goes (dropped if it is the tip, reverted if something sits on
+   * top of it) and the finding comes back: it was marked resolved and closed
+   * *because* of that commit, and with the commit gone that is no longer true.
+   * What stays is the row and the answer already posted in the thread — the
+   * thread was told the commit existed, and the honest correction to that is a
+   * word from a person, not a quiet edit.
+   */
+  async dropFix(fixId) {
+    const fix = this.store.fix(fixId);
+    if (!fix) throw new Error('That fix is gone.');
+    if (fix.state !== 'COMMITTED' || !fix.sha) throw new Error('That attempt left no commit to take out.');
+    if (fix.returnedAt) throw new Error('That fix is already in your clone; undo it there.');
+    const repo = this.engine.requireRepo(fix.repoId);
+    const dir = this.dirFor(repo, fix.prId);
+    if (!this.git.isRepo(dir)) throw new Error(`There is no workshop for PR #${fix.prId}.`);
+    const result = await this.git.dropCommit(dir, fix.branch, fix.sha);
+    if (!result.ok) throw new Error(result.output.slice(0, 300) || 'git could not take that commit out.');
+    this.store.dropFix(fixId);
+    const finding = this.store.finding(fix.findingId);
+    if (finding && !finding.dismissedAt) {
+      this.store.setResolution(finding.id, null, null, null);
+      this.store.closeFinding(finding.id, false);
+    }
+    this.engine.changed(fix.repoId, fix.prId);
+    return { ok: true, how: result.how };
   }
 
   /**
@@ -281,7 +367,7 @@ class FixEngine {
    * when the clone has that branch checked out — git will not update a checked-out
    * branch — and the message says so, because that is nearly always why.
    */
-  async giveBack(repoId, prId) {
+  async giveBack(repoId, prId, { upToFixId = null } = {}) {
     const repo = this.engine.requireRepo(repoId);
     const pr = this.engine.prOrThrow(repoId, prId);
     const dir = this.dirFor(repo, prId);
@@ -289,15 +375,30 @@ class FixEngine {
     const pending = this.store.pendingReturn(repoId, prId);
     if (!pending.length) throw new Error('There are no fixes to hand back.');
     const branch = pr.sourceBranch;
-    const pushed = await this.git.pushToLocal(dir, repo.localPath, branch);
-    const same = (await this.git.branchHead(dir, branch)) === (await this.git.branchHead(repo.localPath, branch));
+    /*
+     * Up to one commit, not a pick of any three.
+     *
+     * Handing back pushes a branch, so what arrives is everything up to the
+     * commit chosen — offering to leave an earlier one behind would be a
+     * promise git cannot keep. The refspec is that commit rather than the
+     * branch tip; the rest stay in the workshop and are handed back next time.
+     */
+    const cut = upToFixId ? pending.findIndex((fix) => fix.id === upToFixId) : -1;
+    if (upToFixId && cut < 0) throw new Error('That fix is not waiting to be handed back.');
+    const chosen = cut >= 0 ? pending.slice(0, cut + 1) : pending;
+    const partial = cut >= 0 && cut < pending.length - 1;
+    const pushed = partial
+      ? await this.git.pushRefToLocal(dir, repo.localPath, pending[cut].sha, branch)
+      : await this.git.pushToLocal(dir, repo.localPath, branch);
+    const want = partial ? pending[cut].sha : await this.git.branchHead(dir, branch);
+    const same = want && want === (await this.git.branchHead(repo.localPath, branch));
     if (!pushed.ok && !same) {
       const checkedOut = (await this.git.currentBranch(repo.localPath)) === branch;
       throw new Error(checkedOut ? `The clone is on "${branch}": switch it to another branch and hand back again.` : pushed.output.slice(0, 300));
     }
-    this.store.markReturned(repoId, prId);
+    this.store.markReturned(repoId, prId, upToFixId);
     this.engine.changed(repoId, prId);
-    return { ok: true, count: pending.length };
+    return { ok: true, count: chosen.length, left: pending.length - chosen.length };
   }
 
   /** Refuses while fixes are waiting to be handed back: the workshop holds the only copy of them. */
@@ -330,4 +431,4 @@ class FixEngine {
   }
 }
 
-module.exports = { FixEngine };
+module.exports = { FixEngine, CHECK_TIMEOUT };

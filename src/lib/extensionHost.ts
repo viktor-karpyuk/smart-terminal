@@ -193,6 +193,7 @@ const SPRING_VERBS = new Map<string, Channel>([
  * the app wrote.
  */
 const REVIEW_READ = [
+  'fixDiff', 'workshopDiff',
   'overview', 'dashboard', 'repos', 'repo', 'prs', 'pr', 'files', 'diff', 'commits', 'commitFiles', 'commitDiff',
   'guidelines', 'usage', 'activity', 'viewed', 'fileText', 'importInspect', 'models', 'depths', 'rerunCheck', 'followUpText', 'brief', 'paths',
   'detectRemote', 'bus',
@@ -201,9 +202,10 @@ const REVIEW_WRITE = [
   'pickFolder', 'saveRepo', 'testRepo', 'deleteRepo', 'hideRepo', 'saveSettings', 'saveGuideline', 'deleteGuideline',
   'importClaudeMd', 'importRun', 'setViewed', 'replyToComment', 'autoRunNow', 'openUrl', 'refreshPrs', 'refreshAll', 'searchHistory', 'loadPr',
   'review', 'cancel', 'cancelRun', 'verify', 'finalPass', 'saveReviewBody', 'publishReview', 'publishFinding',
-  'publishAll', 'dismissFinding', 'closeFinding', 'editFinding', 'addNote', 'updateNote', 'deleteNote', 'publishNote',
+  'publishAll', 'dismissFinding', 'closeFinding', 'settleFinding', 'editFinding', 'addNote', 'updateNote', 'deleteNote', 'publishNote',
+  'checkConflicts',
   'draftReply', 'draftAll', 'saveReplyDraft', 'publishReply', 'dismissReply', 'dismissAllReplies', 'followUp',
-  'adopt', 'fix', 'fixAll', 'retryFixReply', 'giveBack', 'discardWorkshop', 'push',
+  'adopt', 'fix', 'fixAll', 'retryFixReply', 'giveBack', 'discardWorkshop', 'push', 'dropFix',
   'approve', 'unapprove', 'requestChanges', 'undoRequestChanges', 'decline', 'merge',
 ] as const;
 const REVIEW_APP = ['shell', 'ask'] as const;

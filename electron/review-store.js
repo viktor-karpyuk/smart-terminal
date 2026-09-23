@@ -147,6 +147,39 @@ const MIGRATIONS = [
    */
   `ALTER TABLE cr_pr ADD COLUMN conflicts TEXT;
    ALTER TABLE cr_pr ADD COLUMN conflicts_at TEXT`,
+
+  /*
+   * 5 — who decided a finding was settled.
+   *
+   * The resolution alone cannot say. A `WONT_FIX` written by the verifier is a
+   * judgement about the code; a `WONT_FIX` written by the person reading the
+   * thread is "the author argued this away and I agree" — and those must not
+   * be drawn as the same thing, because only one of them was a person taking
+   * responsibility for it. Null is every finding decided before this column
+   * existed, which is the verifier's work by definition.
+   */
+  `ALTER TABLE cr_finding ADD COLUMN resolution_by TEXT`,
+
+  /*
+   * 6 — what happened to a fix after it was written.
+   *
+   * `check_*` is the answer to "does it still build": the command a repository
+   * names, run in the workshop on the commit, with its tail kept. Nothing ran
+   * is NULL, which is not the same as passing and must never be drawn as one.
+   *
+   * `dropped_at` is a fix taken back out of the workshop. The row stays because
+   * it was paid for and its thread was answered; what it no longer is, is a
+   * commit waiting to be handed back.
+   *
+   * `note` is what was asked of the retry, kept so the next reader can see why
+   * the second attempt differs from the first.
+   */
+  `ALTER TABLE cr_finding_fix ADD COLUMN check_state TEXT;
+   ALTER TABLE cr_finding_fix ADD COLUMN check_output TEXT;
+   ALTER TABLE cr_finding_fix ADD COLUMN check_seconds INTEGER;
+   ALTER TABLE cr_finding_fix ADD COLUMN dropped_at TEXT;
+   ALTER TABLE cr_finding_fix ADD COLUMN note TEXT;
+   ALTER TABLE cr_repo ADD COLUMN check_command TEXT`,
 ];
 
 const now = () => new Date().toISOString();
@@ -186,6 +219,7 @@ function repoRow(row, decrypt) {
     replyMode: row.reply_mode || 'DRAFT',
     hidden: Boolean(row.hidden),
     fixMode: row.fix_mode || 'MANUAL',
+    checkCommand: row.check_command ?? null,
   };
 }
 
@@ -243,6 +277,7 @@ const findingRow = (row) =>
     dismissedAt: row.dismissed_at,
     publishError: row.publish_error,
     resolution: row.resolution,
+    resolutionBy: row.resolution_by ?? null,
     resolutionNote: row.resolution_note,
     followedUpAt: row.followed_up_at,
     closedAt: row.closed_at,
@@ -345,6 +380,9 @@ const fixRow = (row) =>
     createdAt: row.created_at,
     finishedAt: row.finished_at,
     returnedAt: row.returned_at,
+    droppedAt: row.dropped_at ?? null,
+    note: row.note ?? null,
+    check: row.check_state ? { state: row.check_state, output: row.check_output ?? '', seconds: row.check_seconds ?? null } : null,
     replyId: row.reply_id,
     replyUrl: row.reply_url,
     replyError: row.reply_error,
@@ -461,11 +499,13 @@ class ReviewStore {
       // The edit form does not carry it: an edit leaves a hidden repository hidden.
       input.hidden === undefined ? (existing?.hidden ?? 0) : bool(input.hidden),
       input.fixMode ?? 'MANUAL',
+      // Undefined leaves what is stored: the edit form may not carry it.
+      input.checkCommand === undefined ? (existing?.check_command ?? null) : nul(String(input.checkCommand).trim()),
     ];
     if (existing) {
       this.run(
         `UPDATE cr_repo SET name=?, local_path=?, token_cipher=?, project_kind=?, default_depth=?, default_model=?, auto_review=?,
-           skip_drafts=?, skip_titles=?, skip_authors=?, only_targets=?, reply_mode=?, hidden=?, fix_mode=? WHERE id=?`,
+           skip_drafts=?, skip_titles=?, skip_authors=?, only_targets=?, reply_mode=?, hidden=?, fix_mode=?, check_command=? WHERE id=?`,
         ...values,
         existing.id,
       );
@@ -474,8 +514,8 @@ class ReviewStore {
     const repoId = input.id || id();
     this.run(
       `INSERT INTO cr_repo (name, local_path, token_cipher, project_kind, default_depth, default_model, auto_review, skip_drafts,
-         skip_titles, skip_authors, only_targets, reply_mode, hidden, fix_mode, id, provider, owner, slug, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         skip_titles, skip_authors, only_targets, reply_mode, hidden, fix_mode, check_command, id, provider, owner, slug, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       ...values,
       repoId,
       input.provider,
@@ -802,8 +842,28 @@ class ReviewStore {
     this.run('UPDATE cr_finding SET review_id = ?, line_no = COALESCE(?, line_no) WHERE id = ?', reviewId, line ?? null, findingId);
   }
 
-  setResolution(findingId, resolution, note) {
-    this.run('UPDATE cr_finding SET resolution = ?, resolution_note = ? WHERE id = ?', resolution, note ?? null, findingId);
+  setResolution(findingId, resolution, note, by = 'VERIFY') {
+    this.run('UPDATE cr_finding SET resolution = ?, resolution_note = ?, resolution_by = ? WHERE id = ?', resolution, note ?? null, by, findingId);
+  }
+
+  /**
+   * A finding the author argued away, settled by hand.
+   *
+   * Three things at once because they are one decision: it will not be fixed,
+   * why not, and that the thread is over. Written together so a finding can
+   * never be left closed without a reason or resolved without being closed —
+   * and undone the same way, since "I settled that too early" is a thing that
+   * happens the moment somebody pushes a commit that proves it.
+   */
+  settleFinding(findingId, { settled = true, note = null } = {}) {
+    if (!settled) {
+      this.run('UPDATE cr_finding SET resolution = NULL, resolution_note = NULL, resolution_by = NULL, closed_at = NULL WHERE id = ?', findingId);
+      return;
+    }
+    this.run(
+      'UPDATE cr_finding SET resolution = ?, resolution_note = ?, resolution_by = ?, closed_at = COALESCE(closed_at, ?) WHERE id = ?',
+      'WONT_FIX', nul(note), 'YOU', now(), findingId,
+    );
   }
 
   closeFinding(findingId, closedFlag) {
@@ -954,6 +1014,29 @@ class ReviewStore {
 
   // --- reply drafts ----------------------------------------------------------
 
+  /**
+   * Drafts answering a comment that sits under one of ours, dismissed together.
+   *
+   * Used when a comment is settled: the decision is that the thread is over,
+   * and a draft left pending under it goes on counting as an answer somebody
+   * owes — so settling would not settle anything. Published ones are history
+   * and are left alone.
+   */
+  dismissDraftsUnder(repoId, prId, ourCommentIds) {
+    const ids = [...new Set(ourCommentIds.filter(Boolean).map(String))];
+    if (!ids.length) return 0;
+    const marks = ids.map(() => '?').join(',');
+    const rows = this.all(
+      `SELECT r.id FROM cr_reply_draft r
+         JOIN cr_pr_comment c ON c.comment_id = r.their_comment_id AND c.repo_id = r.repo_id AND c.pr_id = r.pr_id
+        WHERE r.repo_id = ? AND r.pr_id = ? AND r.status <> 'PUBLISHED' AND r.dismissed_at IS NULL
+          AND c.parent_id IN (${marks})`,
+      repoId, Number(prId), ...ids,
+    );
+    for (const row of rows) this.dismissReply(row.id, true);
+    return rows.length;
+  }
+
   replies(repoId, prId) {
     return this.all('SELECT * FROM cr_reply_draft WHERE repo_id = ? AND pr_id = ? ORDER BY created_at', repoId, prId).map(replyRow);
   }
@@ -1014,14 +1097,30 @@ class ReviewStore {
     return fixRow(this.get('SELECT * FROM cr_finding_fix WHERE id = ?', fixId));
   }
 
+  /** Every attempt on one finding, newest first. */
+  fixesForFinding(findingId) {
+    return this.all('SELECT * FROM cr_finding_fix WHERE finding_id = ? ORDER BY created_at DESC', findingId).map(fixRow);
+  }
+
   fixesForPr(repoId, prId) {
     return this.all('SELECT * FROM cr_finding_fix WHERE repo_id = ? AND pr_id = ? ORDER BY created_at DESC', repoId, prId).map(fixRow);
   }
 
-  startFix({ findingId, reviewId, repoId, prId, branch, workspace }) {
+  startFix({ findingId, reviewId, repoId, prId, branch, workspace, note = null }) {
     const fixId = id();
-    this.run("INSERT INTO cr_finding_fix (id, finding_id, review_id, repo_id, pr_id, branch, state, workspace, created_at) VALUES (?,?,?,?,?,?,'RUNNING',?,?)", fixId, findingId, reviewId, repoId, prId, branch, workspace, now());
+    this.run("INSERT INTO cr_finding_fix (id, finding_id, review_id, repo_id, pr_id, branch, state, workspace, created_at, note) VALUES (?,?,?,?,?,?,'RUNNING',?,?,?)", fixId, findingId, reviewId, repoId, prId, branch, workspace, now(), nul(note));
     return fixId;
+  }
+
+  /** What the repository's own check said about this commit, in the workshop. */
+  fixChecked(fixId, { state, output, seconds }) {
+    this.run('UPDATE cr_finding_fix SET check_state = ?, check_output = ?, check_seconds = ? WHERE id = ?',
+      state, String(output ?? '').slice(-4000), Number.isFinite(seconds) ? Math.round(seconds) : null, fixId);
+  }
+
+  /** Taken back out of the workshop: the row stays, the commit is no longer waiting. */
+  dropFix(fixId) {
+    this.run("UPDATE cr_finding_fix SET dropped_at = ?, state = 'DROPPED' WHERE id = ?", now(), fixId);
   }
 
   fixCommitted(fixId, sha, summary, sessionId, costUsd) {
@@ -1044,12 +1143,30 @@ class ReviewStore {
     this.run('UPDATE cr_finding_fix SET reply_error = ? WHERE id = ?', String(message).slice(0, 1000), fixId);
   }
 
+  /** Committed, still in the workshop, not dropped — oldest first, which is the order they sit in the branch. */
   pendingReturn(repoId, prId) {
-    return this.all("SELECT * FROM cr_finding_fix WHERE repo_id = ? AND pr_id = ? AND state = 'COMMITTED' AND returned_at IS NULL", repoId, prId).map(fixRow);
+    return this.all("SELECT * FROM cr_finding_fix WHERE repo_id = ? AND pr_id = ? AND state = 'COMMITTED' AND returned_at IS NULL AND dropped_at IS NULL ORDER BY created_at", repoId, prId).map(fixRow);
   }
 
-  markReturned(repoId, prId) {
-    this.run("UPDATE cr_finding_fix SET returned_at = ? WHERE repo_id = ? AND pr_id = ? AND state = 'COMMITTED' AND returned_at IS NULL", now(), repoId, prId);
+  /**
+   * Handed back — all of them, or only those up to and including one commit.
+   *
+   * Only a prefix can be chosen, and that is not a limitation of this function
+   * but of what handing back *is*: it pushes a branch, so everything under the
+   * commit you choose goes with it. Offering to hand back the third and not the
+   * first would be a promise git cannot keep.
+   */
+  markReturned(repoId, prId, upToFixId = null) {
+    const stamp = now();
+    if (!upToFixId) {
+      this.run("UPDATE cr_finding_fix SET returned_at = ? WHERE repo_id = ? AND pr_id = ? AND state = 'COMMITTED' AND returned_at IS NULL AND dropped_at IS NULL", stamp, repoId, prId);
+      return;
+    }
+    const pending = this.pendingReturn(repoId, prId);
+    const cut = pending.findIndex((fix) => fix.id === upToFixId);
+    for (const fix of pending.slice(0, cut < 0 ? pending.length : cut + 1)) {
+      this.run('UPDATE cr_finding_fix SET returned_at = ? WHERE id = ?', stamp, fix.id);
+    }
   }
 
   fixReplyIds(repoId, prId) {
@@ -1205,7 +1322,7 @@ class ReviewStore {
         if (row.by_us) fact.changesRequestedByUs = true;
       }
     }
-    for (const row of this.all(`SELECT repo_id, pr_id, COUNT(*) AS n FROM cr_finding_fix ${repoId ? 'WHERE repo_id = ? AND' : 'WHERE'} state = 'COMMITTED' AND returned_at IS NULL GROUP BY repo_id, pr_id`, ...params)) {
+    for (const row of this.all(`SELECT repo_id, pr_id, COUNT(*) AS n FROM cr_finding_fix ${repoId ? 'WHERE repo_id = ? AND' : 'WHERE'} state = 'COMMITTED' AND returned_at IS NULL AND dropped_at IS NULL GROUP BY repo_id, pr_id`, ...params)) {
       factFor(row).pendingReturn = row.n;
     }
     return facts;
