@@ -62,8 +62,17 @@ function withinHours(at, { from = 9, to = 18, weekdaysOnly = true } = {}) {
   const day = when.getDay();
   if (weekdaysOnly && (day === 0 || day === 6)) return false;
   const hour = when.getHours() + when.getMinutes() / 60;
+  /*
+   * Both ends the same is the whole day.
+   *
+   * `9 and 9` read literally is "after nine and before nine", which is never —
+   * a setting that looks like all day and holds everything for ever. Nobody
+   * types two equal hours meaning silence, so it is the day, and the screen
+   * says as much underneath the fields.
+   */
+  if (from === to) return true;
   // A window that wraps midnight is two windows, and both of them count.
-  if (from <= to) return hour >= from && hour < to;
+  if (from < to) return hour >= from && hour < to;
   return hour >= from || hour < to;
 }
 

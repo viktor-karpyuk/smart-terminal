@@ -26,10 +26,20 @@ const rules = require('./review-rules');
 const START_DELAY = 15 * 1000;
 
 class AutoReviewer {
-  constructor({ store, engine, fixer, notify = () => {}, emit = () => {}, setTimer = setTimeout, clearTimer = clearTimeout }) {
+  constructor({ store, engine, fixer, remind = null, notify = () => {}, emit = () => {}, setTimer = setTimeout, clearTimer = clearTimeout }) {
     this.store = store;
     this.engine = engine;
     this.fixer = fixer;
+    /*
+     * The reminder sweep, run on the same clock and behind its own switch.
+     *
+     * Deliberately not behind `enabled()`: "review new commits on their own" and
+     * "chase a comment nobody answered" are two different promises, and somebody
+     * who wants the second does not have to want the first. Without this, the
+     * rules set to send on their own sat there and sent nothing, which is a
+     * promise made on screen and not kept.
+     */
+    this.remind = remind;
     this.notify = notify;
     this.emit = emit;
     this.setTimer = setTimer;
@@ -89,6 +99,15 @@ class AutoReviewer {
         await this.runOnce();
       } catch (error) {
         this.setStatus({ lastMessage: `error: ${String(error?.message ?? error).slice(0, 120)}` });
+      }
+    }
+    // Its own promise, kept whether or not reviews run by themselves, and never
+    // able to stop the next tick being scheduled.
+    if (this.remind) {
+      try {
+        await this.remind();
+      } catch (error) {
+        this.setStatus({ lastMessage: `reminders: ${String(error?.message ?? error).slice(0, 120)}` });
       }
     }
     this.schedule(this.intervalMinutes() * 60 * 1000, () => this.tick());

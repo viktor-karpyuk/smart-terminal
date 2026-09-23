@@ -159,3 +159,21 @@ test('an address is only taken when the handle really is one', () => {
   assert.strictEqual(R.addressFrom('bitbucket:bchavez'), null);
   assert.strictEqual(R.addressFrom('bitbucket:b@k.com', { matchByEmail: false }), null, 'turned off, nothing is guessed');
 });
+
+/*
+ * `9 and 9` read literally is "after nine and before nine", which is never — a
+ * setting that looks like all day and quietly holds every message for ever.
+ */
+test('both ends the same is the whole day, not never', () => {
+  const hours = { from: 9, to: 9, weekdaysOnly: false };
+  for (const hour of [0, 8, 9, 13, 23]) {
+    const at = new Date(2026, 8, 23, hour, 30);
+    assert.ok(R.withinHours(at, hours), `${hour}:30 should be within an all-day window`);
+  }
+});
+
+test('equal ends still respect weekdays', () => {
+  const hours = { from: 9, to: 9, weekdaysOnly: true };
+  assert.ok(!R.withinHours(new Date(2026, 8, 27, 13, 0), hours), 'Sunday is not a working day');
+  assert.ok(R.withinHours(new Date(2026, 8, 23, 13, 0), hours), 'Wednesday is');
+});

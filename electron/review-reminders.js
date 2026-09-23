@@ -98,8 +98,10 @@ function dueFor({ row, threads = [], rules, skipMine = true, me = null }) {
   }
 
   const stalled = on('NO_COMMITS');
-  if (stalled && !(skipMine && mine) && row.changesRequestedByUs) {
-    const since = row.ageSinceChangesDays;
+  // "and nothing moved" is half the sentence: a branch that has had commits
+  // since we asked is a branch somebody is working on, whatever the date says.
+  if (stalled && !(skipMine && mine) && row.changesRequestedByUs && !row.movedSinceReview) {
+    const since = row.changesRequestedDays;
     if (Number.isFinite(since) && since >= stalled.days) {
       return {
         rule: stalled,
@@ -138,7 +140,17 @@ function dueFor({ row, threads = [], rules, skipMine = true, me = null }) {
  */
 function asMessage(due, { row, provider, me }) {
   const pr = row.pr;
-  const handle = due.to ? `${String(provider ?? 'forge').toLowerCase()}:${due.to}` : (me ? `email:${me}` : null);
+  /*
+   * A person, named the way the forge names them — including you.
+   *
+   * `me` is the setting called "your name on the forge", a display name and not
+   * an address. Building `email:Viktor Karpyuk` out of it produced a handle
+   * nothing could ever match, so the one rule meant to tell *you* reached
+   * nobody. Named like everybody else, you appear in the delivery extension's
+   * own list of people and are matched there, once.
+   */
+  const forge = String(provider ?? 'forge').toLowerCase();
+  const handle = due.to ? `${forge}:${due.to}` : (me ? `${forge}:${me}` : null);
   return {
     to: handle ? { handle, display: due.to ?? me } : {},
     title: due.title,

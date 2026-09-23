@@ -882,12 +882,34 @@ function LauncherButton({ viewId, title, icon }: { viewId: string; title: string
       aria-pressed={showing}
       onClick={() => useStore.getState().launchExtensionView(viewId)}
     >
-      {icon === 'review' ? <ReviewIcon /> : icon === 'send' ? <SendIcon /> : <ExtensionsIcon />}
+      {icon === 'review' ? <ReviewIcon /> : icon === 'teams' ? <TeamsIcon /> : icon === 'send' ? <SendIcon /> : <ExtensionsIcon />}
     </button>
   );
 }
 
 /** A pull request under a magnifying glass: two branches meeting, looked at. */
+/*
+ * The Teams mark, in the stroke the rest of the rail is drawn in.
+ *
+ * A paper plane said "something is being sent" and nothing about where. This
+ * says Teams the way Teams says it — the T knocked out of its square, with the
+ * person beside it — so the rail is read rather than hovered over. Solid rather
+ * than stroked like its neighbours, because at fifteen pixels a stroked person
+ * is a stick figure; solid, it is the silhouette everybody already knows. Drawn
+ * rather than shipped as the real logo: filled with `currentColor`, it dims and
+ * lights with every other icon instead of sitting there in purple.
+ */
+function TeamsIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+      {/* The square and the T are one path, so the T is a hole rather than a stroke. */}
+      <path fillRule="evenodd" d="M11.5 4h8a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5h-8a2.5 2.5 0 0 1-2.5-2.5v-11a2.5 2.5 0 0 1 2.5-2.5zM12.3 7.5h6.4v1.8h-2.3v7.2h-1.8v-7.2h-2.3z" />
+      <circle cx="5.7" cy="5.9" r="3.1" />
+      <path d="M1.1 18.9v-3a4.7 4.7 0 0 1 4.7-4.7h3.2v7.7z" />
+    </svg>
+  );
+}
+
 /** A paper plane: something being sent somewhere, in the stroke the rest use. */
 function SendIcon() {
   return (

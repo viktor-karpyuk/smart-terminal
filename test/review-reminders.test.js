@@ -87,12 +87,41 @@ test('you are not reminded about your own pull request', () => {
 // ---------------------------------------------------------------- the other two rules
 
 test('changes asked for and a branch that never moved', () => {
-  const stalled = row({ changesRequestedByUs: true, ageSinceChangesDays: 7 });
+  const stalled = row({ changesRequestedByUs: true, changesRequestedDays: 7 });
   const due = R.dueFor({ row: stalled, threads: [], rules: on('NO_COMMITS', 5) });
   assert.match(due.body, /Changes were asked for 7 days ago/);
-  assert.strictEqual(R.dueFor({ row: row({ changesRequestedByUs: true, ageSinceChangesDays: 2 }), threads: [], rules: on('NO_COMMITS', 5) }), null);
+  assert.strictEqual(R.dueFor({ row: row({ changesRequestedByUs: true, changesRequestedDays: 2 }), threads: [], rules: on('NO_COMMITS', 5) }), null);
   // Nobody asked for changes: there is nothing to be waiting for.
-  assert.strictEqual(R.dueFor({ row: row({ ageSinceChangesDays: 9 }), threads: [], rules: on('NO_COMMITS', 5) }), null);
+  assert.strictEqual(R.dueFor({ row: row({ changesRequestedDays: 9 }), threads: [], rules: on('NO_COMMITS', 5) }), null);
+});
+
+/*
+ * "And nothing moved" is half the sentence. A branch that has had commits since
+ * we asked is a branch somebody is working on, and chasing them for it is the
+ * fastest way to teach somebody to ignore these.
+ */
+test('a branch that has moved since is nobody to chase', () => {
+  const moving = row({ changesRequestedByUs: true, changesRequestedDays: 9, movedSinceReview: true });
+  assert.strictEqual(R.dueFor({ row: moving, threads: [], rules: on('NO_COMMITS', 5) }), null);
+});
+
+/*
+ * The field this rule reads has to be one something actually fills in. It was
+ * not, for a whole release: the rule was on screen, could be switched on, and
+ * could never fire.
+ */
+test('the rule reads a field the board really carries', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const service = fs.readFileSync(path.join(__dirname, '..', 'electron', 'review-service.js'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '..', 'electron', 'review-reminders.js'), 'utf8');
+  for (const field of [...source.matchAll(/\brow\.([a-zA-Z]+)/g)].map((m) => m[1])) {
+    if (['pr', 'flags', 'repoId', 'repoName', 'provider'].includes(field)) continue;
+    assert.ok(
+      new RegExp(`\\b${field}:`).test(service),
+      `review-reminders reads row.${field}, which nothing in review-service puts there`,
+    );
+  }
 });
 
 test('a pull request nobody reviewed is told to you, not to its author', () => {
@@ -124,11 +153,18 @@ test('the message names a person the forge’s way and mentions no delivery at a
   }
 });
 
-test('a reminder meant for you goes to your own address', () => {
+/*
+ * You are named the way everybody else is, so you are matched once in the
+ * delivery extension's own list. It used to build an address out of the setting
+ * called "your name on the forge" — a display name — which produced a handle
+ * nothing could match, and the one rule meant to tell you reached nobody.
+ */
+test('a reminder meant for you names you the way the forge does', () => {
   const one = row({ flags: ['UNREVIEWED'], ageDays: 4 });
   const due = R.dueFor({ row: one, threads: [], rules: on('UNREVIEWED', 2) });
-  const message = R.asMessage(due, { row: one, provider: 'BITBUCKET', me: 'viktor@kubriksoftware.com' });
-  assert.strictEqual(message.to.handle, 'email:viktor@kubriksoftware.com');
+  const message = R.asMessage(due, { row: one, provider: 'BITBUCKET', me: 'Viktor Karpyuk' });
+  assert.strictEqual(message.to.handle, 'bitbucket:Viktor Karpyuk');
+  assert.ok(!message.to.handle.startsWith('email:'), 'a name is not an address');
 });
 
 /*

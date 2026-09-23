@@ -107,28 +107,45 @@ function tokenCache() {
 /**
  * A direct message, through Graph.
  *
- * Three calls and no way around them: who the person is, which one-to-one chat
- * this bot has with them, and then the message. The chat is created the first
- * time and found every time after.
+ * A one-to-one chat has two people in it, and an app is not a person: Graph
+ * takes two `aadUserConversationMember`s and refuses a chat whose two members
+ * are one member. So a direct message is between the person being told and
+ * *somebody it is from* — which is a real account, named in the settings, and
+ * the reason a message in Teams arrives with a face on it rather than from a
+ * nameless app.
+ *
+ * The first version of this filled the second seat with the recipient when
+ * nothing else was configured, and nothing ever configured anything else. It
+ * could not have worked; the fake it was tested against answered every request
+ * with yes, which is how it passed.
  */
 async function sendDirect(fetch, credentials, tokens, { address, message }) {
+  const from = String(credentials.senderAddress ?? '').trim();
+  if (!from) throw new Error('Nobody is set as who these messages come from — a direct message is between two people.');
+  if (from.toLowerCase() === String(address).toLowerCase()) {
+    throw new Error(`These messages are sent from ${from}, so they cannot be sent to ${from}.`);
+  }
+
   const token = await tokens.get(fetch, credentials);
   const auth = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
 
-  const who = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(address)}`, { headers: auth });
-  if (!who.ok) throw new Error(who.status === 404 ? `Teams has nobody at ${address}` : `looking them up answered ${who.status}`);
-  const user = await who.json();
+  const lookUp = async (who, what) => {
+    const found = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(who)}`, { headers: auth });
+    if (!found.ok) throw new Error(found.status === 404 ? `Teams has nobody at ${who}${what}` : `looking up ${who} answered ${found.status}`);
+    return found.json();
+  };
+  const user = await lookUp(address, '');
+  const sender = await lookUp(from, ' — that is the account these messages come from');
 
+  const member = (id) => ({
+    '@odata.type': '#microsoft.graph.aadUserConversationMember',
+    roles: ['owner'],
+    'user@odata.bind': `https://graph.microsoft.com/v1.0/users('${id}')`,
+  });
   const chat = await fetch('https://graph.microsoft.com/v1.0/chats', {
     method: 'POST',
     headers: auth,
-    body: JSON.stringify({
-      chatType: 'oneOnOne',
-      members: [
-        { '@odata.type': '#microsoft.graph.aadUserConversationMember', roles: ['owner'], 'user@odata.bind': `https://graph.microsoft.com/v1.0/users('${user.id}')` },
-        { '@odata.type': '#microsoft.graph.aadUserConversationMember', roles: ['owner'], 'user@odata.bind': `https://graph.microsoft.com/v1.0/users('${credentials.botUserId || user.id}')` },
-      ],
-    }),
+    body: JSON.stringify({ chatType: 'oneOnOne', members: [member(sender.id), member(user.id)] }),
   });
   if (!chat.ok) throw new Error(`opening the chat answered ${chat.status}`);
   const { id: chatId } = await chat.json();

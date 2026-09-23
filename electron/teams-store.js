@@ -46,7 +46,7 @@ const MIGRATIONS = [
      title TEXT NOT NULL DEFAULT '',
      body TEXT NOT NULL DEFAULT '',
      payload TEXT NOT NULL DEFAULT '{}',
-     /* WAITING (for you), SENT, FAILED, HELD (a repeat, or out of hours), SKIPPED */
+     /* WAITING (for you), SENDING (in flight), SENT, FAILED, HELD (a repeat, or out of hours), SKIPPED */
      state TEXT NOT NULL,
      reason TEXT,
      created_at TEXT NOT NULL,
@@ -185,9 +185,18 @@ class TeamsStore {
   rememberPerson({ handle, display = '', address = null, matchedBy = null }) {
     const existing = this.get('SELECT * FROM tm_person WHERE handle = ?', String(handle));
     if (existing) {
+      /*
+       * A choice outranks a guess.
+       *
+       * This used to take whatever address was passed, so a send that could
+       * work one out from the handle overwrote one somebody had picked by hand
+       * — while the row went on saying "matched by you". A guess fills an empty
+       * seat and never takes an occupied one.
+       */
+      const keepAddress = existing.matched_by === 'HAND' || !address;
       this.run(
         'UPDATE tm_person SET display = COALESCE(NULLIF(?, \'\'), display), address = COALESCE(?, address), matched_by = COALESCE(?, matched_by) WHERE id = ?',
-        display, nul(address), nul(matchedBy), existing.id,
+        display, keepAddress ? null : nul(address), keepAddress ? null : nul(matchedBy), existing.id,
       );
       return this.person(handle);
     }
@@ -270,6 +279,7 @@ class TeamsStore {
     this.run(
       'INSERT INTO tm_message (id, app_id, dedupe_key, person_id, to_label, title, body, payload, state, reason, created_at, sent_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
       id, String(appId), nul(key), nul(personId), to, title, body, JSON.stringify(payload ?? {}), state, nul(reason), now(),
+      // Only a message that has actually gone carries the time it went.
       state === 'SENT' ? now() : null,
     );
     return this.message(id);
