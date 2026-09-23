@@ -830,8 +830,8 @@ function readiness({ pr, review, threads, findings, finalPassDone, finalPassBloc
 // ---------------------------------------------------------------------------
 
 const FLAGS = {
-  REVIEWING: { label: 'Reviewing', mine: false },
-  FIXING: { label: 'Fixing', mine: false },
+  REVIEWING: { label: 'Reviewing', mine: true },
+  FIXING: { label: 'Fixing', mine: true },
   UNREVIEWED: { label: 'Not reviewed', mine: true },
   STALE: { label: 'New commits', mine: true },
   TO_PUBLISH: { label: 'To publish', mine: true },
@@ -876,10 +876,20 @@ function prFlags(pr, facts) {
   return flags;
 }
 
+/**
+ * Which band of the board a pull request sits in.
+ *
+ * A run does not move it. Starting a review used to drop the "not reviewed"
+ * flag and rank the row below everything waiting on you — so the pull request
+ * you had just set to work on left the list you were looking at, for a group
+ * called "In progress" that you were not. Work happening in this app, on your
+ * say-so, is still yours: it ranks with the rest of what you are doing, and the
+ * row itself says what the run is up to.
+ */
 function rowRank(flags) {
   if (flags.includes('MERGED') || flags.includes('DECLINED')) return 3;
   if (flags.some((flag) => FLAGS[flag]?.mine)) return 0;
-  if (flags.includes('REVIEWING') || flags.includes('FIXING')) return 1;
+  if (flags.includes('REVIEWING') || flags.includes('FIXING')) return 0;
   return 2;
 }
 

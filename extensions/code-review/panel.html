@@ -148,6 +148,14 @@
   .chip.click:hover { border-color: var(--border-strong); color: var(--text); }
   .chip.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
   .chip.mine { border-color: color-mix(in srgb, #d9a441 60%, var(--border)); color: #d9a441; }
+  /* What is running, inside the row it is running on. */
+  .run-strip { display: flex; align-items: center; gap: 7px; margin-top: 5px; padding: 4px 8px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: var(--r-sm, 5px); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+  .run-strip.is-stopping { border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); background: color-mix(in srgb, var(--warn) 7%, transparent); }
+  .run-what { color: var(--accent); font-weight: 600; white-space: nowrap; }
+  .run-strip.is-stopping .run-what { color: var(--warn); }
+  /* The only part allowed to give way: a tool line is long and a table is not. */
+  .run-step { flex: 1 1 auto; min-width: 0; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .run-since { color: var(--text-faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
   .chip.okc { border-color: color-mix(in srgb, var(--ok) 60%, var(--border)); color: var(--ok); }
   .chip.badc { border-color: color-mix(in srgb, var(--danger) 60%, var(--border)); color: var(--danger); }
   .chip.accent { border-color: var(--accent); color: var(--accent); }
@@ -1463,15 +1471,20 @@
       return true;
     });
     // Grouped by whose turn it is: what only you can do first, then what is running, then what waits on others.
+    /*
+     * Two bands, not three. "In progress" existed only to hold a pull request
+     * while something ran on it — which meant pressing Review moved the row out
+     * of the list you were reading it in. A run is shown in the row now, and
+     * the row stays where the work is.
+     */
     var groups = [
       ['mine', 'Needs you', rows.filter(function (r) { return r.rank === 0; })],
-      ['running', 'In progress', rows.filter(function (r) { return r.rank === 1; })],
       ['others', 'Waiting on others', rows.filter(function (r) { return r.rank >= 2; })]
     ];
     if (!rows.length) html += '<div class="empty">No pull requests match.' + (f.flags.length || f.mine || f.authors.length || f.text ? ' <button class="link" data-act="dash-clear">Clear the filters</button>' : '') + '</div>';
     groups.forEach(function (g) {
       if (!g[2].length) return;
-      html += fold('dash-' + g[0], '<strong>' + g[1] + '</strong><span class="count">' + g[2].length + '</span>', '', drawPrTable(g[2], true), g[0] !== 'others' || groups[0][2].length + groups[1][2].length === 0);
+      html += fold('dash-' + g[0], '<strong>' + g[1] + '</strong><span class="count">' + g[2].length + '</span>', '', drawPrTable(g[2], true), g[0] !== 'others' || groups[0][2].length === 0);
     });
 
     /*
@@ -1618,6 +1631,68 @@
     return '<span class="chip" title="Whether it merges has not been checked yet: the repository has no clone here, or the branch is on a fork">merge ?</span>';
   }
 
+  /**
+   * What is running on a pull request, in its own row on the board.
+   *
+   * The count at the top of the window says *that* something is running; this
+   * says what, on which pull request, and for how long — which is the thing you
+   * went looking for when you pressed Review and then wondered whether anything
+   * had happened. The last line of the run is what it is doing; the whole log
+   * belongs to the pull request's own screen, not to a table.
+   */
+  function runStrip(row) {
+    /*
+     * From the live activity rather than from the row, which is a snapshot of
+     * whenever the board was last read. Runs that were already going when the
+     * panel opened are not in there yet, so the row's own copy is the fallback
+     * — first paint uses it, every paint after that uses what is actually
+     * happening.
+     */
+    var live = runningList().filter(function (run) { return run.repoId === row.repoId && run.prId === row.pr.id; });
+    var runs = (live.length ? live : (row.runs || [])).filter(function (run) { return run.kind === 'review' || run.kind === 'fix'; });
+    if (!runs.length) return '';
+    tickWhileRunning();
+    return runs.map(function (run) {
+      var what = run.cancelled ? 'Stopping' : run.kind === 'fix' ? 'Fixing' : 'Reviewing';
+      var step = run.step || (run.lines && run.lines.length ? run.lines[run.lines.length - 1] : null);
+      return '<div class="run-strip' + (run.cancelled ? ' is-stopping' : '') + '">' +
+        '<span class="dot busy"></span>' +
+        '<span class="run-what">' + what + '</span>' +
+        (step ? '<span class="run-step" title="' + esc(step) + '">' + esc(step) + '</span>' : '') +
+        '<span class="run-since">' + esc(since(run.startedAt)) + '</span>' +
+        (run.cancelled ? '' : '<button class="btn small" data-act="cancel-run" data-key="' + esc(run.key) + '" title="Stop this run">Stop</button>') +
+        '</div>';
+    }).join('');
+  }
+
+  /**
+   * Keep the clock moving between events.
+   *
+   * A run reports a line whenever it does something, and a redraw comes with
+   * it — but a model thinking for forty seconds reports nothing, and a strip
+   * frozen at "12 s" reads like a run that has stopped. One second is enough,
+   * and it stops by itself the moment nothing is running.
+   */
+  var runTick = null;
+  function tickWhileRunning() {
+    if (runTick) return;
+    runTick = setInterval(function () {
+      if (!runningList().length) { clearInterval(runTick); runTick = null; return; }
+      drawQuietly();
+    }, 1000);
+  }
+
+  /** How long it has been going, in the shortest form that is still true. */
+  function since(at) {
+    var ms = Date.now() - Number(at || 0);
+    if (!Number.isFinite(ms) || ms < 0) return '';
+    var secs = Math.round(ms / 1000);
+    if (secs < 60) return secs + ' s';
+    var mins = Math.floor(secs / 60);
+    if (mins < 60) return mins + ' m ' + (secs % 60) + ' s';
+    return Math.floor(mins / 60) + ' h ' + (mins % 60) + ' m';
+  }
+
   function drawPrTable(rows, withRepo) {
     if (!rows.length) return '<div class="empty">No pull requests match.</div>';
     var html = '<table class="list"><tr><th>Pull request</th><th>Age</th><th>Waiting for</th><th title="Published / found, and how many published ones are still open">Findings</th><th title="API-price equivalent of the reviews, not a charge">Cost</th></tr>';
@@ -1626,7 +1701,7 @@
       var closed = pr.state !== 'OPEN';
       html += '<tr class="click' + (closed ? ' closed' : '') + '" data-act="open-pr" data-repo="' + esc(row.repoId) + '" data-pr="' + pr.id + '">' +
         '<td class="title-cell"><div class="t">#' + pr.id + ' ' + esc(pr.title) + '</div><div class="s">' + (withRepo ? '<span class="chip">' + esc(row.repoName) + '</span> ' : '') + esc(pr.author) + (pr.sourceBranch ? ' · <span class="mono">' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch) + '</span>' : '') +
-        (row.pendingReturn ? ' · <span class="warn">' + row.pendingReturn + ' fix(es) to hand back</span>' : '') + '</div></td>' +
+        (row.pendingReturn ? ' · <span class="warn">' + row.pendingReturn + ' fix(es) to hand back</span>' : '') + '</div>' + runStrip(row) + '</td>' +
         '<td class="faint" title="' + esc(pr.createdOn) + '">' + (row.ageDays != null ? row.ageDays + 'd ' : '') + '<span class="' + (row.ageDays >= 14 ? 'bad' : row.ageDays >= 7 ? 'warn' : '') + '">' + ageMark(row.ageDays) + '</span></td>' +
         '<td><div class="row">' + conflictChip(row) + row.flags.map(flagChip).join('') + '</div></td>' +
         '<td class="faint">' + (row.findings.total ? row.findings.published + '/' + row.findings.total + (row.findings.unresolved ? ' <span class="warn">· ' + row.findings.unresolved + ' open</span>' : '') : '') + '</td>' +

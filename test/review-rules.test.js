@@ -172,7 +172,9 @@ test('board flags: nothing claims work on a closed PR, and the ball is yours whe
   assert.deepEqual(R.prFlags({ state: 'MERGED', headSha: 'h' }, { toPublish: true, replied: true }), ['MERGED']);
   assert.equal(R.rowRank(['MERGED']), 3);
   assert.equal(R.rowRank(['TO_PUBLISH', 'REVIEWING']), 0);
-  assert.equal(R.rowRank(['REVIEWING']), 1);
+  // It used to be 1, a band of its own — which is how pressing Review took the
+  // pull request out of the list you pressed it in. See the test below.
+  assert.equal(R.rowRank(['REVIEWING']), 0);
 });
 
 test('conversation: states and their order', () => {
@@ -369,4 +371,42 @@ test('a settled comment is not sent to be verified again', () => {
   assert.strictEqual(R.needsVerdict(settled()), false, 'the person already decided; a run must not overwrite them');
   assert.strictEqual(R.closed(settled()), true);
   assert.strictEqual(R.openForCarry(settled()), false, 'and it is not carried into the next review');
+});
+
+// ---------------------------------------------------------------- a run does not move the row
+
+/*
+ * Pressing Review used to take the pull request out of the list you pressed it
+ * in. The first review drops the "not reviewed" flag, and with nothing else
+ * claiming the row it fell to a band called "In progress" — so the one pull
+ * request you had just set to work on left "Needs you" and appeared somewhere
+ * you were not looking. Work this app is doing on your say-so is still yours.
+ */
+test('a pull request being reviewed stays where the work is', () => {
+  const pr = { state: 'OPEN', headSha: 'h1' };
+
+  const idle = R.prFlags(pr, { reviewedSha: null });
+  assert.ok(idle.includes('UNREVIEWED'));
+  assert.strictEqual(R.rowRank(idle), 0, 'not reviewed is yours to do');
+
+  const running = R.prFlags(pr, { reviewedSha: null, reviewing: true });
+  assert.ok(running.includes('REVIEWING'));
+  assert.strictEqual(R.rowRank(running), 0, 'and it does not move while the review runs');
+
+  const fixing = R.prFlags(pr, { reviewedSha: 'h1', fixing: true });
+  assert.strictEqual(R.rowRank(fixing), 0);
+});
+
+test('a run on somebody else’s waiting pull request is still work of yours', () => {
+  const pr = { state: 'OPEN', headSha: 'h1' };
+  // Published comments, nothing of ours pending: it was waiting on them.
+  const waiting = R.prFlags(pr, { reviewedSha: 'h1', unresolved: 2 });
+  assert.strictEqual(R.rowRank(waiting), 2);
+  const swept = R.prFlags(pr, { reviewedSha: 'h1', unresolved: 2, reviewing: true });
+  assert.strictEqual(R.rowRank(swept), 0, 'while a review runs on it, it is in front of you');
+});
+
+test('a closed pull request is last, run or no run', () => {
+  assert.strictEqual(R.rowRank(R.prFlags({ state: 'MERGED' }, {})), 3);
+  assert.strictEqual(R.rowRank(R.prFlags({ state: 'DECLINED' }, { reviewing: true })), 3);
 });
