@@ -263,6 +263,12 @@ const USAGE_TTL = 5 * 60 * 1000;
  */
 const TEAMS_VERBS = {
   overview: (service) => ({ ok: true, ...service.overview() }),
+  /*
+   * Deliver, on behalf of whichever extension is asking. The app names the
+   * caller from the panel it came from; nothing in the message can claim to be
+   * somebody else.
+   */
+  deliverFor: (service, args) => service.send(String(args.appId ?? ''), String(args.appName ?? ''), args.message ?? {}),
   saveConnection: (service, args) => ({ ok: true, connection: service.saveConnection(args.connection ?? {}) }),
   saveSettings: (service, args) => ({ ok: true, settings: service.saveSettings(args.settings ?? {}) }),
   test: (service, args) => service.test(String(args.to ?? '')),

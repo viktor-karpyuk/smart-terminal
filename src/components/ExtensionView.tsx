@@ -466,6 +466,17 @@ function Frame({
     }
 
     async function appAction(name: string, args: Record<string, unknown>) {
+      /*
+       * Deliver a message, through whatever this app has that can.
+       *
+       * The extension is named by the app, from the panel it is being asked
+       * from — never from the message. An extension that could say which
+       * extension it was could spend another one's ceiling and wear its name
+       * in somebody's outbox.
+       */
+      if (name === 'deliver') {
+        return window.api.teams.call('deliverFor', { appId: view.from, appName: view.title ?? view.from, message: args });
+      }
       // `kube.shell`, `build.run`: the part after the subsystem is the verb.
       const verb = name.slice(name.indexOf('.') + 1);
       const where = {
@@ -723,6 +734,13 @@ function Frame({
   useEffect(() => {
     if (!view.listens?.includes('review')) return;
     return window.api.review.onEvent((payload) => tell('review', payload));
+  }, [view.listens]);
+
+  // The same, for a panel that delivers messages: something changed in its own
+  // world — a message sent, one waiting for an answer, a setting saved.
+  useEffect(() => {
+    if (!view.listens?.includes('teams')) return;
+    return window.api.teams.onEvent((payload) => tell('teams', payload));
   }, [view.listens]);
 
   // The working tree moved: the panel is told, and decides for itself what of

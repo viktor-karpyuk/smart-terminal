@@ -1,0 +1,535 @@
+<style>
+  /*
+   * Teams, drawn in a frame that cannot reach the network or the disk.
+   * Everything it knows arrives through `host.call('teams.*')`; everything it
+   * looks like comes from the app's tokens. No credential is ever sent here —
+   * what this screen holds is what a person may read on a shared laptop.
+   */
+  #app { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; min-height: 0; }
+  .top { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
+  .brand { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; margin-right: 4px; }
+  .brand .mark { width: 18px; height: 18px; border-radius: 5px; background: var(--accent-soft); border: 1px solid var(--accent); display: inline-flex; align-items: center; justify-content: center; }
+  .tab { padding: 4px 10px; border-radius: var(--radius); color: var(--text-dim); cursor: pointer; border: 1px solid transparent; background: none; font: inherit; }
+  .tab:hover { color: var(--text); background: var(--bg-elevated); }
+  .tab.on { color: var(--text); border-color: var(--border); background: var(--bg-elevated); }
+  .spacer { flex: 1; }
+  .faint { color: var(--text-faint); }
+  .dim { color: var(--text-dim); }
+  .ok { color: var(--ok); }
+  .bad { color: var(--danger); }
+  .warn { color: #d9a441; }
+  .mono { font-family: ui-monospace, Menlo, monospace; font-size: 0.95rem; }
+
+  main#main { overflow: auto; min-height: 0; }
+  .page { padding: 14px 16px 40px; max-width: 1180px; display: flex; flex-direction: column; gap: 14px; }
+  h2 { margin: 0; font-size: 1.15rem; font-weight: 600; }
+  .lead { margin: 4px 0 0; color: var(--text-dim); line-height: 1.6; max-width: 76ch; }
+
+  .card { padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-panel); }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .cols { display: flex; gap: 12px; align-items: stretch; }
+  .cols > * { flex: 1 1 0; min-width: 0; }
+
+  .btn { padding: 4px 11px; border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-dim); background: transparent; font: inherit; cursor: pointer; white-space: nowrap; }
+  .btn:hover { color: var(--text); border-color: var(--border-strong); background: var(--bg-elevated); }
+  .btn.primary { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); font-weight: 600; }
+  .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
+  .btn[disabled] { opacity: 0.45; pointer-events: none; }
+  .btn[aria-busy="true"] { opacity: 0.7; }
+
+  .chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-dim); white-space: nowrap; }
+  .chip.okc { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--border)); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+  .chip.badc { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, var(--border)); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+  .chip.warnc { color: #d9a441; border-color: color-mix(in srgb, #d9a441 55%, var(--border)); background: color-mix(in srgb, #d9a441 12%, transparent); }
+  .chip.accent { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+
+  label.field { display: flex; flex-direction: column; gap: 4px; }
+  label.field > span { color: var(--text-faint); font-size: 0.87rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  input[type="text"], input[type="password"], input[type="number"] { padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-input); color: var(--text); font: inherit; }
+  input[type="number"] { width: 72px; font-family: ui-monospace, Menlo, monospace; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .check { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+  .check input { width: 15px; height: 15px; accent-color: var(--accent); }
+
+  .way { display: flex; gap: 11px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
+  .way.on { border-color: var(--accent); background: var(--bg-panel); }
+  .way input { margin-top: 2px; width: 15px; height: 15px; accent-color: var(--accent); }
+  .way .what { font-weight: 600; }
+  .way .why { display: block; margin-top: 4px; color: var(--text-dim); line-height: 1.55; }
+  .way .costs { display: flex; gap: 16px; margin-top: 8px; }
+  .way .costs b { display: block; color: var(--text-faint); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 500; }
+
+  table.list { width: 100%; border-collapse: collapse; }
+  table.list th { text-align: left; padding: 6px 10px; color: var(--text-faint); font-size: 0.87rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.list td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.list tr:last-child td { border-bottom: 0; }
+  table.list td.wrap { white-space: normal; overflow-wrap: anywhere; }
+  table.list td:not(.wrap) { white-space: nowrap; }
+
+  .avatar { width: 24px; height: 24px; flex: none; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--text-dim); font-size: 0.8rem; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; background: var(--bg-elevated); }
+  .banner { padding: 9px 12px; border: 1px solid var(--border); border-left-width: 2px; border-radius: 8px; background: var(--bg-panel); line-height: 1.55; }
+  .banner.good { border-left-color: var(--ok); }
+  .banner.bad { border-left-color: var(--danger); }
+  .banner.warn { border-left-color: #d9a441; }
+  .empty { padding: 18px; color: var(--text-dim); text-align: center; }
+  .help { color: var(--text-faint); line-height: 1.5; margin-top: 4px; }
+</style>
+
+<div id="app">
+  <div class="top" id="top"></div>
+  <main id="main"></main>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var state = { started: false, showing: true, view: 'connection', data: null, error: null, busy: {}, edits: {} };
+
+  function $(id) { return document.getElementById(id); }
+  function esc(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+    });
+  }
+  function call(name, args) {
+    return host.call('teams.' + name, args || {}).then(function (result) {
+      if (result && result.ok === false) throw new Error(result.error || 'it did not say why');
+      return result || {};
+    });
+  }
+  function say(text, bad) { host.emit('notify', { text: String(text).slice(0, 400), kind: bad ? 'bad' : 'ok' }); }
+  function fail(error) { say(error && error.message ? error.message : String(error), true); }
+
+  /** One action at a time per key, with its button drawn as busy meanwhile. */
+  function act(key, promise, done) {
+    if (state.busy[key]) return;
+    state.busy[key] = true;
+    draw();
+    return Promise.resolve().then(promise).then(function (result) { if (done) done(result); }, fail)
+      .then(function () { delete state.busy[key]; draw(); });
+  }
+  function busyAttr(key) { return state.busy[key] ? ' aria-busy="true" disabled' : ''; }
+  function edit(key, fallback) { return state.edits[key] == null ? (fallback == null ? '' : fallback) : state.edits[key]; }
+
+  function when(value) {
+    if (!value) return '';
+    var ms = Date.now() - Date.parse(value);
+    if (!isFinite(ms)) return '';
+    if (ms < 60000) return 'just now';
+    var mins = Math.round(ms / 60000);
+    if (mins < 60) return mins + ' min ago';
+    var hours = Math.round(mins / 60);
+    if (hours < 48) return hours + ' h ago';
+    return Math.round(hours / 24) + ' d ago';
+  }
+  function initials(text) {
+    var parts = String(text || '?').replace(/^[a-z]+:/, '').split(/[\s._-]+/).filter(Boolean);
+    return ((parts[0] || '?')[0] + (parts[1] ? parts[1][0] : '')).toUpperCase();
+  }
+
+  /* ------------------------------------------------------------------ drawing */
+
+  function draw() {
+    if (!state.started) return;
+    drawTop();
+    var main = $('main');
+    var scroll = main.scrollTop;
+    var active = document.activeElement;
+    var focus = active && active.getAttribute && active.getAttribute('data-edit');
+    var caret = focus && active.selectionStart != null ? { start: active.selectionStart, end: active.selectionEnd } : null;
+    var html;
+    try {
+      if (state.error) html = '<div class="page"><div class="banner bad">' + esc(state.error) + '</div></div>';
+      else if (!state.data) html = '<div class="empty">Reading…</div>';
+      else if (state.view === 'apps') html = drawApps();
+      else if (state.view === 'people') html = drawPeople();
+      else if (state.view === 'delivery') html = drawDelivery();
+      else if (state.view === 'outbox') html = drawOutbox();
+      else html = drawConnection();
+    } catch (error) {
+      html = '<div class="page"><div class="banner bad">This view could not be drawn: ' + esc(error && error.stack || error) + '</div></div>';
+    }
+    main.innerHTML = html;
+    main.scrollTop = scroll;
+    if (focus) {
+      var again = main.querySelector('[data-edit="' + focus.replace(/["\\]/g, '\\$&') + '"]');
+      if (again) {
+        again.focus();
+        if (caret) { try { again.setSelectionRange(caret.start, caret.end); } catch (e) { /* not a text field */ } }
+      }
+    }
+  }
+
+  function drawTop() {
+    var tabs = [['connection', 'Connection'], ['apps', 'Apps'], ['people', 'People'], ['delivery', 'Delivery'], ['outbox', 'Outbox']];
+    var waiting = state.data ? state.data.waiting : 0;
+    var html = '<span class="brand"><span class="mark">' + plane() + '</span>Teams</span>';
+    tabs.forEach(function (tab) {
+      var count = tab[0] === 'outbox' && waiting ? ' <span class="chip warnc">' + waiting + '</span>' : '';
+      html += '<button class="tab' + (state.view === tab[0] ? ' on' : '') + '" data-act="nav" data-view="' + tab[0] + '">' + tab[1] + count + '</button>';
+    });
+    html += '<span class="spacer"></span>';
+    if (state.data) {
+      var c = state.data.connection;
+      html += c.ready
+        ? '<span class="chip okc">' + (c.way === 'webhook' ? 'posting to a channel' : 'direct messages') + '</span>'
+        : '<span class="chip warnc">not set up yet</span>';
+    }
+    $('top').innerHTML = html;
+  }
+
+  function plane() {
+    return '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg>';
+  }
+
+  /* ---------------------------------------------------------------- connection */
+
+  function drawConnection() {
+    var c = state.data.connection;
+    var webhook = c.way === 'webhook';
+    var html = '<div class="page">';
+    html += '<div><h2>How this app reaches Teams</h2>' +
+      '<p class="lead">A panel in this app cannot reach the network at all — that is what keeps an extension safe to install. So the connection lives in the app itself, and this screen is the only place credentials are ever entered. Nothing that sends through this extension is told a tenant, a token or an address.</p></div>';
+
+    html += '<div class="cols">' +
+      way('webhook', webhook, 'Post in a channel',
+        'An Incoming Webhook URL from the channel you choose. Two minutes, no administrator, nothing to approve. Everyone in the channel sees every message.',
+        'a webhook URL', 'one channel', false) +
+      way('graph', !webhook, 'Message the person',
+        'An app registration in Entra ID with <span class="mono">Chat.ReadWrite</span> granted by an administrator. This is the only way a message arrives as a direct message rather than a post everybody reads.',
+        'app registration + admin consent', 'any person in the tenant', true) +
+      '</div>';
+
+    html += '<div class="card"><div class="row" style="margin-bottom:10px"><strong>' + (webhook ? 'The webhook' : 'App registration') + '</strong></div>';
+    if (webhook) {
+      html += '<label class="field"><span>Webhook URL</span>' +
+        '<input type="password" data-edit="webhookUrl" placeholder="' + (c.hasWebhook ? '•••••••• kept encrypted; type a new one to replace it' : 'https://…') + '" value="' + esc(edit('webhookUrl', '')) + '"></label>' +
+        '<div class="help">Kept encrypted beside the repository tokens, and never shown again.</div>';
+    } else {
+      html += '<div class="cols" style="margin-bottom:10px">' +
+        '<label class="field"><span>Tenant ID</span><input type="text" class="mono" data-edit="tenantId" value="' + esc(edit('tenantId', c.tenantId)) + '"></label>' +
+        '<label class="field"><span>Client ID</span><input type="text" class="mono" data-edit="clientId" value="' + esc(edit('clientId', c.clientId)) + '"></label>' +
+        '</div>' +
+        '<label class="field"><span>Client secret</span>' +
+        '<input type="password" data-edit="clientSecret" placeholder="' + (c.hasGraph ? '•••••••• kept encrypted; type a new one to replace it' : 'the secret from the app registration') + '" value="' + esc(edit('clientSecret', '')) + '"></label>' +
+        '<div class="help">Kept encrypted beside the repository tokens, and never shown again. Left empty, whatever is stored stays.</div>';
+    }
+    html += '<div class="row" style="margin-top:12px">' +
+      '<button class="btn primary" data-act="save-connection"' + busyAttr('save-connection') + '>Save</button>' +
+      '<label class="field" style="flex-direction:row;align-items:center;gap:7px">' +
+      '<input type="text" data-edit="testTo" placeholder="your address, to try it" value="' + esc(edit('testTo', '')) + '" style="width:220px"></label>' +
+      '<button class="btn" data-act="test"' + busyAttr('test') + '>Send a test message</button>' +
+      '<span class="spacer"></span>' + connectionState(c) + '</div>';
+    html += '</div>';
+
+    html += '<div class="banner">One connection, many senders. Anything in this app may ask this extension to deliver a message; each one shows up in <button class="btn" data-act="nav" data-view="apps" style="padding:1px 8px">Apps</button> with a switch of its own.</div>';
+    return html + '</div>';
+  }
+
+  function connectionState(c) {
+    if (c.checkError) return '<span class="chip badc" title="' + esc(c.checkError) + '">last try failed ' + esc(when(c.checkedAt)) + '</span>';
+    if (c.checkedAt) return '<span class="chip okc">reached Teams ' + esc(when(c.checkedAt)) + '</span>';
+    return '<span class="chip">never tried</span>';
+  }
+
+  function way(id, on, title, why, needs, reaches, recommended) {
+    return '<label class="way' + (on ? ' on' : '') + '">' +
+      '<input type="radio" name="way" data-act="way" data-way="' + id + '"' + (on ? ' checked' : '') + '>' +
+      '<span><span class="row"><span class="what">' + title + '</span>' +
+      (recommended ? '<span class="chip accent">what a direct message needs</span>' : '') + '</span>' +
+      '<span class="why">' + why + '</span>' +
+      '<span class="costs"><span><b>Needs</b>' + esc(needs) + '</span><span><b>Reaches</b>' + esc(reaches) + '</span></span>' +
+      '</span></label>';
+  }
+
+  /* --------------------------------------------------------------------- apps */
+
+  function drawApps() {
+    var apps = state.data.apps;
+    var html = '<div class="page">';
+    html += '<div><h2>Anything in this app can send</h2>' +
+      '<p class="lead">This extension knows nothing about pull requests, builds or clusters. It takes a person, a few lines and some links, and delivers them. Whatever asks shows up here, and the first time something new asks it stops and waits for you.</p></div>';
+
+    if (!apps.length) {
+      html += '<div class="empty">Nothing has asked to send anything yet.</div>';
+      return html + contract() + '</div>';
+    }
+
+    html += '<table class="list"><tr><th>Extension</th><th>May send</th><th>At most</th><th>Last asked</th></tr>';
+    apps.forEach(function (app) {
+      html += '<tr><td class="wrap"><span class="row"><span class="avatar">' + esc(initials(app.name)) + '</span><span>' +
+        '<strong>' + esc(app.name) + '</strong><div class="faint mono">' + esc(app.id) + '</div></span></span></td>' +
+        '<td>' + stance(app) + '</td>' +
+        '<td><input type="number" min="0" max="200" data-edit="cap-' + esc(app.id) + '" value="' + esc(edit('cap-' + app.id, app.dailyCap)) + '" data-act-change="cap" data-id="' + esc(app.id) + '"> <span class="faint">a day</span></td>' +
+        '<td class="faint">' + esc(when(app.lastAskedAt) || '—') + '</td></tr>';
+    });
+    html += '</table>';
+    return html + contract() + '</div>';
+  }
+
+  function stance(app) {
+    var options = [['ALLOW', 'Always'], ['ASK', 'Ask me'], ['DENY', 'Never']];
+    return '<span class="row">' + options.map(function (option) {
+      return '<button class="btn' + (app.stance === option[0] ? ' primary' : '') + '" data-act="stance" data-id="' + esc(app.id) + '" data-stance="' + option[0] + '"' + busyAttr('stance-' + app.id) + '>' + option[1] + '</button>';
+    }).join('') + '</span>';
+  }
+
+  function contract() {
+    return '<div class="card"><strong>What an extension sends</strong>' +
+      '<p class="help">Nothing in the call mentions Teams, and nothing comes back but whether it went. Swap this extension for another and every caller keeps working.</p>' +
+      '<pre class="mono" style="margin:8px 0 0;padding:11px;border:1px solid var(--border);border-radius:8px;background:var(--bg-input);overflow:auto;line-height:1.7">' +
+      esc("// From any extension's panel. Nothing here names Teams.\n" +
+          "await host.call('deliver', {\n" +
+          "  to:    { handle: 'bitbucket:bchavez' },   // or { email: … }, or { channel: … }\n" +
+          "  title: 'kubrik-pos-fe #43 is waiting on you',\n" +
+          "  body:  'Two comments have had no answer for 6 days.',\n" +
+          "  facts: [{ label: 'Branch', value: 'feature/POS-258' }],\n" +
+          "  links: [{ text: 'Open the pull request', url: 'https://…' }],\n" +
+          "  key:   'code-review:pr:43:unanswered',    // the same key is never sent twice\n" +
+          "});\n\n" +
+          "// → { ok: true }\n" +
+          "// → { ok: false, why: 'no-address' | 'not-allowed' | 'quiet-hours' | 'already-sent' | 'asks-first' }") +
+      '</pre></div>';
+  }
+
+  /* ------------------------------------------------------------------- people */
+
+  function drawPeople() {
+    var people = state.data.people;
+    var matched = people.filter(function (one) { return one.address; }).length;
+    var html = '<div class="page">';
+    html += '<div class="row"><div><h2>Who is who</h2>' +
+      '<p class="lead">An extension names a person the way its own world names them — a Bitbucket handle, a GitHub login, an address, an on-call rota. Turning that into somebody in Teams happens here, once, for all of them.</p></div>' +
+      '<span class="spacer"></span>' +
+      '<label class="check"><input type="checkbox" data-act="match-by-email"' + (state.data.settings.matchByEmail ? ' checked' : '') + '> Match by address on its own</label></div>';
+
+    if (!people.length) {
+      html += '<div class="empty">Nobody yet. A person appears here the first time something asks to send them a message.</div>';
+      return html + '</div>';
+    }
+
+    html += '<table class="list"><tr><th>As an extension names them</th><th>In Teams</th><th>How</th><th>Last message</th></tr>';
+    people.forEach(function (one) {
+      var key = 'addr-' + one.handle;
+      html += '<tr><td class="wrap"><span class="row"><span class="avatar">' + esc(initials(one.display)) + '</span><span>' +
+        '<strong>' + esc(one.display) + '</strong><div class="faint mono">' + esc(one.handle) + '</div></span></span></td>' +
+        '<td class="wrap"><span class="row"><input type="text" data-edit="' + esc(key) + '" value="' + esc(edit(key, one.address || '')) + '" placeholder="somebody@example.com" style="width:230px">' +
+        '<button class="btn" data-act="match" data-handle="' + esc(one.handle) + '"' + busyAttr('match-' + one.handle) + '>Save</button></span></td>' +
+        '<td>' + (one.address ? (one.matchedBy === 'HAND' ? '<span class="chip accent">matched by you</span>' : '<span class="chip okc">matched by address</span>') : '<span class="chip warnc">no match</span>') + '</td>' +
+        '<td class="faint">' + esc(when(one.lastSentAt) || 'never') + '</td></tr>';
+    });
+    html += '</table>';
+    html += '<div class="banner">' + matched + ' of ' + people.length + ' matched. The rest are skipped, and whatever asked is told <span class="mono">no-address</span> rather than left to believe it arrived.</div>';
+    return html + '</div>';
+  }
+
+  /* ----------------------------------------------------------------- delivery */
+
+  function drawDelivery() {
+    var s = state.data.settings;
+    var html = '<div class="page">';
+    html += '<div><h2>How much, and when</h2>' +
+      '<p class="lead">Each extension decides what is worth saying and when — this one does not. What lives here is everything that protects the person on the other end, and it holds whoever is asking.</p></div>';
+
+    html += '<div class="cols">' +
+      '<div class="card"><strong>Hours</strong>' +
+      '<div class="row" style="margin-top:9px">Only between' +
+      '<input type="number" min="0" max="23" data-edit="hoursFrom" value="' + esc(edit('hoursFrom', s.hoursFrom)) + '"> and' +
+      '<input type="number" min="0" max="24" data-edit="hoursTo" value="' + esc(edit('hoursTo', s.hoursTo)) + '">' +
+      '<label class="check"><input type="checkbox" data-act="weekdays"' + (s.weekdaysOnly ? ' checked' : '') + '> weekdays only</label></div>' +
+      '<div class="help">Anything raised outside these hours waits for the morning rather than being dropped. A message an extension marks urgent goes anyway.</div></div>' +
+
+      '<div class="card"><strong>How often one person hears from us</strong>' +
+      '<div class="row" style="margin-top:9px">At most' +
+      '<input type="number" min="0" max="50" data-edit="perPersonPerDay" value="' + esc(edit('perPersonPerDay', s.perPersonPerDay)) + '">' +
+      'per person per day, whoever is asking.</div>' +
+      '<div class="help">Zero means no ceiling, not a ban.</div></div>' +
+      '</div>';
+
+    html += '<div class="card"><strong>Never twice for the same thing</strong>' +
+      '<div class="row" style="margin-top:9px">The same <span class="mono">key</span> is delivered once, and not again for' +
+      '<input type="number" min="0" max="365" data-edit="dedupeDays" value="' + esc(edit('dedupeDays', s.dedupeDays)) + '"> days.</div>' +
+      '<div class="help">The sender does not have to remember what it already said, which is the part everybody gets wrong. A message that failed was never said, so it is not held back by this.</div></div>';
+
+    html += '<div class="row"><button class="btn primary" data-act="save-settings"' + busyAttr('save-settings') + '>Save</button>' +
+      '<span class="faint">A ceiling for each extension is on the Apps tab, so a loop in one cannot spend everybody’s attention.</span></div>';
+    return html + '</div>';
+  }
+
+  /* ------------------------------------------------------------------- outbox */
+
+  function drawOutbox() {
+    var messages = state.data.messages;
+    var html = '<div class="page">';
+    html += '<div><h2>Everything that went out</h2>' +
+      '<p class="lead">Every message, whoever asked for it, with the key it was sent under. Anything waiting on you is at the top; anything that failed says why rather than disappearing.</p></div>';
+
+    if (!messages.length) {
+      html += '<div class="empty">Nothing has been sent yet.</div>';
+      return html + '</div>';
+    }
+
+    var order = { WAITING: 0, FAILED: 1 };
+    var rows = messages.slice().sort(function (a, b) {
+      return (order[a.state] == null ? 2 : order[a.state]) - (order[b.state] == null ? 2 : order[b.state]);
+    });
+
+    html += '<table class="list"><tr><th>When</th><th>From</th><th>To</th><th>About</th><th>State</th><th></th></tr>';
+    rows.forEach(function (row) {
+      html += '<tr><td class="faint">' + esc(when(row.createdAt)) + '</td>' +
+        '<td class="faint">' + esc(row.appId) + '</td>' +
+        '<td class="wrap">' + esc(row.to || '—') + '</td>' +
+        '<td class="wrap">' + esc(row.title) + (row.key ? '<div class="faint mono">' + esc(row.key) + '</div>' : '') + '</td>' +
+        '<td>' + messageState(row) + '</td>' +
+        '<td style="text-align:right">' + messageActions(row) + '</td></tr>';
+    });
+    return html + '</table></div>';
+  }
+
+  function messageState(row) {
+    if (row.state === 'SENT') return '<span class="chip okc">delivered</span>';
+    if (row.state === 'WAITING') return '<span class="chip warnc">waiting for you</span>';
+    if (row.state === 'FAILED') return '<span class="chip badc" title="' + esc(row.reason || '') + '">failed</span>';
+    if (row.state === 'HELD') return '<span class="chip" title="' + esc(row.reason || '') + '">held</span>';
+    return '<span class="chip" title="' + esc(row.reason || '') + '">skipped</span>';
+  }
+
+  function messageActions(row) {
+    if (row.state === 'WAITING') {
+      return '<span class="row" style="justify-content:flex-end">' +
+        '<button class="btn primary" data-act="approve" data-id="' + esc(row.id) + '"' + busyAttr('msg-' + row.id) + '>Send</button>' +
+        '<button class="btn" data-act="skip" data-id="' + esc(row.id) + '"' + busyAttr('msg-' + row.id) + '>Not this one</button></span>';
+    }
+    if (row.state === 'FAILED') {
+      return '<span class="row" style="justify-content:flex-end"><span class="bad">' + esc(row.reason || '') + '</span>' +
+        '<button class="btn" data-act="retry" data-id="' + esc(row.id) + '"' + busyAttr('msg-' + row.id) + '>Try again</button></span>';
+    }
+    return '<span class="faint">' + esc(row.reason || '') + '</span>';
+  }
+
+  /* ------------------------------------------------------------------ actions */
+
+  var actions = {
+    nav: function (el) { state.view = el.getAttribute('data-view'); draw(); },
+    way: function (el) {
+      act('save-connection', function () { return call('saveConnection', { connection: { way: el.getAttribute('data-way') } }); }, load);
+    },
+    'save-connection': function () {
+      var connection = state.data.connection.way === 'webhook'
+        ? { way: 'webhook', webhookUrl: edit('webhookUrl', '') }
+        : { way: 'graph', tenantId: edit('tenantId', state.data.connection.tenantId), clientId: edit('clientId', state.data.connection.clientId), clientSecret: edit('clientSecret', '') };
+      act('save-connection', function () { return call('saveConnection', { connection: connection }); }, function () {
+        // A secret typed here is forgotten the moment it is stored.
+        delete state.edits.webhookUrl; delete state.edits.clientSecret;
+        say('Saved.');
+        load();
+      });
+    },
+    test: function () {
+      act('test', function () { return call('test', { to: edit('testTo', '') }); }, function (result) {
+        say(result.ok ? 'It arrived.' : 'It did not go: ' + (result.error || 'no reason given'), !result.ok);
+        load();
+      });
+    },
+    'save-settings': function () {
+      var s = state.data.settings;
+      act('save-settings', function () {
+        return call('saveSettings', { settings: {
+          hoursFrom: Number(edit('hoursFrom', s.hoursFrom)),
+          hoursTo: Number(edit('hoursTo', s.hoursTo)),
+          perPersonPerDay: Number(edit('perPersonPerDay', s.perPersonPerDay)),
+          dedupeDays: Number(edit('dedupeDays', s.dedupeDays)),
+        } });
+      }, function () { say('Saved.'); load(); });
+    },
+    weekdays: function (el) {
+      act('save-settings', function () { return call('saveSettings', { settings: { weekdaysOnly: el.checked } }); }, load);
+    },
+    'match-by-email': function (el) {
+      act('save-settings', function () { return call('saveSettings', { settings: { matchByEmail: el.checked } }); }, load);
+    },
+    stance: function (el) {
+      var id = el.getAttribute('data-id');
+      act('stance-' + id, function () { return call('setAppStance', { id: id, stance: el.getAttribute('data-stance') }); }, load);
+    },
+    cap: function (el) {
+      var id = el.getAttribute('data-id');
+      act('cap-' + id, function () { return call('setAppCap', { id: id, cap: Number(el.value) }); }, load);
+    },
+    match: function (el) {
+      var handle = el.getAttribute('data-handle');
+      act('match-' + handle, function () { return call('matchPerson', { handle: handle, address: edit('addr-' + handle, '') }); }, function () {
+        delete state.edits['addr-' + handle];
+        load();
+      });
+    },
+    approve: function (el) {
+      var id = el.getAttribute('data-id');
+      act('msg-' + id, function () { return call('approve', { id: id }); }, function (result) {
+        say(result.ok ? 'Sent.' : 'It did not go: ' + (result.error || ''), !result.ok);
+        load();
+      });
+    },
+    skip: function (el) {
+      var id = el.getAttribute('data-id');
+      act('msg-' + id, function () { return call('skip', { id: id }); }, load);
+    },
+    retry: function (el) {
+      var id = el.getAttribute('data-id');
+      act('msg-' + id, function () { return call('retry', { id: id }); }, function (result) {
+        say(result.ok ? 'Sent.' : 'Still not going: ' + (result.error || ''), !result.ok);
+        load();
+      });
+    },
+  };
+
+  document.addEventListener('click', function (event) {
+    var el = event.target.closest('[data-act]');
+    if (!el) return;
+    var name = el.getAttribute('data-act');
+    var handler = actions[name];
+    if (!handler) return;
+    if (el.tagName !== 'INPUT') event.preventDefault();
+    handler(el);
+  });
+
+  document.addEventListener('input', function (event) {
+    var key = event.target.getAttribute('data-edit');
+    if (key) state.edits[key] = event.target.value;
+  });
+
+  document.addEventListener('change', function (event) {
+    var name = event.target.getAttribute('data-act-change');
+    if (name && actions[name]) actions[name](event.target);
+  });
+
+  /* -------------------------------------------------------------------- load */
+
+  function load() {
+    return call('overview').then(function (data) {
+      state.data = data;
+      state.error = null;
+      draw();
+    }, function (error) {
+      state.error = error.message;
+      draw();
+    });
+  }
+
+  function start() {
+    if (state.started) return;
+    state.started = true;
+    load();
+  }
+
+  host.on('teams', function () { if (state.started) load(); });
+  host.on('showing', function (payload) {
+    state.showing = !payload || payload.showing !== false;
+    if (state.showing) start();
+  });
+  host.on('context', function () { start(); });
+  host.ready();
+  start();
+})();
+</script>

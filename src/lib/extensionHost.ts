@@ -212,6 +212,17 @@ const REVIEW_WRITE = [
 const REVIEW_APP = ['shell', 'ask'] as const;
 
 /**
+ * Something worth saying, to somebody, from any extension at all.
+ *
+ * Routed through the app rather than at a delivery extension by name: the
+ * caller says who and what, and the app decides which installed extension
+ * carries it. A panel that could name another extension's service would be a
+ * panel that can speak as somebody else — and a caller that named Teams would
+ * have to be rewritten the day a Slack one arrives.
+ */
+const DELIVER = 'deliver';
+
+/**
  * The Teams panel's own calls.
  *
  * `send` is deliberately not among them. An extension asks the *app* to deliver
@@ -221,6 +232,8 @@ const REVIEW_APP = ['shell', 'ask'] as const;
  */
 const TEAMS_READ = ['overview'] as const;
 const TEAMS_WRITE = ['saveConnection', 'saveSettings', 'test', 'setAppStance', 'setAppCap', 'matchPerson', 'approve', 'skip', 'retry'] as const;
+// `deliverFor` is deliberately absent: the app makes that call, naming the
+// caller itself, so no panel can send under another extension's name.
 const TEAMS_VERBS = new Map<string, Channel>(
   [...TEAMS_READ, ...TEAMS_WRITE].map((name) => [name, 'teams'] as [string, Channel]),
 );
@@ -250,6 +263,7 @@ export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring'
  * does not run — there is no default channel.
  */
 export function route(name: string): Channel | null {
+  if (name === DELIVER) return 'app';
   if (GIT_VERBS.has(name)) return 'git';
   if (name.startsWith('kube.')) return KUBE_VERBS.get(name.slice(5)) ?? null;
   if (name.startsWith('helm.')) return HELM_VERBS.get(name.slice(5)) ?? null;
