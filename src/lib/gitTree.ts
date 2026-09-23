@@ -112,7 +112,7 @@ export function group(files: GitFile[], grouping: string): Node[] {
  * that are not versioned yet. Keys are prefixed per section because the same
  * folder can appear in both and folding one must not fold the other.
  */
-export type Section = { id: 'changes' | 'unversioned'; label: string; count: number; nodes: Node[] };
+export type Section = { id: 'changes' | 'unversioned' | 'in-commit'; label: string; count: number; nodes: Node[] };
 
 function prefixed(nodes: Node[], id: string): Node[] {
   return nodes.map((node) =>
@@ -122,10 +122,21 @@ function prefixed(nodes: Node[], id: string): Node[] {
   );
 }
 
-/** The changed files, split into sections and grouped inside each one. */
-export function sections(files: GitFile[], grouping: string): Section[] {
+/**
+ * The changed files, split into sections and grouped inside each one.
+ *
+ * `inCommit` is what an amend is about to rewrite. It belongs in this list and
+ * not in a drawer of its own: "what will this commit contain" is one question,
+ * and answering half of it in a vertical tree and the other half in a strip of
+ * chips somewhere else makes it two. A file that is in the commit *and* changed
+ * now appears once, in Changes, carrying the mark — it is the same file, and
+ * listing it twice invites somebody to stage it twice.
+ */
+export function sections(files: GitFile[], grouping: string, inCommit: GitFile[] = []): Section[] {
   const tracked = files.filter((file) => !file.untracked);
   const untracked = files.filter((file) => file.untracked);
+  const changedNow = new Set(files.map((file) => file.path));
+  const onlyInCommit = inCommit.filter((file) => !changedNow.has(file.path));
   const out: Section[] = [];
   if (tracked.length) {
     out.push({ id: 'changes', label: 'Changes', count: tracked.length, nodes: prefixed(group(tracked, grouping), 'changes') });
@@ -136,6 +147,14 @@ export function sections(files: GitFile[], grouping: string): Section[] {
       label: 'Unversioned files',
       count: untracked.length,
       nodes: prefixed(group(untracked, grouping), 'unversioned'),
+    });
+  }
+  if (onlyInCommit.length) {
+    out.push({
+      id: 'in-commit',
+      label: 'Already in the commit',
+      count: onlyInCommit.length,
+      nodes: prefixed(group(onlyInCommit, grouping), 'in-commit'),
     });
   }
   return out;

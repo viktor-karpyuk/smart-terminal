@@ -125,3 +125,46 @@ test('splitting keeps every file, in every grouping', () => {
     assert.equal(parts.reduce((sum, p) => sum + p.count, 0), files.length, `${grouping} miscounted`);
   }
 });
+
+// ---------------------------------------------------------------- amending
+
+/*
+ * What an amend would rewrite belongs in this list, not in a drawer of its own.
+ * "What will this commit contain" is one question, and answering half of it in
+ * a vertical tree and the other half in a strip of chips somewhere else makes
+ * it two.
+ */
+const inCommit = (path) => file(path);
+
+test('the commit being rewritten is a section of its own', () => {
+  const parts = sections([file('src/a.ts')], 'directory', [inCommit('src/old.ts'), inCommit('docs/readme.md')]);
+  assert.deepEqual(parts.map((part) => part.id), ['changes', 'in-commit']);
+  const last = parts[parts.length - 1];
+  assert.equal(last.label, 'Already in the commit');
+  assert.equal(last.count, 2);
+  // Grouped like everything else in the list, not dumped flat.
+  assert.ok(last.nodes.every((node) => node.key.startsWith('in-commit:')));
+});
+
+/*
+ * A file in the commit and changed again since is one file. Listed twice, it
+ * invites somebody to stage it twice and reads as two things to decide about.
+ */
+test('a file that is in the commit and changed now is shown once, as a change', () => {
+  const parts = sections([file('src/a.ts')], 'directory', [inCommit('src/a.ts'), inCommit('src/b.ts')]);
+  assert.deepEqual(parts.map((part) => part.id), ['changes', 'in-commit']);
+  assert.equal(parts[0].count, 1);
+  assert.equal(parts[1].count, 1);
+  const names = JSON.stringify(parts[1].nodes);
+  assert.ok(names.includes('src/b.ts') && !names.includes('src/a.ts'));
+});
+
+test('without an amend there is no such section', () => {
+  assert.deepEqual(sections([file('src/a.ts')], 'directory').map((part) => part.id), ['changes']);
+  assert.deepEqual(sections([file('src/a.ts')], 'directory', []).map((part) => part.id), ['changes']);
+});
+
+test('a commit whose files are all changed again adds no section', () => {
+  const parts = sections([file('src/a.ts')], 'directory', [inCommit('src/a.ts')]);
+  assert.deepEqual(parts.map((part) => part.id), ['changes']);
+});

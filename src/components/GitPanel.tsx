@@ -457,6 +457,7 @@ function SectionRows({
             selectedPath={selectedPath}
             onToggleStage={onToggleStage}
             onFold={onFold}
+            inCommit={section.id === 'in-commit'}
           />
         ))}
     </>
@@ -480,6 +481,7 @@ function TreeRow({
   selectedPath,
   onToggleStage,
   onFold,
+  inCommit = false,
 }: {
   node: Node;
   depth: number;
@@ -490,6 +492,8 @@ function TreeRow({
   selectedPath: string | null;
   onToggleStage(file: GitFile): void;
   onFold(key: string): void;
+  /** Everything under here is already in the commit an amend would rewrite. */
+  inCommit?: boolean;
 }) {
   if (node.kind === 'file') {
     return (
@@ -500,6 +504,7 @@ function TreeRow({
         onToggle={onToggleStage}
         panelId={panelId}
         selected={selectedPath === node.file.path}
+        inCommit={inCommit}
       />
     );
   }
@@ -533,6 +538,7 @@ function TreeRow({
             selectedPath={selectedPath}
             onToggleStage={onToggleStage}
             onFold={onFold}
+            inCommit={inCommit}
           />
         ))}
     </>
@@ -598,7 +604,37 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
   };
 
   const files = repo?.files ?? [];
-  const parts = useMemo(() => sections(files, panel?.gitGrouping ?? 'directory'), [files, panel?.gitGrouping]);
+  /*
+   * What an amend would rewrite, read here rather than inside the box, because
+   * its files now belong to the list above: "what will this commit contain" is
+   * one question, and it is answered in one place.
+   */
+  const head = useHeadCommit(root, panel?.amend ?? false);
+  const inCommit = useMemo<GitFile[]>(
+    () =>
+      (head?.files ?? []).map((file) => ({
+        path: file.path,
+        absolute: `${root}/${file.path}`,
+        dir: file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : '',
+        name: file.name,
+        index: '',
+        worktree: '',
+        untracked: false,
+        conflicted: false,
+        // Already in the commit: there is nothing to stage, and a checkbox here
+        // would offer something git cannot do.
+        staged: false,
+        partial: false,
+        letter: 'M',
+        added: file.added,
+        removed: file.removed,
+      })),
+    [head, root],
+  );
+  const parts = useMemo(
+    () => sections(files, panel?.gitGrouping ?? 'directory', inCommit),
+    [files, panel?.gitGrouping, inCommit],
+  );
   const staged = files.filter((file) => file.staged || file.partial);
   const allStaged = files.length > 0 && staged.length === files.length;
   const someStaged = staged.length > 0 && !allStaged;
@@ -734,7 +770,7 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
       </div>
 
       <div className="git-commit">
-        {panel.amend && <Amending root={root} panelId={panelId} />}
+        {panel.amend && <Amending head={head} targetName={repo?.branch ?? null} />}
         <textarea
           className="git-message"
           placeholder="What changed, and why"
@@ -779,44 +815,52 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
   );
 }
 
-/**
- * What is about to be rewritten.
- *
- * Amend is the one git verb in this panel that changes history rather than adding
- * to it, and until now the box gave no sign of which commit it meant. Naming it —
- * its subject, when it was made, and every file already in it — is the difference
- * between amending the commit you think you are amending and amending whatever
- * happens to be at the top.
- */
-function Amending({ root, panelId }: { root: string; panelId: string }) {
-  const [head, setHead] = useState<{
-    sha: string;
-    message: string;
-    author: string;
-    date: string;
-    files: Array<{ path: string; name: string; added: number | null; removed: number | null }>;
-  } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const openFile = useStore((s) => s.openFile);
+/** The commit an amend would rewrite, asked for only while one is being made. */
+type HeadCommit = {
+  sha: string;
+  message: string;
+  author: string;
+  date: string;
+  files: Array<{ path: string; name: string; added: number | null; removed: number | null }>;
+};
 
+function useHeadCommit(root: string, wanted: boolean) {
+  const [head, setHead] = useState<HeadCommit | null>(null);
   useEffect(() => {
+    if (!wanted) {
+      setHead(null);
+      return;
+    }
     let alive = true;
-    setHead(null);
-    setError(null);
     window.api.git.call('head', root, {}).then((result) => {
       if (!alive) return;
-      if (result?.ok) setHead(result as never);
-      else setError(result?.error ?? 'Could not read the last commit.');
+      setHead(result?.ok ? (result as never) : null);
     });
     return () => {
       alive = false;
     };
-  }, [root]);
+  }, [root, wanted]);
+  return head;
+}
 
-  if (error) return <p className="git-amending is-empty">{error}</p>;
+/**
+ * Which commit is about to be rewritten.
+ *
+ * Amend is the one git verb in this panel that changes history rather than
+ * adding to it, and until this said so the box gave no sign of which commit it
+ * meant. Naming it — its subject, and when it was made — is the difference
+ * between amending the commit you think you are amending and amending whatever
+ * happens to be at the top.
+ *
+ * Its files used to be here too, as a strip of chips. They are in the list
+ * above now, under "Already in the commit", where the rest of what the commit
+ * will contain already is: one question, one place, one kind of row.
+ */
+function Amending({ head, targetName }: { head: HeadCommit | null; targetName: string | null }) {
   if (!head) return <p className="git-amending is-empty">Reading the last commit…</p>;
 
   const subject = head.message.split('\n')[0];
+  const count = head.files.length;
 
   return (
     <div className="git-amending">
@@ -826,25 +870,12 @@ function Amending({ root, panelId }: { root: string; panelId: string }) {
         <span className="git-amending-subject" title={head.message}>{subject}</span>
         <small>{new Date(head.date).toLocaleString()}</small>
       </header>
-      <div className="git-amending-files">
-        {!head.files.length && <span className="git-amending-none">No files in it — an empty commit.</span>}
-        {head.files.map((file) => (
-          <button
-            key={file.path}
-            className="git-amending-file"
-            title={file.path}
-            onClick={() => openFile(panelId, `${root}/${file.path}`)}
-          >
-            <span className="git-amending-name">{file.name}</span>
-            <span className="git-amending-dir">{file.path.split('/').slice(0, -1).join('/')}</span>
-            {file.added ? <i className="is-add">+{file.added}</i> : null}
-            {file.removed ? <i className="is-del">−{file.removed}</i> : null}
-          </button>
-        ))}
-      </div>
       <p className="git-amending-note">
-        Committing replaces this commit. Anything staged joins it; the message above becomes its
-        message. If it has already been pushed, the push after it has to be forced.
+        {count === 0
+          ? 'It has no files in it — an empty commit.'
+          : `Its ${count === 1 ? 'one file is' : `${count} files are`} in the list above, under “Already in the commit”.`}{' '}
+        Committing replaces it{targetName ? ` on ${targetName}` : ''}: anything staged joins it, and the message
+        above becomes its message. If it has already been pushed, the push after it has to be forced.
       </p>
     </div>
   );
@@ -857,6 +888,7 @@ function FileRow({
   onToggle,
   panelId,
   selected,
+  inCommit = false,
 }: {
   file: GitFile;
   depth: number;
@@ -864,31 +896,39 @@ function FileRow({
   onToggle(file: GitFile): void;
   panelId: string;
   selected?: boolean;
+  /** Already in the commit an amend would rewrite: nothing about it can be staged. */
+  inCommit?: boolean;
 }) {
   const openFile = useStore((s) => s.openFile);
   const patch = useStore((s) => s.patchPanel);
 
   return (
     <div
-      className={`git-row${selected ? ' is-selected' : ''}${file.untracked ? ' is-untracked' : ''}`}
+      className={`git-row${selected ? ' is-selected' : ''}${file.untracked ? ' is-untracked' : ''}${inCommit ? ' is-in-commit' : ''}`}
       style={{ paddingLeft: 8 + depth * 16 }}
       // One click shows what changed; opening it to edit is the deliberate
       // second act, because most looks at a changed file are only looks.
       onClick={() => patch(panelId, { selectedPath: file.path })}
       onDoubleClick={() => openFile(panelId, file.absolute)}
     >
-      <button
-        className={`git-box${file.staged ? ' is-on' : file.partial ? ' is-partial' : ''}`}
-        onClick={() => onToggle(file)}
-        title={
-          file.untracked
-            ? 'Not in git at all — click to add it'
-            : file.staged
-              ? 'Staged — click to take it out'
-              : 'Not staged — click to stage it'
-        }
-        aria-label={file.untracked ? 'Add to git' : 'Stage'}
-      />
+      {inCommit ? (
+        // A mark, not a control: it is already in the commit, and a checkbox
+        // here would offer to do something git has no way of doing.
+        <span className="git-box is-fixed" title="Already in the commit being rewritten" aria-hidden="true" />
+      ) : (
+        <button
+          className={`git-box${file.staged ? ' is-on' : file.partial ? ' is-partial' : ''}`}
+          onClick={() => onToggle(file)}
+          title={
+            file.untracked
+              ? 'Not in git at all — click to add it'
+              : file.staged
+                ? 'Staged — click to take it out'
+                : 'Not staged — click to stage it'
+          }
+          aria-label={file.untracked ? 'Add to git' : 'Stage'}
+        />
+      )}
       <span
         className="git-letter"
         // Untracked takes its colour from the row instead, so that the letter and
