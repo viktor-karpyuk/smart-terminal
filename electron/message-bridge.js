@@ -385,9 +385,24 @@ class MessageBridge {
    */
   flush() {
     const landed = [];
+    /*
+     * One message per session per pass.
+     *
+     * The body is written now and the Return follows seven hundred
+     * milliseconds later, so two messages for the same session in one pass both
+     * went into the same input box with nothing between them: the two bodies
+     * were typed one after the other, the first Return submitted the pair as a
+     * single mangled prompt, and the second submitted an empty line. Both were
+     * marked delivered. Anything else queued for that session waits for the
+     * next sweep, by which time its Return has landed and it is either free
+     * again or busy with the answer.
+     */
+    const written = new Set();
     for (const message of this.store.pending(null, { undeliveredOnly: true })) {
+      if (written.has(message.to)) continue;
       if (!this.isFree(message.to)) continue;
       if (!this.write(message.to, message.body)) continue;
+      written.add(message.to);
       // The Return goes separately, or Claude's input box takes the text and
       // never submits it — the message would sit in the box looking delivered.
       setTimeout(() => this.write(message.to, '\r'), SUBMIT_DELAY_MS);

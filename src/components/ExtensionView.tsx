@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { alreadyOffered, claudeForPanel, streamsFor, whereEachPanelWas } from '../lib/panelHolds';
 import { useStore } from '../state/store';
 import { leafOfTab, parentOf } from '../state/layout';
 import type { ExtensionPanelView } from '../global';
@@ -111,7 +112,6 @@ export function ExtensionView({ panelId, showing = true }: { panelId: string; sh
  * of small objects that go when the window does. The app never reads what is in
  * one — it hands it straight back to the panel that wrote it.
  */
-const whereEachPanelWas = new Map<string, unknown>();
 
 /** The appearance stamped on the root, followed as it changes. */
 function useAppliedTheme(): string {
@@ -141,9 +141,6 @@ function useAppliedTheme(): string {
  * store rather than assumed — the person may have closed it, and a session id
  * that no longer exists is not a session to hand a briefing to.
  */
-const claudeForPanel = new Map<string, string>();
-/** Panels that have already been given one, so a rebuilt frame does not open a second. */
-const alreadyOffered = new Set<string>();
 
 function Frame({
   panelId,
@@ -199,19 +196,59 @@ function Frame({
   useEffect(() => {
     let alive = true;
     void window.api.extensions.stagePanel(panelId, doc).then((staged) => {
-      if (alive) setSource(staged.url ?? null);
+      /*
+       * A new address for a new document, so the frame really reloads.
+       *
+       * The staged URL is built from the panel id alone, so an extension whose
+       * document changed handed `setSource` the identical string: React saw no
+       * change to `src` and the frame went on running the old document — an
+       * updated extension that looked installed and behaved like the one
+       * before it. Only the host is read on the other side, so the query
+       * changes nothing about what is served.
+       */
+      if (alive) setSource(staged.url ? `${staged.url}?v=${Date.now()}` : null);
     });
     return () => {
       alive = false;
-      void window.api.extensions.stagePanel(panelId, null);
+      // Deliberately not unstaged here: the next document stages over this one
+      // under the same id, and clearing first left a gap in which a reload got
+      // "no such panel". The panel closing is what unstages it.
     };
   }, [panelId, doc]);
+  useEffect(() => () => { void window.api.extensions.stagePanel(panelId, null); }, [panelId]);
   /*
    * The long-running things this panel started — a followed log, a held-open
    * port. Kept per frame rather than globally, which is what stops one panel
    * from stopping another's: an id it never received is an id it cannot name.
    */
-  const streams = useRef(new Set<string>());
+  /*
+   * Kept beside the panel rather than inside the frame.
+   *
+   * Opening a terminal under a panel splits its pane, which replaces a leaf with
+   * a split — so React unmounts this frame and mounts another. Held in here,
+   * everything the panel had started was torn down by the app's own act of
+   * doing what was asked: clicking Shell on a pod closed the port-forward you
+   * had just set up and stopped the log you were following.
+   */
+  const streams = useRef(streamsFor(panelId));
+  /*
+   * Questions wait their turn rather than overwrite one another: one promise
+   * chain per frame, each link putting its question up and clearing the dialog
+   * before the next asks.
+   */
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const askInTurn = useCallback((question: string) => {
+    const next = queue.current
+      .catch(() => {})
+      .then(
+        () =>
+          new Promise<boolean>((answer) => {
+            setAsking({ question, answer: (yes: boolean) => { setAsking(null); answer(yes); } });
+          }),
+      );
+    queue.current = next;
+    return next;
+  }, []);
 
   /** Anything the app pushes at the panel. Safe when the frame is not up yet. */
   const tell = (type: string, payload: unknown) => {
@@ -297,8 +334,15 @@ function Frame({
       const args = (message.args ?? {}) as Record<string, unknown>;
       const question = needsConsent(name, args);
       if (question) {
-        const yes = await new Promise<boolean>((answer) => setAsking({ question, answer }));
-        setAsking(null);
+        /*
+         * Asked one at a time, because there is one dialog.
+         *
+         * A second question arriving while the first was up replaced its
+         * resolver, so the first `await` never settled: its reply was never
+         * sent and the panel spun on it for ever. Selecting three pods and
+         * pressing Delete deleted one and left two spinners turning.
+         */
+        const yes = await askInTurn(question);
         if (!yes) {
           reply(false, null, 'the person said no');
           return;
@@ -689,13 +733,9 @@ function Frame({
       if (payload.done) held.delete(payload.id);
       tell('stream', payload);
     });
-    return () => {
-      stop();
-      // The tab is going away, and so is anything it started. A port-forward
-      // nobody stops is a port left open by a panel that no longer exists.
-      for (const id of held) window.api.kube.stopStream(id);
-      held.clear();
-    };
+    // Only the listener goes with the frame. What the panel started outlives a
+    // rebuild and is stopped by `forgetPanel` when the panel itself closes.
+    return stop;
   }, []);
 
   /*

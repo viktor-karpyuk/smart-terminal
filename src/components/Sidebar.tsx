@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
+import { startDrag } from '../lib/resize';
 import { useShallow } from 'zustand/react/shallow';
 import { asFilePanel, useStore } from '../state/store';
 import { allLeaves, allTabs, leafOfTab } from '../state/layout';
@@ -120,14 +121,7 @@ function ListResizer({ above }: { above: string }) {
             },
           });
         };
-        const onUp = () => {
-          window.removeEventListener('pointermove', onMove);
-          window.removeEventListener('pointerup', onUp);
-          document.body.classList.remove('resizing');
-        };
-        document.body.classList.add('resizing');
-        window.addEventListener('pointermove', onMove);
-        window.addEventListener('pointerup', onUp);
+        startDrag(onMove);
       }}
     />
   );

@@ -237,7 +237,7 @@ test('a fix: written in the workshop, committed by the tool, the finding closed,
     async () => ({ structured: { summary: 's', findings: [finding()] } }),
     async (options) => {
       assert.equal(options.kind, 'fix');
-      assert.ok(options.disallowedTools.includes('Bash(git push *)'));
+      assert.ok(options.disallowedTools.includes('Bash(git push*)'));
       assert.notEqual(options.cwd, w.clone, 'never in the person\'s clone');
       assert.equal(git(options.cwd, 'rev-parse', '--abbrev-ref', 'HEAD'), 'feature');
       fs.writeFileSync(path.join(options.cwd, 'app.js'), 'function add(a, b) {\n  return a + b;\n}\n');

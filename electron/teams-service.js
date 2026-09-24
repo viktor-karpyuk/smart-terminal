@@ -4,6 +4,9 @@ const { TeamsStore } = require('./teams-store');
 const rules = require('./teams-rules');
 const { postWebhook, sendDirect, tokenCache, card, asText } = require('./teams-send');
 
+/** Often enough that "waits for the morning" is the morning, rarely enough to be nothing. */
+const HOLD_SWEEP_MS = 5 * 60 * 1000;
+
 /**
  * Teams, as a thing anything in this app can ask to deliver a message.
  *
@@ -25,6 +28,7 @@ class TeamsService {
     this.emit = emit;
     this.now = now;
     this.tokens = tokenCache();
+    this.timer = null;
   }
 
   // --- what it is set up to do ------------------------------------------------
@@ -78,24 +82,56 @@ class TeamsService {
   }
 
   saveConnection({ way, webhookUrl, tenantId, clientId, clientSecret, sender } = {}) {
+    /*
+     * Refuse first, write second.
+     *
+     * A URL that is not https used to be stored as the way before it was
+     * checked, so a rejected save still left the connection switched to a
+     * webhook it had not kept.
+     */
+    const url = typeof webhookUrl === 'string' ? webhookUrl.trim() : null;
+    if (url && !/^https:\/\//i.test(url)) throw new Error('A webhook URL has to be https.');
+
     if (way === 'webhook' || way === 'graph') this.store.setSetting('way', way);
-    if (typeof webhookUrl === 'string') {
-      if (webhookUrl && !/^https:\/\//i.test(webhookUrl)) throw new Error('A webhook URL has to be https.');
-      this.store.setSecret('webhook.url', webhookUrl);
-    }
+    /*
+     * An empty box is "leave it alone", not "erase it".
+     *
+     * Neither secret is ever sent back to the panel — the field shows a
+     * placeholder saying so — which means pressing Save without retyping sends
+     * an empty string. The client secret had this guard from the start; the
+     * webhook URL did not, so saving the Connection screen without touching it
+     * deleted a working webhook and every reminder after it came back with
+     * nowhere to go.
+     */
+    if (url) this.store.setSecret('webhook.url', url);
     if (typeof tenantId === 'string') this.store.setSetting('graph.tenantId', tenantId.trim());
     if (typeof clientId === 'string') this.store.setSetting('graph.clientId', clientId.trim());
     if (typeof sender === 'string') this.store.setSetting('graph.sender', sender.trim());
-    // An empty string is "leave it alone", not "erase it": the panel never has
-    // the secret to send back, so it sends nothing when it has not been retyped.
     if (typeof clientSecret === 'string' && clientSecret.trim()) this.store.setSecret('graph.clientSecret', clientSecret.trim());
     this.tokens.forget();
     this.changed();
     return this.connection();
   }
 
+  /** Really forget a webhook, for the panel's own "forget this" rather than a blank save. */
+  forgetWebhook() {
+    this.store.setSecret('webhook.url', null);
+    this.changed();
+    return this.connection();
+  }
+
   saveSettings(input = {}) {
     const write = (key, value, low, high) => {
+      /*
+       * A box somebody cleared is a box they have not decided about yet.
+       *
+       * `Number('')` is 0 and 0 is finite, so clearing a field and pressing Save
+       * for an unrelated change used to store a real zero — which for the dedupe
+       * window means "never hold anything back" and for a ceiling means "no
+       * ceiling". The same shape as the quiet hours that read 0–0 and held every
+       * message for ever.
+       */
+      if (value === null || value === undefined || String(value).trim() === '') return;
       const number = Number(value);
       if (!Number.isFinite(number)) return;
       this.store.setSetting(key, String(Math.min(high, Math.max(low, Math.round(number)))));
@@ -120,20 +156,26 @@ class TeamsService {
    * it can show in its own screen: `no-address`, `not-allowed`, `quiet-hours`,
    * `already-sent`, `asks-first`.
    */
-  async send(appId, appName, input) {
-    const message = rules.readMessage(input);
-    const app = this.store.seeApp(appId, appName);
+  /**
+   * Who this is for, and whether it may go — asked the same way every time.
+   *
+   * Separate from `send` because a message held back has to be asked again
+   * later, from scratch: the hours may have opened, the ceiling may have
+   * cleared, or the same thing may since have been said another way. Asking it
+   * in two places written twice is how the two answers drift apart.
+   */
+  #judge(message, app, { display = '' } = {}) {
     const settings = this.settings();
-
     const handle = message.to.handle ?? (message.to.email ? `email:${message.to.email}` : null);
     let person = null;
     if (handle) {
       const read = rules.readHandle(handle);
+      const address = rules.addressFrom(read.handle, { matchByEmail: settings.matchByEmail });
       person = this.store.rememberPerson({
         handle: read.handle,
-        display: input?.to?.display ?? '',
-        address: rules.addressFrom(read.handle, { matchByEmail: settings.matchByEmail }),
-        matchedBy: rules.addressFrom(read.handle, { matchByEmail: settings.matchByEmail }) ? 'EMAIL' : null,
+        display,
+        address,
+        matchedBy: address ? 'EMAIL' : null,
       });
     }
 
@@ -146,11 +188,19 @@ class TeamsService {
       now: at,
       hours: { from: settings.hoursFrom, to: settings.hoursTo, weekdaysOnly: settings.weekdaysOnly },
       perPersonPerDay: settings.perPersonPerDay,
-      sentByAppToday: this.store.sentSince(appId, dayAgo),
+      sentByAppToday: this.store.sentSince(app.id, dayAgo),
       sentToPersonToday: person ? this.store.sentToSince(person.id, dayAgo) : 0,
       alreadySent: this.store.alreadySent(message.key, settings.dedupeDays * rules.DAY_MS, at),
     });
+    return { person, handle, decision };
+  }
 
+  async send(appId, appName, input) {
+    const message = rules.readMessage(input);
+    const app = this.store.seeApp(appId, appName);
+    const settings = this.settings();
+
+    const { person, handle, decision } = this.#judge(message, app, { display: input?.to?.display ?? '' });
     const to = message.to.channel ? `#${message.to.channel}` : (person?.display ?? handle ?? '');
     const record = (state, reason) =>
       this.store.addMessage({
@@ -251,6 +301,9 @@ class TeamsService {
     try {
       await this.deliver(row.payload, person);
       this.store.markSent(row.id);
+      // Counts as a message that went, because it did: the People screen said
+      // "never" for somebody who had just been written to.
+      if (person) this.store.notePersonSent(person.handle);
       this.changed();
       return { ok: true };
     } catch (error) {
@@ -258,6 +311,77 @@ class TeamsService {
       this.changed();
       return { ok: false, error: String(error?.message ?? error) };
     }
+  }
+
+  /**
+   * Let out what the hours or a ceiling held back.
+   *
+   * The whole promise of holding rather than dropping — the panel says
+   * "anything raised outside these hours waits for the morning" — and nothing
+   * kept it: `HELD` was written in one place and read by nobody, so the morning
+   * never came. Judged again from scratch, because the hours may still be
+   * closed, the ceiling may still be full, and the thing may since have been
+   * said another way.
+   *
+   * A hold does not last for ever. Something worth saying at 23:40 is worth
+   * saying at 09:00; the same thing three days later is just noise, so it is
+   * let go of and says so.
+   */
+  async releaseHeld() {
+    const out = [];
+    for (const row of this.store.held()) {
+      const age = this.now() - Date.parse(row.createdAt || 0);
+      if (!Number.isFinite(age) || age > rules.DAY_MS) {
+        this.store.markSkipped(row.id, 'held too long to be worth saying now');
+        out.push({ id: row.id, ok: false, why: 'too-old' });
+        continue;
+      }
+      const app = this.store.app(row.appId);
+      if (!app) continue;
+
+      // The same row, judged again — not a new one. A second row for one
+      // message would be counted twice by every ceiling, and its own age would
+      // start over, so a held message could never grow old enough to let go of.
+      const message = rules.readMessage(row.payload);
+      const { person, decision } = this.#judge(message, app);
+      if (decision.verdict === 'HOLD') continue;
+      if (decision.verdict === 'REFUSE') {
+        this.store.markSkipped(row.id, decision.detail ?? decision.why);
+        out.push({ id: row.id, ok: false, why: decision.why });
+        continue;
+      }
+      if (decision.verdict === 'ASK') {
+        this.store.markWaiting(row.id);
+        out.push({ id: row.id, ok: false, why: 'asks-first' });
+        continue;
+      }
+      this.store.markSending(row.id);
+      try {
+        await this.deliver(message, person);
+        this.store.markSent(row.id);
+        if (person) this.store.notePersonSent(person.handle);
+        out.push({ id: row.id, ok: true });
+      } catch (error) {
+        this.store.markFailed(row.id, String(error?.message ?? error));
+        out.push({ id: row.id, ok: false, why: 'failed' });
+      }
+    }
+    if (out.length) this.changed();
+    return out;
+  }
+
+  /** The clock the hold runs on: what was held back is looked at again. */
+  start() {
+    if (this.timer) return;
+    // Whatever a previous process left in flight is not in flight any more.
+    try { this.store.orphanedSends(); } catch { /* an empty outbox is the normal case */ }
+    this.timer = setInterval(() => { this.releaseHeld().catch(() => {}); }, HOLD_SWEEP_MS);
+    this.timer.unref?.();
+  }
+
+  stop() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
   }
 
   /** Say something to yourself, to find out whether any of this works. */

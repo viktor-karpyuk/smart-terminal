@@ -71,28 +71,43 @@ export function HistoryPanel() {
     return loose.length ? [...grouped, { key: 'loose', group: null, rows: loose }] : grouped;
   }, [rows, allGroups]);
 
-  const load = useCallback(async () => {
+  /*
+   * The answer to the question that is being asked, not to an older one.
+   *
+   * The debounce cancelled the timer but nothing cancelled a search already on
+   * its way, and a broader query takes longer — so typing "auth" then "authz"
+   * could leave "auth"'s results on screen under the word "authz", with the
+   * older search's `finally` clearing the spinner while the newer one was still
+   * running. Each run carries a flag its own cleanup clears.
+   */
+  const load = useCallback(async (alive: () => boolean) => {
     setBusy(true);
     try {
       const found = await window.api.history.sessions({ query, limit: 200 });
+      if (!alive()) return;
       setRows(found);
       if (query.trim()) {
         const withText = found.filter((row) => row.matchedTranscript).slice(0, 8);
         const pairs = await Promise.all(
           withText.map(async (row) => [row.id, await window.api.history.excerpts(row.id, query)] as const),
         );
+        if (!alive()) return;
         setExcerpts(Object.fromEntries(pairs));
       } else {
         setExcerpts({});
       }
     } finally {
-      setBusy(false);
+      if (alive()) setBusy(false);
     }
   }, [query]);
 
   useEffect(() => {
-    const timer = window.setTimeout(load, 180);
-    return () => window.clearTimeout(timer);
+    let live = true;
+    const timer = window.setTimeout(() => { void load(() => live); }, 180);
+    return () => {
+      live = false;
+      window.clearTimeout(timer);
+    };
   }, [load]);
 
   useEffect(() => {
@@ -127,7 +142,7 @@ export function HistoryPanel() {
               const removed = await window.api.history.clearHistory({});
               setConfirming(false);
               setCleared(removed);
-              load();
+              void load(() => true);
             }}
           >
             {confirming ? 'Sure? Clear' : 'Clear finished'}
@@ -220,7 +235,7 @@ export function HistoryPanel() {
                             for (const row of section.rows.filter((r) => r.open)) {
                               await window.api.sessions.stop(row.id);
                             }
-                            load();
+                            void load(() => true);
                           }}
                           onBlur={() => setPendingStop((id) => (id === section.key ? null : id))}
                         >
@@ -340,7 +355,7 @@ export function HistoryPanel() {
                         }
                         setPendingStop(null);
                         await window.api.sessions.stop(row.id);
-                        load();
+                        void load(() => true);
                       }}
                       onBlur={() => setPendingStop((id) => (id === row.id ? null : id))}
                     >
@@ -362,7 +377,7 @@ export function HistoryPanel() {
                         }
                         setPendingDelete(null);
                         await window.api.history.deleteSession(row.id);
-                        load();
+                        void load(() => true);
                       }}
                       onBlur={() => setPendingDelete((id) => (id === row.id ? null : id))}
                     >

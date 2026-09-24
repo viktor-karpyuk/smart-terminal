@@ -262,8 +262,20 @@ class TeamsStore {
 
   // --- messages ---------------------------------------------------------------
 
+  /**
+   * The outbox: the newest `limit`, and everything still waiting on somebody
+   * whether or not it fits in them.
+   *
+   * The count of what is waiting was never capped, but the rows were — so once a
+   * busy extension had sent sixty messages, the badge said one was waiting and
+   * the table had no row to press Send on. A message nobody can reach is a
+   * message that was not really asked about.
+   */
   messages({ limit = 100 } = {}) {
-    return this.all('SELECT * FROM tm_message ORDER BY created_at DESC LIMIT ?', Math.max(1, Number(limit) || 100)).map(messageRow);
+    const newest = this.all('SELECT * FROM tm_message ORDER BY created_at DESC LIMIT ?', Math.max(1, Number(limit) || 100)).map(messageRow);
+    const shown = new Set(newest.map((row) => row.id));
+    const owed = this.all("SELECT * FROM tm_message WHERE state IN ('WAITING', 'HELD') ORDER BY created_at DESC").map(messageRow);
+    return [...newest, ...owed.filter((row) => !shown.has(row.id))];
   }
 
   message(id) {
@@ -272,6 +284,25 @@ class TeamsStore {
 
   waiting() {
     return this.all("SELECT * FROM tm_message WHERE state = 'WAITING' ORDER BY created_at").map(messageRow);
+  }
+
+  /**
+   * Rows left mid-flight by a process that died, failed so they can be retried.
+   *
+   * A message is written as SENDING before it goes on the wire and moved when
+   * it lands. Kill the app in between and the row said "going now" for ever,
+   * with no button on it and no way to tell whether it went — the reviewer has
+   * `orphanedRuns` for exactly this and the outbox had nothing.
+   */
+  orphanedSends() {
+    const rows = this.all("SELECT id FROM tm_message WHERE state = 'SENDING'");
+    for (const row of rows) this.markFailed(row.id, 'the app stopped while this was going out');
+    return rows.length;
+  }
+
+  /** Messages held back by the hours or a ceiling, oldest first: the queue to release. */
+  held() {
+    return this.all("SELECT * FROM tm_message WHERE state = 'HELD' ORDER BY created_at").map(messageRow);
   }
 
   addMessage({ appId, key = null, personId = null, to = '', title = '', body = '', payload = {}, state, reason = null }) {
@@ -291,6 +322,16 @@ class TeamsStore {
 
   markFailed(id, reason) {
     this.run("UPDATE tm_message SET state = 'FAILED', reason = ?, attempts = attempts + 1 WHERE id = ?", String(reason ?? '').slice(0, 500), String(id));
+  }
+
+  /** Back to waiting on somebody: a held message whose extension now asks first. */
+  markWaiting(id) {
+    this.run("UPDATE tm_message SET state = 'WAITING', reason = NULL WHERE id = ?", String(id));
+  }
+
+  /** In flight. Written before the wire, never after: a failed row must carry no sent time. */
+  markSending(id) {
+    this.run("UPDATE tm_message SET state = 'SENDING', reason = NULL WHERE id = ?", String(id));
   }
 
   markSkipped(id, reason) {

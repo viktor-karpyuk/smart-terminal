@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { app } = require('electron');
+const { linesSince } = require('./jsonl-tail');
 
 const SNAPSHOT_INTERVAL = 8000;
 
@@ -386,19 +387,63 @@ class ContextStore {
     const file = coords
       ? transcriptPath(coords)
       : path.join(snapshotPath(sessionId), `${db.getSession(sessionId)?.claudeSessionId}.jsonl`);
-
-    let content;
-    try {
-      content = fs.readFileSync(file, 'utf8');
-    } catch {
-      return 0;
-    }
-
     const withCommands = coords?.withCommands ?? true;
 
+    /*
+     * Where this session's reading got to, and under what terms.
+     *
+     * A transcript only grows, so the rows past this offset are the only ones
+     * that can be new. `rows` counts what has been handed to the database, which
+     * is what makes each new row's sequence number knowable without having seen
+     * the rows before it — the thing that used to cost a full read and a full
+     * parse of the whole conversation, every eight seconds, for ever.
+     *
+     * `withCommands` is part of the state because it decides which rows are
+     * dropped, and therefore how the rest are numbered: change it and every
+     * sequence number after the change would mean something different. So a
+     * change starts the conversation again rather than continuing it.
+     */
+    const state =
+      coords?.ingest?.file === file && coords.ingest.withCommands === withCommands
+        ? coords.ingest
+        : { file, offset: 0, rows: 0, withCommands };
+    if (coords) coords.ingest = state;
+
+    const found = linesSince(file, state.offset);
+    if (!found) return 0;
+    // A shorter file is not this one: the session restarted without its
+    // conversation, so nothing counted before means anything now — and that
+    // includes what is already stored, or the new conversation would be filed
+    // after the end of the old one as though the two were a single thread.
+    if (found.restarted) {
+      state.offset = 0;
+      state.rows = 0;
+      db.resetTranscript?.(sessionId);
+      return this.#restart(db, sessionId, file, state, withCommands);
+    }
+    return this.#write(db, sessionId, state, found.lines, withCommands, found.offset);
+  }
+
+  /** Read the file from the beginning, when an offset turned out not to fit. */
+  #restart(db, sessionId, file, state, withCommands) {
+    const found = linesSince(file, 0);
+    if (!found) return 0;
+    return this.#write(db, sessionId, state, found.lines, withCommands, found.offset);
+  }
+
+  /*
+   * The offset and the count move together, and only once the write has taken.
+   *
+   * Advancing the offset first meant a database that threw — busy, full, a
+   * trigger that failed — left the reader past rows it had never stored, and
+   * the caller swallows that throw to keep the loop alive. The rows between
+   * were then gone for the life of the process, with no gap for the sequence
+   * check to catch. Left where they were, the same tail is simply offered
+   * again next tick and the database skips what it already holds.
+   */
+  #write(db, sessionId, state, lines, withCommands, nextOffset) {
     const rows = [];
-    for (const line of content.split('\n')) {
-      if (!line.trim()) continue;
+    for (const line of lines) {
       try {
         for (const row of entriesFrom(JSON.parse(line))) {
           // What a command printed is the bulk of a conversation's size, and the
@@ -408,10 +453,29 @@ class ContextStore {
           rows.push(row);
         }
       } catch {
-        continue; // a half-written last line is normal while a session is live
+        continue; // a row from a format this version does not know
       }
     }
-    return db.ingestTranscript(sessionId, rows);
+    if (!rows.length) {
+      state.offset = nextOffset;
+      return 0;
+    }
+
+    const written = db.ingestTranscript(sessionId, rows, { from: state.rows });
+    /*
+     * The database has fewer rows than this offset claims — it was pruned, or
+     * this is a copy being read for the first time. Writing from here would
+     * leave a hole nothing later fills, so the whole conversation is offered
+     * again and the count starts from what it really holds.
+     */
+    if (written < 0) {
+      state.rows = 0;
+      state.offset = 0;
+      return 0;
+    }
+    state.rows += rows.length;
+    state.offset = nextOffset;
+    return written;
   }
 
   /**

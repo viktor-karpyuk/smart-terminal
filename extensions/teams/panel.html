@@ -280,6 +280,10 @@
         '<td class="faint">' + esc(when(app.lastAskedAt) || '—') + '</td></tr>';
     });
     html += '</table>';
+    // The other ceiling, on the Delivery tab, has said this since it was drawn.
+    // This one meant the same thing and never said it, so typing 0 here to stop
+    // an extension read as "no ceiling" and did the opposite.
+    html += '<div class="help">Zero means no ceiling, not a ban. To stop an extension, set <em>May send</em> to Never.</div>';
     return html + contract() + '</div>';
   }
 

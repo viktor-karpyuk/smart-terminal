@@ -192,6 +192,18 @@ class ReviewGit {
    */
   async dropCommit(dir, branch, sha) {
     if (await this.isDirty(dir)) return { ok: false, how: null, output: 'The workshop has uncommitted changes; commit or discard them first.' };
+    /*
+     * Reset moves whatever HEAD is on, and the check above it asks about a named
+     * branch. Nothing guarantees the workshop is on that branch: a pull request
+     * retargeted to another source branch leaves the workshop checked out
+     * somewhere else, and dropping an older fix then discarded the newest
+     * commits of the branch it happened to be on — including fixes not handed
+     * back. Asked about the branch, so acted on the branch.
+     */
+    const on = await this.currentBranch(dir);
+    if (on !== branch) {
+      return { ok: false, how: null, output: `The workshop is on "${on ?? '?'}", not "${branch}". Discard it and start again if you want to drop this fix.` };
+    }
     if (await this.isTip(dir, branch, sha)) {
       const res = await this.run(dir, ['reset', '--hard', `${sha}^`]);
       return { ok: res.ok, how: 'reset', output: res.output };
@@ -287,6 +299,19 @@ class ReviewGit {
     return (await this.run(dir, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])).ok;
   }
 
+  /**
+   * Whether everything in `older` is already in `newer`.
+   *
+   * What "the branch moved on" really means. A workshop whose head is an
+   * ancestor of the tip has nothing the tip does not, so putting it at the tip
+   * loses nothing; a workshop that is not an ancestor is carrying work — a fix
+   * handed back into the clone but not pushed to the forge is exactly that, and
+   * it is invisible in the forge's tip by definition.
+   */
+  async isAncestor(dir, older, newer) {
+    return (await this.run(dir, ['merge-base', '--is-ancestor', older, newer])).ok;
+  }
+
   async isDirty(dir) {
     return Boolean((await this.run(dir, ['status', '--porcelain'])).stdout.trim());
   }
@@ -365,11 +390,18 @@ class ReviewGit {
     const fetched = (await this.run(dir, ['fetch', 'origin', `+refs/remotes/origin/${branch}:${tipRef}`])).ok;
     let base = fetched && (await this.revParse(dir, tipRef)) ? tipRef : branch;
     if (base === branch && !(await this.revParse(dir, branch)) && !(await this.revParse(dir, `origin/${branch}`))) {
-      // The clone only knows the branch as origin/<branch>; make it a branch there so the workshop can see it.
-      if ((await this.revParse(origin, `origin/${branch}`)) && (await this.run(origin, ['branch', branch, `origin/${branch}`])).ok) {
-        await this.run(dir, ['fetch', 'origin', '--quiet']);
-        base = `origin/${branch}`;
-      }
+      /*
+       * The clone knows the branch only as a remote-tracking ref, so ask for
+       * that ref by name.
+       *
+       * This used to run `git branch` in the person's own clone to give the
+       * workshop something to see — leaving branches in their repository that
+       * they never made, while both this file's own header and the repository
+       * form promise that a review never writes to their working copy. Fetching
+       * the ref straight into the workshop needs nothing of theirs to change.
+       */
+      const pulled = await this.run(dir, ['fetch', 'origin', `+refs/heads/${branch}:${tipRef}`]);
+      if (pulled.ok && (await this.revParse(dir, tipRef))) base = tipRef;
     }
     const exists = Boolean(await this.revParse(dir, `refs/heads/${branch}`));
     if (!exists) {
@@ -387,6 +419,21 @@ class ReviewGit {
       log('The PR moved, but the workshop has fixes not handed back yet: fixing on top of those. Hand them back and discard the workshop to start from the new tip.');
     } else if (await this.isDirty(dir)) {
       log('The workshop has uncommitted changes; not moving it.');
+    } else if (!(await this.isAncestor(dir, here, tip))) {
+      /*
+       * The workshop is not behind the tip, it is carrying something the tip
+       * has not got.
+       *
+       * Handing a fix back and pushing it are two buttons on purpose, so the
+       * ordinary way to work is several fixes handed back and one push at the
+       * end. In between, those commits are in the clone and not on the forge —
+       * so the forge's tip differs from the workshop's head while the workshop
+       * is *ahead*. Read as "the PR moved", this reset the workshop to before
+       * the fixes, wrote the next fix against code that did not contain them,
+       * and the hand-back after that was refused as a non-fast-forward with
+       * nothing left to do but discard the workshop.
+       */
+      log('The workshop is ahead of the pull request: it holds fixes the forge has not got yet. Leaving it where it is.');
     } else {
       log(`The PR moved: putting the workshop at ${tip.slice(0, 7)}.`);
       await this.run(dir, ['checkout', '-B', branch, tipRef]);

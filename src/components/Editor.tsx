@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { EditorState, type Extension } from '@codemirror/state';
+import { Annotation, EditorState, Transaction, type Extension } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
@@ -245,6 +245,9 @@ interface Props {
   onSelection(from: number, to: number, text: string): void;
 }
 
+/** Marks a change this component made to match the store, rather than a keystroke. */
+const fromStore = Annotation.define<boolean>();
+
 export function Editor({ path, onSave, onSelection }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -293,7 +296,13 @@ export function Editor({ path, onSave, onSelection }: Props) {
           ]),
           EditorState.readOnly.of(readOnly),
           EditorView.updateListener.of((update) => {
-            if (update.docChanged) {
+            // A change this component made to match the store is not somebody
+            // typing, and reporting it as one wiped the very thing that caused
+            // it: `editBuffer` clears `reloadedAt`, so the "a session just
+            // changed this file" notice was erased within a frame of appearing,
+            // every time — visible only on the preview-only view, where no
+            // editor is mounted to erase it.
+            if (update.docChanged && !update.transactions.some((one) => one.annotation(fromStore))) {
               useStore.getState().editBuffer(path, update.state.doc.toString());
             }
             if (update.selectionSet) {
@@ -332,6 +341,14 @@ export function Editor({ path, onSave, onSelection }: Props) {
       changes: { from: 0, to: current.length, insert: text },
       // Keep the caret where it was when the new text is long enough to hold it.
       selection: { anchor: Math.min(view.state.selection.main.anchor, text.length) },
+      /*
+       * And it is not somebody's edit to undo either: `history` leaves a
+       * transaction carrying this annotation out of the undo stack. Without it a
+       * file rewritten by a session landed in that stack, so the next Cmd+Z put
+       * the old text back and marked the buffer dirty against what is really on
+       * disk — an undo that makes a conflict out of nothing.
+       */
+      annotations: [fromStore.of(true), Transaction.addToHistory.of(false)],
     });
   }, [text]);
 

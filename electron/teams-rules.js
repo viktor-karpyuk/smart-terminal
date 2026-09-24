@@ -110,6 +110,8 @@ function decide({
 
   if (app.stance === 'ASK') return { verdict: 'ASK', why: 'asks-first' };
 
+  // Zero is no ceiling, not a ban — the same as the per-person one, and the
+  // Apps tab now says so where it always meant it.
   if (app.dailyCap > 0 && sentByAppToday >= app.dailyCap) {
     return { verdict: 'HOLD', why: 'app-cap', detail: `${app.name} has sent its ${app.dailyCap} for today` };
   }
@@ -146,22 +148,39 @@ function describeAge(ms) {
 function readHandle(value) {
   const text = String(value ?? '').trim();
   if (!text) return null;
+  /*
+   * One person, one row.
+   *
+   * Only the kind was folded, and the row is unique on the whole string — so
+   * `email:Bob.Smith@corp.com`, which is how a forge reports a display address,
+   * and `email:bob.smith@corp.com`, which is how anything else writes it, were
+   * two people: two rows in the list, two matches to make by hand, and "at most
+   * one message per person per day" counting them separately, so Bob got two.
+   * The name as written is kept for showing; the handle is what is matched on.
+   */
+  const fold = (name) => name.toLowerCase();
   const cut = text.indexOf(':');
   if (cut > 0) {
     const kind = text.slice(0, cut).toLowerCase();
     const name = text.slice(cut + 1).trim();
-    if (name) return { kind, name, handle: `${kind}:${name}` };
+    if (name) return { kind, name, handle: `${kind}:${fold(name)}` };
   }
-  if (text.includes('@')) return { kind: 'email', name: text, handle: `email:${text}` };
-  return { kind: 'handle', name: text, handle: `handle:${text}` };
+  if (text.includes('@')) return { kind: 'email', name: text, handle: `email:${fold(text)}` };
+  return { kind: 'handle', name: text, handle: `handle:${fold(text)}` };
 }
 
-/** The address a handle implies on its own, when it implies one at all. */
+/*
+ * The address a handle gives away on its own, when that is allowed.
+ *
+ * An `email:` handle used to be answered before the switch was consulted, so
+ * turning "match by address on its own" off left it matching exactly the
+ * handles most obviously made of an address. Off means off.
+ */
 function addressFrom(handle, { matchByEmail = true } = {}) {
   const read = readHandle(handle);
-  if (!read) return null;
+  if (!read || !matchByEmail) return null;
   if (read.kind === 'email') return read.name;
-  return matchByEmail && read.name.includes('@') ? read.name : null;
+  return read.name.includes('@') ? read.name : null;
 }
 
 const DAY_MS = DAY;

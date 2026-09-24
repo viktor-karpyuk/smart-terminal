@@ -396,7 +396,7 @@ class FixEngine {
       const checkedOut = (await this.git.currentBranch(repo.localPath)) === branch;
       throw new Error(checkedOut ? `The clone is on "${branch}": switch it to another branch and hand back again.` : pushed.output.slice(0, 300));
     }
-    this.store.markReturned(repoId, prId, upToFixId);
+    this.store.markReturned(chosen.map((fix) => fix.id));
     this.engine.changed(repoId, prId);
     return { ok: true, count: chosen.length, left: pending.length - chosen.length };
   }
@@ -406,6 +406,15 @@ class FixEngine {
     const repo = this.engine.requireRepo(repoId);
     const dir = this.dirFor(repo, prId);
     if (!fs.existsSync(dir)) return { ok: true };
+    /*
+     * A fix running in there is using this directory as its working tree, and
+     * `force` is about the fixes waiting to be handed back, not about pulling
+     * the floor out from under a run in progress. Deleting it mid-run killed
+     * the run, failed the fix, and threw away work already written to disk —
+     * so this one is refused either way.
+     */
+    const busy = this.running().filter((run) => run.repoId === repoId && String(run.prId) === String(prId));
+    if (busy.length) throw new Error('A fix is being written in this workshop right now. Wait for it to finish, or cancel it first.');
     if (!force) {
       const pending = this.store.pendingReturn(repoId, prId);
       if (pending.length) throw new Error(`${pending.length} fix(es) have not been handed back. Hand them back before discarding.`);

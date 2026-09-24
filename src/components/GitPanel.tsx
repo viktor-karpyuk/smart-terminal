@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { startDrag } from '../lib/resize';
 import { asFilePanel, useStore } from '../state/store';
 import type { GitBranch, GitCommit, GitFile } from '../global';
 import { Popover } from './Popover';
@@ -446,14 +447,7 @@ function ListResizer({ panelId }: { panelId: string }) {
           /* no capture; the window listeners still see the whole drag */
         }
         const onMove = (move: PointerEvent) => setFrom(move.clientX, element);
-        const onUp = () => {
-          window.removeEventListener('pointermove', onMove);
-          window.removeEventListener('pointerup', onUp);
-          document.body.classList.remove('resizing');
-        };
-        document.body.classList.add('resizing');
-        window.addEventListener('pointermove', onMove);
-        window.addEventListener('pointerup', onUp);
+        startDrag(onMove);
       }}
     />
   );
@@ -641,6 +635,22 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
   const loaded = useRef<string | null>(null);
 
   /** Ticking Amend is a question asked of git, not a flag flipped in the panel. */
+  /*
+   * An amend belongs to the repository it was started in. Pointing the panel at
+   * another folder leaves the tick, the message and the selected file untouched,
+   * so "rewriting <sha>" stayed on screen above a commit box for a repository
+   * that has a different HEAD.
+   */
+  const amendRoot = useRef<string | null>(null);
+  useEffect(() => {
+    if (amendRoot.current !== null && amendRoot.current !== root && panel?.amend) {
+      patch(panelId, { amend: false, message: '' });
+      draft.current = null;
+      loaded.current = null;
+    }
+    amendRoot.current = root;
+  }, [root, panelId, panel?.amend, patch]);
+
   const toggleAmend = async (id: string, on: boolean) => {
     const before = asFilePanel(useStore.getState().panels[id]);
 
@@ -658,9 +668,15 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
     const result = await window.api.git.call('head', root, {});
     if (!result?.ok) return;
     const now = asFilePanel(useStore.getState().panels[id]);
-    // An answer that arrives late must not land on a box somebody has moved on
-    // from — unticked in the meantime, or typed into while it was being fetched.
-    if (!now?.amend || now.message.trim()) return;
+    /*
+     * An answer that arrives late must not land on a box somebody has moved on
+     * from — unticked in the meantime, typed into while it was being fetched,
+     * or pointed at a different repository. The folder chooser leaves `amend`
+     * and the message where they were, so without the last check one
+     * repository's HEAD message could land in the box above another
+     * repository's "rewriting <sha>".
+     */
+    if (!now?.amend || now.message.trim() || now.gitRoot !== before?.gitRoot) return;
     loaded.current = result.message ?? '';
     patch(id, { message: loaded.current });
   };
@@ -703,19 +719,30 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
 
   if (!panel || !root) return null;
 
+  /*
+   * A rename is one row and two paths.
+   *
+   * Only the new name was ever sent, so unticking a renamed file — or pressing
+   * Deselect all — took `new.txt` out of the commit and left `D old.txt` in it.
+   * The panel then read "1 of 2 staged" with Commit still enabled, and
+   * committing removed the file you were trying not to touch. Both names, every
+   * time: git wants the pair to move together.
+   */
+  const pathsOf = (file: GitFile) => (file.from ? [file.path, file.from] : [file.path]);
+
   const toggle = (file: GitFile) =>
-    gitDo(root, file.staged || file.partial ? 'unstage' : 'stage', { paths: [file.path] }, 'Staging');
+    gitDo(root, file.staged || file.partial ? 'unstage' : 'stage', { paths: pathsOf(file) }, 'Staging');
 
   // Everything in one call rather than one call per file: forty files is forty
   // git processes and forty refreshes, and the list flickering its way through
   // them looks like something going wrong.
   const selectAll = () =>
-    gitDo(root, 'stage', { paths: files.map((file) => file.path) }, 'Staging everything');
+    gitDo(root, 'stage', { paths: files.flatMap(pathsOf) }, 'Staging everything');
   const deselectAll = () =>
     gitDo(
       root,
       'unstage',
-      { paths: files.filter((file) => file.staged || file.partial).map((file) => file.path) },
+      { paths: files.filter((file) => file.staged || file.partial).flatMap(pathsOf) },
       'Taking everything back out',
     );
 
@@ -1091,17 +1118,33 @@ function Patch({ text }: { text: string }) {
     const out: Array<{ kind: string; text: string; before: number | null; after: number | null }> = [];
     let before = 0;
     let after = 0;
+    /*
+     * Headers only before the first hunk.
+     *
+     * A file's headers all come before its first `@@`, and inside a hunk every
+     * line is content with one marker character in front of it — so a deleted
+     * line whose text is `-- ` arrives as `--- `, which the header pattern
+     * matched. It was dropped without counting, and every "before" line number
+     * under it was one out from there on.
+     */
+    let inHunk = false;
     for (const line of text.split('\n')) {
       // `@@ -12,7 +12,9 @@` — where the next run of lines sits in each side.
       const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
       if (hunk) {
         before = Number(hunk[1]);
         after = Number(hunk[2]);
+        inHunk = true;
         out.push({ kind: 'hunk', text: line, before: null, after: null });
         continue;
       }
       // The file headers say nothing the panel is not already showing.
-      if (/^(diff --git|index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode)/.test(line)) {
+      if (!inHunk && /^(diff --git|index |--- |\+\+\+ |new file|deleted file|similarity|rename |old mode|new mode)/.test(line)) {
+        continue;
+      }
+      // A new file's headers start again, so the next one's are skipped too.
+      if (line.startsWith('diff --git ')) {
+        inHunk = false;
         continue;
       }
       if (line.startsWith('+')) {
@@ -1190,8 +1233,21 @@ function History({ panelId }: { panelId: string }) {
   const patch = useStore((s) => s.patchPanel);
   const refreshRepo = useStore((s) => s.refreshRepo);
 
+  /*
+   * Asked once per folder, not once per answer.
+   *
+   * `repo` was in the dependencies and a read writes a new `repos[root]` twice,
+   * so a repository whose answer is legitimately empty — one you have just
+   * `git init`ed, which is exactly when you open this tab — re-fired the effect
+   * that had just written it and spawned `git log` again, back to back, for as
+   * long as the tab was on screen.
+   */
+  const askedGraph = useRef<string | null>(null);
   useEffect(() => {
-    if (root && repo && !repo.commits.length && !repo.loading) refreshRepo(root, 'graph');
+    if (!root || !repo || repo.loading) return;
+    if (repo.commits.length || askedGraph.current === root) return;
+    askedGraph.current = root;
+    refreshRepo(root, 'graph');
   }, [root, repo, refreshRepo]);
 
   if (!panel || !root) return null;
@@ -1304,10 +1360,22 @@ function CommitDetail({
   const gitDo = useStore((s) => s.gitDo);
   const refreshRepo = useStore((s) => s.refreshRepo);
 
+  /*
+   * The list belongs to the commit above it, or there is no list.
+   *
+   * It was never cleared when the sha changed and never set when a read failed,
+   * so clicking from one commit to the next showed the first commit's files
+   * under the second one's header — and permanently if the read failed, which
+   * it does for a sha that went away in a force-push while the panel was open.
+   * Revert sits on the same screen and acts on the header's commit, so reading
+   * one commit's files and pressing it reverted a different one.
+   */
   useEffect(() => {
     let alive = true;
+    setFiles([]);
     window.api.git.call('commitFiles', root, { sha }).then((result) => {
-      if (alive && result.ok) setFiles((result.value as never) ?? (result as { files?: never }).files ?? []);
+      if (!alive) return;
+      setFiles(result.ok ? ((result.value as never) ?? (result as { files?: never }).files ?? []) : []);
     });
     return () => {
       alive = false;
@@ -1395,8 +1463,14 @@ function Branches({ panelId }: { panelId: string }) {
   const gitDo = useStore((s) => s.gitDo);
   const refreshRepo = useStore((s) => s.refreshRepo);
 
+  // Same shape as the history tab above: no local branches exist until the first
+  // commit, so an empty answer is an answer and must not ask again for ever.
+  const askedRefs = useRef<string | null>(null);
   useEffect(() => {
-    if (root && repo && !repo.local.length && !repo.loading) refreshRepo(root, 'refs');
+    if (!root || !repo || repo.loading) return;
+    if (repo.local.length || askedRefs.current === root) return;
+    askedRefs.current = root;
+    refreshRepo(root, 'refs');
   }, [root, repo, refreshRepo]);
 
   if (!panel || !root) return null;

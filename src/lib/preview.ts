@@ -156,10 +156,35 @@ function styles(dark: boolean): string {
  * would be showing something other than the file. Its own `<style>` applies;
  * anything it loads from beside itself does not.
  */
+/**
+ * A `<base>` for a previewed page, so what it points at resolves.
+ *
+ * The preview is handed to the frame as a document rather than loaded from a
+ * URL, so its base is `about:srcdoc` and every relative link, stylesheet, image
+ * and `#anchor` in it is dead — silently, with nothing on screen saying why. A
+ * base of the file's own folder makes them mean what they say. It is inserted
+ * as the first thing in `<head>` because a `<base>` only governs what follows
+ * it, and added only when the page has not declared one of its own.
+ */
+function withBase(text: string, path: string): string {
+  if (/<base\b/i.test(text)) return text;
+  const dir = path.slice(0, path.lastIndexOf('/') + 1);
+  if (!dir) return text;
+  const tag = `<base href="file://${encodeURI(dir)}">`;
+  const head = /<head\b[^>]*>/i.exec(text);
+  if (head) return text.slice(0, head.index + head[0].length) + tag + text.slice(head.index + head[0].length);
+  const html = /<html\b[^>]*>/i.exec(text);
+  if (html) return text.slice(0, html.index + html[0].length) + `<head>${tag}</head>` + text.slice(html.index + html[0].length);
+  return tag + text;
+}
+
 export function previewDocument(path: string, text: string, dark: boolean, openTo = 3, kind = previewKind(path)): string {
   // An SVG and an HTML page are both already documents; anything done to them
-  // would be showing something other than the file.
-  if (kind === 'html' || kind === 'svg') return text;
+  // would be showing something other than the file — beyond telling the frame
+  // where the file lives, which is the one thing a document cannot say about
+  // itself and the one thing it needs to resolve what it points at.
+  if (kind === 'svg') return text;
+  if (kind === 'html') return withBase(text, path);
   if (kind === 'xml') return xmlDocument(text, dark, openTo);
   if (kind === 'dockerfile' || kind === 'shell') return scriptDocument(text, kind === 'dockerfile' ? 'dockerfile' : 'shell', dark, openTo);
   if (kind === 'yaml') return yamlDocument(text, dark, openTo);
@@ -250,7 +275,7 @@ export function parseXml(source: string): XmlNode[] {
       continue;
     }
 
-    const end = source.indexOf('>', next);
+    const end = tagEnd(source, next);
     if (end === -1) {
       // A tag with no closing bracket: the rest of the file is that tag. Shown
       // as text rather than dropped, because a broken file still has to be read.
@@ -369,7 +394,7 @@ export function xmlSpans(text: string, inComment = false): { spans: Span[]; inCo
       continue;
     }
 
-    const shut = text.indexOf('>', open);
+    const shut = tagEnd(text, open);
     const to = shut === -1 ? text.length : shut + 1;
     spans.push(...tagSpans(text.slice(open, to), open));
     i = to;
@@ -490,14 +515,47 @@ const SHELL_WORDS = new Set([
   'function', 'return', 'exit', 'local', 'export', 'set', 'source', 'trap', 'shift', 'readonly',
 ]);
 
+/**
+ * Where a tag really ends.
+ *
+ * `indexOf('>')` finds the first one, and a `>` inside an attribute value is an
+ * ordinary character — so `<xsl:when test="$n > 5">` was cut in half, the rest
+ * of its attribute was lost and `5">` leaked out into the document as text.
+ * Quotes are skipped over, which is all XML needs: an attribute value cannot
+ * contain its own delimiter unescaped.
+ */
+function tagEnd(source: string, from: number): number {
+  let quote: string | null = null;
+  for (let i = from; i < source.length; i += 1) {
+    const ch = source[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === '>') return i;
+  }
+  return -1;
+}
+
 type Line = { n: number; text: string };
 type Section = { title: string | null; subtitle: string | null; lines: Line[] };
 
-/** A banner comment: `# --- doing the thing ---`, or `#### Setup ####`. */
+/**
+ * A banner comment: `# --- doing the thing ---`, or `#### Setup ####`.
+ *
+ * The decoration is what makes it a banner. Both runs of it were optional, so
+ * every ordinary `# install deps` between three and sixty characters became a
+ * section heading of its own and a shell script came out as a list of folds one
+ * comment long. A banner is a rule of `-`, `=`, `*` or extra `#` on at least one
+ * side, or several `#` to open with — which is what anybody writing one does.
+ */
 function bannerOf(text: string): string | null {
-  const match = /^\s*#+\s*[-=*#\s]*([A-Za-z][^-=*#]*?)[-=*#\s]*$/.exec(text);
+  const match = /^\s*(#+)(\s*[-=*#]+\s*|\s+)([A-Za-z][^-=*#]*?)(\s*[-=*#]+\s*|\s*)$/.exec(text);
   if (!match) return null;
-  const title = match[1].trim();
+  const decorated = /[-=*#]/.test(match[2]) || /[-=*#]/.test(match[4]) || match[1].length > 1;
+  if (!decorated) return null;
+  const title = match[3].trim();
   return title.length >= 3 && title.length <= 60 ? title : null;
 }
 

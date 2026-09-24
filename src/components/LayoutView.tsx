@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useRef } from 'react';
+import { startDrag as beginDrag } from '../lib/resize';
 import type { LayoutNode, SplitNode } from '../state/types';
 import { useStore } from '../state/store';
 import { Pane } from './Pane';
@@ -41,15 +42,7 @@ function Split({ node }: { node: SplitNode }) {
         resizeSplit(node.id, next);
       };
 
-      const onUp = () => {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        document.body.classList.remove('resizing');
-      };
-
-      document.body.classList.add('resizing');
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
+      beginDrag(onMove);
     },
     [node, resizeSplit],
   );

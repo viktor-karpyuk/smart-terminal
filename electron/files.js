@@ -168,7 +168,8 @@ async function findInTree(root, query, { limit = 200, maxEntries = 40000, maxMs 
     for (const entry of entries) {
       scanned += 1;
       const isHidden = entry.name.startsWith('.');
-      if (isHidden && !wantsHidden) continue;
+      // Skipped, and said to have been: see the note further down.
+      if (isHidden && !wantsHidden) { cut = true; continue; }
       const full = path.join(dir, entry.name);
       const relative = path.relative(root, full);
       // A link is not followed while searching: two of them pointing at each
@@ -187,7 +188,18 @@ async function findInTree(root, query, { limit = 200, maxEntries = 40000, maxMs 
           depth: relative.split(path.sep).length,
         });
       }
-      if (isDirectory && !NEVER_WALK.has(entry.name) && !entry.isSymbolicLink()) queue.push(full);
+      /*
+       * Somewhere not looked in is somewhere the answer might be.
+       *
+       * `cut` means "this is not the whole answer", and only running out of
+       * time or entries used to set it — while `node_modules`, `vendor`,
+       * `target`, every dotted folder and every symlinked one were walked past
+       * in silence. So a search said "Nothing here is called that" about a file
+       * visible in the tree two rows up. It is the same sentence either way;
+       * what changes is whether the panel is allowed to say "nothing".
+       */
+      if (isDirectory && (NEVER_WALK.has(entry.name) || entry.isSymbolicLink())) cut = true;
+      else if (isDirectory) queue.push(full);
     }
   }
 

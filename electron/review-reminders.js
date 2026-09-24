@@ -55,6 +55,18 @@ function readRules(stored = {}) {
   return Object.keys(RULES).map((id) => readRule(id, stored[id] ?? {}));
 }
 
+/*
+ * A key names the thing being said, not the day it is being said on.
+ *
+ * All three keys used to end in a number that grew — how many days unanswered,
+ * how old the pull request is — so no two days ever produced the same key, and
+ * the delivery extension's "the same thing is not said twice within N days"
+ * could never match anything. A pull request nobody had reviewed sent a message
+ * every single day for three weeks, each one passing the check because the key
+ * had moved. The age belongs in the words, where somebody reads it; the key is
+ * only what tells "this again" from "something new".
+ */
+
 /**
  * Whether a pull request has tripped a rule, and what to say about it.
  *
@@ -87,7 +99,7 @@ function dueFor({ row, threads = [], rules, skipMine = true, me = null }) {
         rule: unanswered,
         to: pr.author,
         days: longest,
-        key: `code-review:${row.repoId}:${pr.id}:unanswered:${longest}`,
+        key: `code-review:${row.repoId}:${pr.id}:unanswered`,
         title: `${row.repoName} #${pr.id} is waiting on you`,
         body: waiting.length === 1
           ? `A comment has had no answer for ${longest} days.`
@@ -107,7 +119,7 @@ function dueFor({ row, threads = [], rules, skipMine = true, me = null }) {
         rule: stalled,
         to: pr.author,
         days: since,
-        key: `code-review:${row.repoId}:${pr.id}:no-commits:${since}`,
+        key: `code-review:${row.repoId}:${pr.id}:no-commits`,
         title: `${row.repoName} #${pr.id} is waiting on you`,
         body: `Changes were asked for ${since} days ago and no commit has arrived since.`,
         quote: null,
@@ -121,7 +133,7 @@ function dueFor({ row, threads = [], rules, skipMine = true, me = null }) {
       rule: unreviewed,
       to: null, // yourself: there is nobody else to tell
       days: row.ageDays,
-      key: `code-review:${row.repoId}:${pr.id}:unreviewed:${row.ageDays}`,
+      key: `code-review:${row.repoId}:${pr.id}:unreviewed`,
       title: `${row.repoName} #${pr.id} has not been reviewed`,
       body: `It has been open ${row.ageDays} days by ${pr.author}, and nothing has looked at it.`,
       quote: pr.title,

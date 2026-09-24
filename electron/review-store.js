@@ -653,7 +653,23 @@ class ReviewStore {
         ...(pr.changesRequestedBy ?? []).map((who) => [who, 'CHANGES_REQUESTED']),
       ];
       const before = this.all('SELECT approved_by, by_us, approved_at, state FROM cr_pr_approval WHERE repo_id = ? AND pr_id = ?', repoId, prId);
-      const ours = new Set(before.filter((row) => row.by_us).map((row) => row.approved_by));
+      /*
+       * Which of these is us, matched the way people are matched everywhere
+       * else: without regard to case.
+       *
+       * Our own row is written under the "your name on the forge" setting,
+       * which is free text and defaults to empty — stored as the literal "us" —
+       * while the forge reports a display name. An exact byte match therefore
+       * failed for almost everybody, and the next refresh, ten minutes later,
+       * quietly rebuilt the row with `by_us = 0`. "Changes requested by us"
+       * vanished from the board, and the rule that chases a branch nobody has
+       * pushed to could never fire again on that pull request.
+       */
+      const fold = (who) => String(who ?? '').trim().toLowerCase();
+      const me = fold(this.pref('me.author', ''));
+      const ours = new Set(before.filter((row) => row.by_us).map((row) => fold(row.approved_by)));
+      if (me) ours.add(me);
+      const isUs = (who) => ours.has(fold(who));
       /*
        * When somebody took this position, not when we last looked.
        *
@@ -666,7 +682,7 @@ class ReviewStore {
       this.run('DELETE FROM cr_pr_approval WHERE repo_id = ? AND pr_id = ?', repoId, prId);
       for (const [who, state] of stances) {
         this.run('INSERT OR REPLACE INTO cr_pr_approval (repo_id, pr_id, approved_by, by_us, approved_at, state) VALUES (?,?,?,?,?,?)',
-          repoId, prId, who, bool(ours.has(who)), since.get(`${who}\u0000${state}`) ?? now(), state);
+          repoId, prId, who, bool(isUs(who)), since.get(`${who}\u0000${state}`) ?? now(), state);
       }
     });
   }
@@ -1033,16 +1049,44 @@ class ReviewStore {
    * owes — so settling would not settle anything. Published ones are history
    * and are left alone.
    */
+  /**
+   * Everything owed under these comments, however deep it sits.
+   *
+   * A thread is not two levels. An answer to our answer is registered as a
+   * draft too — "or the conversation would stop at its first turn" — and it
+   * hangs off our reply's id, not the finding's. Matching only direct children
+   * left those drafts owed after the finding was settled, so the pull request
+   * read as fully ready and refused to merge in the same breath, with a blocker
+   * naming a reply nobody could see was outstanding.
+   */
   dismissDraftsUnder(repoId, prId, ourCommentIds) {
-    const ids = [...new Set(ourCommentIds.filter(Boolean).map(String))];
-    if (!ids.length) return 0;
-    const marks = ids.map(() => '?').join(',');
+    const roots = [...new Set(ourCommentIds.filter(Boolean).map(String))];
+    if (!roots.length) return 0;
+
+    // Walk down from the roots: their children, their children's children, and
+    // so on. A thread is a handful of comments, so this is a few small steps.
+    const under = new Set(roots);
+    let frontier = roots;
+    while (frontier.length) {
+      const marks = frontier.map(() => '?').join(',');
+      const next = this.all(
+        `SELECT comment_id FROM cr_pr_comment
+          WHERE repo_id = ? AND pr_id = ? AND parent_id IN (${marks})`,
+        repoId, Number(prId), ...frontier,
+      )
+        .map((row) => String(row.comment_id))
+        .filter((id) => !under.has(id));
+      next.forEach((id) => under.add(id));
+      frontier = next;
+    }
+
+    const marks = [...under].map(() => '?').join(',');
     const rows = this.all(
       `SELECT r.id FROM cr_reply_draft r
          JOIN cr_pr_comment c ON c.comment_id = r.their_comment_id AND c.repo_id = r.repo_id AND c.pr_id = r.pr_id
         WHERE r.repo_id = ? AND r.pr_id = ? AND r.status <> 'PUBLISHED' AND r.dismissed_at IS NULL
           AND c.parent_id IN (${marks})`,
-      repoId, Number(prId), ...ids,
+      repoId, Number(prId), ...under,
     );
     for (const row of rows) this.dismissReply(row.id, true);
     return rows.length;
@@ -1167,17 +1211,20 @@ class ReviewStore {
    * commit you choose goes with it. Offering to hand back the third and not the
    * first would be a promise git cannot keep.
    */
-  markReturned(repoId, prId, upToFixId = null) {
+  /**
+   * Stamp exactly the fixes that were handed back.
+   *
+   * By id, never by asking the question again. It used to re-run "what is
+   * waiting to be handed back" at this moment instead, so a fix that committed
+   * in the seconds between the push and this line was marked as delivered
+   * although it never left the workshop: its finding already read as resolved,
+   * its thread already said the commit existed, and the workshop was then free
+   * to be discarded — or reset out from under it by the next fix run — taking
+   * the only copy with it.
+   */
+  markReturned(fixIds = []) {
     const stamp = now();
-    if (!upToFixId) {
-      this.run("UPDATE cr_finding_fix SET returned_at = ? WHERE repo_id = ? AND pr_id = ? AND state = 'COMMITTED' AND returned_at IS NULL AND dropped_at IS NULL", stamp, repoId, prId);
-      return;
-    }
-    const pending = this.pendingReturn(repoId, prId);
-    const cut = pending.findIndex((fix) => fix.id === upToFixId);
-    for (const fix of pending.slice(0, cut < 0 ? pending.length : cut + 1)) {
-      this.run('UPDATE cr_finding_fix SET returned_at = ? WHERE id = ?', stamp, fix.id);
-    }
+    for (const id of fixIds) this.run('UPDATE cr_finding_fix SET returned_at = ? WHERE id = ? AND returned_at IS NULL', stamp, id);
   }
 
   fixReplyIds(repoId, prId) {

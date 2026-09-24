@@ -150,12 +150,38 @@ const REVIEW_DENIED = ['Edit', 'Write', 'WebFetch', 'WebSearch', 'Bash(git *--ou
 const FIX_TOOLS = ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'TodoWrite'];
 
 /**
- * What a fix cannot do even while fixing. Pushing is a person's decision;
- * `reset --hard` in a workshop holding the only copy of a fix is how it is lost;
- * and `git commit` is the tool's, because a clean tree is how the app decides
- * whether anything changed at all.
+ * What a fix cannot do even while fixing.
+ *
+ * Pushing is a person's decision; a reset in a workshop holding the only copy of
+ * a fix is how it is lost; and committing is the tool's job, because a clean
+ * tree is how the app decides whether anything changed at all.
+ *
+ * The three at the end are the ones that matter most and were missing. The
+ * workshop's `origin` *is* the person's own clone, so its path is one allowed
+ * `git remote get-url` away — and from there `git -C <their repo> checkout -- .`
+ * or `cd <their repo> && git reset` reaches straight into the working copy this
+ * whole design exists to keep out of. `-C`, `--git-dir` and `--work-tree` are
+ * the three ways git is pointed somewhere else, and a fix never needs any of
+ * them: it runs in the workshop, which is already where it should be writing.
+ *
+ * Worth being plain about the limit: this is a list of command prefixes, not a
+ * sandbox. It closes the paths a model actually takes and it is not a proof.
+ * What does the real work is that `prepareWorkshop` no longer writes to the
+ * clone either, so nothing in the ordinary path teaches the model that reaching
+ * over there is something this app does.
  */
-const FIX_DENIED = ['Bash(git push *)', 'Bash(git commit *)', 'Bash(git reset --hard *)', 'WebFetch', 'WebSearch'];
+const FIX_DENIED = [
+  'Bash(git push*)',
+  'Bash(git commit*)',
+  'Bash(git reset*)',
+  'Bash(git clean*)',
+  'Bash(git remote*)',
+  'Bash(git -C *)',
+  'Bash(git --git-dir*)',
+  'Bash(git --work-tree*)',
+  'WebFetch',
+  'WebSearch',
+];
 
 const WEB_EXT = new Set(['ts', 'tsx', 'js', 'jsx', 'vue', 'svelte', 'css', 'scss', 'less', 'html']);
 const BACKEND_EXT = new Set(['java', 'kt', 'go', 'rs', 'py', 'rb', 'cs', 'php', 'scala', 'sql']);
