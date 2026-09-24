@@ -310,6 +310,16 @@ function forgetPath(set: SetState, get: GetState, path: string) {
     if (panel.kind !== 'files') continue;
     for (const open of panel.open) if (under(open)) get().closeFile(id, open);
   }
+  /*
+   * Which files are going, worked out before they are dropped.
+   *
+   * The unwatch loop used to run after the buffers had already been filtered
+   * out of the store, so it walked what was left and matched nothing — dead
+   * code by construction. Nothing was ever unwatched, and the main process went
+   * on polling a deleted file with a synchronous `stat` every second and a half
+   * for the life of the window, one more of them for every file ever trashed.
+   */
+  const going = Object.keys(get().buffers).filter(under);
   set((prev) => {
     const panels: typeof prev.panels = {};
     for (const [id, panel] of Object.entries(prev.panels)) {
@@ -321,7 +331,7 @@ function forgetPath(set: SetState, get: GetState, path: string) {
     for (const [key, listing] of Object.entries(prev.dirs)) if (!under(key)) dirs[key] = listing;
     return { panels, buffers, dirs };
   });
-  for (const key of Object.keys(get().buffers)) if (under(key)) window.api.files.unwatch(key);
+  for (const key of going) window.api.files.unwatch(key);
   void get().loadDir(parentOf(path));
   schedulePersist(get);
 }
@@ -684,6 +694,23 @@ function reportScreen(sessionId: string) {
 }
 
 let persistTimer: number | undefined;
+/**
+ * A pane that is really in the tree, to put something new into.
+ *
+ * `activeLeafId` is held outside the layout, so anything that rebuilds the tree
+ * can leave it naming a pane that no longer exists — arranging a group as
+ * columns did exactly that. Five places then read "the active pane is missing"
+ * as "there is no workspace" and replaced the whole tree with a single new
+ * pane: every other pane's tabs vanished from the layout, from the dock and
+ * from the sidebar, their ptys left running and unreachable, and the next save
+ * wrote the loss to disk. A stale id means "put it somewhere sensible", never
+ * "start again".
+ */
+function landingLeaf(layout: LayoutNode, wanted?: string | null): string | null {
+  if (wanted && findLeaf(layout, wanted)) return wanted;
+  return allLeaves(layout)[0]?.id ?? null;
+}
+
 function schedulePersist(get: () => State) {
   window.clearTimeout(persistTimer);
   persistTimer = window.setTimeout(() => {
@@ -1216,24 +1243,6 @@ export const useStore = create<State>((set, get) => ({
     const targetLeafId = options.leafId || state.activeLeafId || allLeaves(state.layout)[0]?.id;
     const side = options.side || 'center';
 
-    set((prev) => {
-      let layout = prev.layout;
-      const leafExists = targetLeafId && findLeaf(layout, targetLeafId);
-      if (!leafExists) {
-        const leaf = makeLeaf([sessionId]);
-        return { layout: leaf, activeLeafId: leaf.id };
-      }
-      if (side === 'center') {
-        layout = insertTab(layout, targetLeafId, sessionId);
-        return { layout, activeLeafId: targetLeafId };
-      }
-      const direction = side === 'left' || side === 'right' ? 'row' : 'column';
-      const result = splitLeaf(layout, targetLeafId, direction, sessionId);
-      // A maximized pane covers the whole workspace, so a new pane behind it would
-      // be invisible and splitting would look broken. Creating one leaves zoom.
-      return { layout: result.root, activeLeafId: result.leafId, zoomedLeafId: null };
-    });
-
     // A fresh session gets a name of its own; a continued or carried-over one keeps
     // the name it already had.
     const title =
@@ -1251,6 +1260,13 @@ export const useStore = create<State>((set, get) => ({
      * going to press — and what it produces is what the app would have chosen
      * anyway.
      *
+     * Asked *before* anything is put in the layout. It used to insert the tab
+     * first, so pressing Escape left a tab id in the tree with no session and
+     * no panel behind it: nothing to draw, and a pane that could not be closed,
+     * filled or pruned because it counted as holding one tab. Confirming was no
+     * better — it started again with a new id and left the first one in the
+     * strip for ever.
+     *
      * It returns null here, which every caller of `newSession` already handles:
      * a session that could not be started returns null too, and none of them
      * does anything with the id but focus it, which `confirmNewSession` does.
@@ -1259,6 +1275,24 @@ export const useStore = create<State>((set, get) => ({
       set({ pendingSession: { suggested: title ?? '', cwd, options: { ...options, ask: false } } });
       return null;
     }
+
+    set((prev) => {
+      let layout = prev.layout;
+      const target = landingLeaf(layout, targetLeafId);
+      if (!target) {
+        const leaf = makeLeaf([sessionId]);
+        return { layout: leaf, activeLeafId: leaf.id };
+      }
+      if (side === 'center') {
+        layout = insertTab(layout, target, sessionId);
+        return { layout, activeLeafId: target };
+      }
+      const direction = side === 'left' || side === 'right' ? 'row' : 'column';
+      const result = splitLeaf(layout, target, direction, sessionId);
+      // A maximized pane covers the whole workspace, so a new pane behind it would
+      // be invisible and splitting would look broken. Creating one leaves zoom.
+      return { layout: result.root, activeLeafId: result.leafId, zoomedLeafId: null };
+    });
 
     await spawnInto(set, get, {
       sessionId,
@@ -1735,6 +1769,16 @@ export const useStore = create<State>((set, get) => ({
     const state = get();
     const leaf = findLeaf(state.layout, leafId);
     if (!leaf || !leaf.tabs.length) return;
+    /*
+     * The last pane is the workspace itself, so there is nowhere to set it
+     * aside to — `closePane` says so by handing the tree straight back. Setting
+     * it aside anyway put its tabs in the dock while they were still in the
+     * layout, and restoring then spliced a second pane holding the same tabs:
+     * two panes claiming one session, two terminal slots fighting over the one
+     * xterm, and whichever unmounted last blanked the live terminal in the
+     * other. Persisted, so it survived a restart.
+     */
+    if (closePane(state.layout, leafId) === state.layout) return;
 
     const place = panePlace(state.layout, leafId);
     // What to call it down there: the group if one owns the whole pane, else
@@ -1869,13 +1913,14 @@ export const useStore = create<State>((set, get) => ({
     set((prev) => {
       const panels = { ...prev.panels, [panelId]: panel };
       let layout = prev.layout;
-      if (!targetLeafId || !findLeaf(layout, targetLeafId)) {
+      const target = landingLeaf(layout, targetLeafId);
+      if (!target) {
         const leaf = makeLeaf([panelId]);
         return { panels, layout: leaf, activeLeafId: leaf.id };
       }
       if (side === 'center') {
-        layout = insertTab(layout, targetLeafId, panelId);
-        return { panels, layout, activeLeafId: targetLeafId };
+        layout = insertTab(layout, target, panelId);
+        return { panels, layout, activeLeafId: target };
       }
       const direction = side === 'left' || side === 'right' ? 'row' : 'column';
       const result = splitLeaf(layout, targetLeafId, direction, panelId);
@@ -2910,11 +2955,12 @@ export const useStore = create<State>((set, get) => ({
 
     set((prev) => {
       const panels = { ...prev.panels, [panelId]: panel };
-      if (!targetLeafId || !findLeaf(prev.layout, targetLeafId)) {
+      const target = landingLeaf(prev.layout, targetLeafId);
+      if (!target) {
         const leaf = makeLeaf([panelId]);
         return { panels, layout: leaf, activeLeafId: leaf.id };
       }
-      return { panels, layout: insertTab(prev.layout, targetLeafId, panelId), activeLeafId: targetLeafId };
+      return { panels, layout: insertTab(prev.layout, target, panelId), activeLeafId: target };
     });
 
     if (wanted) get().refreshAnalysis(wanted);
@@ -2939,11 +2985,12 @@ export const useStore = create<State>((set, get) => ({
     const targetLeafId = state.activeLeafId || allLeaves(state.layout)[0]?.id;
     set((prev) => {
       const panels = { ...prev.panels, [panelId]: { id: panelId, kind: 'extensions' as const } };
-      if (!targetLeafId || !findLeaf(prev.layout, targetLeafId)) {
+      const target = landingLeaf(prev.layout, targetLeafId);
+      if (!target) {
         const leaf = makeLeaf([panelId]);
         return { panels, layout: leaf, activeLeafId: leaf.id };
       }
-      return { panels, layout: insertTab(prev.layout, targetLeafId, panelId), activeLeafId: targetLeafId };
+      return { panels, layout: insertTab(prev.layout, target, panelId), activeLeafId: target };
     });
     schedulePersist(get);
   },
@@ -3187,11 +3234,12 @@ export const useStore = create<State>((set, get) => ({
     };
     set((prev) => {
       const panels = { ...prev.panels, [panelId]: panel };
-      if (!targetLeafId || !findLeaf(prev.layout, targetLeafId)) {
+      const target = landingLeaf(prev.layout, targetLeafId);
+      if (!target) {
         const leaf = makeLeaf([panelId]);
         return { panels, layout: leaf, activeLeafId: leaf.id };
       }
-      return { panels, layout: insertTab(prev.layout, targetLeafId, panelId), activeLeafId: targetLeafId };
+      return { panels, layout: insertTab(prev.layout, target, panelId), activeLeafId: target };
     });
     /*
      * A panel about a folder follows that folder itself. It used to rely on a
@@ -3463,14 +3511,24 @@ export const useStore = create<State>((set, get) => ({
   arrangeGroupAs(groupId, arrangement) {
     const members = get().membersOf(groupId);
     if (!members.length) return;
-    set((state) => ({
-      layout: arrangeGroup(state.layout, members, arrangement),
-      // Remembered on the group, not just applied: closing it and opening it again
-      // should give back the arrangement that was chosen, not a default.
-      groups: state.groups.map((group) =>
-        group.id === groupId ? { ...group, arrangement } : group,
-      ),
-    }));
+    set((state) => {
+      /*
+       * Arranging swaps the pane that held the group for new ones, so the pane
+       * the app was pointing at is gone — and a pointer to a pane that is not
+       * there used to be read as "there is no workspace", which threw the rest
+       * of it away on the next thing opened.
+       */
+      const layout = arrangeGroup(state.layout, members, arrangement);
+      return {
+        layout,
+        activeLeafId: landingLeaf(layout, state.activeLeafId) ?? state.activeLeafId,
+        // Remembered on the group, not just applied: closing it and opening it again
+        // should give back the arrangement that was chosen, not a default.
+        groups: state.groups.map((group) =>
+          group.id === groupId ? { ...group, arrangement } : group,
+        ),
+      };
+    });
     window.api.groups.save(get().groups);
     schedulePersist(get);
   },

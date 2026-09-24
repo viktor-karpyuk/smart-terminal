@@ -246,6 +246,17 @@ class SessionMonitor {
    */
   sweep() {
     const ids = this.sessions();
+    /*
+     * Let go of what nobody is following any more.
+     *
+     * Closing a tab releases the conversation but sends nothing this way, so
+     * the rows kept for it stayed held — and when the last tab went, the sweep
+     * returned before the ceiling was ever checked again, pinning every one of
+     * them until the app quit. Done before the early return, for exactly that
+     * case.
+     */
+    const following = new Set(ids);
+    for (const sessionId of this.parsed.keys()) if (!following.has(sessionId)) this.forget(sessionId);
     if (!ids.length) return [];
 
     const changed = [];

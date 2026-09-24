@@ -110,6 +110,8 @@ function decide({
 
   if (app.stance === 'ASK') return { verdict: 'ASK', why: 'asks-first' };
 
+  // Zero is no ceiling, not a ban — the same as the per-person one, and the
+  // Apps tab now says so where it always meant it.
   if (app.dailyCap > 0 && sentByAppToday >= app.dailyCap) {
     return { verdict: 'HOLD', why: 'app-cap', detail: `${app.name} has sent its ${app.dailyCap} for today` };
   }
@@ -156,12 +158,18 @@ function readHandle(value) {
   return { kind: 'handle', name: text, handle: `handle:${text}` };
 }
 
-/** The address a handle implies on its own, when it implies one at all. */
+/*
+ * The address a handle gives away on its own, when that is allowed.
+ *
+ * An `email:` handle used to be answered before the switch was consulted, so
+ * turning "match by address on its own" off left it matching exactly the
+ * handles most obviously made of an address. Off means off.
+ */
 function addressFrom(handle, { matchByEmail = true } = {}) {
   const read = readHandle(handle);
-  if (!read) return null;
+  if (!read || !matchByEmail) return null;
   if (read.kind === 'email') return read.name;
-  return matchByEmail && read.name.includes('@') ? read.name : null;
+  return read.name.includes('@') ? read.name : null;
 }
 
 const DAY_MS = DAY;

@@ -1012,6 +1012,16 @@ class ReviewEngine {
       if (!got.ok) return null;
     }
     const paths = await this.git.conflicts(repo.localPath, `origin/${pr.targetBranch}`, `origin/${pr.sourceBranch}`);
+    /*
+     * "Could not tell" is not an answer, so it does not get stamped as one.
+     *
+     * `null` means nobody was able to work it out — a git too old for
+     * `--write-tree`, a ref missing for a moment after a rename. Writing the
+     * time alongside it made the freshness check treat the non-answer as
+     * current and refuse to ask again for ten minutes, so a transient failure
+     * became ten minutes of not knowing.
+     */
+    if (paths === null) return null;
     this.store.setConflicts(repoId, prId, paths);
     if (paths !== null) this.changed(repoId, prId);
     return paths;

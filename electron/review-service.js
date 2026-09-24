@@ -380,7 +380,20 @@ class ReviewService {
 
     let posted = null;
     if (inThread && found.rule.id !== 'UNREVIEWED') {
-      const threads = this.threadsOf(repoId, prId).filter((thread) => thread.state !== 'OK' && thread.findingId);
+      /*
+       * A thread that has been waiting, not one we spoke in a moment ago.
+       *
+       * Posting resets a thread's wait to zero, which is what keeps the rule
+       * about unanswered threads from firing twice. The rule about a branch
+       * nobody has pushed to reads none of that — it watches the stance and the
+       * head — so it stayed due, and the sweep every ten minutes posted another
+       * "still waiting" into the same thread each time: about a hundred and
+       * fifty comments a day on somebody else's pull request. Requiring a day
+       * of actual waiting makes the comment self-limiting whichever rule
+       * brought us here.
+       */
+      const threads = this.threadsOf(repoId, prId)
+        .filter((thread) => thread.state !== 'OK' && thread.findingId && (thread.waitingDays ?? 0) >= 1);
       const oldest = threads.sort((a, b) => (b.waitingDays ?? 0) - (a.waitingDays ?? 0))[0];
       if (oldest) {
         try {

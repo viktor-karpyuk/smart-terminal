@@ -1190,8 +1190,21 @@ function History({ panelId }: { panelId: string }) {
   const patch = useStore((s) => s.patchPanel);
   const refreshRepo = useStore((s) => s.refreshRepo);
 
+  /*
+   * Asked once per folder, not once per answer.
+   *
+   * `repo` was in the dependencies and a read writes a new `repos[root]` twice,
+   * so a repository whose answer is legitimately empty — one you have just
+   * `git init`ed, which is exactly when you open this tab — re-fired the effect
+   * that had just written it and spawned `git log` again, back to back, for as
+   * long as the tab was on screen.
+   */
+  const askedGraph = useRef<string | null>(null);
   useEffect(() => {
-    if (root && repo && !repo.commits.length && !repo.loading) refreshRepo(root, 'graph');
+    if (!root || !repo || repo.loading) return;
+    if (repo.commits.length || askedGraph.current === root) return;
+    askedGraph.current = root;
+    refreshRepo(root, 'graph');
   }, [root, repo, refreshRepo]);
 
   if (!panel || !root) return null;
@@ -1395,8 +1408,14 @@ function Branches({ panelId }: { panelId: string }) {
   const gitDo = useStore((s) => s.gitDo);
   const refreshRepo = useStore((s) => s.refreshRepo);
 
+  // Same shape as the history tab above: no local branches exist until the first
+  // commit, so an empty answer is an answer and must not ask again for ever.
+  const askedRefs = useRef<string | null>(null);
   useEffect(() => {
-    if (root && repo && !repo.local.length && !repo.loading) refreshRepo(root, 'refs');
+    if (!root || !repo || repo.loading) return;
+    if (repo.local.length || askedRefs.current === root) return;
+    askedRefs.current = root;
+    refreshRepo(root, 'refs');
   }, [root, repo, refreshRepo]);
 
   if (!panel || !root) return null;

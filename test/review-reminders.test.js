@@ -172,10 +172,41 @@ test('a reminder meant for you names you the way the forge does', () => {
  * ignored is mentioned again tomorrow rather than once and never — while the
  * same day's reminder is never sent twice.
  */
-test('the key is the same within a day and different the next', () => {
+/*
+ * This used to assert the opposite — that the key changed with the day — and
+ * that was the bug written down as intent. The delivery extension holds a
+ * message back when it has already said the same thing within N days and
+ * decides "the same thing" by the key, so a key that moved every day made that
+ * setting inert: the same pull request was announced again every morning for as
+ * long as it stayed open. Of the two intentions, the one the setting exists to
+ * serve wins.
+ */
+test('the key is the same for as long as the same thing is true', () => {
   const same = R.dueFor({ row: row(), threads: [thread({ waitingDays: 6 })], rules: on('UNANSWERED', 3) });
-  const again = R.dueFor({ row: row(), threads: [thread({ waitingDays: 6 })], rules: on('UNANSWERED', 3) });
   const tomorrow = R.dueFor({ row: row(), threads: [thread({ waitingDays: 7 })], rules: on('UNANSWERED', 3) });
-  assert.strictEqual(same.key, again.key);
-  assert.notStrictEqual(same.key, tomorrow.key);
+  assert.strictEqual(same.key, tomorrow.key, 'still unanswered tomorrow is not news');
+  assert.ok(tomorrow.body.includes('7'), 'the day count belongs in the words');
+});
+
+/*
+ * The delivery extension holds a message back when it has already said the same
+ * thing recently, and it decides "the same thing" by the key. All three keys
+ * used to carry the day count, so the key moved every day and the check could
+ * never match — a pull request nobody reviewed sent a message a day for as long
+ * as it stayed open.
+ */
+test('a key says what is being said, not what day it is', () => {
+  const rules = on('UNREVIEWED', 2);
+  const day2 = R.dueFor({ row: row({ flags: ['UNREVIEWED'], ageDays: 2 }), threads: [], rules });
+  const day9 = R.dueFor({ row: row({ flags: ['UNREVIEWED'], ageDays: 9 }), threads: [], rules });
+  assert.equal(day2.key, day9.key, 'the same pull request, still unreviewed, is the same thing to say');
+  assert.ok(day9.body.includes('9'), 'and the age is in the words, where somebody reads it');
+});
+
+test('two pull requests are never the same thing to say', () => {
+  const rules = on('UNREVIEWED', 2);
+  const a = R.dueFor({ row: row({ flags: ['UNREVIEWED'], ageDays: 4 }), threads: [], rules });
+  const other = row({ flags: ['UNREVIEWED'], ageDays: 4 });
+  const b = R.dueFor({ row: { ...other, pr: { ...other.pr, id: 99 } }, threads: [], rules });
+  assert.notEqual(a.key, b.key);
 });

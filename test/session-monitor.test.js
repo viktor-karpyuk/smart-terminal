@@ -388,3 +388,25 @@ test('a conversation dropped for space is read again, whole, and reads the same'
   assert.equal(again.requests, first.requests);
   assert.deepEqual(again.totals, first.totals);
 });
+
+/*
+ * Closing a tab releases the conversation but sends nothing the monitor's way,
+ * so the rows kept for it stayed held — and when the last tab went, the sweep
+ * returned before the ceiling was ever checked again, pinning all of them until
+ * the app quit. The sweep lets go of what nobody is following any more.
+ */
+test('a session nobody follows any more is let go of, even when it was the last one', () => {
+  const files = { a: transcript('drop-a', 20), b: transcript('drop-b', 20) };
+  const following = { ...files };
+  const monitor = new SessionMonitor({ context: fakeContext(following) });
+  monitor.sweep();
+  assert.deepEqual([...monitor.parsed.keys()].sort(), ['a', 'b']);
+
+  delete following.a;
+  monitor.sweep();
+  assert.deepEqual([...monitor.parsed.keys()], ['b'], 'the released one is dropped');
+
+  delete following.b;
+  monitor.sweep();
+  assert.deepEqual([...monitor.parsed.keys()], [], 'and so is the last one, which used to pin everything');
+});

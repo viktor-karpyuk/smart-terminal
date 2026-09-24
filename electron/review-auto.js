@@ -224,10 +224,29 @@ class AutoReviewer {
     let crashed = null;
     try {
       const repos = this.store.repos({ withHidden: false });
+      /*
+       * One budget for the cycle, not one for each repository.
+       *
+       * Each draft is a paid run, and this budget sat inside the loop — so
+       * fourteen repositories with a cap of three spent forty-two runs a sweep,
+       * every ten minutes, while the screen said "the spending cap of each
+       * sweep".
+       */
+      let budget = this.maxPerCycle();
       for (const repo of repos) {
-        if (repo.replyMode === 'OFF') continue;
+        /*
+         * Reading the threads is not drafting.
+         *
+         * "Only detect — the reply shows up; nothing is drafted" used to skip
+         * the reading as well, so a repository set that way never learned an
+         * answer had arrived at all: no flag on the board, no verification
+         * triggered, and nothing until somebody opened the pull request by
+         * hand. `processReplies` already declines to draft for OFF on its own.
+         */
         await this.syncThreads(repo);
-        const replied = await this.processReplies(repo, this.maxPerCycle());
+        if (repo.replyMode === 'OFF' || budget <= 0) continue;
+        const replied = await this.processReplies(repo, budget);
+        budget -= replied;
         if (replied > 0) notes.push(`${repo.name}: ${replied} reply(ies) drafted`);
       }
       const targets = repos.filter((repo) => repo.autoReview);

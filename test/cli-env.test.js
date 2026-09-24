@@ -117,3 +117,35 @@ test('a shell that never answers does not hang the app, and is not left running'
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------- quoting
+
+/*
+ * The launch line is typed into a live shell, so anything spliced into it has
+ * to survive the shell reading it. Every argument went through the quoter and
+ * the binary itself did not — and a path with a space in it is an ordinary
+ * thing to have on a Mac.
+ */
+const { quoteArg } = require('../electron/pty-manager');
+
+test('a path with a space survives being typed into a shell', () => {
+  assert.equal(quoteArg('/Users/viktor/Kubrik One Drive/bin/claude'), "'/Users/viktor/Kubrik One Drive/bin/claude'");
+});
+
+/*
+ * Inside double quotes a shell still expands these two, which is why JSON
+ * quoting is not shell quoting: a folder named after `$USER` resolved to a
+ * different folder, and a backtick ran what was between the pair.
+ */
+test('a dollar and a backtick are not expanded', () => {
+  assert.equal(quoteArg('/Users/viktor/scratch/$USER-notes'), "'/Users/viktor/scratch/$USER-notes'");
+  assert.equal(quoteArg('/tmp/`whoami`'), "'/tmp/`whoami`'");
+});
+
+test('a single quote is closed and reopened, not left hanging', () => {
+  assert.equal(quoteArg("it's"), "'it'\\''s'");
+});
+
+test('an ordinary path is left alone', () => {
+  assert.equal(quoteArg('/usr/local/bin/claude'), '/usr/local/bin/claude');
+});

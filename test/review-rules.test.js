@@ -57,7 +57,35 @@ test('every depth denies writing and the network, and allows more git as it deep
   assert.ok(!R.DEPTHS.LIGHT.tools.includes('Bash(git log *)'));
   assert.ok(R.DEPTHS.HEAVY.tools.includes('Bash(git blame *)'));
   for (const depth of Object.values(R.DEPTHS)) assert.ok(!depth.tools.some((tool) => /Edit|Write|push/.test(tool)));
-  assert.ok(R.FIX_DENIED.includes('Bash(git push *)') && R.FIX_DENIED.includes('Bash(git commit *)'));
+  assert.ok(R.FIX_DENIED.includes('Bash(git push*)') && R.FIX_DENIED.includes('Bash(git commit*)'));
+});
+
+/*
+ * The workshop's origin is the person's own clone, so its path is one allowed
+ * `git remote get-url` away — and `git -C <that path> reset` reaches into the
+ * working copy the workshop exists to keep out of. These three are how git is
+ * pointed somewhere other than where it is running, and a fix never needs any
+ * of them.
+ */
+test('a fix cannot point git at another repository', () => {
+  for (const flag of ['Bash(git -C *)', 'Bash(git --git-dir*)', 'Bash(git --work-tree*)']) {
+    assert.ok(R.FIX_DENIED.includes(flag), `${flag} is how a fix reaches out of the workshop`);
+  }
+});
+
+/*
+ * Prefix patterns, so a pattern that carries a trailing space only denies the
+ * form with an argument: `git push` on its own, and `git reset --keep`, both
+ * walked past the old list.
+ */
+test('the denials are not written so that the bare command slips past', () => {
+  for (const denied of R.FIX_DENIED) {
+    if (!denied.startsWith('Bash(git ')) continue;
+    const verb = denied.slice('Bash(git '.length).replace(/\*?\)$/, '');
+    if (verb.endsWith(' ')) continue; // deliberately argument-only, like -C
+    assert.ok(!verb.endsWith(' '), `${denied} would let the bare command through`);
+  }
+  assert.ok(R.FIX_DENIED.includes('Bash(git reset*)'), 'reset --keep and reset --merge lose a fix just as well as --hard');
 });
 
 test('numstat resolves renames to the path that exists now', () => {

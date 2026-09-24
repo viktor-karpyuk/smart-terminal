@@ -78,7 +78,17 @@ function claudeLaunchLine(profile, extraArgs = [], { useProfileArgs = true } = {
     .map(quoteArg)
     .join(' ');
   const prefix = bin.includes('/') ? '' : 'command ';
-  return `${prefix}${bin}${args ? ` ${args}` : ''}`;
+  /*
+   * The path to Claude is quoted like everything else on the line.
+   *
+   * Every argument went through `quoteArg` and the binary was spliced in raw —
+   * so an account whose "Claude command" is a real path with a space in it,
+   * which on this machine is an ordinary thing to have, was word-split by the
+   * shell and reported as "no such file or directory". Meanwhile the same value
+   * is handed to `execFile` elsewhere, where a space is nothing at all, so the
+   * account checked out as signed in and healthy while no session could start.
+   */
+  return `${prefix}${quoteArg(bin)}${args ? ` ${args}` : ''}`;
 }
 
 /** What gets typed into the shell for each kind of session. */
@@ -232,4 +242,4 @@ class PtyManager {
   }
 }
 
-module.exports = { PtyManager, claudeLaunchLine, buildEnv, DEFAULT_SHELL };
+module.exports = { quoteArg, PtyManager, claudeLaunchLine, buildEnv, DEFAULT_SHELL };

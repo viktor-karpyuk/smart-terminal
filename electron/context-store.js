@@ -412,25 +412,36 @@ class ContextStore {
     const found = linesSince(file, state.offset);
     if (!found) return 0;
     // A shorter file is not this one: the session restarted without its
-    // conversation, so nothing counted before means anything now.
+    // conversation, so nothing counted before means anything now — and that
+    // includes what is already stored, or the new conversation would be filed
+    // after the end of the old one as though the two were a single thread.
     if (found.restarted) {
       state.offset = 0;
       state.rows = 0;
+      db.resetTranscript?.(sessionId);
       return this.#restart(db, sessionId, file, state, withCommands);
     }
-    state.offset = found.offset;
-    return this.#write(db, sessionId, state, found.lines, withCommands);
+    return this.#write(db, sessionId, state, found.lines, withCommands, found.offset);
   }
 
   /** Read the file from the beginning, when an offset turned out not to fit. */
   #restart(db, sessionId, file, state, withCommands) {
     const found = linesSince(file, 0);
     if (!found) return 0;
-    state.offset = found.offset;
-    return this.#write(db, sessionId, state, found.lines, withCommands);
+    return this.#write(db, sessionId, state, found.lines, withCommands, found.offset);
   }
 
-  #write(db, sessionId, state, lines, withCommands) {
+  /*
+   * The offset and the count move together, and only once the write has taken.
+   *
+   * Advancing the offset first meant a database that threw — busy, full, a
+   * trigger that failed — left the reader past rows it had never stored, and
+   * the caller swallows that throw to keep the loop alive. The rows between
+   * were then gone for the life of the process, with no gap for the sequence
+   * check to catch. Left where they were, the same tail is simply offered
+   * again next tick and the database skips what it already holds.
+   */
+  #write(db, sessionId, state, lines, withCommands, nextOffset) {
     const rows = [];
     for (const line of lines) {
       try {
@@ -445,7 +456,10 @@ class ContextStore {
         continue; // a row from a format this version does not know
       }
     }
-    if (!rows.length) return 0;
+    if (!rows.length) {
+      state.offset = nextOffset;
+      return 0;
+    }
 
     const written = db.ingestTranscript(sessionId, rows, { from: state.rows });
     /*
@@ -460,6 +474,7 @@ class ContextStore {
       return 0;
     }
     state.rows += rows.length;
+    state.offset = nextOffset;
     return written;
   }
 

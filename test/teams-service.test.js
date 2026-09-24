@@ -378,3 +378,103 @@ test('a hand-made match can still be changed by hand', { skip }, () => {
   assert.strictEqual(person.address, 'new@kubrik.com', 'the People screen still decides');
   assert.strictEqual(person.matchedBy, 'HAND');
 });
+
+// ------------------------------------------------- what the hours held back
+
+/*
+ * "Anything raised outside these hours waits for the morning rather than being
+ * dropped" is what the screen says, and nothing kept it: HELD was written in one
+ * place and read by nobody, so the morning never came. No button, no sweep, no
+ * way back — the message simply stopped existing as far as anyone could tell.
+ */
+test('a message held outside the hours goes out when they open', { skip }, async () => {
+  const { service, calls, setNow } = setup({ at: new Date('2026-09-23T23:40:00').getTime() });
+  service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/hook' });
+  service.saveSettings({ hoursFrom: 9, hoursTo: 18, weekdaysOnly: true, perPersonPerDay: 5, dedupeDays: 7 });
+  service.store.setAppStance('code-review', 'ALLOW');
+
+  const held = await service.send('code-review', 'Code Reviewer', { to: { email: 'b@kubrik.com' }, title: 'PR #43 is waiting on you', body: 'x', key: 'k1' });
+  assert.equal(held.why, 'quiet-hours');
+  assert.equal(calls.length, 0, 'nothing went out at twenty to midnight');
+
+  setNow(new Date('2026-09-24T09:30:00').getTime());
+  const out = await service.releaseHeld();
+  assert.deepEqual(out.map((one) => one.ok), [true]);
+  assert.equal(calls.length, 1, 'and it went out in the morning');
+  assert.equal(service.store.message(held.id).state, 'SENT');
+});
+
+test('still outside the hours means it keeps waiting, not that it is dropped', { skip }, async () => {
+  const { service, calls, setNow } = setup({ at: new Date('2026-09-23T23:40:00').getTime() });
+  service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/hook' });
+  service.saveSettings({ hoursFrom: 9, hoursTo: 18, weekdaysOnly: true, perPersonPerDay: 5, dedupeDays: 7 });
+  service.store.setAppStance('code-review', 'ALLOW');
+  const held = await service.send('code-review', 'Code Reviewer', { to: { email: 'b@kubrik.com' }, title: 'later', body: 'x', key: 'k2' });
+
+  setNow(new Date('2026-09-24T03:00:00').getTime());
+  assert.deepEqual(await service.releaseHeld(), []);
+  assert.equal(calls.length, 0);
+  assert.equal(service.store.message(held.id).state, 'HELD');
+});
+
+/*
+ * A hold is not a queue that keeps for ever. Something worth saying at 23:40 is
+ * worth saying at 09:00; the same thing three days later is only noise.
+ */
+test('a message held for more than a day is let go of, and says so', { skip }, async () => {
+  const { service, calls, setNow } = setup({ at: new Date('2026-09-23T23:40:00').getTime() });
+  service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/hook' });
+  service.saveSettings({ hoursFrom: 9, hoursTo: 18, weekdaysOnly: true, perPersonPerDay: 5, dedupeDays: 7 });
+  service.store.setAppStance('code-review', 'ALLOW');
+  const held = await service.send('code-review', 'Code Reviewer', { to: { email: 'b@kubrik.com' }, title: 'stale', body: 'x', key: 'k3' });
+
+  setNow(new Date('2026-09-26T10:00:00').getTime());
+  const out = await service.releaseHeld();
+  assert.deepEqual(out.map((one) => one.why), ['too-old']);
+  assert.equal(calls.length, 0);
+  const row = service.store.message(held.id);
+  assert.equal(row.state, 'SKIPPED');
+  assert.match(row.reason, /held too long/);
+});
+
+/*
+ * Judged again, not sent again: a second row for one message would be counted
+ * twice by every ceiling, and its own age would start over — so a held message
+ * could never grow old enough to let go of.
+ */
+test('releasing judges the row it has rather than making another', { skip }, async () => {
+  const { service, setNow } = setup({ at: new Date('2026-09-23T23:40:00').getTime() });
+  service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/hook' });
+  service.saveSettings({ hoursFrom: 9, hoursTo: 18, weekdaysOnly: true, perPersonPerDay: 5, dedupeDays: 7 });
+  service.store.setAppStance('code-review', 'ALLOW');
+  await service.send('code-review', 'Code Reviewer', { to: { email: 'b@kubrik.com' }, title: 'one', body: 'x', key: 'k4' });
+  const before = service.store.messages({ limit: 100 }).length;
+
+  setNow(new Date('2026-09-24T02:00:00').getTime());
+  await service.releaseHeld();
+  await service.releaseHeld();
+  assert.equal(service.store.messages({ limit: 100 }).length, before, 'no new rows for a message still held');
+});
+
+/*
+ * The count of what is waiting was never capped but the rows were, so a busy
+ * extension could push the one message somebody had to decide about off the end
+ * of the table — badge saying one, and no row to press Send on.
+ */
+test('a message waiting on you is in the outbox however much came after it', { skip }, async () => {
+  const { service } = setup();
+  service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/hook' });
+  service.store.setAppStance('code-review', 'ALLOW');
+  service.saveSettings({ hoursFrom: 0, hoursTo: 24, weekdaysOnly: false, perPersonPerDay: 0, dedupeDays: 0 });
+  service.store.seeApp('newcomer', 'Newcomer');
+  service.store.setAppStance('newcomer', 'ASK');
+  const asked = await service.send('newcomer', 'Newcomer', { to: { email: 'b@kubrik.com' }, title: 'may I?', body: 'x', key: 'w1' });
+  assert.equal(asked.why, 'asks-first');
+
+  for (let i = 0; i < 70; i += 1) {
+    await service.send('code-review', 'Code Reviewer', { to: { email: 'b@kubrik.com' }, title: `noise ${i}`, body: 'x', key: `n${i}` });
+  }
+  const shown = service.store.messages({ limit: 60 });
+  assert.ok(shown.some((row) => row.id === asked.id), 'the one you have to decide about is reachable');
+  assert.equal(service.overview().waiting, 1);
+});

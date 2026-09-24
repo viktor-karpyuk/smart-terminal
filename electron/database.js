@@ -478,11 +478,21 @@ class Database {
          ON CONFLICT(id) DO UPDATE SET
            profile_id        = excluded.profile_id,
            profile_name      = excluded.profile_name,
-           claude_session_id = excluded.claude_session_id,
+           -- Not overwritten with nothing. A shell tab somebody started Claude
+           -- in by hand is adopted onto its conversation after the fact, and a
+           -- plain restart passes none — so a straight assignment forgot which
+           -- conversation that tab held: it could no longer be resumed,
+           -- recording stopped, and the adoption sweep was free to bind it to
+           -- whatever transcript in that folder happened to be newest.
+           claude_session_id = COALESCE(excluded.claude_session_id, sessions.claude_session_id),
            last_active_at    = excluded.last_active_at,
            window_id         = COALESCE(excluded.window_id, sessions.window_id),
            ended_at          = NULL,
-           exit_code         = NULL`,
+           exit_code         = NULL,
+           -- Picking a session back up is what un-pauses it. The method that
+           -- did this existed and nothing ever called it, so every session ever
+           -- paused came back as a dead paused tab on every launch after.
+           paused            = 0`,
       )
       .run(
         session.id,
@@ -914,6 +924,19 @@ class Database {
          WHERE id = ?`,
       )
       .run(sessionId, sessionId);
+  }
+
+  /**
+   * Empty a session's stored conversation, without turning recording off.
+   *
+   * For a transcript that was replaced rather than appended to — a session
+   * restarted without its conversation gets a new, shorter file under a new
+   * name. `forgetTranscript` is the other thing: somebody asked for the copy
+   * to stop existing, so it also clears the switch.
+   */
+  resetTranscript(sessionId) {
+    this.db.prepare('DELETE FROM transcript_chunks WHERE session_id = ?').run(sessionId);
+    this.db.prepare('UPDATE sessions SET transcript_bytes = 0 WHERE id = ?').run(sessionId);
   }
 
   forgetTranscript(sessionId) {
@@ -1517,17 +1540,33 @@ class Database {
     return doomed;
   }
 
-  /** Keep history from growing without bound. */
-  prune({ keepDays = 90, keepRows = 1000 } = {}) {
+  /**
+   * Keep history from growing without bound.
+   *
+   * `keep` is the sessions this launch has no business erasing — the ones
+   * `closeStaleSessions` just stamped, which are tabs carried across a restart
+   * rather than history. Without it, a tab you keep open is stamped closed at
+   * launch and erased by the very next line once it is old enough or has fallen
+   * out of the newest rows: the tab, its conversation and its snapshot all gone
+   * in one launch, with a single console line as the only trace.
+   *
+   * Recency is when a session was last worked in, not when it was first opened.
+   * A tab that has been open for three months is the last thing anybody wants
+   * dropped for being old.
+   */
+  prune({ keepDays = 90, keepRows = 1000, keep = [] } = {}) {
     const cutoff = Date.now() - keepDays * 86400000;
+    const immune = new Set(keep);
     const doomed = this.db
       .prepare(
         `SELECT id FROM sessions
-         WHERE ended_at IS NOT NULL AND (started_at < ?
-           OR id NOT IN (SELECT id FROM sessions ORDER BY started_at DESC LIMIT ?))`,
+         WHERE ended_at IS NOT NULL AND (COALESCE(last_worked_at, last_active_at, started_at) < ?
+           OR id NOT IN (SELECT id FROM sessions
+                         ORDER BY COALESCE(last_worked_at, last_active_at, started_at) DESC LIMIT ?))`,
       )
       .all(cutoff, keepRows)
-      .map((row) => row.id);
+      .map((row) => row.id)
+      .filter((id) => !immune.has(id));
 
     if (!doomed.length) return doomed;
 

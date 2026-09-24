@@ -6,7 +6,7 @@ const { app, BrowserWindow, ipcMain, dialog, protocol, shell, net, Notification,
 const { DatabaseSync } = require('node:sqlite');
 const { createHash, randomUUID } = require('node:crypto');
 
-const { PtyManager, claudeLaunchLine } = require('./pty-manager');
+const { PtyManager, claudeLaunchLine, quoteArg } = require('./pty-manager');
 const { readUsage } = require('./usage');
 const { ProfileStore, discoverAccountDirs } = require('./profiles');
 const { accountsRoot, authStatus, ensureConfigDir, invalidateAuthCache, suggestConfigDirs } = require('./auth');
@@ -369,6 +369,20 @@ function send(channel, payload) {
 }
 
 /**
+ * Everything this launch remembered about one pty, dropped together.
+ *
+ * In one place because it is the thing most easily got wrong: each map here was
+ * added for its own reason, and a pty forgotten by some of them and not the
+ * others is worse than one forgotten by none — the app then answers questions
+ * about a process that is not there.
+ */
+function forgetPty(ptyId) {
+  windowByPty.delete(ptyId);
+  sessionByPty.delete(ptyId);
+  foregroundByPty.delete(ptyId);
+}
+
+/**
  * To the one window that shows this pty, when that is known.
  *
  * A pty nobody is on record as owning — the map is only written by `pty:spawn`,
@@ -503,6 +517,14 @@ function createWindow(windowId = randomUUID(), bounds = null) {
 
   win.on('closed', () => {
     windows.delete(windowId);
+    /*
+     * This window is closed; the next one under this id has not agreed to
+     * anything. Cmd+Shift+T deliberately rebuilds a window under the same id, so
+     * leaving the id here meant the window that came back — with whatever
+     * sessions were started in it since — closed on a stray Cmd+W with no
+     * confirmation and no chance to cancel.
+     */
+    closingWindows.delete(windowId);
     for (const [streamId, owner] of [...kubeStreamOwners]) {
       if (owner !== windowId) continue;
       kubeStreams.stop(streamId);
@@ -510,10 +532,28 @@ function createWindow(windowId = randomUUID(), bounds = null) {
     }
     // A window the app took down on its way out is meant to come back next launch.
     if (isQuitting) return;
-    // Closing a window ends its sessions; they are not coming back with it.
+    /*
+     * Closing a window ends its sessions; they are not coming back with it.
+     *
+     * "Ends" used to mean only the row. The shell and the Claude inside it were
+     * left running with nothing on screen accounting for them — and autopilot
+     * went on nudging them every two and a half seconds, because it watches the
+     * session and nothing had told it otherwise. A window closed with a session
+     * on autopilot kept spending tokens and writing files for as long as the app
+     * stayed open, and the roster it would have been stoppable from no longer
+     * listed it.
+     */
     for (const sessionId of [...liveSessions]) {
       if (db?.getSession(sessionId)?.windowId !== windowId) continue;
+      for (const [ptyId, owner] of sessionByPty) {
+        if (owner !== sessionId) continue;
+        ptys?.kill(ptyId);
+        forgetPty(ptyId);
+      }
       liveSessions.delete(sessionId);
+      autopilot?.forget(sessionId);
+      screenBySession.delete(sessionId);
+      lastOutputBySession.delete(sessionId);
       db?.endSession(sessionId, null);
     }
     db?.closeWindow(windowId);
@@ -695,9 +735,19 @@ function registerIpc() {
       const overrides = { ...(profile.env || {}) };
       if (profile.configDir) overrides.CLAUDE_CONFIG_DIR = profile.configDir;
       else overrides.CLAUDE_CONFIG_DIR = path.join(os.homedir(), '.claude');
+      /*
+       * Shell quoting, not JSON quoting.
+       *
+       * `JSON.stringify` wraps a value in double quotes, and inside double
+       * quotes a shell still expands `$` and a backtick — so a folder like
+       * `~/scratch/$USER-notes` became a different path, the resume landed
+       * where the conversation is not filed and the thread was abandoned; a
+       * backtick ran whatever was between the pair. `quoteArg` is the one the
+       * rest of the launch line already uses.
+       */
       const prefix = Object.entries(overrides)
         .filter(([, value]) => value !== null && value !== undefined)
-        .map(([key, value]) => `${key}=${JSON.stringify(String(value))}`)
+        .map(([key, value]) => `${key}=${quoteArg(String(value))}`)
         .join(' ');
       if (prefix) line = `${prefix} ${line}`;
     }
@@ -705,7 +755,7 @@ function registerIpc() {
     // The line is typed into a shell that is sitting wherever it was left. A
     // resume run from the wrong folder finds no conversation, so walk there first.
     const workdir = found?.cwd && fs.existsSync(found.cwd) ? found.cwd : null;
-    return workdir ? `cd ${JSON.stringify(workdir)} && ${line}` : line;
+    return workdir ? `cd ${quoteArg(workdir)} && ${line}` : line;
   });
 
   /**
@@ -732,7 +782,7 @@ function registerIpc() {
     for (const [ptyId, sessionId] of sessionByPty) {
       if (db.getSession(sessionId)?.windowId !== windowId) continue;
       ptys.kill(ptyId);
-      sessionByPty.delete(ptyId);
+      forgetPty(ptyId);
       liveSessions.delete(sessionId);
       // Without this the row stays marked running for ever, and the history shows
       // sessions that no longer exist.
@@ -1755,7 +1805,7 @@ function registerIpc() {
     for (const [ptyId, owner] of sessionByPty) {
       if (owner !== sessionId) continue;
       ptys.kill(ptyId);
-      sessionByPty.delete(ptyId);
+      forgetPty(ptyId);
       stopped = true;
     }
     liveSessions.delete(sessionId);
@@ -1842,7 +1892,7 @@ function registerIpc() {
     db.dropMessagesFor(sessionId);
     screenBySession.delete(sessionId);
     lastOutputBySession.delete(sessionId);
-    for (const [ptyId, owner] of sessionByPty) if (owner === sessionId) sessionByPty.delete(ptyId);
+    for (const [ptyId, owner] of sessionByPty) if (owner === sessionId) forgetPty(ptyId);
     db.endSession(sessionId, exitCode ?? null);
     announceRoster();
   });
@@ -1954,8 +2004,13 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   // to close cleanly; the rows are closed so their duration is not open-ended.
   const crashed = db.closeStaleSessions();
   if (crashed.length) console.log(`[db] closed ${crashed.length} session(s) left open by a previous run`);
-  db.prune();
+  // Those rows were open a second ago, so they are tabs being carried across a
+  // restart, not history — and history is the only thing the prune is for.
+  db.prune({ keep: crashed });
   teamsService = createTeamsService();
+  // What the hours held back is looked at again on a clock of its own: the
+  // delivery extension promises the morning, and something has to bring it.
+  teamsService?.start();
   reviewService = createReviewService();
 
   workspace = new JsonStore('workspace.json', { layout: null, sessions: [], settings: {} });
@@ -1972,7 +2027,21 @@ if (isPrimaryInstance) app.whenReady().then(() => {
       }
     }
     sendToPtyOwner(channel, payload);
-    if (channel === 'pty:exit') windowByPty.delete(payload.id);
+    /*
+     * A pty that has gone stops being anybody's.
+     *
+     * Only the window was forgotten here, so a dead pty stayed in
+     * `sessionByPty` — and everything that turns a session back into a pty
+     * scans that map and takes the FIRST match. After a restart the dead one is
+     * the older entry, so it always won: `ptys.write` on an unknown id is a
+     * silent no-op, and both callers reported the write as delivered. The
+     * hand-over brief a fresh restart exists to carry was written into nothing
+     * and marked as delivered; every autopilot nudge after that typed nowhere
+     * while the session was driven on towards "done". Its last reading in
+     * `foregroundByPty` was frozen too, because the watcher only ever polls
+     * living ptys — so "is Claude up" answered for a process that had exited.
+     */
+    if (channel === 'pty:exit') forgetPty(payload.id);
   });
 
   autopilot = new Autopilot({
