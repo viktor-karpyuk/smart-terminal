@@ -2238,7 +2238,16 @@ if (isPrimaryInstance) app.whenReady().then(() => {
    * rather than a second one of its own.
    */
   updates.on('quit-for-install', () => app.quit());
-  updates.start();
+  /*
+   * A copy made to work on this app does not update itself.
+   *
+   * It is built from a branch, so the newest published release is almost always
+   * *older* than what it is running — and taking it would quietly replace the
+   * thing being tested with the thing it is being tested against. The panel
+   * still works; it simply is not asked on a timer.
+   */
+  if (buildInfo.variant !== 'dev') updates.start();
+  else console.log('[updates] this is a dev copy; it does not update itself');
 
   registerIpc();
   buildMenu(sendToFocused, () => createWindow(), () => {
