@@ -25,8 +25,26 @@ const rules = require('./review-rules');
 
 const START_DELAY = 15 * 1000;
 
+/**
+ * How often one repository is looked at, and why it is one rather than all.
+ *
+ * "Notice a new pull request straight away" and "ask fourteen repositories every
+ * five seconds" are not the same thing, and only the first is wanted. Bitbucket
+ * allows a thousand requests an hour, and asking all fourteen every five seconds
+ * is ten thousand — throttled inside a minute, after which the reviewer sees
+ * nothing at all.
+ *
+ * So one repository per tick, in turn. Something is always being looked at, the
+ * whole set comes round every `repos × interval`, and the cost is one request
+ * per tick however many repositories there are. Fourteen repositories at five
+ * seconds is each one seen every seventy seconds, for seven hundred and twenty
+ * requests an hour — and most of those are answered `304 Not Modified`, because
+ * the list is asked for with the tag it was last given.
+ */
+const WATCH_SECONDS = 5;
+
 class AutoReviewer {
-  constructor({ store, engine, fixer, remind = null, notify = () => {}, emit = () => {}, setTimer = setTimeout, clearTimer = clearTimeout }) {
+  constructor({ store, engine, fixer, remind = null, announce = null, notify = () => {}, emit = () => {}, setTimer = setTimeout, clearTimer = clearTimeout }) {
     this.store = store;
     this.engine = engine;
     this.fixer = fixer;
@@ -40,11 +58,17 @@ class AutoReviewer {
      * promise made on screen and not kept.
      */
     this.remind = remind;
+    /** Say in the room that one has begun. Optional: without it, nothing is said. */
+    this.announce = announce;
     this.notify = notify;
     this.emit = emit;
     this.setTimer = setTimer;
     this.clearTimer = clearTimer;
     this.timer = null;
+    /** The light watch, on its own clock: which repository is next, and its timer. */
+    this.watchTimer = null;
+    this.watchAt = 0;
+    this.stopped = false;
     this.busy = false;
     this.status = { running: false, lastRunAt: null, lastMessage: null, reviewedTotal: 0, nextRunAt: null };
   }
@@ -61,6 +85,33 @@ class AutoReviewer {
     return Math.max(1, Number.parseInt(this.store.pref('auto.max.per.cycle', '3'), 10) || 3);
   }
 
+  watchSeconds() {
+    const stored = Number.parseInt(this.store.pref('auto.watch.seconds', String(WATCH_SECONDS)), 10);
+    // Below a second is a busy loop; above a minute it is not watching any more.
+    return Math.min(60, Math.max(1, stored || WATCH_SECONDS));
+  }
+
+  watching() {
+    return this.store.pref('auto.watch', 'true') !== 'false';
+  }
+
+  /**
+   * What the watch costs, so the screen can say it rather than imply it.
+   *
+   * One request per tick, whatever the number of repositories — the tick is what
+   * is spent, not the fleet.
+   */
+  watchBudget() {
+    const repos = this.store.repos({ withHidden: false }).filter((repo) => repo.autoReview).length;
+    const every = this.watchSeconds();
+    return {
+      repos,
+      everySeconds: every,
+      eachSeenSeconds: repos ? repos * every : 0,
+      requestsPerHour: Math.round(3600 / every),
+    };
+  }
+
   setStatus(fields) {
     Object.assign(this.status, fields);
     this.emit({ type: 'auto', status: { ...this.status } });
@@ -68,6 +119,10 @@ class AutoReviewer {
 
   start() {
     if (this.timer) return;
+    this.stopped = false;
+    // The light watch starts with everything else and runs on its own clock, so
+    // a long review cycle never delays noticing that something moved.
+    this.armWatch();
     this.schedule(START_DELAY, async () => {
       try {
         const resumed = await this.resumePending();
@@ -79,9 +134,67 @@ class AutoReviewer {
     });
   }
 
+  /*
+   * The review clock only. `schedule` calls this between every cycle, so
+   * anything taken down here is taken down six times an hour — which is how the
+   * watch would have been killed on every tick and re-armed by luck.
+   */
   stop() {
     if (this.timer) this.clearTimer(this.timer);
     this.timer = null;
+  }
+
+  /** Both clocks, for good: the app closing, or the reviewer being switched off. */
+  stopAll() {
+    this.stopped = true;
+    this.stop();
+    if (this.watchTimer) this.clearTimer(this.watchTimer);
+    this.watchTimer = null;
+  }
+
+  /**
+   * One repository, looked at now: has anything moved?
+   *
+   * Deliberately nothing else. It lists, and if the list came back changed it
+   * says so — the reviewing itself stays on its own clock and its own budget,
+   * because a review costs money and noticing does not.
+   */
+  async watchOnce() {
+    if (!this.watching() || this.busy) return null;
+    const repos = this.store.repos({ withHidden: false }).filter((repo) => repo.autoReview);
+    if (!repos.length) return null;
+
+    const repo = repos[this.watchAt % repos.length];
+    this.watchAt = (this.watchAt + 1) % repos.length;
+    try {
+      const listed = await this.engine.refreshPrs(repo.id, { notifyNew: true });
+      if (listed?.fresh?.length) {
+        this.setStatus({ lastMessage: `${repo.name}: ${listed.fresh.length} new pull request(s)` });
+        this.emit({ type: 'watch', repoId: repo.id, fresh: listed.fresh.length });
+      }
+      return listed;
+    } catch {
+      // A repository that cannot be listed this second is listed next time
+      // round. Saying so every five seconds would be its own kind of noise.
+      return null;
+    }
+  }
+
+  /**
+   * Arm the watch, or leave it alone if it is switched off.
+   *
+   * Called when the ticker starts and again when the setting changes, so
+   * turning it on takes effect now rather than at the end of a review cycle.
+   * Switched off it arms nothing at all — a timer that wakes only to find it
+   * has nothing to do is still a timer.
+   */
+  armWatch() {
+    if (this.stopped || !this.watching() || this.watchTimer) return;
+    this.watchTimer = this.setTimer(() => {
+      this.watchTimer = null;
+      void this.watchOnce().finally(() => this.armWatch());
+    }, this.watchSeconds() * 1000);
+    this.watchTimer?.unref?.();
   }
 
   schedule(ms, fn) {
@@ -293,6 +406,10 @@ class AutoReviewer {
           if (this.store.existsForHead(repo.id, pr.id, pr.headSha)) continue;
           if (this.engine.isReviewing(repo.id, pr.id)) continue;
           done++;
+          // The room hears it has begun. An automatic review is exactly the case
+          // the announcement is for: nobody pressed anything, so without it the
+          // team has no way of knowing this one is already being looked at.
+          if (this.announce) void this.announce(repo.id, pr.id, { kind: 'started' }).catch(() => {});
           const outcome = await this.engine.review(repo.id, pr.id, { auto: true });
           if (outcome.ok) {
             notes.push(`${repo.name} #${pr.id}: ready to publish`);

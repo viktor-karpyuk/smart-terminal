@@ -888,6 +888,10 @@
     * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
     .stat:hover { transform: none; }
   }
+
+    /* A column just wide enough for a tick, and a bar that only exists when something is chosen. */
+    .list th.pick, .list td.pick { width: 26px; padding-right: 0; text-align: center; }
+    .picked-bar { margin: 6px 0 8px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
 </style>
 
 <div id="app">
@@ -1183,6 +1187,15 @@
     });
   }
 
+  /*
+   * Asked for on its own rather than riding along with the settings, because it
+   * reads every pull request anybody has been asked to change and the rest of
+   * the page should not wait for it.
+   */
+  function loadFixTimes() {
+    return call('fixTimes').then(function (r) { state.fixTimes = r; draw(); }, function () { state.fixTimes = { people: [], overDays: 0 }; });
+  }
+
   function load() {
     var view = state.view;
     var promise;
@@ -1193,7 +1206,7 @@
     // Usage has a tab, so it fetches its own numbers rather than riding along
     // with the settings page that used to show a corner of them.
     else if (view === 'usage') promise = call('usage').then(function (r) { state.usage = r.usage; });
-    else if (view === 'settings') promise = call('guidelines', { repoId: null }).then(function (r) { state.globalGuidelines = r.guidelines; });
+    else if (view === 'settings') promise = call('guidelines', { repoId: null }).then(function (r) { state.globalGuidelines = r.guidelines; }).then(loadFixTimes);
     else if (view === 'import') promise = call('importInspect').then(function (r) { state.importInfo = r; });
     else if (view === 'bus') promise = call('bus').then(function (r) { state.bus = r; });
     else promise = Promise.resolve();
@@ -1481,6 +1494,19 @@
       ['mine', 'Needs you', rows.filter(function (r) { return r.rank === 0; })],
       ['others', 'Waiting on others', rows.filter(function (r) { return r.rank >= 2; })]
     ];
+    /*
+     * A bar that is there only when it has something to say. Above the list, so
+     * the count and the button are where the eye already is after ticking.
+     */
+    var picked = chosenPrs();
+    if (picked.length) {
+      html += '<div class="row picked-bar">' +
+        '<strong>' + picked.length + ' chosen</strong>' +
+        '<span class="spacer"></span>' +
+        '<button class="btn" data-act="pick-none">Clear</button> ' +
+        '<button class="btn primary" data-act="review-chosen"' + busyAttr('review-chosen') + '>Review ' + picked.length + '</button>' +
+        '</div>';
+    }
     if (!rows.length) html += '<div class="empty">No pull requests match.' + (f.flags.length || f.mine || f.authors.length || f.text ? ' <button class="link" data-act="dash-clear">Clear the filters</button>' : '') + '</div>';
     groups.forEach(function (g) {
       if (!g[2].length) return;
@@ -1693,13 +1719,28 @@
     return Math.floor(mins / 60) + ' h ' + (mins % 60) + ' m';
   }
 
+  /** A pull request's own name in the chosen set: repository and number together. */
+  function prKeyOf(repoId, prId) { return repoId + '#' + prId; }
+
+  function chosenPrs() {
+    return Object.keys(state.chosen || {}).filter(function (key) { return state.chosen[key]; });
+  }
+
   function drawPrTable(rows, withRepo) {
     if (!rows.length) return '<div class="empty">No pull requests match.</div>';
-    var html = '<table class="list"><tr><th>Pull request</th><th>Age</th><th>Waiting for</th><th title="Published / found, and how many published ones are still open">Findings</th><th title="API-price equivalent of the reviews, not a charge">Cost</th></tr>';
+    /*
+     * A tick per row, and the row still opens when clicked.
+     *
+     * The box stops the click from reaching the row — choosing several is not a
+     * reason to be taken away from the list you are choosing them in.
+     */
+    var html = '<table class="list"><tr><th class="pick"></th><th>Pull request</th><th>Age</th><th>Waiting for</th><th title="Published / found, and how many published ones are still open">Findings</th><th title="API-price equivalent of the reviews, not a charge">Cost</th></tr>';
     rows.forEach(function (row) {
       var pr = row.pr;
       var closed = pr.state !== 'OPEN';
+      var key = prKeyOf(row.repoId, pr.id);
       html += '<tr class="click' + (closed ? ' closed' : '') + '" data-act="open-pr" data-repo="' + esc(row.repoId) + '" data-pr="' + pr.id + '">' +
+        '<td class="pick"><input type="checkbox" data-act-change="pick-pr" data-key="' + esc(key) + '"' + (state.chosen && state.chosen[key] ? ' checked' : '') + ' title="Choose this one to review with others"></td>' +
         '<td class="title-cell"><div class="t">#' + pr.id + ' ' + esc(pr.title) + '</div><div class="s">' + (withRepo ? '<span class="chip">' + esc(row.repoName) + '</span> ' : '') + esc(pr.author) + (pr.sourceBranch ? ' · <span class="mono">' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch) + '</span>' : '') +
         (row.pendingReturn ? ' · <span class="warn">' + row.pendingReturn + ' fix(es) to hand back</span>' : '') + '</div>' + runStrip(row) + '</td>' +
         '<td class="faint" title="' + esc(pr.createdOn) + '">' + (row.ageDays != null ? row.ageDays + 'd ' : '') + '<span class="' + (row.ageDays >= 14 ? 'bad' : row.ageDays >= 7 ? 'warn' : '') + '">' + ageMark(row.ageDays) + '</span></td>' +
@@ -3297,6 +3338,7 @@
     html += '<div class="field"><label>Remind after</label><div class="row"><input type="number" min="1" data-setting="followUpDays" data-edit="set-followUpDays" value="' + esc(edit('set-followUpDays', val('followUpDays'))) + '" style="width:80px"> days without an answer</div></div>';
     var auto = state.auto || o.auto;
     html += remindersSection(o);
+    html += fixTimesSection();
     html += '<div class="row"><button class="btn" data-act="auto-now">Sweep now</button><span class="faint">' + esc(auto && auto.lastMessage ? (auto.lastRunAt ? when(auto.lastRunAt) + ': ' : '') + auto.lastMessage : 'No sweep yet.') + '</span></div></div>';
     /*
      * Two numbers, not one. The panel is prose and the diff is code, they are
@@ -3481,8 +3523,61 @@
         : 'Reminders are only a comment in the thread until something is installed and set up to carry one.') +
       '</div></div></div>';
 
+    /*
+     * The room, which is a different errand from the private reminder.
+     *
+     * A reminder is said to the person who owes the answer, and said again. This
+     * is the step after that: past a point somebody other than the author needs
+     * to know, because by then it is not going to move on its own. Said once a
+     * day at most, whatever the sweep's clock.
+     */
+    html += '<div class="field"><label>In the channel</label><div>' +
+      '<div class="row">' +
+      '<span class="faint">Announce a review to</span>' +
+      '<input data-edit="announce-channel" placeholder="a channel name" value="' + esc(edit('announce-channel', settings.announceChannel || '')) + '" style="width:180px">' +
+      '<label class="check"><input type="checkbox" data-edit-check="announce-on"' + (settings.announceEnabled ? ' checked' : '') + '> on</label>' +
+      '</div>' +
+      '<div class="help">Said once when a review begins, so nobody wonders and two people do not review the same thing. It goes to the room as the app, not as you.</div>' +
+      '<div class="row" style="margin-top:6px">' +
+      '<span class="faint">Say in the channel when somebody has been sitting on changes for</span>' +
+      '<input type="number" min="0" max="90" data-edit="escalate-days" value="' + esc(edit('escalate-days', settings.escalateDays || 0)) + '" style="width:64px">' +
+      '<span class="faint">days</span>' +
+      '<button class="btn small" data-act="escalate-now"' + busyAttr('escalate-now') + '>Say it now</button>' +
+      '</div>' +
+      '<div class="help">Zero means never. The private reminder has already been sent by then, more than once.</div>' +
+      '</div></div>';
+
     html += '<div class="row" style="margin-top:6px"><button class="btn" data-act="rules-save"' + busyAttr('rules-save') + '>Save the days</button></div>';
     return html + '</div>';
+  }
+
+  /**
+   * How long each person takes, and what is waiting on them now.
+   *
+   * The typical time is the middle one rather than the mean, so one pull request
+   * left over a holiday does not make somebody look slow. What is waiting is
+   * what you act on today; the typical time is what you talk about at the end of
+   * the month.
+   */
+  function fixTimesSection() {
+    var data = state.fixTimes;
+    if (!data) return '<div class="section"><h3>How long changes take</h3><div class="loading">Reading…</div></div>';
+    if (!data.people.length) {
+      return '<div class="section"><h3>How long changes take</h3>' +
+        '<div class="empty">Nothing measured yet. The clock starts when you ask somebody for changes.</div></div>';
+    }
+    var html = '<div class="section"><h3>How long changes take</h3>' +
+      '<div class="help faint" style="margin-bottom:8px">From the moment changes were asked for to the moment a commit arrived — or to now, for the ones still waiting.</div>' +
+      '<table class="list"><tr><th>Who</th><th>Typical</th><th>Answered</th><th>Waiting now</th><th>Longest</th></tr>';
+    data.people.forEach(function (person) {
+      var late = data.overDays > 0 && person.longestWaitingDays != null && person.longestWaitingDays >= data.overDays;
+      html += '<tr><td>' + esc(person.author) + '</td>' +
+        '<td class="faint">' + (person.typicalDays == null ? '—' : person.typicalDays + 'd') + '</td>' +
+        '<td class="faint">' + person.answered + '</td>' +
+        '<td' + (person.waiting ? '' : ' class="faint"') + '>' + (person.waiting || '—') + '</td>' +
+        '<td class="' + (late ? 'bad' : 'faint') + '">' + (person.longestWaitingDays == null ? '—' : person.longestWaitingDays + 'd' + (late ? ' ▲' : '')) + '</td></tr>';
+    });
+    return html + '</table></div>';
   }
 
   /** Every shortcut on one card, so they can be found without reading the source. `?` opens and closes it. */
@@ -3606,6 +3701,36 @@
     },
     // The result goes in the top bar and the failures on their repositories, not in a toast that cuts them off.
     'refresh-all': function () { act('refresh-all', function () { return call('refreshAll'); }, function (r) { state.refreshResult = r; load(); }); },
+    'pick-none': function () { state.chosen = {}; draw(); },
+    'escalate-now': function () {
+      act('escalate-now', function () { return call('escalateNow'); }, function (r) {
+        var said = (r.sent || []).filter(function (one) { return one.ok; }).length;
+        say(said ? said + ' said in the channel' : 'Nothing is waiting long enough to say.');
+      });
+    },
+    /*
+     * The chosen ones, sent off together.
+     *
+     * The ticks are cleared as soon as they are handed over, because they have
+     * been acted on — leaving them would invite a second press that reviews
+     * everything again at full price. What each one did is said in the toast,
+     * and the runs themselves show in their own rows.
+     */
+    'review-chosen': function () {
+      var picked = chosenPrs().map(function (key) {
+        var cut = key.lastIndexOf('#');
+        return { repoId: key.slice(0, cut), prId: Number(key.slice(cut + 1)) };
+      });
+      if (!picked.length) return;
+      act('review-chosen', function () { return call('reviewMany', { prs: picked }); }, function (r) {
+        state.chosen = {};
+        var parts = [r.done + ' sent to review'];
+        if (r.failed) parts.push(r.failed + ' could not start');
+        if (r.cancelled) parts.push(r.cancelled + ' cancelled');
+        say(parts.join(' · '));
+        load();
+      });
+    },
     fold: function (el) { var key = el.getAttribute('data-key'); state.folds[key] = !isOpen(key, el.closest('.fold') ? el.closest('.fold').classList.contains('open') : false); draw(); },
     more: function (el) { state.folds['more-' + el.getAttribute('data-key')] = true; draw(); },
     // A checkbox inside a row that also opens the file: the click marks, and does not open.
@@ -3977,10 +4102,22 @@
       (state.overview.settings.reminders || []).forEach(function (rule) {
         rules[rule.id] = { mode: rule.mode, days: Number(edit('rule-days-' + rule.id, rule.days)) };
       });
-      act('rules-save', function () { return call('saveSettings', { settings: { reminders: rules } }); }, function (r) {
+      // Everything this section draws goes in the payload. A field drawn and not
+      // sent is a field that looks saved and saves nothing, which has happened.
+      var patch = {
+        reminders: rules,
+        announceChannel: String(edit('announce-channel', state.overview.settings.announceChannel || '')),
+        announceEnabled: Boolean(state.edits['announce-on'] != null ? state.edits['announce-on'] : state.overview.settings.announceEnabled),
+        escalateDays: Number(edit('escalate-days', state.overview.settings.escalateDays || 0)),
+      };
+      act('rules-save', function () { return call('saveSettings', { settings: patch }); }, function (r) {
         state.overview.settings = r.settings;
         (r.settings.reminders || []).forEach(function (rule) { delete state.edits['rule-days-' + rule.id]; });
+        delete state.edits['announce-channel'];
+        delete state.edits['announce-on'];
+        delete state.edits['escalate-days'];
         say('Saved.');
+        loadFixTimes();
       });
     },
     'remind-in-thread': function (el) {
@@ -4030,6 +4167,16 @@
   };
 
   document.addEventListener('click', function (event) {
+    /*
+     * A tick inside a row that also opens on click.
+     *
+     * The box carries `data-act-change`, not `data-act`, so `closest` walked
+     * straight past it to the row and opened the pull request — choosing four
+     * of them took you away from the list four times, and the tick was lost
+     * with the view. Handled where the same case already is for a checkbox that
+     * does carry an action.
+     */
+    if (event.target.hasAttribute && event.target.hasAttribute('data-act-change')) return;
     var el = event.target.closest('[data-act]');
     if (!el || el.hasAttribute('disabled')) return;
     var name = el.getAttribute('data-act');
@@ -4063,6 +4210,8 @@
 
   document.addEventListener('change', function (event) {
     var el = event.target;
+    // A tick inside a row that also opens on click: ticking marks, and does not open.
+    if (el.getAttribute('data-act-change') === 'pick-pr') event.stopPropagation();
     var formField = el.getAttribute('data-form');
     if (formField && state.form) {
       if (el.type === 'checkbox') state.form[formField] = el.checked;
@@ -4078,6 +4227,18 @@
     }
     if (el.getAttribute('data-edit-select')) { state.edits[el.getAttribute('data-edit-select')] = el.value; }
     if (el.getAttribute('data-edit-check')) { state.edits[el.getAttribute('data-edit-check')] = el.checked; }
+    /*
+     * A tick on a pull request. Kept in the panel rather than the store: what
+     * you are about to do with a handful of rows is not something a restart
+     * should remember for you.
+     */
+    if (el.getAttribute('data-act-change') === 'pick-pr') {
+      state.chosen = state.chosen || {};
+      var pickKey = el.getAttribute('data-key');
+      if (el.checked) state.chosen[pickKey] = true;
+      else delete state.chosen[pickKey];
+      draw();
+    }
     if (el.getAttribute('data-bind') === 'prs-sort') { state.prSort = el.value; remember(); draw(); }
     if (el.getAttribute('data-bind') === 'history-author') { state.historyAuthor = el.value; draw(); }
   });
