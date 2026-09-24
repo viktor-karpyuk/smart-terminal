@@ -579,6 +579,69 @@ class ReviewService {
     return out;
   }
 
+  /**
+   * Your own words, wherever you want them.
+   *
+   * Three places, because they are three different acts. The thread is where a
+   * discussion belongs and where it survives. The room is where you tell the
+   * team something without leaving the reviewer. The direct message is where
+   * you say something to one person that the pull request does not need to
+   * carry for ever.
+   *
+   * Sent as *you* — the delivery extension's own account — and not as the app
+   * and not as a bot. That is the whole point of it: these are your words, and
+   * a message that reads as having come from a machine is a message nobody
+   * answers.
+   *
+   * Each destination is tried and reported on separately. The thread is done
+   * first and its failure is the only one that stops the rest, because a
+   * comment that did not land is the one people would otherwise assume exists.
+   */
+  async speak(repoId, prId, { text, to = {} } = {}) {
+    const body = String(text ?? '').trim();
+    if (!body) throw new Error('There is nothing to say.');
+    const repo = this.store.repo(repoId);
+    const pr = this.store.pr(repoId, prId);
+    if (!repo || !pr) throw new Error('That pull request is gone.');
+
+    const out = { thread: null, channel: null, person: null };
+
+    if (to.thread) {
+      // Straight onto the pull request, under nothing: a comment of its own.
+      out.thread = await this.engine.comment(repoId, prId, body);
+      if (out.thread?.ok === false) return out;
+    }
+
+    const shared = {
+      title: `${repo.name} #${pr.id}`,
+      body,
+      facts: [{ label: 'Pull request', value: pr.title }],
+      links: pr.url ? [{ text: 'Open the pull request', url: pr.url }] : [],
+      // Said by a person, now, on purpose: never held for the hours and never
+      // held back as a repeat. Both of those protect somebody from a machine
+      // that will not stop, and neither is about you pressing Send.
+      level: 'urgent',
+      key: null,
+    };
+
+    const channel = this.store.pref('announce.channel', '').trim();
+    if (to.channel && channel) {
+      out.channel = await this.deliver({ ...shared, to: { channel } }).catch((error) => ({ ok: false, why: 'failed', detail: String(error?.message ?? error) }));
+    }
+
+    if (to.person) {
+      const provider = String(repo.provider ?? 'forge').toLowerCase();
+      const who = to.person === true ? pr.author : to.person;
+      out.person = await this.deliver({
+        ...shared,
+        to: { handle: `${provider}:${who}`, display: who },
+      }).catch((error) => ({ ok: false, why: 'failed', detail: String(error?.message ?? error) }));
+    }
+
+    this.engine.changed(repoId, prId);
+    return out;
+  }
+
   async sweepReminders() {
     const sent = [];
     for (const found of this.due()) {
@@ -1254,6 +1317,15 @@ class ReviewService {
       },
       followUpText: (args) => ({ ok: true, text: rules.followUpText(findingOf(args), e.language()) }),
       followUp: (args) => e.followUp(findingOf(args).id, args.body),
+      /** Your own words, to the thread, the room, the author, or any of the three. */
+      speak: (args) => s.speak(str(args.repoId, 'A repository'), num(args.prId), {
+        text: args.text,
+        to: {
+          thread: Boolean(args.thread),
+          channel: Boolean(args.channel),
+          person: args.person === true ? true : (args.person ? String(args.person) : false),
+        },
+      }),
 
       // fixes
       adopt: (args) => {

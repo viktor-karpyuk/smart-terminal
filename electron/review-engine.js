@@ -864,6 +864,25 @@ class ReviewEngine {
   // --- publishing ----------------------------------------------------------------------
 
   /** The general comment. The publication stores the exact text sent, not what the draft says later. */
+  /**
+   * A comment on the pull request, in your own words.
+   *
+   * Not a review and not a finding: nothing is recorded against it, nothing is
+   * verified later, and it does not move the readiness. It is you saying
+   * something in the place the discussion lives.
+   */
+  async comment(repoId, prId, text) {
+    const repo = this.requireRepo(repoId);
+    const body = String(text ?? '').trim();
+    if (!body) throw new Error('The comment is empty.');
+    try {
+      const posted = await this.forge.of(repo).comment(prId, body);
+      return { ok: true, url: posted?.url ?? null };
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  }
+
   async publishReview(reviewId, body) {
     const review = this.store.review(reviewId);
     if (!review) throw new Error('That review is gone.');
