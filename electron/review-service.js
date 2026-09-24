@@ -142,7 +142,7 @@ class ReviewService {
       escalateChannel: prefs['escalate.channel'] ?? '',
       escalateDays: Number(prefs['escalate.days'] ?? 0) || 0,
       watchEnabled: prefs['auto.watch'] !== 'false',
-      watchSeconds: Number(prefs['auto.watch.seconds'] ?? 5) || 5,
+      watchSeconds: Number(prefs['auto.watch.seconds'] ?? 120) || 120,
       delivery: this.deliveryState(),
       mergeStrategy: prefs['merge.strategy'] ?? 'MERGE_COMMIT',
       // How the panel was laid out, so a restart does not undo a dragged divider.
@@ -995,7 +995,8 @@ class ReviewService {
         // Zero is a real answer here — it means never say it in the room — so it
         // is not folded in with the ones that are floored at one.
         if ('escalateDays' in input) s.store.setPref('escalate.days', String(Math.min(90, Math.max(0, Number.parseInt(input.escalateDays, 10) || 0))));
-        if ('watchSeconds' in input) s.store.setPref('auto.watch.seconds', String(Math.min(60, Math.max(1, Number.parseInt(input.watchSeconds, 10) || 5))));
+        // Ten seconds is asking flat out; an hour is not watching any more.
+        if ('watchSeconds' in input) s.store.setPref('auto.watch.seconds', String(Math.min(3600, Math.max(10, Number.parseInt(input.watchSeconds, 10) || 120))));
         // Turning the watch on takes effect now rather than at the end of a cycle.
         if ('watchEnabled' in input || 'watchSeconds' in input) s.auto.armWatch();
         if ('remindInThread' in input) s.store.setPref('reminders.inThread', input.remindInThread ? 'true' : 'false');

@@ -616,3 +616,16 @@ test('zero days is a real answer for the escalation', () => {
   const service = fs.readFileSync(path.join(__dirname, '..', 'electron', 'review-service.js'), 'utf8');
   assert.match(service, /escalate\.days[^\n]*Math\.max\(0,/, 'floored at zero, not at one');
 });
+
+/*
+ * The dial says how often each repository is looked at, and the line under it
+ * works out what that costs. A field drawn and not sent looks saved and saves
+ * nothing, which is why this is checked rather than assumed.
+ */
+test('the watch dial is drawn, sent, and its cost is worked out', () => {
+  assert.match(source, /data-edit="watch-seconds"/, 'the dial is drawn');
+  const at = source.indexOf("'rules-save': function");
+  const handler = source.slice(at, at + 1600);
+  assert.ok(handler.includes('watchSeconds') && handler.includes('watchEnabled'), 'and both are sent');
+  assert.match(source, /watch\.requestsPerHour/, 'the cost is the number, not a promise');
+});

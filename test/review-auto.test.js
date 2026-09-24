@@ -179,9 +179,31 @@ test('what the watch costs is a number the screen can show', () => {
   const { auto } = watcher(someRepos(14));
   const budget = auto.watchBudget();
   assert.equal(budget.repos, 14);
-  assert.equal(budget.everySeconds, 5);
-  assert.equal(budget.eachSeenSeconds, 70, 'each repository comes round every seventy seconds');
-  assert.equal(budget.requestsPerHour, 720, 'and the hour costs seven hundred and twenty of a thousand');
+  assert.equal(budget.everySeconds, 120, 'the setting says how often each one is looked at');
+  assert.equal(budget.eachSeenSeconds, 120);
+  assert.equal(budget.requestsPerHour, 420, 'fourteen every two minutes, of Bitbucket\'s thousand');
+});
+
+/*
+ * The setting says how often each repository is looked at; the tick is that
+ * divided by however many there are. So the round keeps its meaning while the
+ * asking is spread through it rather than arriving all at once every two
+ * minutes — kinder to the other end, and to the review work sharing the process.
+ */
+test('the round is spread out rather than arriving in a burst', () => {
+  assert.equal(watcher(someRepos(14)).auto.watchTickMs(), 8571, 'fourteen repositories, one about every eight and a half seconds');
+  assert.equal(watcher(someRepos(1)).auto.watchTickMs(), 120000, 'one repository is simply asked every two minutes');
+  assert.equal(watcher(someRepos(2)).auto.watchTickMs(), 60000);
+});
+
+/*
+ * A fleet big enough to divide the round into nothing must not become a busy
+ * loop. Past that point the round takes longer than it says, which is the right
+ * way to run out of room.
+ */
+test('a very large fleet slows the round rather than the gap', () => {
+  const { auto } = watcher(someRepos(400));
+  assert.equal(auto.watchTickMs(), 1000, 'never faster than one a second');
 });
 
 test('a repository that cannot be listed does not stop the round', async () => {
@@ -213,14 +235,26 @@ test('turned off, it asks nothing', async () => {
   assert.equal(await auto.watchOnce(), null);
 });
 
-test('a repository that does not review by itself is not watched either', async () => {
+/*
+ * Looking and reviewing are different jobs: one costs a request, the other costs
+ * money. Somebody who reviews by hand has *more* use for knowing a pull request
+ * arrived, not less — they are the one who has to go and press it. Tied to
+ * `autoReview` this watched nothing at all on a fleet reviewed by hand, which is
+ * the ordinary case and was the case on the machine it was written for.
+ */
+test('a repository reviewed by hand is watched just the same', async () => {
   const { auto, asked } = watcher([
-    { id: 'r0', name: 'on', autoReview: true },
-    { id: 'r1', name: 'off', autoReview: false },
+    { id: 'r0', name: 'auto', autoReview: true },
+    { id: 'r1', name: 'by hand', autoReview: false },
   ]);
   await auto.watchOnce();
   await auto.watchOnce();
-  assert.deepEqual(asked, ['r0', 'r0']);
+  assert.deepEqual(asked, ['r0', 'r1'], 'both, because both can gain a pull request');
+});
+
+test('a hidden repository is not watched', async () => {
+  const { auto } = watcher([]);
+  assert.equal(await auto.watchOnce(), null, 'nothing to look at is nothing asked');
 });
 
 /*

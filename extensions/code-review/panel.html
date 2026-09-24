@@ -1193,7 +1193,10 @@
    * the page should not wait for it.
    */
   function loadFixTimes() {
-    return call('fixTimes').then(function (r) { state.fixTimes = r; draw(); }, function () { state.fixTimes = { people: [], overDays: 0 }; });
+    return Promise.all([
+      call('fixTimes').then(function (r) { state.fixTimes = r; }, function () { state.fixTimes = { people: [], overDays: 0 }; }),
+      call('watchBudget').then(function (r) { state.watchBudget = r; }, function () { state.watchBudget = null; }),
+    ]).then(draw);
   }
 
   function load() {
@@ -3531,6 +3534,25 @@
      * to know, because by then it is not going to move on its own. Said once a
      * day at most, whatever the sweep's clock.
      */
+    /*
+     * Looking, which is a different thing from reviewing and costs almost
+     * nothing. The number underneath is worked out rather than promised — a
+     * fleet twice the size is twice the requests, and that should be visible
+     * before somebody turns the dial rather than after.
+     */
+    var watch = state.watchBudget;
+    html += '<div class="field"><label>Looking for new work</label><div>' +
+      '<div class="row">' +
+      '<label class="check"><input type="checkbox" data-edit-check="watch-on"' + (settings.watchEnabled ? ' checked' : '') + '> Check each repository every</label>' +
+      '<input type="number" min="10" max="3600" step="10" data-edit="watch-seconds" value="' + esc(edit('watch-seconds', settings.watchSeconds || 120)) + '" style="width:72px">' +
+      '<span class="faint">seconds</span>' +
+      '</div>' +
+      '<div class="help">' +
+      (watch
+        ? esc(watch.repos + ' repositor' + (watch.repos === 1 ? 'y' : 'ies') + ' · about ' + watch.requestsPerHour + ' requests an hour of Bitbucket\'s 1,000, one at a time roughly every ' + Math.round(watch.tickMs / 100) / 10 + 's')
+        : 'Only the list of pull requests, asked for with the tag it was last given — most answers are “nothing changed”.') +
+      '</div></div></div>';
+
     html += '<div class="field"><label>In the channel</label><div>' +
       '<div class="row">' +
       '<span class="faint">Announce a review to</span>' +
@@ -4106,6 +4128,8 @@
       // sent is a field that looks saved and saves nothing, which has happened.
       var patch = {
         reminders: rules,
+        watchEnabled: Boolean(state.edits['watch-on'] != null ? state.edits['watch-on'] : state.overview.settings.watchEnabled),
+        watchSeconds: Number(edit('watch-seconds', state.overview.settings.watchSeconds || 120)),
         announceChannel: String(edit('announce-channel', state.overview.settings.announceChannel || '')),
         announceEnabled: Boolean(state.edits['announce-on'] != null ? state.edits['announce-on'] : state.overview.settings.announceEnabled),
         escalateDays: Number(edit('escalate-days', state.overview.settings.escalateDays || 0)),
@@ -4113,6 +4137,8 @@
       act('rules-save', function () { return call('saveSettings', { settings: patch }); }, function (r) {
         state.overview.settings = r.settings;
         (r.settings.reminders || []).forEach(function (rule) { delete state.edits['rule-days-' + rule.id]; });
+        delete state.edits['watch-on'];
+        delete state.edits['watch-seconds'];
         delete state.edits['announce-channel'];
         delete state.edits['announce-on'];
         delete state.edits['escalate-days'];
