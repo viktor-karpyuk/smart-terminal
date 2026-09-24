@@ -1,5 +1,6 @@
 {
-  "version": "0.8.17",
+  "version": "0.8.18",
   "build": 1,
-  "builtAt": "2026-09-24T21:40:52.526Z"
+  "builtAt": "2026-09-24T22:11:44.270Z",
+  "variant": "release"
 }
