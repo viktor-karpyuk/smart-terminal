@@ -3274,7 +3274,7 @@
            */
           var rules = (v.settings && v.settings.reminders) || [];
           var anyRuleOn = rules.some(function (rule) { return rule.mode && rule.mode !== 'OFF'; });
-          if (delivery.ready && anyRuleOn) {
+          if (delivery.person && anyRuleOn) {
             html += '<button class="btn small go" data-act="remind-out" data-days="' + esc(t.waitingDays) + '"' + busyAttr(prKey('remind')) + ' title="Post the follow-up and send them a message where they will see it">Remind ' + esc(shortName(v.pr.author)) + ' as well</button>';
           }
         }
@@ -3515,15 +3515,24 @@
       '<label class="check"><input type="checkbox" data-act="remind-in-thread"' + (settings.remindInThread ? ' checked' : '') + '> Also post a follow-up in the thread</label>' +
       '<div class="help">The thread is where the answer belongs; a message elsewhere is only what makes somebody go and look.</div></div></div>';
 
+    /*
+     * The two destinations, said apart.
+     *
+     * A reminder goes to a person, so something that can only reach a room
+     * cannot carry one. Saying "connected" because one of the two works is how a
+     * green button came to answer with an error about a thing this panel is not
+     * even supposed to know the name of.
+     */
     html += '<div class="field"><label>Outside the pull request</label><div>' +
-      (delivery.ready
-        ? '<span class="chip okc">' + esc(delivery.name || 'a delivery extension') + ' · connected</span>'
-        : delivery.installed
-          ? '<span class="chip mine">' + esc(delivery.name || 'a delivery extension') + ' · not set up yet</span>'
-          : '<span class="chip">nothing installed that can deliver</span>') +
-      '<div class="help">' + (delivery.ready
+      (!delivery.installed
+        ? '<span class="chip">nothing installed that can deliver</span>'
+        : '<span class="chip ' + (delivery.person ? 'okc' : 'mine') + '">to a person · ' + (delivery.person ? 'ready' : 'not set up') + '</span> ' +
+          '<span class="chip ' + (delivery.channel ? 'okc' : 'mine') + '">to a channel · ' + (delivery.channel ? 'ready' : 'not set up') + '</span>') +
+      '<div class="help">' + (delivery.person
         ? 'A reminder reaches the person outside the pull request as well. This panel never learns their address.'
-        : 'Reminders are only a comment in the thread until something is installed and set up to carry one.') +
+        : delivery.installed
+          ? 'Reminders are only a comment in the thread until ' + esc(delivery.name || 'the delivery extension') + ' can reach somebody directly.'
+          : 'Reminders are only a comment in the thread until something is installed and set up to carry one.') +
       '</div></div></div>';
 
     /*

@@ -468,6 +468,8 @@ class TeamsService {
       id: 'teams',
       name: 'Teams',
       ready: () => this.connection().ready,
+      /** Asked per destination, because a room and a person are reached differently. */
+      canReach: (what) => Boolean(this.connection()[what === 'channel' ? 'channel' : 'person']?.ready),
       send: (appId, appName, message) => this.send(appId, appName, message),
     };
   }
