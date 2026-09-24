@@ -393,7 +393,7 @@ test('a message held outside the hours goes out when they open', { skip }, async
   service.saveSettings({ hoursFrom: 9, hoursTo: 18, weekdaysOnly: true, perPersonPerDay: 5, dedupeDays: 7 });
   service.store.setAppStance('code-review', 'ALLOW');
 
-  const held = await service.send('code-review', 'Code Reviewer', { to: { email: 'b@kubrik.com' }, title: 'PR #43 is waiting on you', body: 'x', key: 'k1' });
+  const held = await service.send('code-review', 'Code Reviewer', { to: { channel: 'reviews' }, title: 'PR #43 is waiting on you', body: 'x', key: 'k1' });
   assert.equal(held.why, 'quiet-hours');
   assert.equal(calls.length, 0, 'nothing went out at twenty to midnight');
 
@@ -409,7 +409,7 @@ test('still outside the hours means it keeps waiting, not that it is dropped', {
   service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/hook' });
   service.saveSettings({ hoursFrom: 9, hoursTo: 18, weekdaysOnly: true, perPersonPerDay: 5, dedupeDays: 7 });
   service.store.setAppStance('code-review', 'ALLOW');
-  const held = await service.send('code-review', 'Code Reviewer', { to: { email: 'b@kubrik.com' }, title: 'later', body: 'x', key: 'k2' });
+  const held = await service.send('code-review', 'Code Reviewer', { to: { channel: 'reviews' }, title: 'later', body: 'x', key: 'k2' });
 
   setNow(new Date('2026-09-24T03:00:00').getTime());
   assert.deepEqual(await service.releaseHeld(), []);
@@ -426,7 +426,7 @@ test('a message held for more than a day is let go of, and says so', { skip }, a
   service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/hook' });
   service.saveSettings({ hoursFrom: 9, hoursTo: 18, weekdaysOnly: true, perPersonPerDay: 5, dedupeDays: 7 });
   service.store.setAppStance('code-review', 'ALLOW');
-  const held = await service.send('code-review', 'Code Reviewer', { to: { email: 'b@kubrik.com' }, title: 'stale', body: 'x', key: 'k3' });
+  const held = await service.send('code-review', 'Code Reviewer', { to: { channel: 'reviews' }, title: 'stale', body: 'x', key: 'k3' });
 
   setNow(new Date('2026-09-26T10:00:00').getTime());
   const out = await service.releaseHeld();
@@ -447,7 +447,7 @@ test('releasing judges the row it has rather than making another', { skip }, asy
   service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/hook' });
   service.saveSettings({ hoursFrom: 9, hoursTo: 18, weekdaysOnly: true, perPersonPerDay: 5, dedupeDays: 7 });
   service.store.setAppStance('code-review', 'ALLOW');
-  await service.send('code-review', 'Code Reviewer', { to: { email: 'b@kubrik.com' }, title: 'one', body: 'x', key: 'k4' });
+  await service.send('code-review', 'Code Reviewer', { to: { channel: 'reviews' }, title: 'one', body: 'x', key: 'k4' });
   const before = service.store.messages({ limit: 100 }).length;
 
   setNow(new Date('2026-09-24T02:00:00').getTime());
@@ -468,13 +468,57 @@ test('a message waiting on you is in the outbox however much came after it', { s
   service.saveSettings({ hoursFrom: 0, hoursTo: 24, weekdaysOnly: false, perPersonPerDay: 0, dedupeDays: 0 });
   service.store.seeApp('newcomer', 'Newcomer');
   service.store.setAppStance('newcomer', 'ASK');
-  const asked = await service.send('newcomer', 'Newcomer', { to: { email: 'b@kubrik.com' }, title: 'may I?', body: 'x', key: 'w1' });
+  const asked = await service.send('newcomer', 'Newcomer', { to: { channel: 'reviews' }, title: 'may I?', body: 'x', key: 'w1' });
   assert.equal(asked.why, 'asks-first');
 
   for (let i = 0; i < 70; i += 1) {
-    await service.send('code-review', 'Code Reviewer', { to: { email: 'b@kubrik.com' }, title: `noise ${i}`, body: 'x', key: `n${i}` });
+    await service.send('code-review', 'Code Reviewer', { to: { channel: 'reviews' }, title: `noise ${i}`, body: 'x', key: `n${i}` });
   }
   const shown = service.store.messages({ limit: 60 });
   assert.ok(shown.some((row) => row.id === asked.id), 'the one you have to decide about is reachable');
   assert.equal(service.overview().waiting, 1);
+});
+
+/*
+ * A room and a person are two errands, not two ways of doing one.
+ *
+ * They used to be a single radio button — webhook *or* app registration — and
+ * whichever was chosen carried everything. So with the webhook picked, a
+ * message addressed to one developer went into the channel where the whole team
+ * read it. Where a message goes is decided by who it is addressed to.
+ */
+test('a message for one person does not go into the room', { skip }, async () => {
+  const { service, calls } = setup();
+  service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/hook' });
+  service.store.setAppStance('code-review', 'ALLOW');
+
+  const out = await service.send('code-review', 'Code Reviewer', {
+    to: { email: 'b@kubrik.com' }, title: 'a word in your ear', body: 'x', key: 'p1',
+  });
+  assert.equal(out.ok, false, 'there is no way to reach a person yet');
+  assert.match(out.detail ?? '', /app registration/);
+  assert.equal(calls.length, 0, 'and nothing was posted where everybody would read it');
+});
+
+test('a message for the room goes out on the webhook alone', { skip }, async () => {
+  const { service, calls } = setup();
+  service.saveConnection({ way: 'graph', webhookUrl: 'https://example.invalid/hook' });
+  service.store.setAppStance('code-review', 'ALLOW');
+
+  const out = await service.send('code-review', 'Code Reviewer', {
+    to: { channel: 'reviews' }, title: 'PR #43 is being reviewed', body: 'x', key: 'c1',
+  });
+  assert.equal(out.ok, true, 'a room needs no app registration');
+  assert.equal(calls.length, 1);
+});
+
+test('each way out answers for itself', { skip }, () => {
+  const { service } = setup();
+  assert.deepEqual(
+    [service.connection().channel.ready, service.connection().person.ready],
+    [false, false],
+  );
+  service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/hook' });
+  assert.equal(service.connection().channel.ready, true, 'the room can be reached');
+  assert.equal(service.connection().person.ready, false, 'and nobody privately, yet');
 });

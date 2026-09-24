@@ -551,3 +551,81 @@ test('every answer the delivery gives is said in words, not swallowed', () => {
   // And the thread is told first, whatever happens outside it.
   assert.match(handler, /Posted in the thread/);
 });
+
+// ---------------------------------------------------- choosing several at once
+
+/*
+ * Every verb the panel calls has to be in the router's allow-list, which has no
+ * default channel — a name that is not there fails silently and the button
+ * simply does nothing. That has already shipped once.
+ */
+test('the verb for reviewing several is one the router lets through', () => {
+  const host = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'extensionHost.ts'), 'utf8');
+  assert.match(source, /call\('reviewMany'/, 'the panel asks for it');
+  assert.match(host, /'reviewMany'/, 'and the router knows it');
+});
+
+test('a tick does not open the row it sits in', () => {
+  assert.match(
+    source,
+    /data-act-change'\) === 'pick-pr'\) event\.stopPropagation\(\)/,
+    'choosing several must not take you away from the list you are choosing them in',
+  );
+});
+
+/*
+ * Handed over means acted on. Leaving the ticks would invite a second press
+ * that reviews all of them again, and a review is a paid run.
+ */
+test('the ticks are cleared once they have been sent', () => {
+  const at = source.indexOf("'review-chosen': function");
+  const handler = source.slice(at, at + 900);
+  assert.match(handler, /state\.chosen = \{\}/);
+  assert.match(handler, /r\.failed/, 'and what failed is said rather than swallowed');
+});
+
+// ------------------------------------------------- the room, and the clock
+
+/*
+ * A field drawn on a form and missing from the payload looks saved and saves
+ * nothing. That has shipped here before, so every field this section draws is
+ * checked against what the save sends.
+ */
+test('every field the channel settings draw is in what gets saved', () => {
+  const at = source.indexOf("'rules-save': function");
+  const handler = source.slice(at, at + 1400);
+  for (const field of ['announceChannel', 'announceEnabled', 'escalateDays']) {
+    assert.ok(handler.includes(field), `${field} is drawn, so it has to be sent`);
+  }
+});
+
+test('the verbs the new screens call are ones the router lets through', () => {
+  const host = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'extensionHost.ts'), 'utf8');
+  for (const verb of ['fixTimes', 'escalateNow']) {
+    assert.match(source, new RegExp(`call\\('${verb}'`), `the panel asks for ${verb}`);
+    assert.ok(host.includes(`'${verb}'`), `and the router knows ${verb}`);
+  }
+});
+
+/*
+ * Zero days means never say it in the room, so it must not be floored at one
+ * the way the intervals are — a ceiling of one day would turn "off" into
+ * "every day", which is the loudest possible reading of "off".
+ */
+test('zero days is a real answer for the escalation', () => {
+  const service = fs.readFileSync(path.join(__dirname, '..', 'electron', 'review-service.js'), 'utf8');
+  assert.match(service, /escalate\.days[^\n]*Math\.max\(0,/, 'floored at zero, not at one');
+});
+
+/*
+ * The dial says how often each repository is looked at, and the line under it
+ * works out what that costs. A field drawn and not sent looks saved and saves
+ * nothing, which is why this is checked rather than assumed.
+ */
+test('the watch dial is drawn, sent, and its cost is worked out', () => {
+  assert.match(source, /data-edit="watch-seconds"/, 'the dial is drawn');
+  const at = source.indexOf("'rules-save': function");
+  const handler = source.slice(at, at + 1600);
+  assert.ok(handler.includes('watchSeconds') && handler.includes('watchEnabled'), 'and both are sent');
+  assert.match(source, /watch\.requestsPerHour/, 'the cost is the number, not a promise');
+});

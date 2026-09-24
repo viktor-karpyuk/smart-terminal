@@ -687,6 +687,55 @@ class ReviewStore {
     });
   }
 
+  /**
+   * How long each author has kept a pull request waiting, and on which ones.
+   *
+   * Measured from the moment we asked for changes to the moment a commit
+   * arrived — or to now, for the ones still waiting. Only pull requests where
+   * *we* asked: "how long do they take" is a question about an answer somebody
+   * owes, and a pull request nobody asked anything of owes nothing.
+   *
+   * Read rather than kept. Every part of it is already written down, and a
+   * second copy of a number is a second thing to get wrong.
+   */
+  fixClocks({ since = null } = {}) {
+    const rows = this.all(
+      `SELECT p.repo_id, p.pr_id, p.author, p.title, p.state, p.head_sha, p.updated_on,
+              a.approved_at AS asked_at,
+              (SELECT r.head_sha FROM cr_review r
+                WHERE r.repo_id = p.repo_id AND r.pr_id = p.pr_id AND r.status = 'DONE'
+                ORDER BY r.created_at DESC LIMIT 1) AS reviewed_sha
+         FROM cr_pr p
+         JOIN cr_pr_approval a
+           ON a.repo_id = p.repo_id AND a.pr_id = p.pr_id
+          AND a.state = 'CHANGES_REQUESTED' AND a.by_us = 1
+        WHERE (?1 IS NULL OR a.approved_at >= ?1)`,
+      since,
+    );
+    return rows.map((row) => {
+      /*
+       * A branch that has moved since we looked is a branch somebody worked on,
+       * and that is where the clock stops — whatever the calendar says. The
+       * ones still on the same commit are still running, so their number is
+       * measured to now and grows while nobody does anything.
+       */
+      const moved = Boolean(row.reviewed_sha && row.head_sha && row.reviewed_sha !== row.head_sha);
+      const from = Date.parse(row.asked_at ?? '');
+      const to = moved ? Date.parse(row.updated_on ?? '') : Date.now();
+      const days = Number.isFinite(from) && Number.isFinite(to) ? Math.max(0, (to - from) / 86400000) : null;
+      return {
+        repoId: row.repo_id,
+        prId: row.pr_id,
+        author: row.author ?? '',
+        title: row.title ?? '',
+        open: row.state === 'OPEN',
+        askedAt: row.asked_at ?? null,
+        answered: moved,
+        days: days === null ? null : Math.round(days * 10) / 10,
+      };
+    });
+  }
+
   recordStance(repoId, prId, who, state) {
     this.run('DELETE FROM cr_pr_approval WHERE repo_id = ? AND pr_id = ? AND by_us = 1', repoId, prId);
     this.run('INSERT OR REPLACE INTO cr_pr_approval (repo_id, pr_id, approved_by, by_us, approved_at, state) VALUES (?,?,?,1,?,?)', repoId, prId, who || 'us', now(), state);

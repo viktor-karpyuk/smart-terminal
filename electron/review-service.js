@@ -84,7 +84,13 @@ class ReviewService {
       store: this.store,
       engine: this.engine,
       fixer: this.fixer,
-      remind: () => this.sweepReminders(),
+      remind: async () => {
+        await this.sweepReminders();
+        // The room hears about what the private reminders have not moved. On the
+        // same clock, because it is the step after them and not a thing of its own.
+        await this.escalate();
+      },
+      announce: (repoId, prId, options) => this.announceReview(repoId, prId, options),
       notify: notifier,
       emit: emitter,
     });
@@ -99,7 +105,7 @@ class ReviewService {
   }
 
   stop() {
-    this.auto.stop();
+    this.auto.stopAll();
     for (const run of this.engine.activity.runs.values()) run.handle?.cancel();
   }
 
@@ -131,6 +137,12 @@ class ReviewService {
        */
       reminders: reminders.readRules(readJson(prefs['reminders.rules'])),
       remindInThread: prefs['reminders.inThread'] !== 'false',
+      announceChannel: prefs['announce.channel'] ?? '',
+      announceEnabled: prefs['announce.enabled'] === 'true',
+      escalateChannel: prefs['escalate.channel'] ?? '',
+      escalateDays: Number(prefs['escalate.days'] ?? 0) || 0,
+      watchEnabled: prefs['auto.watch'] !== 'false',
+      watchSeconds: Number(prefs['auto.watch.seconds'] ?? 120) || 120,
       delivery: this.deliveryState(),
       mergeStrategy: prefs['merge.strategy'] ?? 'MERGE_COMMIT',
       // How the panel was laid out, so a restart does not undo a dragged divider.
@@ -418,6 +430,131 @@ class ReviewService {
    * here throws: one pull request that cannot be reminded about must not stop
    * the rest.
    */
+  /**
+   * Tell the room a pull request is being looked at.
+   *
+   * Said once when a review starts, and only into a channel — the author does
+   * not need a private message telling them somebody has begun; they need one
+   * when something is waiting on them. The point of the room is that everybody
+   * else stops wondering, and that two people do not review the same thing.
+   *
+   * Nothing here can stop a review: a channel that is not set up, an extension
+   * that is off, a webhook that has gone — all of them mean the review happens
+   * anyway and nobody is told.
+   */
+  async announceReview(repoId, prId, { kind = 'started' } = {}) {
+    const channel = this.store.pref('announce.channel', '').trim();
+    if (!channel || this.store.pref('announce.enabled', 'false') !== 'true') return { ok: false, why: 'off' };
+    const repo = this.store.repo(repoId);
+    const pr = this.store.pr(repoId, prId);
+    if (!repo || !pr) return { ok: false, why: 'gone' };
+
+    const said = kind === 'finished' ? 'has been reviewed' : 'is being reviewed';
+    try {
+      return await this.deliver({
+        to: { channel },
+        title: `${repo.name} #${pr.id} ${said}`,
+        body: pr.title,
+        facts: [
+          { label: 'Author', value: String(pr.author ?? '') },
+          pr.sourceBranch ? { label: 'Branch', value: `${pr.sourceBranch} → ${pr.targetBranch}` } : null,
+        ].filter(Boolean),
+        links: pr.url ? [{ text: 'Open the pull request', url: pr.url }] : [],
+        // Its own key per pull request and per head, so starting a review of the
+        // same commit twice says it once — and a new commit is news again.
+        key: `code-review:${repoId}:${pr.id}:${kind}:${pr.headSha ?? ''}`,
+        level: 'normal',
+      });
+    } catch (error) {
+      return { ok: false, why: 'failed', detail: String(error?.message ?? error) };
+    }
+  }
+
+  /**
+   * How long people take, per person: the number and the ones behind it.
+   *
+   * Two figures, because they answer different questions. The *typical* time is
+   * the middle one rather than the mean, so a single pull request left over a
+   * holiday does not make somebody look slow. What is *waiting now* is what you
+   * act on today. Somebody who has answered everything shows a typical time and
+   * nothing waiting, which is the point.
+   */
+  fixTimes({ overDays = null } = {}) {
+    const clocks = this.store.fixClocks();
+    const threshold = Number.isFinite(Number(overDays)) ? Number(overDays) : this.escalateDays();
+    const byAuthor = new Map();
+    for (const clock of clocks) {
+      if (clock.days === null) continue;
+      const who = clock.author || '(unknown)';
+      const held = byAuthor.get(who) ?? { author: who, answered: [], waiting: [], over: [] };
+      byAuthor.set(who, held);
+      if (clock.answered) held.answered.push(clock);
+      else {
+        held.waiting.push(clock);
+        if (threshold > 0 && clock.days >= threshold) held.over.push(clock);
+      }
+    }
+    const middle = (list) => {
+      if (!list.length) return null;
+      const sorted = list.map((one) => one.days).sort((a, b) => a - b);
+      const at = Math.floor(sorted.length / 2);
+      const value = sorted.length % 2 ? sorted[at] : (sorted[at - 1] + sorted[at]) / 2;
+      return Math.round(value * 10) / 10;
+    };
+    return [...byAuthor.values()]
+      .map((held) => ({
+        author: held.author,
+        typicalDays: middle(held.answered),
+        answered: held.answered.length,
+        waiting: held.waiting.length,
+        longestWaitingDays: held.waiting.length ? Math.max(...held.waiting.map((one) => one.days)) : null,
+        over: held.over.map((one) => ({ repoId: one.repoId, prId: one.prId, title: one.title, days: one.days })),
+      }))
+      .sort((a, b) => (b.longestWaitingDays ?? -1) - (a.longestWaitingDays ?? -1) || a.author.localeCompare(b.author));
+  }
+
+  escalateDays() {
+    const stored = Number(this.store.pref('escalate.days', '0'));
+    return Number.isFinite(stored) && stored > 0 ? stored : 0;
+  }
+
+  /**
+   * Say in the room what has been waiting too long.
+   *
+   * The room rather than the person, deliberately: the private reminder is the
+   * reviewer's own rule and it has already been said, more than once. This is
+   * the step after that — somebody other than the author needs to know, because
+   * by now it is not going to move on its own.
+   *
+   * Once a day per author at most: the key carries the day, so a sweep running
+   * every ten minutes says it in the morning and not again.
+   */
+  async escalate() {
+    const channel = this.store.pref('escalate.channel', '').trim() || this.store.pref('announce.channel', '').trim();
+    const days = this.escalateDays();
+    if (!channel || !days) return [];
+
+    const today = new Date().toISOString().slice(0, 10);
+    const out = [];
+    for (const person of this.fixTimes({ overDays: days })) {
+      if (!person.over.length) continue;
+      const worst = person.over.slice().sort((a, b) => b.days - a.days)[0];
+      const many = person.over.length > 1;
+      const sent = await this.deliver({
+        to: { channel },
+        title: `${person.author} has ${person.over.length} pull request${many ? 's' : ''} waiting on changes`,
+        body: many
+          ? `The oldest has been waiting ${worst.days} days.`
+          : `“${worst.title}” has been waiting ${worst.days} days since changes were asked for.`,
+        facts: person.over.slice(0, 5).map((one) => ({ label: `#${one.prId}`, value: `${one.days} days · ${one.title}`.slice(0, 300) })),
+        key: `code-review:escalate:${person.author}:${today}`,
+        level: 'normal',
+      }).catch((error) => ({ ok: false, why: 'failed', detail: String(error?.message ?? error) }));
+      out.push({ author: person.author, over: person.over.length, ...sent });
+    }
+    return out;
+  }
+
   async sweepReminders() {
     const sent = [];
     for (const found of this.due()) {
@@ -837,7 +974,7 @@ class ReviewService {
       },
       saveSettings: (args) => {
         const input = args.settings ?? {};
-        const map = { language: 'review.language', me: 'me.author', profileId: 'claude.profileId', notify: 'notify.enabled', autoEnabled: 'auto.enabled', autoInterval: 'auto.interval.minutes', autoMax: 'auto.max.per.cycle', followUpDays: 'followup.days', asideWidth: 'ui.asideWidth', wrapLines: 'ui.wrapLines', diffLayout: 'ui.diffLayout', diffFont: 'ui.diffFont', uiFont: 'ui.font' };
+        const map = { language: 'review.language', me: 'me.author', profileId: 'claude.profileId', notify: 'notify.enabled', autoEnabled: 'auto.enabled', autoInterval: 'auto.interval.minutes', autoMax: 'auto.max.per.cycle', followUpDays: 'followup.days', asideWidth: 'ui.asideWidth', wrapLines: 'ui.wrapLines', diffLayout: 'ui.diffLayout', diffFont: 'ui.diffFont', uiFont: 'ui.font', announceChannel: 'announce.channel', announceEnabled: 'announce.enabled', escalateChannel: 'escalate.channel', watchEnabled: 'auto.watch', watchSeconds: 'auto.watch.seconds' };
         for (const [field, key] of Object.entries(map)) {
           if (!(field in input)) continue;
           const value = input[field];
@@ -855,6 +992,13 @@ class ReviewService {
           for (const rule of reminders.readRules(input.reminders)) clean[rule.id] = { mode: rule.mode, days: rule.days };
           s.store.setPref('reminders.rules', JSON.stringify(clean));
         }
+        // Zero is a real answer here — it means never say it in the room — so it
+        // is not folded in with the ones that are floored at one.
+        if ('escalateDays' in input) s.store.setPref('escalate.days', String(Math.min(90, Math.max(0, Number.parseInt(input.escalateDays, 10) || 0))));
+        // Ten seconds is asking flat out; an hour is not watching any more.
+        if ('watchSeconds' in input) s.store.setPref('auto.watch.seconds', String(Math.min(3600, Math.max(10, Number.parseInt(input.watchSeconds, 10) || 120))));
+        // Turning the watch on takes effect now rather than at the end of a cycle.
+        if ('watchEnabled' in input || 'watchSeconds' in input) s.auto.armWatch();
         if ('remindInThread' in input) s.store.setPref('reminders.inThread', input.remindInThread ? 'true' : 'false');
         s.emitRaw({ type: 'settings', settings: s.settings() });
         return { ok: true, settings: s.settings() };
@@ -915,6 +1059,9 @@ class ReviewService {
 
       // reviewing
       review: async (args) => {
+        // The room is told it has begun, and told nothing if it cannot be. A
+        // review is never held up by an announcement.
+        void s.announceReview(String(args.repoId ?? ''), Number(args.prId), { kind: 'started' }).catch(() => {});
         const outcome = await e.review(str(args.repoId, 'A repository'), num(args.prId), {
           depth: args.depth === 'AUTO' ? null : args.depth,
           kind: args.kind === 'AUTO' ? null : args.kind,
@@ -923,6 +1070,51 @@ class ReviewService {
         });
         return outcome.ok ? { ok: true, reviewId: outcome.review.id } : { ok: false, error: outcome.error, cancelled: outcome.cancelled };
       },
+      /**
+       * Several pull requests, sent to review together.
+       *
+       * One at a time and in the order given, because a review is a paid run and
+       * four at once is four times the spend with nothing gained — the reviewer
+       * is not waiting on anything but itself. Each is reported on its own, so a
+       * repository whose token expired halfway does not take the rest with it.
+       */
+      reviewMany: async (args) => {
+        const wanted = Array.isArray(args.prs) ? args.prs : [];
+        if (!wanted.length) throw new Error('Nothing was chosen.');
+        const options = {
+          depth: args.depth === 'AUTO' ? null : args.depth,
+          kind: args.kind === 'AUTO' ? null : args.kind,
+          model: args.model,
+          forceFull: Boolean(args.forceFull),
+        };
+        const results = [];
+        for (const one of wanted) {
+          const repoId = str(one?.repoId, 'A repository');
+          const prId = num(one?.prId);
+          void s.announceReview(repoId, prId, { kind: 'started' }).catch(() => {});
+          try {
+            const outcome = await e.review(repoId, prId, options);
+            results.push(outcome.ok
+              ? { repoId, prId, ok: true, reviewId: outcome.review.id }
+              : { repoId, prId, ok: false, error: outcome.error, cancelled: outcome.cancelled });
+          } catch (error) {
+            results.push({ repoId, prId, ok: false, error: String(error?.message ?? error) });
+          }
+        }
+        return {
+          ok: results.some((one) => one.ok),
+          done: results.filter((one) => one.ok).length,
+          failed: results.filter((one) => !one.ok && !one.cancelled).length,
+          cancelled: results.filter((one) => one.cancelled).length,
+          results,
+        };
+      },
+      /** How long each author takes, and what is waiting on them right now. */
+      fixTimes: () => ({ people: s.fixTimes(), overDays: s.escalateDays() }),
+      /** Say in the room what has been waiting too long, now rather than on the clock. */
+      escalateNow: async () => ({ ok: true, sent: await s.escalate() }),
+      /** What the light watch costs, so the screen can show it rather than promise it. */
+      watchBudget: () => s.auto.watchBudget(),
       /** Warns only when a *finished* review exists for this very commit; failed or cancelled ones do not count. */
       rerunCheck: (args) => {
         const repoId = str(args.repoId, 'A repository');

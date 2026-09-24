@@ -34,6 +34,14 @@ class TeamsService {
   // --- what it is set up to do ------------------------------------------------
 
   /** How it reaches Teams, and whether it can. Never includes a secret. */
+  /**
+   * The two ways out, each answered for on its own.
+   *
+   * `ready` used to mean "the one way that is switched on works". There is no
+   * one way: a room and a person are reached differently and both are wanted,
+   * so each says for itself whether it can carry anything. `way` is still read
+   * for the screens that have not caught up, and for nothing else.
+   */
   connection() {
     const way = this.store.setting('way', 'graph');
     const hasWebhook = Boolean(this.store.secret('webhook.url'));
@@ -45,7 +53,12 @@ class TeamsService {
     );
     return {
       way,
-      ready: way === 'webhook' ? hasWebhook : hasGraph,
+      // Anything at all can be said, which is what a sender asks before trying.
+      ready: hasWebhook || hasGraph,
+      /** A room: the webhook posts as the app rather than as anybody. */
+      channel: { ready: hasWebhook, via: 'webhook' },
+      /** One person, privately. The bot will go here when it exists. */
+      person: { ready: hasGraph, via: 'graph' },
       hasWebhook,
       hasGraph,
       tenantId: this.store.setting('graph.tenantId', ''),
@@ -244,13 +257,32 @@ class TeamsService {
   }
 
   /** Put it on the wire, whichever way this machine is set up. */
+  /**
+   * Put it on the wire, by where it is going rather than by a switch.
+   *
+   * A channel and a person are two different errands, not two ways of doing
+   * one. They were a single radio button — webhook *or* app registration — and
+   * whichever was picked carried everything: with the webhook chosen, a message
+   * addressed to one developer went into the channel where everybody read it.
+   * Announcing to a room and telling somebody privately are both wanted, at the
+   * same time, which is the shape this has now.
+   */
   async deliver(message, person) {
-    const way = this.store.setting('way', 'graph');
-    if (way === 'webhook') {
-      const url = this.store.secret('webhook.url');
-      if (!url) throw new Error('No webhook is set up.');
-      return postWebhook(this.fetch, url, message);
-    }
+    if (message.to.channel) return this.#toChannel(message);
+    return this.#toPerson(message, person);
+  }
+
+  /** A room. The webhook is the app's own identity there, which is what a room wants. */
+  async #toChannel(message) {
+    const url = this.store.secret('webhook.url');
+    if (!url) throw new Error('No webhook is set up, so there is no channel to post in.');
+    return postWebhook(this.fetch, url, message);
+  }
+
+  /** One person, privately. */
+  async #toPerson(message, person) {
+    const address = person?.address;
+    if (!address) throw new Error('There is no Teams address for them.');
     const credentials = {
       tenantId: this.store.setting('graph.tenantId'),
       clientId: this.store.setting('graph.clientId'),
@@ -258,13 +290,11 @@ class TeamsService {
       senderAddress: this.store.setting('graph.sender') || null,
     };
     if (!credentials.tenantId || !credentials.clientId || !credentials.clientSecret) {
-      throw new Error('The app registration is not filled in.');
+      throw new Error('The app registration is not filled in, so nothing can be said to somebody directly.');
     }
     if (!credentials.senderAddress) {
       throw new Error('Nobody is set as who these messages come from — a direct message is between two people.');
     }
-    const address = message.to.channel ? null : person?.address;
-    if (!address) throw new Error('There is no Teams address for them.');
     return sendDirect(this.fetch, credentials, this.tokens, { address, message });
   }
 

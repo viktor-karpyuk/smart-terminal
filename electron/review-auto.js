@@ -25,8 +25,25 @@ const rules = require('./review-rules');
 
 const START_DELAY = 15 * 1000;
 
+/**
+ * How often each repository is looked at.
+ *
+ * Two minutes: fast enough that a new pull request is noticed while somebody is
+ * still looking at the screen, slow enough that nobody is asking anything flat
+ * out. Fourteen repositories at two minutes is four hundred and twenty requests
+ * an hour of Bitbucket's thousand, and most of those come back `304 Not
+ * Modified` because the list is asked for with the tag it was last given.
+ *
+ * Still one repository per tick rather than all of them at once. The tick is
+ * this divided by however many there are, so the setting keeps meaning what it
+ * says while the asking stays spread out instead of arriving in a burst every
+ * two minutes. Nothing about the cost changes; it is only kinder to the other
+ * end, and to the ten minutes of review work sharing the same process.
+ */
+const WATCH_SECONDS = 120;
+
 class AutoReviewer {
-  constructor({ store, engine, fixer, remind = null, notify = () => {}, emit = () => {}, setTimer = setTimeout, clearTimer = clearTimeout }) {
+  constructor({ store, engine, fixer, remind = null, announce = null, notify = () => {}, emit = () => {}, setTimer = setTimeout, clearTimer = clearTimeout }) {
     this.store = store;
     this.engine = engine;
     this.fixer = fixer;
@@ -40,11 +57,17 @@ class AutoReviewer {
      * promise made on screen and not kept.
      */
     this.remind = remind;
+    /** Say in the room that one has begun. Optional: without it, nothing is said. */
+    this.announce = announce;
     this.notify = notify;
     this.emit = emit;
     this.setTimer = setTimer;
     this.clearTimer = clearTimer;
     this.timer = null;
+    /** The light watch, on its own clock: which repository is next, and its timer. */
+    this.watchTimer = null;
+    this.watchAt = 0;
+    this.stopped = false;
     this.busy = false;
     this.status = { running: false, lastRunAt: null, lastMessage: null, reviewedTotal: 0, nextRunAt: null };
   }
@@ -61,6 +84,64 @@ class AutoReviewer {
     return Math.max(1, Number.parseInt(this.store.pref('auto.max.per.cycle', '3'), 10) || 3);
   }
 
+  /** How often each repository is looked at, whatever the fleet size. */
+  watchSeconds() {
+    const stored = Number.parseInt(this.store.pref('auto.watch.seconds', String(WATCH_SECONDS)), 10);
+    // Below ten seconds is asking flat out; above an hour it is not watching.
+    return Math.min(3600, Math.max(10, stored || WATCH_SECONDS));
+  }
+
+  /**
+   * How long to wait before the next single repository.
+   *
+   * The round divided by the number of repositories, so each one comes up once
+   * per round and the asking is spread through it. Floored at a second so a
+   * fleet large enough to divide the round into nothing cannot turn into a busy
+   * loop — past that point the round simply takes longer than it says, which is
+   * the right way to run out of room.
+   */
+  watchTickMs() {
+    return Math.max(1000, Math.round((this.watchSeconds() * 1000) / Math.max(1, this.watchedRepos().length)));
+  }
+
+  /**
+   * Which repositories are looked at: all of them that are not hidden.
+   *
+   * Deliberately *not* only the ones that review by themselves. Looking and
+   * reviewing are different jobs — one costs a request, the other costs money —
+   * and somebody who reviews by hand has more use for knowing a pull request
+   * arrived, not less, because they are the one who has to go and press it.
+   * Tied to `autoReview` this watched nothing at all on a fleet where every
+   * repository is reviewed by hand, which is the ordinary case.
+   */
+  watchedRepos() {
+    return this.store.repos({ withHidden: false });
+  }
+
+  watching() {
+    return this.store.pref('auto.watch', 'true') !== 'false';
+  }
+
+  /**
+   * What the watch costs, so the screen can say it rather than imply it.
+   *
+   * One request per tick, whatever the number of repositories — the tick is what
+   * is spent, not the fleet.
+   */
+  watchBudget() {
+    const repos = this.watchedRepos().length;
+    const every = this.watchSeconds();
+    return {
+      repos,
+      /** How often each repository comes round, which is what the setting says. */
+      everySeconds: every,
+      eachSeenSeconds: every,
+      /** And the gap between two single requests, which is what it costs. */
+      tickMs: this.watchTickMs(),
+      requestsPerHour: Math.round((repos * 3600) / every),
+    };
+  }
+
   setStatus(fields) {
     Object.assign(this.status, fields);
     this.emit({ type: 'auto', status: { ...this.status } });
@@ -68,6 +149,10 @@ class AutoReviewer {
 
   start() {
     if (this.timer) return;
+    this.stopped = false;
+    // The light watch starts with everything else and runs on its own clock, so
+    // a long review cycle never delays noticing that something moved.
+    this.armWatch();
     this.schedule(START_DELAY, async () => {
       try {
         const resumed = await this.resumePending();
@@ -79,9 +164,67 @@ class AutoReviewer {
     });
   }
 
+  /*
+   * The review clock only. `schedule` calls this between every cycle, so
+   * anything taken down here is taken down six times an hour — which is how the
+   * watch would have been killed on every tick and re-armed by luck.
+   */
   stop() {
     if (this.timer) this.clearTimer(this.timer);
     this.timer = null;
+  }
+
+  /** Both clocks, for good: the app closing, or the reviewer being switched off. */
+  stopAll() {
+    this.stopped = true;
+    this.stop();
+    if (this.watchTimer) this.clearTimer(this.watchTimer);
+    this.watchTimer = null;
+  }
+
+  /**
+   * One repository, looked at now: has anything moved?
+   *
+   * Deliberately nothing else. It lists, and if the list came back changed it
+   * says so — the reviewing itself stays on its own clock and its own budget,
+   * because a review costs money and noticing does not.
+   */
+  async watchOnce() {
+    if (!this.watching() || this.busy) return null;
+    const repos = this.watchedRepos();
+    if (!repos.length) return null;
+
+    const repo = repos[this.watchAt % repos.length];
+    this.watchAt = (this.watchAt + 1) % repos.length;
+    try {
+      const listed = await this.engine.refreshPrs(repo.id, { notifyNew: true });
+      if (listed?.fresh?.length) {
+        this.setStatus({ lastMessage: `${repo.name}: ${listed.fresh.length} new pull request(s)` });
+        this.emit({ type: 'watch', repoId: repo.id, fresh: listed.fresh.length });
+      }
+      return listed;
+    } catch {
+      // A repository that cannot be listed this second is listed next time
+      // round. Saying so every five seconds would be its own kind of noise.
+      return null;
+    }
+  }
+
+  /**
+   * Arm the watch, or leave it alone if it is switched off.
+   *
+   * Called when the ticker starts and again when the setting changes, so
+   * turning it on takes effect now rather than at the end of a review cycle.
+   * Switched off it arms nothing at all — a timer that wakes only to find it
+   * has nothing to do is still a timer.
+   */
+  armWatch() {
+    if (this.stopped || !this.watching() || this.watchTimer) return;
+    this.watchTimer = this.setTimer(() => {
+      this.watchTimer = null;
+      void this.watchOnce().finally(() => this.armWatch());
+    }, this.watchTickMs());
+    this.watchTimer?.unref?.();
   }
 
   schedule(ms, fn) {
@@ -293,6 +436,10 @@ class AutoReviewer {
           if (this.store.existsForHead(repo.id, pr.id, pr.headSha)) continue;
           if (this.engine.isReviewing(repo.id, pr.id)) continue;
           done++;
+          // The room hears it has begun. An automatic review is exactly the case
+          // the announcement is for: nobody pressed anything, so without it the
+          // team has no way of knowing this one is already being looked at.
+          if (this.announce) void this.announce(repo.id, pr.id, { kind: 'started' }).catch(() => {});
           const outcome = await this.engine.review(repo.id, pr.id, { auto: true });
           if (outcome.ok) {
             notes.push(`${repo.name} #${pr.id}: ready to publish`);
