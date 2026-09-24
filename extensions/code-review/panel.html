@@ -892,6 +892,12 @@
     /* A column just wide enough for a tick, and a bar that only exists when something is chosen. */
     .list th.pick, .list td.pick { width: 26px; padding-right: 0; text-align: center; }
     .picked-bar { margin: 6px 0 8px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
+
+    /* Your own words: set apart from the threads it sits above, without being a card among cards. */
+    .say-box { margin-bottom: 12px; }
+    .say-box textarea { width: 100%; resize: vertical; }
+    .say-box .check.faint { opacity: .55; }
+    .say-box .help.warn { margin-top: 6px; }
 </style>
 
 <div id="app">
@@ -917,6 +923,8 @@
     overview: null,
     dashboard: null,
     dashFilter: { flags: [], mode: 'ALL', mine: false, authors: [], text: '' },
+    /** Where your own words go: the thread by default, which is where they survive. */
+    sayTo: { thread: true, channel: false, person: false },
     repos: null,
     prList: null,
     prStates: ['OPEN'],
@@ -1055,7 +1063,7 @@
   }
 
   function remember() {
-    host.emit('remember', { view: state.view, repoId: state.repoId, prId: state.prId, prTab: state.prTab, prSort: state.prSort, dashFilter: state.dashFilter, codeFile: state.view === 'pr' ? state.code.file : null });
+    host.emit('remember', { view: state.view, repoId: state.repoId, prId: state.prId, prTab: state.prTab, prSort: state.prSort, dashFilter: state.dashFilter, sayTo: state.sayTo, codeFile: state.view === 'pr' ? state.code.file : null });
   }
 
   /* ------------------------------------------------------------------ *
@@ -3190,6 +3198,51 @@
 
   // ---- conversation ------------------------------------------------------------------
 
+  /**
+   * Your own words, and where they go.
+   *
+   * Three destinations because they are three different acts: the thread is
+   * where a discussion belongs and where it survives, the room is telling the
+   * team without leaving this screen, and the direct message is something one
+   * person needs that the pull request does not have to carry for ever. Any
+   * combination, chosen each time — the last choice is remembered, because
+   * whoever wants the room today usually wants it tomorrow.
+   *
+   * Sent as *you*, never as the app and never as the bot. A message that reads
+   * as having come from a machine is a message nobody answers.
+   */
+  function sayBox(v) {
+    var delivery = (v.settings && v.settings.delivery) || {};
+    var channel = (v.settings && v.settings.announceChannel) || '';
+    var where = state.sayTo || { thread: true, channel: false, person: false };
+    var text = edit('say-text', '');
+    var anywhere = where.thread || (where.channel && channel && delivery.channel) || (where.person && delivery.person);
+
+    var html = '<div class="card say-box"><div class="row" style="margin-bottom:6px">' +
+      '<strong>Say something</strong>' +
+      '<span class="faint">as you, not as the reviewer</span></div>' +
+      '<textarea rows="3" data-edit="say-text" placeholder="In your own words…">' + esc(text) + '</textarea>' +
+      '<div class="row" style="margin-top:8px">';
+
+    html += '<label class="check"><input type="checkbox" data-act-change="say-where" data-where="thread"' + (where.thread ? ' checked' : '') + '> In the thread</label>';
+
+    html += '<label class="check' + (channel && delivery.channel ? '' : ' faint') + '" title="' +
+      (channel && delivery.channel ? 'Posted in ' + esc(channel) : !channel ? 'No channel is set on the Settings screen' : 'Nothing installed can reach a channel') + '">' +
+      '<input type="checkbox" data-act-change="say-where" data-where="channel"' + (where.channel ? ' checked' : '') + (channel && delivery.channel ? '' : ' disabled') + '> In the channel</label>';
+
+    html += '<label class="check' + (delivery.person ? '' : ' faint') + '" title="' +
+      (delivery.person ? 'A direct message to ' + esc(v.pr.author) : 'Nothing installed can reach somebody directly') + '">' +
+      '<input type="checkbox" data-act-change="say-where" data-where="person"' + (where.person ? ' checked' : '') + (delivery.person ? '' : ' disabled') + '> To ' + esc(shortName(v.pr.author)) + '</label>';
+
+    html += '<span class="spacer"></span>' +
+      '<button class="btn primary" data-act="say"' + (text.trim() && anywhere ? busyAttr(prKey('say')) : ' disabled') + '>Send</button>' +
+      '</div>';
+
+    // Said where it cannot be taken back from, so it says where before it is said.
+    if (!anywhere && text.trim()) html += '<div class="help warn">Nowhere to send it: pick at least one that is available.</div>';
+    return html + '</div>';
+  }
+
   function drawConversationTab(v) {
     var threads = v.threads;
     var open = v.pr.state === 'OPEN';
@@ -3203,7 +3256,9 @@
     if (!open && (filter === 'yours' || filter === 'waiting')) filter = 'left';
     if (open && filter === 'left') filter = 'all';
     var shown = filter === 'yours' ? yours : filter === 'waiting' ? waiting : filter === 'left' ? left : filter === 'closed' ? shut : threads;
-    var html = '<div class="page"><div class="section-title"><h3>Threads</h3><span class="faint">' + (threads.length - shut.length) + ' open of ' + threads.length + '</span></div>';
+    var html = '<div class="page">';
+    if (open) html += sayBox(v);
+    html += '<div class="section-title"><h3>Threads</h3><span class="faint">' + (threads.length - shut.length) + ' open of ' + threads.length + '</span></div>';
     html += '<div class="row" style="margin-bottom:8px">' + (open ? [['yours', 'Your turn', yours.length], ['waiting', 'Waiting', waiting.length]] : [['left', 'Left open', left.length]]).concat([['closed', 'Closed', shut.length], ['all', 'All', threads.length]]).map(function (o) {
       return '<span class="chip click' + (filter === o[0] ? ' on' : '') + '" data-act="thread-filter" data-filter="' + o[0] + '">' + o[1] + ' ' + o[2] + '</span>';
     }).join('') + '<span class="spacer"></span>';
@@ -3733,6 +3788,33 @@
     // The result goes in the top bar and the failures on their repositories, not in a toast that cuts them off.
     'refresh-all': function () { act('refresh-all', function () { return call('refreshAll'); }, function (r) { state.refreshResult = r; load(); }); },
     'pick-none': function () { state.chosen = {}; draw(); },
+    /*
+     * Each destination is reported on its own. The thread is the one that
+     * matters most — a comment that did not land is the one people would
+     * otherwise assume exists — so a failure there is said first and the box
+     * keeps what was typed.
+     */
+    say: function () {
+      var text = edit('say-text', '');
+      var where = state.sayTo || { thread: true, channel: false, person: false };
+      if (!text.trim()) return;
+      act(prKey('say'), function () {
+        return call('speak', prArgs({ text: text, thread: where.thread, channel: where.channel, person: where.person }));
+      }, function (r) {
+        var went = [];
+        var failed = [];
+        if (r.thread) (r.thread.ok === false ? failed : went).push('the thread');
+        if (r.channel) (r.channel.ok ? went : failed).push('the channel');
+        if (r.person) (r.person.ok ? went : failed).push('them');
+        if (!failed.length) {
+          delete state.edits['say-text'];
+          say('Said in ' + went.join(' and ') + '.');
+        } else {
+          say('Said in ' + (went.join(' and ') || 'nowhere') + ' · could not reach ' + failed.join(' and '), true);
+        }
+        loadPrView();
+      });
+    },
     'escalate-now': function () {
       act('escalate-now', function () { return call('escalateNow'); }, function (r) {
         var said = (r.sent || []).filter(function (one) { return one.ok; }).length;
@@ -4267,6 +4349,12 @@
      * you are about to do with a handful of rows is not something a restart
      * should remember for you.
      */
+    if (el.getAttribute('data-act-change') === 'say-where') {
+      state.sayTo = state.sayTo || { thread: true, channel: false, person: false };
+      state.sayTo[el.getAttribute('data-where')] = el.checked;
+      remember();
+      draw();
+    }
     if (el.getAttribute('data-act-change') === 'pick-pr') {
       state.chosen = state.chosen || {};
       var pickKey = el.getAttribute('data-key');
@@ -4321,6 +4409,8 @@
       if (saved.prTab) state.prTab = saved.prTab;
       if (saved.prSort) state.prSort = saved.prSort;
       if (saved.dashFilter) state.dashFilter = saved.dashFilter;
+      // Whoever wants the room today usually wants it tomorrow.
+      if (saved.sayTo) state.sayTo = saved.sayTo;
       if (saved.codeFile && state.view === 'pr') state.code.file = saved.codeFile;
     }
     if (payload && payload.showing === false) state.showing = false;

@@ -678,3 +678,42 @@ test('the room is told from one place, when a review really begins', () => {
   const auto = fs.readFileSync(path.join(__dirname, '..', 'electron', 'review-auto.js'), 'utf8');
   assert.ok(!auto.includes('announce'), 'the sweep does not carry its own copy');
 });
+
+// ------------------------------------------------------ speaking as yourself
+
+/*
+ * Three destinations because they are three different acts, and each is only
+ * offered when it can actually carry anything — the same rule the reminder
+ * button needed, for the same reason.
+ */
+test('your own words can go to the thread, the room, or the author', () => {
+  const at = source.indexOf('function sayBox');
+  assert.ok(at > 0, 'the box is drawn');
+  const box = source.slice(at, at + 2600);
+  for (const where of ['thread', 'channel', 'person']) {
+    assert.ok(box.includes(`data-where="${where}"`), `${where} is one of the choices`);
+  }
+  assert.match(box, /delivery\.channel \? '' : ' disabled'/, 'a room that cannot be reached is not offered');
+  assert.match(box, /delivery\.person \? '' : ' disabled'/, 'nor a person');
+});
+
+test('the verb it calls is one the router lets through', () => {
+  const host = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'extensionHost.ts'), 'utf8');
+  assert.match(source, /call\('speak'/);
+  assert.ok(host.includes("'speak'"));
+});
+
+/*
+ * Said where it cannot be taken back from. Nothing is sent with nowhere chosen,
+ * and what was typed survives a destination that failed — retyping a paragraph
+ * because a channel was down is the worst possible answer to a channel being
+ * down.
+ */
+test('nothing is sent with nowhere chosen, and a failure keeps the text', () => {
+  const box = source.slice(source.indexOf('function sayBox'), source.indexOf('function sayBox') + 2600);
+  assert.match(box, /text\.trim\(\) && anywhere \? busyAttr/, 'the button is dead until there is somewhere and something');
+
+  const at = source.indexOf('    say: function ()');
+  const handler = source.slice(at, at + 1200);
+  assert.match(handler, /if \(!failed\.length\) \{[\s\S]{0,120}delete state\.edits\['say-text'\]/, 'cleared only when everything landed');
+});

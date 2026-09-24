@@ -207,7 +207,7 @@ const REVIEW_WRITE = [
   'checkConflicts',
   'draftReply', 'draftAll', 'saveReplyDraft', 'publishReply', 'dismissReply', 'dismissAllReplies', 'followUp',
   'adopt', 'fix', 'fixAll', 'retryFixReply', 'giveBack', 'discardWorkshop', 'push', 'dropFix',
-  'remind', 'sweepReminders', 'escalateNow',
+  'remind', 'sweepReminders', 'escalateNow', 'speak',
   'approve', 'unapprove', 'requestChanges', 'undoRequestChanges', 'decline', 'merge',
 ] as const;
 const REVIEW_APP = ['shell', 'ask'] as const;
