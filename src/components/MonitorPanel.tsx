@@ -93,8 +93,19 @@ export function MonitorPanel({ panelId }: { panelId: string }) {
                 : 'No conversation on disk for this session.'}
             </p>
           )}
+          {/*
+            * Keyed on the session, so switching sessions gets a fresh Detail.
+            *
+            * Every verdict is pre-loaded, so this never unmounted between two
+            * sessions and everything it held carried across: the stretch of the
+            * curve somebody had selected on session A was reused to compute
+            * session B's headline figures, A's clock times sat in "showing 21
+            * requests", the advice button still read "sent to the session" for
+            * a session nothing had been sent to, and a half-typed compaction
+            * note about A went into B on the next Enter.
+            */}
           {current?.ok && chosen && (
-            <Detail verdict={current} sessionId={chosen} showSuggestions={showSuggestions} />
+            <Detail key={chosen} verdict={current} sessionId={chosen} showSuggestions={showSuggestions} />
           )}
         </section>
       </div>

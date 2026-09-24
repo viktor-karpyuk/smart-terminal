@@ -108,7 +108,15 @@ class RepoWatcher {
   release(root, force = false) {
     const entry = this.watching.get(root);
     if (!entry) return;
-    entry.holders -= 1;
+    /*
+     * A forced release is the watch failing, not a panel letting go of it.
+     *
+     * Counting it as one dropped the entry while other panels still held it, so
+     * the next `watch()` started again at one holder — and the first of those
+     * panels to close blinded all the rest. Forced means gone for everybody; the
+     * count is only for the ordinary case.
+     */
+    if (!force) entry.holders -= 1;
     if (!force && entry.holders > 0) return;
     if (entry.timer) clearTimeout(entry.timer);
     try {

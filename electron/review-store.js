@@ -1049,16 +1049,44 @@ class ReviewStore {
    * owes — so settling would not settle anything. Published ones are history
    * and are left alone.
    */
+  /**
+   * Everything owed under these comments, however deep it sits.
+   *
+   * A thread is not two levels. An answer to our answer is registered as a
+   * draft too — "or the conversation would stop at its first turn" — and it
+   * hangs off our reply's id, not the finding's. Matching only direct children
+   * left those drafts owed after the finding was settled, so the pull request
+   * read as fully ready and refused to merge in the same breath, with a blocker
+   * naming a reply nobody could see was outstanding.
+   */
   dismissDraftsUnder(repoId, prId, ourCommentIds) {
-    const ids = [...new Set(ourCommentIds.filter(Boolean).map(String))];
-    if (!ids.length) return 0;
-    const marks = ids.map(() => '?').join(',');
+    const roots = [...new Set(ourCommentIds.filter(Boolean).map(String))];
+    if (!roots.length) return 0;
+
+    // Walk down from the roots: their children, their children's children, and
+    // so on. A thread is a handful of comments, so this is a few small steps.
+    const under = new Set(roots);
+    let frontier = roots;
+    while (frontier.length) {
+      const marks = frontier.map(() => '?').join(',');
+      const next = this.all(
+        `SELECT comment_id FROM cr_pr_comment
+          WHERE repo_id = ? AND pr_id = ? AND parent_id IN (${marks})`,
+        repoId, Number(prId), ...frontier,
+      )
+        .map((row) => String(row.comment_id))
+        .filter((id) => !under.has(id));
+      next.forEach((id) => under.add(id));
+      frontier = next;
+    }
+
+    const marks = [...under].map(() => '?').join(',');
     const rows = this.all(
       `SELECT r.id FROM cr_reply_draft r
          JOIN cr_pr_comment c ON c.comment_id = r.their_comment_id AND c.repo_id = r.repo_id AND c.pr_id = r.pr_id
         WHERE r.repo_id = ? AND r.pr_id = ? AND r.status <> 'PUBLISHED' AND r.dismissed_at IS NULL
           AND c.parent_id IN (${marks})`,
-      repoId, Number(prId), ...ids,
+      repoId, Number(prId), ...under,
     );
     for (const row of rows) this.dismissReply(row.id, true);
     return rows.length;

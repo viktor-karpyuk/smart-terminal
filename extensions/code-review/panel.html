@@ -3217,7 +3217,20 @@
            * a button that cannot do anything is worse than no button.
            */
           var delivery = (v.settings && v.settings.delivery) || {};
-          if (delivery.ready) {
+          /*
+           * Drawn from one setting and gated by another is how a green button
+           * came to produce a red error.
+           *
+           * Pressing it asks the reviewer for what is due on this pull request,
+           * and nothing is ever due while every rule is off — which is the
+           * default on a fresh install. So on a thread the panel itself had just
+           * said was twelve days old, the button answered "nothing on that pull
+           * request is waiting long enough". A rule has to be on for there to be
+           * anything to send.
+           */
+          var rules = (v.settings && v.settings.reminders) || [];
+          var anyRuleOn = rules.some(function (rule) { return rule.mode && rule.mode !== 'OFF'; });
+          if (delivery.ready && anyRuleOn) {
             html += '<button class="btn small go" data-act="remind-out" data-days="' + esc(t.waitingDays) + '"' + busyAttr(prKey('remind')) + ' title="Post the follow-up and send them a message where they will see it">Remind ' + esc(shortName(v.pr.author)) + ' as well</button>';
           }
         }

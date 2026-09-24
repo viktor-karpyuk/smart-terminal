@@ -192,6 +192,18 @@ class ReviewGit {
    */
   async dropCommit(dir, branch, sha) {
     if (await this.isDirty(dir)) return { ok: false, how: null, output: 'The workshop has uncommitted changes; commit or discard them first.' };
+    /*
+     * Reset moves whatever HEAD is on, and the check above it asks about a named
+     * branch. Nothing guarantees the workshop is on that branch: a pull request
+     * retargeted to another source branch leaves the workshop checked out
+     * somewhere else, and dropping an older fix then discarded the newest
+     * commits of the branch it happened to be on — including fixes not handed
+     * back. Asked about the branch, so acted on the branch.
+     */
+    const on = await this.currentBranch(dir);
+    if (on !== branch) {
+      return { ok: false, how: null, output: `The workshop is on "${on ?? '?'}", not "${branch}". Discard it and start again if you want to drop this fix.` };
+    }
     if (await this.isTip(dir, branch, sha)) {
       const res = await this.run(dir, ['reset', '--hard', `${sha}^`]);
       return { ok: res.ok, how: 'reset', output: res.output };

@@ -373,6 +373,8 @@ class TeamsService {
   /** The clock the hold runs on: what was held back is looked at again. */
   start() {
     if (this.timer) return;
+    // Whatever a previous process left in flight is not in flight any more.
+    try { this.store.orphanedSends(); } catch { /* an empty outbox is the normal case */ }
     this.timer = setInterval(() => { this.releaseHeld().catch(() => {}); }, HOLD_SWEEP_MS);
     this.timer.unref?.();
   }

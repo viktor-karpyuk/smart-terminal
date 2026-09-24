@@ -530,8 +530,16 @@ test('the reminder screen names no delivery at all', () => {
  * reaches somebody outside the pull request only exists when something is set
  * up to carry it.
  */
+/*
+ * "When it can" is two things, and this only ever checked one. Pressing the
+ * button asks the reviewer what is due on this pull request, and nothing is
+ * ever due while every rule is off — the default on a fresh install — so a
+ * green button on a twelve-day-old thread answered "nothing on that pull
+ * request is waiting long enough".
+ */
 test('the button that reaches somebody outside appears only when it can', () => {
-  assert.match(source, /if \(delivery\.ready\) \{[\s\S]{0,400}data-act="remind-out"/);
+  assert.match(source, /if \(delivery\.ready && anyRuleOn\) \{[\s\S]{0,400}data-act="remind-out"/);
+  assert.match(source, /rule\.mode !== 'OFF'/, 'and "can" includes a rule being on');
 });
 
 test('every answer the delivery gives is said in words, not swallowed', () => {

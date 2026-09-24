@@ -369,6 +369,41 @@ function send(channel, payload) {
 }
 
 /**
+ * Which window asked for which tree watch, and how many times.
+ *
+ * A watch is released by the renderer that took it — and a window closing
+ * destroys its renderer without releasing anything. So every recursive watch a
+ * closed window held stayed open for the life of the app, still waking a
+ * refresh and still broadcasting changes for folders no window was showing.
+ */
+const treesByWindow = new Map();
+
+function watchTree(windowId, root) {
+  if (!windowId || !root) return;
+  const held = treesByWindow.get(windowId) ?? new Map();
+  treesByWindow.set(windowId, held);
+  held.set(root, (held.get(root) ?? 0) + 1);
+  repos.watch(root);
+}
+
+function releaseTree(windowId, root) {
+  const held = treesByWindow.get(windowId);
+  const count = held?.get(root) ?? 0;
+  if (!count) return;
+  if (count === 1) held.delete(root);
+  else held.set(root, count - 1);
+  repos.release(root);
+}
+
+/** A window has gone: let go of every watch it was holding, as many times as it held it. */
+function releaseTreesOf(windowId) {
+  const held = treesByWindow.get(windowId);
+  if (!held) return;
+  for (const [root, count] of held) for (let i = 0; i < count; i += 1) repos.release(root);
+  treesByWindow.delete(windowId);
+}
+
+/**
  * Everything this launch remembered about one pty, dropped together.
  *
  * In one place because it is the thing most easily got wrong: each map here was
@@ -556,6 +591,7 @@ function createWindow(windowId = randomUUID(), bounds = null) {
       lastOutputBySession.delete(sessionId);
       db?.endSession(sessionId, null);
     }
+    releaseTreesOf(windowId);
     db?.closeWindow(windowId);
   });
 
@@ -1000,8 +1036,8 @@ function registerIpc() {
 
   // Held while a panel has a repository open. Counted, so closing one of two
   // panels on the same repository does not blind the other.
-  ipcMain.on('git:watch', (_e, root) => repos.watch(root));
-  ipcMain.on('git:unwatch', (_e, root) => repos.release(root));
+  ipcMain.on('git:watch', (_e, root) => watchTree(windowIdOf(_e), root));
+  ipcMain.on('git:unwatch', (_e, root) => releaseTree(windowIdOf(_e), root));
 
   /** Tidying, and only what was asked for. Never on a timer, never as a side effect. */
   ipcMain.handle('db:maintain', (_e, options = {}) => db.maintain(options ?? {}));
@@ -1148,7 +1184,14 @@ function registerIpc() {
   ipcMain.handle('workspace:load', (event) => {
     const windowId = windowIdOf(event);
     const stored = windowId ? db.loadWorkspace(windowId) : null;
-    if (!stored?.layout) return workspace.get();
+    /*
+     * The legacy file is what a window gets when there is nothing in the
+     * database for it — but only on the one launch that migrates it, and only
+     * for a window that existed before. A window made *after* the migration has
+     * no stored layout by definition, and handing it `workspace.json` gave it
+     * the pre-migration layout and session list instead of an empty workspace.
+     */
+    if (!stored?.layout) return db.openWindows().length > 1 ? {} : workspace.get();
     // Asked for by id rather than by a page of history: the layout is the record
     // of what this window had, and a session it is not handed back is a pane the
     // renderer prunes out of the layout and then saves without.
@@ -1291,8 +1334,8 @@ function registerIpc() {
   // is showing has to notice a file appearing, being renamed or going away —
   // which the per-file poll cannot see, because it only knows about files
   // somebody already opened.
-  ipcMain.on('files:watch-tree', (_e, root) => repos.watch(root));
-  ipcMain.on('files:unwatch-tree', (_e, root) => repos.release(root));
+  ipcMain.on('files:watch-tree', (_e, root) => watchTree(windowIdOf(_e), root));
+  ipcMain.on('files:unwatch-tree', (_e, root) => releaseTree(windowIdOf(_e), root));
   ipcMain.on('files:reveal', (_e, file) => shell.showItemInFolder(file));
 
   /*
@@ -1974,6 +2017,30 @@ app.setAboutPanelOptions({
  */
 const stagedPanels = new Map();
 
+/*
+ * A launch that cannot get as far as a window must say so.
+ *
+ * Everything below — opening the database, closing what a crash left open,
+ * pruning, migrating, creating the window — ran inside one `then` with no
+ * rejection handler. A database that is corrupt or locked throws before the
+ * window is made: the app launches, opens nothing, says nothing, and sits in the
+ * dock; clicking it calls `createWindow` again, which throws again on the null
+ * database. A dialog and an honest exit beat a window that never comes.
+ */
+function launchFailed(error) {
+  const message = String(error?.stack ?? error?.message ?? error);
+  console.error('[start] the app could not start:', message);
+  try {
+    dialog.showErrorBox(
+      'Smart Terminal could not start',
+      `Something went wrong before any window could open.\n\n${message.slice(0, 800)}`,
+    );
+  } catch {
+    /* no dialog available this early; the log above is what there is */
+  }
+  app.exit(1);
+}
+
 if (isPrimaryInstance) app.whenReady().then(() => {
   protocol.handle('panel', (request) => {
     const id = new URL(request.url).hostname;
@@ -2191,7 +2258,7 @@ if (isPrimaryInstance) app.whenReady().then(() => {
     if (isQuitting) return;
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
-});
+}).catch(launchFailed);
 
 app.on('window-all-closed', () => {
   ptys?.killAll();

@@ -223,6 +223,11 @@ class AutoReviewer {
     const skipped = [];
     let crashed = null;
     try {
+      // Anything a previous process left queued, a few at a time. `start()` took
+      // one cycle's worth once and never looked again, so with more orphans than
+      // the cap the rest sat in the table until the next launch — and a PR the
+      // ordinary sweep skips sat there for ever.
+      await this.resumePending();
       const repos = this.store.repos({ withHidden: false });
       /*
        * One budget for the cycle, not one for each repository.

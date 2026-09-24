@@ -564,10 +564,24 @@ export function restorePaneAt(
   // place was written by a build that only knew how to remember one.
   const remembered = place.anchorTabs?.length ? place.anchorTabs : (place.anchorTabId ? [place.anchorTabId] : []);
   const anchor = remembered.length ? commonAncestor(root, remembered) : null;
-  const target = anchor?.id ?? fallbackLeafId;
+  /*
+   * Somewhere in the tree to hang it beside.
+   *
+   * The remembered anchor first, then whatever the caller suggested — and if
+   * neither is there any more, any pane at all. It used to fall straight to
+   * "it becomes the workspace", which replaced everything else with the one
+   * section being restored; the caller's fallback is `activeLeafId`, which can
+   * be stale and truthy at the same time, so the tree was thrown away on the
+   * strength of an id nobody had checked.
+   */
+  const target =
+    (anchor?.id && findNode(root, anchor.id) ? anchor.id : null) ??
+    (findNode(root, fallbackLeafId) ? fallbackLeafId : null) ??
+    allLeaves(root)[0]?.id ??
+    null;
   const side = place.side ?? 'right';
-  if (!findNode(root, target)) {
-    // Nothing left to hang it on: it becomes the workspace.
+  if (!target) {
+    // Genuinely nothing left: it becomes the workspace.
     return { root: prune(restored), leafId: restored.id };
   }
 
@@ -620,10 +634,17 @@ export function swapPanes(root: LayoutNode, a: string, b: string): LayoutNode {
   const second = findLeaf(root, b);
   if (!first || !second) return root;
 
+  /*
+   * `placeholder` travels with the contents, because it describes them: it means
+   * "this pane is empty on purpose, do not tidy it away". Left with the place,
+   * trading a full pane into an empty one marked the *occupied* one as asked-for
+   * and the now-empty one as an accident — so the next prune, which any tab drag
+   * or pane close runs, deleted the gap somebody had just made.
+   */
   const swap = (node: LayoutNode): LayoutNode => {
     if (isLeaf(node)) {
-      if (node.id === a) return { ...node, tabs: second.tabs, active: second.active };
-      if (node.id === b) return { ...node, tabs: first.tabs, active: first.active };
+      if (node.id === a) return { ...node, tabs: second.tabs, active: second.active, placeholder: second.placeholder };
+      if (node.id === b) return { ...node, tabs: first.tabs, active: first.active, placeholder: first.placeholder };
       return node;
     }
     return { ...node, children: node.children.map(swap) };

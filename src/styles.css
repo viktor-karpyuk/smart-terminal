@@ -1527,6 +1527,8 @@ select {
 
 .confirm h3 { margin: 0; font-size: 14px; font-weight: 600; }
 .confirm p { margin: 0; font-size: 12px; line-height: 1.5; color: var(--text-dim); }
+/* The half of a confirmation that cannot be undone, said in the colour that means so. */
+.confirm p.confirm-warn { color: var(--warn, #c2703a); }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; padding-top: 4px; }
 
 .usage-error { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid rgba(247,118,142,0.4); border-radius: 8px; background: var(--bg-panel); }

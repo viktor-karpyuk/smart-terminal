@@ -473,14 +473,25 @@ const push = (root, { force = false, setUpstream = null } = {}) =>
  *
  * Pure, so the counting is tested rather than believed.
  */
+/*
+ * `-z` for the same reason every other read here uses it.
+ *
+ * Without it git C-quotes any path that is not plain ASCII, so pulling a branch
+ * that adds `café.txt` produced the literal row `"caf\303\251.txt"` — and
+ * clicking it asked to open a file of that name, which resolves to nothing. The
+ * records are separated by NUL and a rename's two names are two records, so the
+ * line-and-tab split becomes a walk over a flat list.
+ */
 function summarizePull(nameStatus, commitCount) {
   const summary = { commits: Number(String(commitCount ?? '').trim()) || 0, added: 0, updated: 0, removed: 0, renamed: 0, total: 0, files: [] };
-  for (const line of String(nameStatus ?? '').split('\n')) {
-    if (!line.trim()) continue;
-    const parts = line.split('\t');
-    const mark = parts[0][0];
-    // A rename is `R100\told\tnew`; everything else is `X\tpath`.
-    const path = mark === 'R' || mark === 'C' ? parts[2] : parts[1];
+  const fields = String(nameStatus ?? '').split('\0').filter((field) => field !== '');
+  for (let i = 0; i < fields.length; i += 1) {
+    const mark = fields[i][0];
+    if (!mark) continue;
+    // A rename or a copy carries two names; everything else carries one.
+    const twoNames = mark === 'R' || mark === 'C';
+    const path = twoNames ? fields[i + 2] : fields[i + 1];
+    i += twoNames ? 2 : 1;
     if (!path) continue;
     if (mark === 'A') summary.added += 1;
     else if (mark === 'D') summary.removed += 1;
@@ -505,7 +516,7 @@ async function pull(root, { rebase = false } = {}) {
   if (!from || !to || from === to) return { ...result, changed: summarizePull('', '0') };
 
   const [names, commits] = await Promise.all([
-    run(root, ['diff', '--name-status', '-M', `${from}..${to}`]),
+    run(root, ['diff', '--name-status', '-M', '-z', `${from}..${to}`]),
     run(root, ['rev-list', '--count', `${from}..${to}`]),
   ]);
   return { ...result, changed: summarizePull(names.stdout, commits.stdout) };

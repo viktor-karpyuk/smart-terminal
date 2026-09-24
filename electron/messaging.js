@@ -67,16 +67,30 @@ function resolveRecipient(target, audience = []) {
   const byId = audience.find((entry) => entry.id === wanted);
   if (byId) return byId;
 
-  const byShortId = audience.find((entry) => entry.id.startsWith(lower) && lower.length >= 6);
-  if (byShortId) return byShortId;
+  /*
+   * An ambiguous id is refused, the same as an ambiguous name.
+   *
+   * A short id can prefix two sessions, and two live sessions really can share a
+   * conversation id — restoring the same one from History into a window is
+   * allowed. Both used a bare `find`, so the message silently went to whichever
+   * had been registered first, while a name in the same position was carefully
+   * refused. Delivering to the wrong session is the thing being avoided; how the
+   * address was written does not change that.
+   */
+  if (lower.length >= 6) {
+    const byShortId = audience.filter((entry) => entry.id.startsWith(lower));
+    if (byShortId.length === 1) return byShortId[0];
+    if (byShortId.length > 1) return { ambiguous: byShortId };
+  }
 
   // The conversation id counts too. The app hands that one out — it is on the
   // session's own menu and in every roster — so refusing it would be refusing an
   // address the app itself gave out.
-  const byConversation = audience.find(
+  const byConversation = audience.filter(
     (entry) => entry.conversation && String(entry.conversation).toLowerCase() === lower,
   );
-  if (byConversation) return byConversation;
+  if (byConversation.length === 1) return byConversation[0];
+  if (byConversation.length > 1) return { ambiguous: byConversation };
 
   const named = audience.filter((entry) => String(entry.name ?? '').toLowerCase() === lower);
   // An ambiguous name is refused rather than guessed at: delivering to the wrong

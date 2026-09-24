@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { startDrag } from './lib/resize';
 import { isDarkAppearance, useStore } from './state/store';
 import { findLeaf } from './state/layout';
 import { GIT_TAB } from './state/types';
@@ -114,6 +115,7 @@ function SidebarResizer() {
         const startX = event.clientX;
         const startWidth = useStore.getState().settings.sidebarWidth;
 
+        let stop = () => {};
         const onMove = (move: PointerEvent) => {
           const wanted = startWidth + move.clientX - startX;
           /*
@@ -124,19 +126,12 @@ function SidebarResizer() {
            */
           if (wanted < HIDE_BELOW) {
             updateSettings({ sidebarVisible: false });
-            onUp();
+            stop();
             return;
           }
           updateSettings({ sidebarWidth: Math.min(520, Math.max(MIN_WIDTH, wanted)) });
         };
-        const onUp = () => {
-          window.removeEventListener('pointermove', onMove);
-          window.removeEventListener('pointerup', onUp);
-          document.body.classList.remove('resizing');
-        };
-        document.body.classList.add('resizing');
-        window.addEventListener('pointermove', onMove);
-        window.addEventListener('pointerup', onUp);
+        stop = startDrag(onMove);
       }}
     />
   );

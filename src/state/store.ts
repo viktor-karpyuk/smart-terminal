@@ -4,6 +4,7 @@ import { generateSessionName } from '../lib/names';
 import { shortContext, terminalSetup } from '../lib/extensionHost';
 import { whatItDid } from '../lib/gitUpdate';
 import { launchPlan } from '../lib/launcher';
+import { forgetPanel } from '../lib/panelHolds';
 import { baseOf, movedPath, moveProblem, nameProblem, parentOf } from '../lib/fileOps';
 import { arrangeGroup, moveGroupTo } from './groups';
 import { closePane, movePane, panePlace, restorePaneAt, splitEmpty, splitOffTabs, swapPanes } from './layout';
@@ -897,7 +898,9 @@ export const useStore = create<State>((set, get) => ({
         }
         if (buffer.text !== buffer.savedText) {
           window.api.files.read(change.path).then((result) => {
-            if (!result.ok) return;
+            // Closed while it was being read: putting it back would make a
+            // buffer out of one field and leave it open with no view of it.
+            if (!result.ok || !get().buffers[change.path]) return;
             set((prev) => ({
               buffers: {
                 ...prev.buffers,
@@ -911,7 +914,7 @@ export const useStore = create<State>((set, get) => ({
           continue;
         }
         window.api.files.read(change.path).then((result) => {
-          if (!result.ok) return;
+          if (!result.ok || !get().buffers[change.path]) return;
           set((prev) => ({
             buffers: {
               ...prev.buffers,
@@ -1216,6 +1219,21 @@ export const useStore = create<State>((set, get) => ({
       await get().newSession({ kind: 'claude' });
     }
 
+    /*
+     * Nothing unsaved goes quietly.
+     *
+     * Editor buffers live in memory and are never persisted, so quitting with
+     * an edited file open lost it with no prompt of any kind — and there was no
+     * `beforeunload` anywhere in the app. The browser shows its own wording; all
+     * this does is say there is something to lose.
+     */
+    window.addEventListener('beforeunload', (event) => {
+      const unsaved = Object.values(get().buffers).filter((buffer) => buffer.text !== buffer.savedText);
+      if (!unsaved.length) return;
+      event.preventDefault();
+      event.returnValue = '';
+    });
+
     window.api.history.setRecordDefault(settings.recordConversations);
     get().refreshAllAuth();
     // Asked again now and then, not only at startup. This runs while a restored
@@ -1312,6 +1330,11 @@ export const useStore = create<State>((set, get) => ({
 
   closeSession(sessionId) {
     const session = get().sessions[sessionId];
+    /*
+     * Nothing goes on naming it. `activeSessionId` survived a close, so opening
+     * the monitor with no argument pointed it at a session that was gone.
+     */
+    if (get().activeSessionId === sessionId) set({ activeSessionId: null });
     if (session?.ptyId) {
       window.api.pty.kill(session.ptyId);
       ptyIndex.delete(session.ptyId);
@@ -1439,6 +1462,10 @@ export const useStore = create<State>((set, get) => ({
 
     const result = await window.api.session.pause(sessionId, session.ptyId ?? null);
     if (session.ptyId) ptyIndex.delete(session.ptyId);
+    // Pausing interrupts Claude and writes down where it got to, which takes
+    // seconds — long enough to close the tab in. Spreading a record that is not
+    // there any more would put back a session made of four fields.
+    if (!get().sessions[sessionId]) return;
 
     set((state) => ({
       sessions: {
@@ -2025,6 +2052,10 @@ export const useStore = create<State>((set, get) => ({
     if (shell) get().closeSession(shell);
     followTree(panelId, null);
     followTree(`${panelId}:git`, null);
+    // Anything an extension panel was holding open — a port-forward, a followed
+    // log — and everything remembered about it by id. A frame being rebuilt is
+    // not this; this is the panel itself going.
+    forgetPanel(panelId);
     // Its buffers are not closed with it: another panel may be showing the same
     // file, and an unsaved edit must never be discarded by closing a view of it.
     set((prev) => {
@@ -2077,7 +2108,16 @@ export const useStore = create<State>((set, get) => ({
       if (!now || now.root !== panel.root) return;
       get().patchPanel(panelId, { gitRoot });
     }
-    if (!gitRoot) return;
+    /*
+     * Let go of the old repository's watch even when the new folder is not in
+     * one. This used to return first, so pointing a panel at a folder outside
+     * any repository kept the previous one watched for the life of the panel —
+     * and its changes went on waking a refresh nobody was looking at.
+     */
+    if (!gitRoot) {
+      followTree(`${panelId}:git`, null);
+      return;
+    }
 
     /*
      * The folder's own tree is already watched, and that is not enough: a commit
@@ -2372,6 +2412,16 @@ export const useStore = create<State>((set, get) => ({
     }));
 
     const result = await window.api.files.read(path);
+    /*
+     * The tab may have been closed while the file was being read.
+     *
+     * `closeFile` drops the buffer and unwatches when nothing was edited, which
+     * for a buffer still showing "opening…" is always true — and this then put
+     * it back without `path` or `conflict`, and registered a watch that nothing
+     * would ever release. Reopening the file later found the malformed buffer
+     * already there and showed its empty text as though it were saved.
+     */
+    if (!get().buffers[path]) return;
     set((prev) => ({
       buffers: {
         ...prev.buffers,
@@ -2507,6 +2557,9 @@ export const useStore = create<State>((set, get) => ({
       force: options.force === true,
     });
 
+    // Writing takes a moment, and a tab can be closed in it. Every branch below
+    // spreads the buffer, and spreading one that is gone rebuilds it wrong.
+    if (!get().buffers[path]) return result.ok === true;
     if (result.conflict) {
       set((prev) => ({
         buffers: {
@@ -2583,8 +2636,23 @@ export const useStore = create<State>((set, get) => ({
     void text;
   },
 
+  /**
+   * Bring a tab back, from wherever it went.
+   *
+   * There are two docks — one for a tab on its own, one for a whole section set
+   * aside — and this only ever knew about the first. So anything holding a
+   * panel found in the second called this, nothing happened, and because a
+   * panel *had* been found no new one was made either: clicking Monitor did
+   * nothing at all, for ever, until the section was restored by hand.
+   */
   restoreMinimized(sessionId) {
-    restoreTabs(set, get, [sessionId]);
+    const state = get();
+    if (state.minimized.some((entry) => entry.sessionId === sessionId)) {
+      restoreTabs(set, get, [sessionId]);
+      return;
+    }
+    const section = state.minimizedSections.find((entry) => entry.tabs.includes(sessionId));
+    if (section) get().restoreSection(section.id);
   },
 
   /** A group went into the dock as one thing, so it comes back as one thing. */
@@ -3275,7 +3343,13 @@ export const useStore = create<State>((set, get) => ({
     const anywhere = inFront ?? Object.values(state.panels).find(suits);
     if (anywhere) {
       const leaf = leaves.find((candidate) => candidate.tabs.includes(anywhere.id));
-      if (leaf) get().focusPanel(leaf.id, anywhere.id);
+      if (leaf) {
+        get().focusPanel(leaf.id, anywhere.id);
+      } else {
+        // The panel that suits is in a dock somewhere. Opening the file into it
+        // while it is out of sight looked like the click had done nothing.
+        get().restoreMinimized(anywhere.id);
+      }
       get().openFile(anywhere.id, path);
       return;
     }
@@ -3932,15 +4006,20 @@ export const useStore = create<State>((set, get) => ({
    * handful of sessions that happen to share a name.
    */
   requestCloseGroup(groupId) {
-    // A group can be part in the layout and part in the dock. Closing it means all
-    // of it: gathering only what a pane shows would leave the set-aside half
-    // running with no group left to close it from.
+    /*
+     * A group can be part in the layout, part in the dock, and part inside a
+     * section that was set aside. Closing it means all of it: the third was
+     * missed, so closing a group left whatever was in a set-aside section
+     * running with no group left to close it from.
+     */
+    const state = get();
     const members = [
       ...new Set([
-        ...get().membersOf(groupId),
-        ...get()
-          .minimized.filter((entry) => entry.groupId === groupId)
-          .map((entry) => entry.sessionId),
+        ...state.membersOf(groupId),
+        ...state.minimized.filter((entry) => entry.groupId === groupId).map((entry) => entry.sessionId),
+        ...state.minimizedSections
+          .flatMap((entry) => entry.tabs)
+          .filter((tab) => state.sessions[tab]?.groupId === groupId),
       ]),
     ];
     if (!members.length) return;
@@ -4185,6 +4264,20 @@ async function spawnInto(
           ? { claudeSessionId }
           : {}),
     });
+    /*
+     * The tab may be gone: starting takes a moment, and closing one that says
+     * "starting…" is an ordinary thing to do.
+     *
+     * `closeSession` kills the pty by the id on the record, and the record has
+     * none yet — so nothing was killed, and this line then put the session back
+     * as `{ptyId, pid, cwd, status}` with no id, no title and no kind: a real
+     * Claude running with no tab, no entry in the roster, and no way to stop it
+     * short of restarting the app. Kill what we just started instead.
+     */
+    if (!get().sessions[sessionId]) {
+      window.api.pty.kill(result.id);
+      return;
+    }
     ptyIndex.set(result.id, sessionId);
     set((state) => ({
       sessions: {
@@ -4208,6 +4301,7 @@ async function spawnInto(
     if (args.groupId || args.fontSize != null) applyGroupAppearance(get);
   } catch (error) {
     announce(sessionId, `\r\n\x1b[38;5;203mFailed to start session: ${String(error)}\x1b[0m\r\n`);
+    if (!get().sessions[sessionId]) return;
     set((state) => ({
       sessions: {
         ...state.sessions,

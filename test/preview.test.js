@@ -34,9 +34,24 @@ test('the harder parts of markdown survive, which is why this is not hand-rolled
   assert.match(doc, /<pre><code class="language-js">/);
 });
 
-test('html is passed through as it was written', () => {
+/*
+ * This used to assert that nothing at all was added, and that was too strong.
+ * The preview is handed to the frame as a document rather than loaded from a
+ * URL, so its base is `about:srcdoc` and every relative link, stylesheet, image
+ * and anchor in the page is dead — silently, with nothing saying why. Where the
+ * file lives is the one thing a document cannot say about itself. Its own
+ * content still passes through untouched, which is what the rule was for.
+ */
+test('html is passed through as it was written, but told where it lives', () => {
   const source = '<!doctype html><html><body><p>hello</p></body></html>';
-  assert.equal(P.previewDocument('/w/page.html', source, false), source);
+  const out = P.previewDocument('/w/page.html', source, false);
+  assert.match(out, /<base href="file:\/\/\/w\/">/);
+  assert.equal(out.replace(/<head><base[^>]*><\/head>|<base[^>]*>/, ''), source, 'nothing else changed');
+});
+
+test('svg is passed through exactly, having nothing to resolve', () => {
+  const source = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="4" height="4"/></svg>';
+  assert.equal(P.previewDocument('/w/a.svg', source, false), source);
 });
 
 test('the theme is carried in, since the frame cannot see the app around it', () => {
@@ -415,4 +430,48 @@ test('XML is scanned line by line, and a comment carries across', () => {
     ['attr', 'x-attr'],
     ['"value"', 'x-value'],
   ]);
+});
+
+/*
+ * A `>` inside an attribute value is an ordinary character. Cut at the first
+ * one, `<xsl:when test="$n > 5">` lost the rest of its attribute and leaked
+ * `5">` into the document as text somebody could read.
+ */
+test('a tag is not cut at a greater-than inside an attribute', () => {
+  const out = P.previewDocument('t.xml', '<root><xsl:when test="$n > 5"><a/></xsl:when></root>', false);
+  assert.ok(!out.includes('5&quot;&gt;') && !out.includes('5">'), 'nothing leaked out of the tag');
+  assert.ok(out.includes('xsl:when'));
+});
+
+/*
+ * The decoration is what makes a banner a banner. Both runs of it were
+ * optional, so an ordinary comment became a section heading and a script came
+ * out as a list of folds one comment long.
+ */
+test('an ordinary comment is not a section of its own', () => {
+  const out = P.previewDocument('s.sh', '#!/bin/sh\n# install deps\nnpm ci\n', false);
+  const banners = (out.match(/install deps/g) ?? []).length;
+  assert.equal(banners, 1, 'it appears as the comment it is, not also as a heading');
+});
+
+test('a real banner still is one', () => {
+  const out = P.previewDocument('s.sh', '#!/bin/sh\n# --- installing ---\nnpm ci\n', false);
+  assert.ok(out.includes('installing'));
+});
+
+/*
+ * The preview is handed to the frame as a document, so its base is
+ * `about:srcdoc` and everything the page points at is dead unless it is told
+ * where the file lives.
+ */
+test('a previewed page is told where it lives', () => {
+  const out = P.previewDocument('/Users/v/site/index.html', '<html><head><title>x</title></head><body><a href="about.html">a</a></body></html>', false);
+  assert.ok(out.includes('<base href="file:///Users/v/site/"'), 'a base pointing at the file’s own folder');
+  assert.ok(out.indexOf('<base') < out.indexOf('<title>'), 'before anything it could govern');
+});
+
+test('a page that declares its own base keeps it', () => {
+  const out = P.previewDocument('/Users/v/site/index.html', '<html><head><base href="https://example.test/"></head><body></body></html>', false);
+  assert.equal((out.match(/<base/g) ?? []).length, 1);
+  assert.ok(out.includes('https://example.test/'));
 });

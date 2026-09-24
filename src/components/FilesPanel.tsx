@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { startDrag } from '../lib/resize';
 import { useShallow } from 'zustand/react/shallow';
 import { asFilePanel, isDarkAppearance, useStore } from '../state/store';
 import type { DirEntry } from '../global';
@@ -46,7 +47,16 @@ export function FilesPanel({ panelId }: { panelId: string }) {
   const closeFile = useStore((s) => s.closeFile);
   const setActiveFile = useStore((s) => s.setActiveFile);
   const saveBuffer = useStore((s) => s.saveBuffer);
-  const [selection, setSelection] = useState<{ from: number; to: number; text: string } | null>(null);
+  /*
+   * A selection belongs to the file it was made in.
+   *
+   * It lives out here while the editor below remounts on every tab switch, and
+   * a fresh editor reports no selection — so switching files left "Ln 10–20
+   * selected" and the Send button in place, and pressing it handed the session
+   * `@the-new-file:10-20` with the old file's text and line numbers nobody had
+   * looked at.
+   */
+  const [selection, setSelection] = useState<{ from: number; to: number; text: string; path: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
     noticeListeners.set(panelId, setNotice);
@@ -114,8 +124,8 @@ export function FilesPanel({ panelId }: { panelId: string }) {
             path={active}
             root={panel.root}
             onSave={() => saveBuffer(active)}
-            selection={selection}
-            onSelection={(from, to, text) => setSelection({ from, to, text })}
+            selection={selection?.path === active ? selection : null}
+            onSelection={(from, to, text) => setSelection({ from, to, text, path: active })}
           />
         ) : (
           <div className="files-empty">
@@ -800,14 +810,7 @@ function TreeResizer({ panelId }: { panelId: string }) {
           const next = Math.round(Math.min(640, Math.max(140, startWidth + move.clientX - startX)));
           patchPanel(panelId, { treeWidth: next });
         };
-        const onUp = () => {
-          window.removeEventListener('pointermove', onMove);
-          window.removeEventListener('pointerup', onUp);
-          document.body.classList.remove('resizing');
-        };
-        document.body.classList.add('resizing');
-        window.addEventListener('pointermove', onMove);
-        window.addEventListener('pointerup', onUp);
+        startDrag(onMove);
       }}
     />
   );
@@ -1329,10 +1332,24 @@ function Row({
     const panel = asFilePanel(s.panels[panelId]);
     return panel?.kind === 'files' && panel.active === entry.path;
   });
-  const dirty = useStore((s) => {
-    const buffer = s.buffers[entry.path];
-    return buffer ? buffer.text !== buffer.savedText : false;
+  /*
+   * Unsaved work under this entry, not only in it.
+   *
+   * Asked of the entry's own path, a folder is never dirty — so trashing one
+   * said "everything in it goes with it, it can be put back from the Trash"
+   * while the edits inside it could not: the file in the Trash holds the last
+   * *saved* version, and buffers are never written to disk. The number is what
+   * makes it a warning rather than a footnote.
+   */
+  const dirtyCount = useStore((s) => {
+    const under = (key: string) => key === entry.path || key.startsWith(`${entry.path}/`);
+    let n = 0;
+    for (const [key, buffer] of Object.entries(s.buffers)) {
+      if (under(key) && buffer.text !== buffer.savedText) n += 1;
+    }
+    return n;
   });
+  const dirty = dirtyCount > 0;
   const iconStyle = useStore((s) => s.settings.fileIcons);
   const folderColour = useStore((s) => s.settings.folderColour);
   const folderStyle = useStore((s) => s.settings.folderStyle);
@@ -1485,7 +1502,7 @@ function Row({
       {asking && (
         <TrashConfirm
           entry={entry}
-          dirty={dirty}
+          dirtyCount={dirtyCount}
           onAnswer={(yes) => {
             setAsking(false);
             if (!yes) return;
@@ -1555,16 +1572,26 @@ function RenameBox({ name, isDirectory, onDone }: { name: string; isDirectory: b
  * there — but a folder is a folder, and a file with an edit nobody saved is
  * an edit that goes with it.
  */
-function TrashConfirm({ entry, dirty, onAnswer }: { entry: DirEntry; dirty: boolean; onAnswer(yes: boolean): void }) {
+function TrashConfirm({ entry, dirtyCount, onAnswer }: { entry: DirEntry; dirtyCount: number; onAnswer(yes: boolean): void }) {
   return (
     <div className="modal-backdrop" onMouseDown={() => onAnswer(false)}>
       <div className="confirm" onMouseDown={(event) => event.stopPropagation()}>
         <h3>Move {entry.isDirectory ? `the folder ${entry.name}` : entry.name} to the Trash?</h3>
         <p>
           {entry.isDirectory ? 'Everything in it goes with it. ' : ''}
-          {dirty ? 'It has changes that were never saved; they go too. ' : ''}
           It can be put back from the Trash.
         </p>
+        {/*
+          * Said on its own line and last, because it is the only part that
+          * cannot be undone: what is in the Trash is the last saved version.
+          */}
+        {dirtyCount > 0 && (
+          <p className="confirm-warn">
+            {dirtyCount === 1
+              ? 'One open file has changes that were never saved. They are not in the Trash copy, and they are gone.'
+              : `${dirtyCount} open files have changes that were never saved. They are not in the Trash copy, and they are gone.`}
+          </p>
+        )}
         <div className="confirm-actions">
           <button className="ghost-btn" autoFocus onClick={() => onAnswer(false)}>
             Keep it

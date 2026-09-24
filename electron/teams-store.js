@@ -286,6 +286,20 @@ class TeamsStore {
     return this.all("SELECT * FROM tm_message WHERE state = 'WAITING' ORDER BY created_at").map(messageRow);
   }
 
+  /**
+   * Rows left mid-flight by a process that died, failed so they can be retried.
+   *
+   * A message is written as SENDING before it goes on the wire and moved when
+   * it lands. Kill the app in between and the row said "going now" for ever,
+   * with no button on it and no way to tell whether it went — the reviewer has
+   * `orphanedRuns` for exactly this and the outbox had nothing.
+   */
+  orphanedSends() {
+    const rows = this.all("SELECT id FROM tm_message WHERE state = 'SENDING'");
+    for (const row of rows) this.markFailed(row.id, 'the app stopped while this was going out');
+    return rows.length;
+  }
+
   /** Messages held back by the hours or a ceiling, oldest first: the queue to release. */
   held() {
     return this.all("SELECT * FROM tm_message WHERE state = 'HELD' ORDER BY created_at").map(messageRow);

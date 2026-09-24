@@ -231,3 +231,27 @@ test('scoring, on its own', () => {
   // Matched only by a folder above it: found, but below anything named for it.
   assert.strictEqual(scoreName('pricing.md', 'KS-ERP/pricing.md', ['ks-erp']), 0);
 });
+
+/*
+ * `cut` is the difference between "nothing is called that" and "nothing I
+ * looked at is called that", and only running out of time or entries used to
+ * set it — while `node_modules`, `vendor`, `target`, every dotted folder and
+ * every symlinked one were walked past in silence. So the panel confidently
+ * said nothing matched, about a file visible in the tree two rows up.
+ */
+test('a search that walked past somewhere says it did not look everywhere', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'find-cut-'));
+  fs.mkdirSync(path.join(root, 'node_modules'));
+  fs.writeFileSync(path.join(root, 'node_modules', 'needle.ts'), '');
+  const found = await findInTree(root, 'needle', {});
+  assert.equal(found.cut, true, 'it did not look in node_modules, and says so');
+
+  const clean = fs.mkdtempSync(path.join(os.tmpdir(), 'find-clean-'));
+  fs.writeFileSync(path.join(clean, 'needle.ts'), '');
+  const all = await findInTree(clean, 'needle', {});
+  assert.equal(all.cut, false, 'nothing was skipped here, so nothing is claimed');
+  assert.equal(all.results.length, 1);
+
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(clean, { recursive: true, force: true });
+});
