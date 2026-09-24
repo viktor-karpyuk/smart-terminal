@@ -46,9 +46,29 @@ if (signing) {
   console.log('[build] unsigned build — first launch will need right-click → Open');
 }
 
+/*
+ * A second copy, for working on this app rather than in it.
+ *
+ * Its own identifier and its own name, which is the whole trick: Electron takes
+ * the data directory from the product name, so a copy called something else
+ * gets its own database, its own sessions and its own single-instance lock
+ * without anything being passed to it at launch. Double-clicked from the dock
+ * it simply is a different app, and reinstalling it cannot disturb the one
+ * being worked in.
+ *
+ * `extraMetadata` is what makes it true at runtime as well as on the tin: the
+ * packaged `package.json` is what `app.getName()` reads, and without it the
+ * copy would wear a different name and still open the same database.
+ */
+const isDevCopy = process.env.SMART_TERMINAL_VARIANT === 'dev';
+const productName = isDevCopy ? 'Smart Terminal Dev' : 'Smart Terminal';
+
 module.exports = {
-  appId: 'com.kubrik.smart-terminal',
-  productName: 'Smart Terminal',
+  appId: isDevCopy ? 'com.kubrik.smart-terminal-dev' : 'com.kubrik.smart-terminal',
+  productName,
+  ...(isDevCopy
+    ? { extraMetadata: { name: 'smart-terminal-dev', productName: 'Smart Terminal Dev' } }
+    : {}),
   directories: {
     output: 'release',
     buildResources: 'resources',

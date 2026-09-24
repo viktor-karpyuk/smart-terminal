@@ -30,7 +30,16 @@ const info = {
   // Restart the count when the version changes; otherwise carry on from the last.
   build: previous?.version === version ? (previous.build ?? 0) + 1 : 1,
   builtAt: new Date().toISOString(),
+  /*
+   * Which copy this is.
+   *
+   * A build made to work *on* this app rather than in it: its own name, its own
+   * data, its own dock icon, and no updater — it is built from a branch, so an
+   * update would quietly replace it with whatever was last released and take
+   * the thing being tested with it.
+   */
+  variant: process.env.SMART_TERMINAL_VARIANT === 'dev' ? 'dev' : 'release',
 };
 
 fs.writeFileSync(target, `${JSON.stringify(info, null, 2)}\n`);
-console.log(`[build] ${info.version} build ${info.build} — ${info.builtAt}`);
+console.log(`[build] ${info.version} build ${info.build}${info.variant === 'dev' ? ' (dev copy)' : ''} — ${info.builtAt}`);
