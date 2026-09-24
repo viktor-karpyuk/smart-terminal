@@ -301,15 +301,28 @@ class ReviewEngine {
       const prs = this.store.prs(repoId, { states: ['OPEN'] });
       // A fork's branch is `owner:branch` and origin does not have it; it is left as "not checked".
       const ours = prs.filter((pr) => pr.targetBranch && pr.sourceBranch && !/^[-+]|:/.test(pr.sourceBranch) && !/^[-+]|:/.test(pr.targetBranch));
-      const branches = [...new Set(ours.flatMap((pr) => [pr.targetBranch, pr.sourceBranch]))];
+      /*
+       * Only the ones whose answer has gone stale or whose branch has moved.
+       *
+       * This swept every open pull request every time the list was refreshed,
+       * ignoring the ten-minute freshness rule that exists a few lines above for
+       * exactly this — and the expensive half is a real `git fetch` of every
+       * branch they name, against the remote. That was tolerable while the list
+       * was refreshed every ten minutes. It stopped being tolerable the moment
+       * the list started being refreshed every two, which turned it into a fetch
+       * of fourteen clones every two minutes for answers that had not changed.
+       */
+      const wanting = ours.filter((pr) => conflictsWantChecking(pr));
+      if (!wanting.length) return;
+      const branches = [...new Set(wanting.flatMap((pr) => [pr.targetBranch, pr.sourceBranch]))];
       if (!branches.length) return;
       const got = await this.inClone(repo.localPath, () => this.git.fetch(repo.localPath, ...branches));
       if (!got.ok) {
         // One branch gone on the remote fails the whole fetch; the rest are asked about one at a time.
-        for (const pr of ours) await this.checkConflicts(repoId, pr.id, { fetch: true }).catch(() => {});
+        for (const pr of wanting) await this.checkConflicts(repoId, pr.id, { fetch: true }).catch(() => {});
         return;
       }
-      for (const pr of ours) {
+      for (const pr of wanting) {
         const paths = await this.git.conflicts(repo.localPath, `origin/${pr.targetBranch}`, `origin/${pr.sourceBranch}`);
         this.store.setConflicts(repoId, pr.id, paths);
       }

@@ -61,7 +61,22 @@ class ReviewService {
      */
     this.deliver = deliver ?? (async () => ({ ok: false, why: 'no-delivery' }));
     this.deliveryState = deliveryState ?? (() => ({ installed: false, ready: false }));
-    const emitter = (event) => this.emitRaw(event);
+    /*
+     * Everything the engine says, passed on — and one thing acted on.
+     *
+     * The room is told a review has begun when one actually begins, which is
+     * the moment the engine records the run. Said from the three places that
+     * start a review — by hand, in a batch, and by the sweep — it was three
+     * copies to keep in step, and each of them said it before the engine had
+     * agreed to anything: a review refused for a token that expired announced
+     * itself first and then never happened.
+     */
+    const emitter = (event) => {
+      if (event?.type === 'activity' && event.run?.kind === 'review' && event.run.repoId && event.run.prId) {
+        void this.announceReview(event.run.repoId, event.run.prId, { kind: 'started' }).catch(() => {});
+      }
+      this.emitRaw(event);
+    };
     const notifier = (title, body) => {
       if (this.store.pref('notify.enabled', 'true') === 'false') return;
       this.notifyRaw(title, body);
@@ -90,7 +105,6 @@ class ReviewService {
         // same clock, because it is the step after them and not a thing of its own.
         await this.escalate();
       },
-      announce: (repoId, prId, options) => this.announceReview(repoId, prId, options),
       notify: notifier,
       emit: emitter,
     });
@@ -534,7 +548,17 @@ class ReviewService {
     const days = this.escalateDays();
     if (!channel || !days) return [];
 
-    const today = new Date().toISOString().slice(0, 10);
+    /*
+     * Today where the person reading it is, not where UTC is.
+     *
+     * The key holds the day so the same escalation is said once however often
+     * the sweep runs. Taken from the ISO string it was the UTC day, so from nine
+     * in the evening in Buenos Aires onwards it was already tomorrow — and the
+     * same thing was said twice, three hours apart, on the evening of any day
+     * that reached the threshold.
+     */
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     const out = [];
     for (const person of this.fixTimes({ overDays: days })) {
       if (!person.over.length) continue;
@@ -1059,9 +1083,6 @@ class ReviewService {
 
       // reviewing
       review: async (args) => {
-        // The room is told it has begun, and told nothing if it cannot be. A
-        // review is never held up by an announcement.
-        void s.announceReview(String(args.repoId ?? ''), Number(args.prId), { kind: 'started' }).catch(() => {});
         const outcome = await e.review(str(args.repoId, 'A repository'), num(args.prId), {
           depth: args.depth === 'AUTO' ? null : args.depth,
           kind: args.kind === 'AUTO' ? null : args.kind,
@@ -1091,7 +1112,6 @@ class ReviewService {
         for (const one of wanted) {
           const repoId = str(one?.repoId, 'A repository');
           const prId = num(one?.prId);
-          void s.announceReview(repoId, prId, { kind: 'started' }).catch(() => {});
           try {
             const outcome = await e.review(repoId, prId, options);
             results.push(outcome.ok

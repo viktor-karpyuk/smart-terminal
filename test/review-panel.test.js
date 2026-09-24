@@ -513,16 +513,27 @@ test('every cell that carries a summary or an error says it wraps', () => {
  * must not learn an address, a tenant or a channel — swap the delivery
  * extension for a Slack one and none of this screen changes.
  */
-test('the reminder screen names no delivery at all', () => {
+/*
+ * The reviewer knows there is something that delivers, and nothing about what.
+ *
+ * `channel` used to be on this list and has come off it, deliberately. A room
+ * and a person are the two destinations the delivery contract itself is written
+ * in — every extension that carries a message takes one or the other — so
+ * naming a room is naming the contract, not the extension behind it. A webhook,
+ * a tenant, Graph and the word Teams are still none of the reviewer's business,
+ * and that is the half this test is for.
+ */
+test('the reminder screen names no delivery extension at all', () => {
   const at = source.indexOf('function remindersSection');
   assert.ok(at > 0, 'the section is still there');
-  const section = source.slice(at, at + 2600).toLowerCase();
-  for (const word of ['teams', 'slack', 'webhook', 'tenant', 'graph.', 'channel']) {
+  const section = source.slice(at, at + 3600).toLowerCase();
+  for (const word of ['teams', 'slack', 'webhook', 'tenant', 'graph.', 'incoming']) {
     assert.ok(!section.includes(word), `the reviewer must not know about ${word}`);
   }
-  // What it does say is what is installed, in the app's own words.
-  assert.match(source.slice(at, at + 2600), /delivery\.ready/);
-  assert.match(source.slice(at, at + 2600), /nothing installed that can deliver/);
+  // What it does say is which of the two destinations can be reached.
+  assert.match(source.slice(at, at + 3600), /delivery\.person/);
+  assert.match(source.slice(at, at + 3600), /delivery\.channel/);
+  assert.match(source.slice(at, at + 3600), /nothing installed that can deliver/);
 });
 
 /*
@@ -537,9 +548,18 @@ test('the reminder screen names no delivery at all', () => {
  * green button on a twelve-day-old thread answered "nothing on that pull
  * request is waiting long enough".
  */
+/*
+ * "When it can" is three things, and this checked one of them at a time.
+ *
+ * Pressing it asks the reviewer what is due, and nothing is ever due while every
+ * rule is off — the default on a fresh install. And it sends somebody a *direct
+ * message*, so a delivery extension that can only reach a room cannot carry it:
+ * `ready` meaning "one of the two ways works" drew a green button that answered
+ * "the app registration is not filled in".
+ */
 test('the button that reaches somebody outside appears only when it can', () => {
-  assert.match(source, /if \(delivery\.ready && anyRuleOn\) \{[\s\S]{0,400}data-act="remind-out"/);
-  assert.match(source, /rule\.mode !== 'OFF'/, 'and "can" includes a rule being on');
+  assert.match(source, /if \(delivery\.person && anyRuleOn\) \{[\s\S]{0,400}data-act="remind-out"/);
+  assert.match(source, /rule\.mode !== 'OFF'/, 'a rule has to be on');
 });
 
 test('every answer the delivery gives is said in words, not swallowed', () => {
@@ -628,4 +648,33 @@ test('the watch dial is drawn, sent, and its cost is worked out', () => {
   const handler = source.slice(at, at + 1600);
   assert.ok(handler.includes('watchSeconds') && handler.includes('watchEnabled'), 'and both are sent');
   assert.match(source, /watch\.requestsPerHour/, 'the cost is the number, not a promise');
+});
+
+/*
+ * A room and a person are reached differently, and the reviewer is told about
+ * each separately. `ready` alone meant "one of the two works", which is not a
+ * question anything actually asks.
+ */
+test('the app tells the reviewer about each destination on its own', () => {
+  const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.js'), 'utf8');
+  const at = main.indexOf('deliveryState:');
+  const block = main.slice(at, at + 900);
+  assert.match(block, /channel: Boolean\(/);
+  assert.match(block, /person: Boolean\(/);
+});
+
+/*
+ * Said once, from the moment the engine records the run — not from the three
+ * places that ask for one. Three copies were three things to keep in step, and
+ * each said it before the engine had agreed to anything: a review refused for
+ * an expired token announced itself and then never happened.
+ */
+test('the room is told from one place, when a review really begins', () => {
+  const service = fs.readFileSync(path.join(__dirname, '..', 'electron', 'review-service.js'), 'utf8');
+  const hooks = service.match(/announceReview\(/g) ?? [];
+  assert.equal(hooks.length, 2, 'the definition and the one hook that calls it');
+  assert.match(service, /event\?\.type === 'activity' && event\.run\?\.kind === 'review'/);
+
+  const auto = fs.readFileSync(path.join(__dirname, '..', 'electron', 'review-auto.js'), 'utf8');
+  assert.ok(!auto.includes('announce'), 'the sweep does not carry its own copy');
 });

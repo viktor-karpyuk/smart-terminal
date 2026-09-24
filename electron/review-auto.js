@@ -43,7 +43,7 @@ const START_DELAY = 15 * 1000;
 const WATCH_SECONDS = 120;
 
 class AutoReviewer {
-  constructor({ store, engine, fixer, remind = null, announce = null, notify = () => {}, emit = () => {}, setTimer = setTimeout, clearTimer = clearTimeout }) {
+  constructor({ store, engine, fixer, remind = null, notify = () => {}, emit = () => {}, setTimer = setTimeout, clearTimer = clearTimeout }) {
     this.store = store;
     this.engine = engine;
     this.fixer = fixer;
@@ -57,8 +57,6 @@ class AutoReviewer {
      * promise made on screen and not kept.
      */
     this.remind = remind;
-    /** Say in the room that one has begun. Optional: without it, nothing is said. */
-    this.announce = announce;
     this.notify = notify;
     this.emit = emit;
     this.setTimer = setTimer;
@@ -436,10 +434,6 @@ class AutoReviewer {
           if (this.store.existsForHead(repo.id, pr.id, pr.headSha)) continue;
           if (this.engine.isReviewing(repo.id, pr.id)) continue;
           done++;
-          // The room hears it has begun. An automatic review is exactly the case
-          // the announcement is for: nobody pressed anything, so without it the
-          // team has no way of knowing this one is already being looked at.
-          if (this.announce) void this.announce(repo.id, pr.id, { kind: 'started' }).catch(() => {});
           const outcome = await this.engine.review(repo.id, pr.id, { auto: true });
           if (outcome.ok) {
             notes.push(`${repo.name} #${pr.id}: ready to publish`);

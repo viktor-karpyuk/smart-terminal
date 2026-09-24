@@ -344,15 +344,43 @@ function createReviewService() {
        * says so in its own screen rather than believing it sent something.
        */
       deliver: async (message) => {
-        if (!teamsService || !teamsService.connection().ready) return { ok: false, why: 'no-delivery' };
+        if (!teamsService) return { ok: false, why: 'no-delivery' };
+        /*
+         * Answered for the destination this message actually has.
+         *
+         * `ready` on its own means "one of the two ways works", which is not a
+         * question anything asks: a reminder to a person cannot ride a webhook,
+         * and an announcement to a room does not need an app registration.
+         * Asked the old way, a room-only setup accepted a reminder for somebody
+         * and then failed on the wire, which reads to the sender as the message
+         * having been lost rather than never having been possible.
+         */
+        const connection = teamsService.connection();
+        const wants = message?.to?.channel ? connection.channel : connection.person;
+        if (!wants?.ready) return { ok: false, why: 'no-delivery' };
         return teamsService.send('code-review', 'Code Reviewer', message);
       },
-      deliveryState: () => ({
-        id: 'teams',
-        name: 'Teams',
-        installed: Boolean(teamsService),
-        ready: Boolean(teamsService && teamsService.connection().ready),
-      }),
+      /*
+       * What can actually be reached, told apart.
+       *
+       * `ready` on its own meant "one of the two ways works", and the reviewer
+       * uses it to decide whether to offer a button that sends somebody a
+       * direct message — so a webhook and no app registration drew a green
+       * button that answered "the app registration is not filled in". A room and
+       * a person are reached differently and each has to be asked about
+       * separately.
+       */
+      deliveryState: () => {
+        const connection = teamsService?.connection();
+        return {
+          id: 'teams',
+          name: 'Teams',
+          installed: Boolean(teamsService),
+          ready: Boolean(connection?.ready),
+          channel: Boolean(connection?.channel?.ready),
+          person: Boolean(connection?.person?.ready),
+        };
+      },
     });
   } catch (error) {
     // The rest of the app does not depend on the reviewer; a reviewer that cannot start says so and stays out of the way.
