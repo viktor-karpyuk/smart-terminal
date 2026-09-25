@@ -522,3 +522,51 @@ test('each way out answers for itself', { skip }, () => {
   assert.equal(service.connection().channel.ready, true, 'the room can be reached');
   assert.equal(service.connection().person.ready, false, 'and nobody privately, yet');
 });
+
+// ---------------------------------------------------------------- rooms by name
+
+/*
+ * One webhook is one channel, so "the right room" is a second webhook with a
+ * name a sender asks for — the payments repository's alerts in the payments
+ * room, not in whichever channel happened to be set up first.
+ */
+test('a room with a name of its own gets its own webhook', { skip }, async () => {
+  const { service, calls } = setup();
+  service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/default' });
+  service.saveChannel({ name: '#Payments', webhookUrl: 'https://example.invalid/payments' });
+  service.store.setAppStance('code-review', 'ALLOW');
+
+  await service.send('code-review', 'Code Reviewer', { to: { channel: 'payments' }, title: 'two migrations numbered 12', key: 'm1' });
+  await service.send('code-review', 'Code Reviewer', { to: { channel: 'reviews' }, title: 'somebody else', key: 'm2' });
+
+  assert.deepEqual(calls.map((call) => call.url), ['https://example.invalid/payments', 'https://example.invalid/default'],
+    'a name it knows goes to that room; one it does not goes where everything went before');
+  assert.deepEqual(service.connection().channels, ['Payments'], 'kept as written, without the #');
+});
+
+test('a room can be the only way out, and a name nobody set up then says so', { skip }, async () => {
+  const { service, calls } = setup();
+  service.saveChannel({ name: 'payments', webhookUrl: 'https://example.invalid/payments' });
+  service.store.setAppStance('code-review', 'ALLOW');
+  assert.equal(service.connection().channel.ready, true);
+
+  const out = await service.send('code-review', 'Code Reviewer', { to: { channel: 'elsewhere' }, title: 'x', key: 'm3' });
+  assert.equal(out.ok, false);
+  assert.match(out.detail, /no webhook for “elsewhere”/);
+  assert.equal(calls.length, 0);
+});
+
+test('a room keeps its webhook out of sight, and can be forgotten', { skip }, () => {
+  const { service } = setup();
+  assert.throws(() => service.saveChannel({ name: 'payments', webhookUrl: 'http://inside/hook' }), /https/);
+  assert.throws(() => service.saveChannel({ name: '', webhookUrl: 'https://example.invalid/x' }), /name/);
+  assert.throws(() => service.saveChannel({ name: 'payments' }), /Webhook URL/);
+  service.saveChannel({ name: 'payments', webhookUrl: 'https://example.invalid/ROOM-SECRET' });
+  // Saved again with the box empty: the name stays and so does its webhook.
+  service.saveChannel({ name: 'Payments' });
+  assert.deepEqual(service.channels(), [{ name: 'payments', hasWebhook: true }], 'one room, whatever the case');
+  assert.ok(!JSON.stringify(service.overview()).includes('ROOM-SECRET'));
+  service.forgetChannel('PAYMENTS');
+  assert.deepEqual(service.channels(), []);
+  assert.equal(service.webhookFor('payments'), null);
+});

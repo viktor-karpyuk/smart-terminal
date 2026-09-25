@@ -226,8 +226,11 @@ which. What it keeps, and what a change must not break:
   next one takes the run; a session is never resumed across accounts.
 - **A review is read-only, and one that used no tool is failed.** The model sometimes answers
   "I cannot access the diff" without trying, with no permission denial to show for it.
-- **Nothing is published by itself.** Findings are drafts. The only automatic publication is
-  an answer to a reply, for a repository whose reply mode is AUTO.
+- **Nothing is published by itself unless the repository says so.** Findings are drafts. A
+  repository can choose two automatic publications, each on its own switch with a warning on
+  screen: an answer to a reply (reply mode AUTO), and the findings of a finished review
+  (publishing AUTO — every review, whoever started it, inline; a clean review says so once as
+  a comment and then keeps quiet). A person's notes are never published for them.
 - **Fixes are written in a workshop** — a `git clone --local` under
   `userData/code-review/fixes` — never in the person's clone, with `git push` and
   `git commit` denied to the model. The tool commits; a clean tree means nothing was fixed.
@@ -275,7 +278,28 @@ the reviewer's fixes and the person's own Claude sessions (`review-bus.js`). Sev
   starts from the moment it joins. After a fix commits, the files it changed are recorded
   against its branch, and if another open branch changes them too, the repository is told.
 
-The panel's Coordination tab shows it, read-only. The plugin's `code-review-bus` skill tells
+The panel's Coordination tab shows it, read-only.
+
+### Migration numbers taken twice
+
+The bus stops the writers *in this app* from colliding. Everybody else's pull requests are
+watched by `review-migrations.js`, for a repository that names the folder its migrations are
+created in:
+
+- Every time the list is read, after the conflict sweep has fetched, each open PR's branch is
+  diffed against its target for the migrations it **adds** there, and the target is listed.
+  Two different files claiming one number is a clash (`V12` and `V012` are one number). The
+  same path on two branches is one migration — a stacked PR carries its parent's — and is not.
+- A clash flags the PRs in it and heads their merge gate. A PR whose number is **already on
+  its target** is refused by `engine.merge`, asked again of freshly fetched branches at that
+  moment: that merge is the duplicate. Two open PRs sharing a number are not refused, because
+  refusing both leaves nothing mergeable; the moment one lands the other is in the first case.
+- The repository's room (its own, or the reviewer's) is told once per set of PRs in the clash,
+  and again only when somebody new joins it. What the room was told is kept on the clash.
+
+Teams reaches "the repository's room" through **rooms by name**: each is one channel's
+Incoming Webhook under the name a sender asks for. A name nobody set up falls back to the one
+webhook there always was, so every sender written before rooms had names keeps working. The plugin's `code-review-bus` skill tells
 a session when to reach for the tools.
 
 Testing it by hand needs no real review: import an AI Code Reviewer history into an isolated

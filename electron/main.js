@@ -272,6 +272,12 @@ const TEAMS_VERBS = {
   saveConnection: (service, args) => ({ ok: true, connection: service.saveConnection(args.connection ?? {}) }),
   saveSettings: (service, args) => ({ ok: true, settings: service.saveSettings(args.settings ?? {}) }),
   test: (service, args) => service.test(String(args.to ?? '')),
+  saveChannel: (service, args) => ({ ok: true, channels: service.saveChannel(args.channel ?? {}) }),
+  forgetChannel: (service, args) => ({ ok: true, channels: service.forgetChannel(String(args.name ?? '')) }),
+  testChannel: (service, args) => service.testChannel(String(args.name ?? '')),
+  // Signing in as yourself: a code to type at Microsoft, and the way back out.
+  signIn: (service) => service.signIn(),
+  signOut: (service) => ({ ok: true, connection: service.signOut() }),
   setAppStance: (service, args) => ({ ok: true, app: service.store.setAppStance(String(args.id ?? ''), String(args.stance ?? 'ASK')) }),
   setAppCap: (service, args) => ({ ok: true, app: service.store.setAppCap(String(args.id ?? ''), args.cap) }),
   matchPerson: (service, args) => ({ ok: true, person: service.store.matchPerson(String(args.handle ?? ''), String(args.address ?? '')) }),
@@ -297,6 +303,8 @@ function createTeamsService() {
         if (Notification.isSupported()) new Notification({ title, body }).show();
       },
       emit: (event) => send('teams:event', event),
+      // Microsoft's sign-in page, where the code is typed. Only ever the web.
+      openExternal: (url) => { if (/^https:\/\//.test(url)) shell.openExternal(url); },
     });
   } catch (error) {
     // Nothing else depends on it; an extension that cannot start says so and stays out of the way.
@@ -379,6 +387,9 @@ function createReviewService() {
           ready: Boolean(connection?.ready),
           channel: Boolean(connection?.channel?.ready),
           person: Boolean(connection?.person?.ready),
+          // The rooms it knows by name, so a repository can be pointed at one. Names only.
+          channels: connection?.channels ?? [],
+          defaultChannel: Boolean(connection?.hasWebhook),
         };
       },
     });

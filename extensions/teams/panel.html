@@ -238,7 +238,35 @@
       '<span class="spacer"></span>' + connectionState(c) + '</div>';
     html += '</div>';
 
+    html += drawRooms();
+
     html += '<div class="banner">One connection, many senders. Anything in this app may ask this extension to deliver a message; each one shows up in <button class="btn" data-act="nav" data-view="apps" style="padding:1px 8px">Apps</button> with a switch of its own.</div>';
+    return html + '</div>';
+  }
+
+  /*
+   * Rooms by name.
+   *
+   * An Incoming Webhook posts into one channel, so a second room is a second
+   * webhook, and a sender asks for it by the name given here — the Code
+   * Reviewer, for instance, sends each repository's alerts to the room that
+   * repository names. A name nobody set up lands in the webhook above.
+   */
+  function drawRooms() {
+    var rooms = state.data.channels || [];
+    var html = '<div class="card"><div class="row" style="margin-bottom:6px"><strong>Rooms by name</strong></div>' +
+      '<div class="help" style="margin-bottom:10px">Each room is one channel’s Incoming Webhook, under the name senders ask for it by. Something sent to a name that is not here goes to the webhook above' + (state.data.connection.hasWebhook ? '' : ' — and there is none yet, so it would fail') + '.</div>';
+    if (rooms.length) {
+      html += '<table style="margin-bottom:10px"><tbody>' + rooms.map(function (room) {
+        return '<tr><td class="mono">' + esc(room.name) + '</td><td>' + (room.hasWebhook ? '<span class="chip okc">webhook kept</span>' : '<span class="chip badc">no webhook</span>') + '</td>' +
+          '<td style="text-align:right"><button class="btn" data-act="test-room" data-name="' + esc(room.name) + '"' + busyAttr('room-' + room.name) + '>Send a test</button> ' +
+          '<button class="btn" data-act="forget-room" data-name="' + esc(room.name) + '"' + busyAttr('room-' + room.name) + '>Forget</button></td></tr>';
+      }).join('') + '</tbody></table>';
+    }
+    html += '<div class="row">' +
+      '<input type="text" data-edit="roomName" placeholder="payments-dev" value="' + esc(edit('roomName', '')) + '" style="width:170px">' +
+      '<input type="password" data-edit="roomUrl" placeholder="https://… the channel’s webhook URL" value="' + esc(edit('roomUrl', '')) + '" style="flex:1">' +
+      '<button class="btn primary" data-act="save-room"' + busyAttr('save-room') + '>Add the room</button></div>';
     return html + '</div>';
   }
 
@@ -450,6 +478,23 @@
       act('test', function () { return call('test', { to: edit('testTo', '') }); }, function (result) {
         say(result.ok ? 'It arrived.' : 'It did not go: ' + (result.error || 'no reason given'), !result.ok);
         load();
+      });
+    },
+    'save-room': function () {
+      act('save-room', function () { return call('saveChannel', { channel: { name: edit('roomName', ''), webhookUrl: edit('roomUrl', '') } }); }, function () {
+        delete state.edits.roomName; delete state.edits.roomUrl;
+        say('Room kept.');
+        load();
+      });
+    },
+    'forget-room': function (el) {
+      var name = el.getAttribute('data-name');
+      act('room-' + name, function () { return call('forgetChannel', { name: name }); }, function () { say('Forgotten.'); load(); });
+    },
+    'test-room': function (el) {
+      var name = el.getAttribute('data-name');
+      act('room-' + name, function () { return call('testChannel', { name: name }); }, function (result) {
+        say(result.ok ? 'It arrived in ' + name + '.' : 'It did not go: ' + (result.error || 'no reason given'), !result.ok);
       });
     },
     'save-settings': function () {
