@@ -15,6 +15,7 @@ import { FilesPanel } from './FilesPanel';
 import { MonitorPanel } from './MonitorPanel';
 import { ExtensionsPanel } from './ExtensionsPanel';
 import { ExtensionView } from './ExtensionView';
+import { PlusIcon, ChevronDownIcon, MinimizeIcon, MaximizeIcon } from './icons';
 import { PanelTab } from './PanelTab';
 
 export function Pane({ leaf }: { leaf: LeafNode }) {
@@ -315,16 +316,18 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
                 ? `New tab as ${activeProfile.name} (⌘T)`
                 : 'New tab (⌘T)'
             }
+            aria-label="New tab"
           >
-            +
+            <PlusIcon />
           </button>
           <button
             ref={caretRef}
             className="icon-btn caret"
             onClick={() => setMenuOpen((open) => !open)}
             title="New session as another account…"
+            aria-label="New session as another account"
           >
-            ⌄
+            <ChevronDownIcon />
           </button>
           {leaf.tabs.length > 0 && (
             <>
@@ -338,7 +341,7 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
                 }
                 aria-label="Minimize this section"
               >
-                &#8211;
+                <MinimizeIcon />
               </button>
               <button
                 className={`icon-btn${zoomed ? ' is-on' : ''}`}
@@ -352,7 +355,7 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
                 }
                 aria-label={zoomed ? 'Restore this section' : 'Maximize this section'}
               >
-                ⤢
+                <MaximizeIcon restore={Boolean(zoomed)} />
               </button>
             </>
           )}

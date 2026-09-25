@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../state/store';
 import { allTabs } from '../state/layout';
+import { SplitRightIcon, SplitDownIcon, EvenSplitsIcon, MaximizeIcon } from './icons';
 import { UsageGauge } from './UsageGauge';
 
 export function TitleBar() {
@@ -82,21 +83,22 @@ export function TitleBar() {
       </div>
 
       <div className="titlebar-actions">
-        <button className="icon-btn" title="Split right (⌘D)" onClick={() => splitActive('row')}>
-          ⇥
+        <button className="icon-btn" title="Split right (⌘D)" aria-label="Split right" onClick={() => splitActive('row')}>
+          <SplitRightIcon />
         </button>
-        <button className="icon-btn" title="Split down (⇧⌘D)" onClick={() => splitActive('column')}>
-          ⇩
+        <button className="icon-btn" title="Split down (⇧⌘D)" aria-label="Split down" onClick={() => splitActive('column')}>
+          <SplitDownIcon />
         </button>
-        <button className="icon-btn" title="Even out splits (⌥⌘0)" onClick={evenSplits}>
-          ⊞
+        <button className="icon-btn" title="Even out splits (⌥⌘0)" aria-label="Even out splits" onClick={evenSplits}>
+          <EvenSplitsIcon />
         </button>
         <button
           className={`icon-btn${zoomed ? ' is-on' : ''}`}
           title="Maximize pane (⌥⌘⏎)"
+          aria-label="Maximize pane"
           onClick={toggleZoom}
         >
-          ⤢
+          <MaximizeIcon restore={Boolean(zoomed)} />
         </button>
       </div>
     </header>

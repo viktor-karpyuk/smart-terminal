@@ -225,47 +225,48 @@ function Menu({
         </>
       )}
 
-      {hostsClaude && (
-        <button
-          className={`menu-item menu-check${session.autopilot ? ' is-on' : ''}`}
-          title={
-            session.autopilot
-              ? 'It carries on by itself, and stops when something needs you'
-              : 'Let it carry on by itself between turns'
-          }
-          onClick={run(() => store.setAutopilot(sessionId, !session.autopilot))}
-        >
-          <span>
-            <i className="check">{session.autopilot ? '☑' : '☐'}</i> Keep working on its own
-          </span>
-          <kbd title={autopilotHint(session)}>{autopilotHint(session)}</kbd>
-        </button>
-      )}
-
       {/*
-        Only worth offering once there is something to bring back. The app cannot
-        tell a dev server from a migration, so this is per session and off until
-        someone says otherwise.
+        Everything here that is on or off, together and drawn one way: the
+        label says what it does and never changes, the switch says whether it
+        is on. Flipping one leaves the menu open, so the switch is seen to move.
       */}
-      {session.lastCommand && (
-        <button
-          className={`menu-item menu-check${session.resumeCommand ? ' is-on' : ''}`}
-          title={`Start ${session.lastCommand} again whenever this session comes back`}
-          onClick={run(() => store.setResumeCommand(sessionId, !session.resumeCommand))}
-        >
-          <span>
-            <i className="check">{session.resumeCommand ? '☑' : '☐'}</i> Bring its command back
-          </span>
-          <kbd title={session.lastCommand}>{session.lastCommand}</kbd>
-        </button>
-      )}
-
-      {hostsClaude && (
-        <MenuItem
-          label={session.recording ? 'Recording conversation ✓' : 'Record conversation'}
-          hint={session.recording ? 'on' : 'off'}
-          onClick={run(() => store.setRecording(sessionId, !session.recording))}
-        />
+      {(hostsClaude || session.lastCommand) && (
+        <>
+          <div className="menu-separator" />
+          {hostsClaude && (
+            <MenuToggle
+              label="Keep working on its own"
+              on={Boolean(session.autopilot)}
+              status={session.autopilot ? autopilotHint(session, { short: true }) : undefined}
+              title={
+                session.autopilot
+                  ? `It carries on by itself, and stops when something needs you. Now: ${autopilotHint(session)}`
+                  : 'Let it carry on by itself between turns'
+              }
+              onToggle={() => store.setAutopilot(sessionId, !session.autopilot)}
+            />
+          )}
+          {hostsClaude && (
+            <MenuToggle
+              label="Record the conversation"
+              on={Boolean(session.recording)}
+              onToggle={() => store.setRecording(sessionId, !session.recording)}
+            />
+          )}
+          {/*
+            Only worth offering once there is something to bring back. The app
+            cannot tell a dev server from a migration, so this is per session
+            and off until someone says otherwise.
+          */}
+          {session.lastCommand && (
+            <MenuToggle
+              label="Rerun its command on return"
+              on={Boolean(session.resumeCommand)}
+              title={`Start ${session.lastCommand} again whenever this session comes back`}
+              onToggle={() => store.setResumeCommand(sessionId, !session.resumeCommand)}
+            />
+          )}
+        </>
       )}
 
       <LookSection session={session} />
@@ -340,11 +341,12 @@ function folderName(path: string): string {
 }
 
 /** What autopilot is doing right now, in the fewest words that still say it. */
-function autopilotHint(session: Session): string {
+function autopilotHint(session: Session, { short = false } = {}): string {
   if (!session.autopilot) return 'off';
   switch (session.autopilotState) {
     case 'waiting-for-you':
-      return session.autopilotAsking ? `needs you · ${session.autopilotAsking}` : 'needs you';
+      // Beside a switch there is room for the state, not for the question; the question is in the hover.
+      return session.autopilotAsking && !short ? `needs you · ${session.autopilotAsking}` : 'needs you';
     case 'done':
       return 'nothing left';
     case 'working':
@@ -384,37 +386,47 @@ function LookSection({ session }: { session: Session }) {
     <>
       <div className="menu-separator" />
       <div className="menu-label">This tab</div>
-      <div className="group-swatches">
-        <button
-          className={`swatch is-none${session.color ? '' : ' is-selected'}`}
-          title="No colour of its own"
-          aria-label="no colour"
-          onClick={() => updateSessionLook(session.id, { color: null })}
-        />
-        {TAB_COLORS.map((color) => (
+      <div className="menu-row">
+        <span>Colour</span>
+        <div className="menu-swatches" role="radiogroup" aria-label="Tab colour">
           <button
-            key={color}
-            className={`swatch${session.color === color ? ' is-selected' : ''}`}
-            style={{ background: color }}
-            aria-label={color}
-            onClick={() => updateSessionLook(session.id, { color })}
+            className={`swatch is-none${session.color ? '' : ' is-selected'}`}
+            title="No colour of its own"
+            role="radio"
+            aria-checked={!session.color}
+            aria-label="no colour"
+            onClick={() => updateSessionLook(session.id, { color: null })}
           />
-        ))}
+          {TAB_COLORS.map((color) => (
+            <button
+              key={color}
+              className={`swatch${session.color === color ? ' is-selected' : ''}`}
+              style={{ background: color }}
+              role="radio"
+              aria-checked={session.color === color}
+              aria-label={color}
+              onClick={() => updateSessionLook(session.id, { color })}
+            />
+          ))}
+        </div>
       </div>
-      <label className="field">
-        <span>Text size for this tab</span>
-        <div className="segmented">
+      <div className="menu-row">
+        <span>Text size</span>
+        <div className="segmented is-compact" role="radiogroup" aria-label="Text size for this tab">
           {SIZES.map((size) => (
             <button
               key={String(size)}
-              className={session.fontSize === size ? 'is-on' : ''}
+              className={(session.fontSize ?? null) === size ? 'is-on' : ''}
+              role="radio"
+              aria-checked={(session.fontSize ?? null) === size}
+              title={size === null ? "The app's own text size" : `${size} pt`}
               onClick={() => updateSessionLook(session.id, { fontSize: size })}
             >
-              {size ?? 'default'}
+              {size ?? 'auto'}
             </button>
           ))}
         </div>
-      </label>
+      </div>
     </>
   );
 }
@@ -443,7 +455,7 @@ function GroupSection({
 
   if (naming) {
     return (
-      <label className="field">
+      <label className="field menu-field">
         <span>New group</span>
         <input
           autoFocus
@@ -463,6 +475,7 @@ function GroupSection({
 
   return (
     <>
+      <div className="menu-separator" />
       <div className="menu-label">Group</div>
       {current && (
         <>
@@ -539,6 +552,41 @@ function GroupSection({
         <span>New group…</span>
       </button>
     </>
+  );
+}
+
+/**
+ * A setting that is on or off. The label is the setting's name and stays the
+ * same whichever way it is set; the switch carries the state, and a short
+ * status may sit beside it when being on means something more (autopilot).
+ */
+function MenuToggle({
+  label,
+  on,
+  status,
+  title,
+  onToggle,
+}: {
+  label: string;
+  on: boolean;
+  status?: string;
+  title?: string;
+  onToggle(): void;
+}) {
+  return (
+    <button
+      className="menu-item menu-toggle"
+      role="menuitemcheckbox"
+      aria-checked={on}
+      title={title}
+      onClick={onToggle}
+    >
+      <span>{label}</span>
+      <span className="menu-toggle-end">
+        {status && <kbd title={status}>{status}</kbd>}
+        <i className={`switch${on ? ' is-on' : ''}`} aria-hidden="true" />
+      </span>
+    </button>
   );
 }
 
