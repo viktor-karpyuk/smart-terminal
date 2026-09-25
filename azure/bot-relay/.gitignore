@@ -1,0 +1,4 @@
+# Holds the bot's client secret and the queue's SAS token.
+.env.local
+node_modules/
+build/
