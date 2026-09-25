@@ -225,21 +225,23 @@ function Menu({
         </>
       )}
 
+      {/*
+        The session's on/off settings, all drawn the same way: the label, what it
+        is doing right now, and a switch. Flipping one leaves the menu open, so
+        the switch is seen to move and the next one is a click away.
+      */}
       {hostsClaude && (
-        <button
-          className={`menu-item menu-check${session.autopilot ? ' is-on' : ''}`}
+        <MenuSwitch
+          label="Keep working on its own"
+          on={Boolean(session.autopilot)}
+          hint={session.autopilot ? autopilotHint(session) : undefined}
           title={
             session.autopilot
               ? 'It carries on by itself, and stops when something needs you'
               : 'Let it carry on by itself between turns'
           }
-          onClick={run(() => store.setAutopilot(sessionId, !session.autopilot))}
-        >
-          <span>
-            <i className="check">{session.autopilot ? '☑' : '☐'}</i> Keep working on its own
-          </span>
-          <kbd title={autopilotHint(session)}>{autopilotHint(session)}</kbd>
-        </button>
+          onChange={(on) => store.setAutopilot(sessionId, on)}
+        />
       )}
 
       {/*
@@ -248,23 +250,20 @@ function Menu({
         someone says otherwise.
       */}
       {session.lastCommand && (
-        <button
-          className={`menu-item menu-check${session.resumeCommand ? ' is-on' : ''}`}
+        <MenuSwitch
+          label="Bring its command back"
+          on={Boolean(session.resumeCommand)}
+          hint={session.lastCommand}
           title={`Start ${session.lastCommand} again whenever this session comes back`}
-          onClick={run(() => store.setResumeCommand(sessionId, !session.resumeCommand))}
-        >
-          <span>
-            <i className="check">{session.resumeCommand ? '☑' : '☐'}</i> Bring its command back
-          </span>
-          <kbd title={session.lastCommand}>{session.lastCommand}</kbd>
-        </button>
+          onChange={(on) => store.setResumeCommand(sessionId, on)}
+        />
       )}
 
       {hostsClaude && (
-        <MenuItem
-          label={session.recording ? 'Recording conversation ✓' : 'Record conversation'}
-          hint={session.recording ? 'on' : 'off'}
-          onClick={run(() => store.setRecording(sessionId, !session.recording))}
+        <MenuSwitch
+          label="Record conversation"
+          on={Boolean(session.recording)}
+          onChange={(on) => store.setRecording(sessionId, on)}
         />
       )}
 
@@ -539,6 +538,36 @@ function GroupSection({
         <span>New group…</span>
       </button>
     </>
+  );
+}
+
+/** A setting that is either on or off, as a row with a switch at its end. */
+function MenuSwitch({
+  label,
+  on,
+  hint,
+  title,
+  onChange,
+}: {
+  label: string;
+  on: boolean;
+  /** What the setting is doing right now, when there is more to say than on or off. */
+  hint?: string;
+  title?: string;
+  onChange(on: boolean): void;
+}) {
+  return (
+    <button
+      className="menu-item menu-switch"
+      role="switch"
+      aria-checked={on}
+      title={title}
+      onClick={() => onChange(!on)}
+    >
+      <span>{label}</span>
+      {hint && <kbd title={hint}>{hint}</kbd>}
+      <i className={`switch${on ? ' is-on' : ''}`} aria-hidden />
+    </button>
   );
 }
 
