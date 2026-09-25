@@ -45,6 +45,7 @@ class TeamsService {
   connection() {
     const way = this.store.setting('way', 'graph');
     const hasWebhook = Boolean(this.store.secret('webhook.url'));
+    const channels = this.channels();
     // A direct message needs somebody it is from, so a registration without one
     // is not ready — saying it is would be a green light in front of a failure.
     const hasGraph = Boolean(
@@ -54,9 +55,11 @@ class TeamsService {
     return {
       way,
       // Anything at all can be said, which is what a sender asks before trying.
-      ready: hasWebhook || hasGraph,
+      ready: hasWebhook || channels.length > 0 || hasGraph,
       /** A room: the webhook posts as the app rather than as anybody. */
-      channel: { ready: hasWebhook, via: 'webhook' },
+      channel: { ready: hasWebhook || channels.length > 0, via: 'webhook' },
+      /** The rooms that have a webhook of their own, by name. Names only: a URL is a secret. */
+      channels: channels.map((channel) => channel.name),
       /** One person, privately. The bot will go here when it exists. */
       person: { ready: hasGraph, via: 'graph' },
       hasWebhook,
@@ -124,6 +127,54 @@ class TeamsService {
     this.tokens.forget();
     this.changed();
     return this.connection();
+  }
+
+  // --- named rooms -------------------------------------------------------------
+
+  /**
+   * The rooms this machine can post in, each with its own webhook.
+   *
+   * An Incoming Webhook belongs to one channel, so "the right room" for
+   * something — the payments team for the payments repository — is a second
+   * webhook, and it needs a name a sender can ask for. The one webhook there
+   * always was stays as the room for anything that names a room nobody set up,
+   * which is every sender written before rooms had names.
+   */
+  channels() {
+    let names;
+    try {
+      names = JSON.parse(this.store.setting('channels', '[]'));
+    } catch {
+      names = [];
+    }
+    return (Array.isArray(names) ? names : []).filter((name) => typeof name === 'string' && name.trim()).map((name) => ({ name, hasWebhook: Boolean(this.store.secret(channelKey(name))) }));
+  }
+
+  saveChannel({ name, webhookUrl } = {}) {
+    const clean = channelName(name);
+    if (!clean) throw new Error('A room needs a name — the one a sender will ask for it by.');
+    const url = String(webhookUrl ?? '').trim();
+    const known = this.channels().find((channel) => channelKey(channel.name) === channelKey(clean));
+    if (!url && !known?.hasWebhook) throw new Error('A room needs the Incoming Webhook URL of its channel.');
+    if (url && !/^https:\/\//i.test(url)) throw new Error('A webhook URL has to be https.');
+    if (url) this.store.setSecret(channelKey(clean), url);
+    if (!known) this.store.setSetting('channels', JSON.stringify([...this.channels().map((channel) => channel.name), clean]));
+    this.changed();
+    return this.channels();
+  }
+
+  forgetChannel(name) {
+    const key = channelKey(name);
+    this.store.setSecret(key, null);
+    this.store.setSetting('channels', JSON.stringify(this.channels().map((channel) => channel.name).filter((one) => channelKey(one) !== key)));
+    this.changed();
+    return this.channels();
+  }
+
+  /** The webhook a room name reaches: its own, or the one there always was. */
+  webhookFor(name) {
+    const own = name ? this.store.secret(channelKey(name)) : null;
+    return own || this.store.secret('webhook.url');
   }
 
   /** Really forget a webhook, for the panel's own "forget this" rather than a blank save. */
@@ -274,8 +325,8 @@ class TeamsService {
 
   /** A room. The webhook is the app's own identity there, which is what a room wants. */
   async #toChannel(message) {
-    const url = this.store.secret('webhook.url');
-    if (!url) throw new Error('No webhook is set up, so there is no channel to post in.');
+    const url = this.webhookFor(message.to.channel);
+    if (!url) throw new Error(`There is no webhook for “${message.to.channel}”, and no default one to fall back on.`);
     return postWebhook(this.fetch, url, message);
   }
 
@@ -447,9 +498,27 @@ class TeamsService {
     }
   }
 
+  /** A test message to one named room, so each webhook can be proved on its own. */
+  async testChannel(name) {
+    const clean = channelName(name);
+    if (!clean) return { ok: false, error: 'Which room?' };
+    const message = rules.readMessage({
+      to: { channel: clean },
+      title: `Smart Terminal can post in ${clean}`,
+      body: 'Nothing is wrong. Somebody pressed “Send a test message” for this room to find out whether its webhook works.',
+    });
+    try {
+      await this.deliver(message, null);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  }
+
   overview() {
     return {
       connection: this.connection(),
+      channels: this.channels(),
       settings: this.settings(),
       apps: this.store.apps(),
       people: this.store.people(),
@@ -475,4 +544,14 @@ class TeamsService {
   }
 }
 
-module.exports = { TeamsService, card, asText };
+/** A room's name as written, without the `#` people put in front of channel names out of habit. */
+function channelName(name) {
+  return String(name ?? '').trim().replace(/^#+/, '').trim().slice(0, 80);
+}
+
+/** Where a room's webhook is kept. Case does not make two rooms: `Payments` and `payments` are one. */
+function channelKey(name) {
+  return `webhook.channel.${channelName(name).toLowerCase()}`;
+}
+
+module.exports = { TeamsService, card, asText, channelName };

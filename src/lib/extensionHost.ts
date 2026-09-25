@@ -197,14 +197,14 @@ const REVIEW_READ = [
   'overview', 'dashboard', 'repos', 'repo', 'prs', 'pr', 'files', 'diff', 'commits', 'commitFiles', 'commitDiff',
   'guidelines', 'usage', 'activity', 'viewed', 'fileText', 'importInspect', 'models', 'depths', 'rerunCheck', 'followUpText', 'brief', 'paths',
   'detectRemote', 'bus',
-  'fixTimes', 'watchBudget',
+  'fixTimes', 'watchBudget', 'migrationClashes',
 ] as const;
 const REVIEW_WRITE = [
   'pickFolder', 'saveRepo', 'testRepo', 'deleteRepo', 'hideRepo', 'saveSettings', 'saveGuideline', 'deleteGuideline',
   'importClaudeMd', 'importRun', 'setViewed', 'replyToComment', 'autoRunNow', 'openUrl', 'refreshPrs', 'refreshAll', 'searchHistory', 'loadPr',
   'review', 'reviewMany', 'cancel', 'cancelRun', 'verify', 'finalPass', 'saveReviewBody', 'publishReview', 'publishFinding',
   'publishAll', 'dismissFinding', 'closeFinding', 'settleFinding', 'editFinding', 'addNote', 'updateNote', 'deleteNote', 'publishNote',
-  'checkConflicts',
+  'checkConflicts', 'checkMigrations',
   'draftReply', 'draftAll', 'saveReplyDraft', 'publishReply', 'dismissReply', 'dismissAllReplies', 'followUp',
   'adopt', 'fix', 'fixAll', 'retryFixReply', 'giveBack', 'discardWorkshop', 'push', 'dropFix',
   'remind', 'sweepReminders', 'escalateNow', 'speak',
@@ -232,7 +232,7 @@ const DELIVER = 'deliver';
  * somebody else.
  */
 const TEAMS_READ = ['overview'] as const;
-const TEAMS_WRITE = ['saveConnection', 'saveSettings', 'test', 'setAppStance', 'setAppCap', 'matchPerson', 'approve', 'skip', 'retry'] as const;
+const TEAMS_WRITE = ['saveConnection', 'saveSettings', 'test', 'saveChannel', 'forgetChannel', 'testChannel', 'setAppStance', 'setAppCap', 'matchPerson', 'approve', 'skip', 'retry'] as const;
 // `deliverFor` is deliberately absent: the app makes that call, naming the
 // caller itself, so no panel can send under another extension's name.
 const TEAMS_VERBS = new Map<string, Channel>(

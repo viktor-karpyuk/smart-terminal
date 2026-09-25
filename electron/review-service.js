@@ -25,6 +25,7 @@ const { FixEngine } = require('./review-fix');
 const { AutoReviewer } = require('./review-auto');
 const importer = require('./review-import');
 const { ReviewBus } = require('./review-bus');
+const { MigrationWatch, clashFor, clashSentence } = require('./review-migrations');
 
 /**
  * Code Reviewer: the one door the panel knocks on.
@@ -92,9 +93,27 @@ class ReviewService {
     const workshops = path.join(dataDir, 'code-review', 'fixes');
     this.bus = new ReviewBus({ store: this.store, git: this.git, workshopRoot: workshops, emit: emitter });
     this.fixer = new FixEngine({ store: this.store, forge: this.forge, git: this.git, claude: this.claude, engine: this.engine, root: workshops, notify: notifier, emit: emitter, bus: this.bus, busServer: busServer ?? (() => null) });
+    /*
+     * Published first, fixed second: a fix answers its finding's thread, and a
+     * finding that is not on the pull request yet has no thread to answer in.
+     */
     this.engine.onFinished = (repo, pr, review) => {
-      if (repo.fixMode === 'AUTO') void this.fixer.autoFix(repo, pr, review).catch(() => {});
+      void (async () => {
+        await this.autoPublish(repo, pr, review).catch(() => {});
+        if (repo.fixMode === 'AUTO') await this.fixer.autoFix(repo, pr, review);
+      })().catch(() => {});
     };
+    this.migrations = new MigrationWatch({
+      store: this.store,
+      git: this.git,
+      deliver: (message) => this.deliver(message),
+      // The repository's own room, or the reviewer's when it names none.
+      channelFor: (repo) => String(repo.alertChannel ?? '').trim() || this.store.pref('announce.channel', '').trim(),
+      notify: notifier,
+      emit: emitter,
+    });
+    this.engine.onBranches = (repoId) => this.migrations.check(repoId);
+    this.engine.beforeMerge = (repo, pr) => this.migrations.blockMerge(repo, pr);
     this.auto = new AutoReviewer({
       store: this.store,
       engine: this.engine,
@@ -121,6 +140,46 @@ class ReviewService {
   stop() {
     this.auto.stopAll();
     for (const run of this.engine.activity.runs.values()) run.handle?.cancel();
+  }
+
+  /**
+   * A finished review, said on the pull request without anybody pressing
+   * anything — for a repository that asked for exactly that.
+   *
+   * Every review, whoever started it: the setting is the repository's, and a
+   * repository that publishes by itself does not stop doing so because the
+   * review was started by hand. What goes out is what "Publish inline" sends,
+   * minus the notes — a note is a person's and only a person says it. A review
+   * that found nothing says so once, as a general comment, so the author can
+   * tell "looked at, nothing to say" from "nobody has looked"; after that a
+   * clean review of new commits is silence, not another comment per push.
+   */
+  async autoPublish(repo, pr, review) {
+    if (repo.publishMode !== 'AUTO' || !review || review.status !== 'DONE') return null;
+    if (!repo.hasToken) {
+      this.notifyRaw(`Could not publish · ${repo.name} #${pr.id}`, 'The repository publishes automatically, but it has no token to publish with.');
+      return { ok: false, published: 0, errors: ['no token'] };
+    }
+    const out = await this.engine.publishAll(repo.id, pr.id, { notes: false });
+    let summary = false;
+    if (!out.published && !out.errors.length) {
+      const saidBefore = this.store.publications(repo.id, pr.id).length > 0 || this.store.findingsForPr(repo.id, pr.id).some((finding) => finding.publishedId);
+      if (!saidBefore && String(review.body ?? '').trim()) {
+        try {
+          await this.engine.publishReview(review.id, review.body);
+          summary = true;
+        } catch (error) {
+          out.errors.push(`summary: ${String(error?.message ?? error).slice(0, 200)}`);
+        }
+      }
+    }
+    if (out.errors.length) {
+      this.notifyRaw(`Published with errors · ${repo.name} #${pr.id}`, `${out.published} went out; ${out.errors.length} did not: ${out.errors[0]}`.slice(0, 200));
+    } else if (out.published || summary) {
+      this.notifyRaw(`Published · ${repo.name} #${pr.id}`, summary ? 'Nothing found; the summary is on the pull request.' : `${out.published} finding(s) are on the pull request.`);
+    }
+    this.engine.changed(repo.id, pr.id);
+    return { ...out, summary };
   }
 
   // --- views the panel draws from ---------------------------------------------------
@@ -284,6 +343,11 @@ class ReviewService {
   /** Rows for a list of PRs: the PR, its flags, its counts, and why it cannot be merged. */
   rows(prs, reposById, facts) {
     const running = this.engine.activity.list();
+    const clashes = new Map();
+    const clashesOf = (repoId) => {
+      if (!clashes.has(repoId)) clashes.set(repoId, this.store.migrationClashes(repoId));
+      return clashes.get(repoId);
+    };
     return prs
       .map((pr) => {
         const repo = reposById.get(pr.repoId);
@@ -292,8 +356,10 @@ class ReviewService {
         const runs = running.filter((run) => run.repoId === pr.repoId && run.prId === pr.id);
         const reviewing = runs.some((run) => run.kind === 'review');
         const fixing = runs.some((run) => run.kind === 'fix');
-        const flags = rules.prFlags(pr, { ...fact, reviewing, fixing });
+        const clash = pr.state === 'OPEN' ? clashFor(pr.id, clashesOf(pr.repoId)) : null;
+        const flags = rules.prFlags(pr, { ...fact, reviewing, fixing, migrationClash: Boolean(clash) });
         const blocker = rules.mergeBlocker({
+          migrationClash: clashSentence(clash),
           prHeadSha: pr.headSha,
           reviewHeadSha: fact.reviewedSha,
           hasReview: Boolean(fact.reviewId),
@@ -340,6 +406,7 @@ class ReviewService {
             step: run.lines.length ? run.lines[run.lines.length - 1] : null,
           })),
           mergeBlocker: blocker,
+          migrationClash: clash,
           ageDays: rules.daysBetween(pr.createdOn || pr.firstSeenAt || '', new Date()),
         };
       })
@@ -740,7 +807,8 @@ class ReviewService {
     const threads = rules.buildConversation({ findings: doneFindings, comments, replies });
     const fixes = this.store.fixesForPr(repoId, prId);
     const finalPassDone = Boolean(done?.finalPassHead && pr && done.finalPassHead === pr.headSha);
-    const counts = rules.mergeCounts({ pr, review: done, findings: doneFindings.filter((finding) => !finding.askedBy), notes, replies });
+    const migrationClash = pr?.state === 'OPEN' ? clashFor(prId, this.store.migrationClashes(repoId)) : null;
+    const counts = { ...rules.mergeCounts({ pr, review: done, findings: doneFindings.filter((finding) => !finding.askedBy), notes, replies }), migrationClash: clashSentence(migrationClash) };
     const running = this.engine.activity.list().filter((run) => run.repoId === repoId && run.prId === prId);
     return {
       repo: this.publicRepo(repo),
@@ -761,6 +829,7 @@ class ReviewService {
       readiness: rules.readiness({ pr, review: done, threads, findings: doneFindings, finalPassDone, finalPassBlockers: finalPassDone ? done.finalPassBlockers ?? 0 : 0 }),
       finalPassDone,
       mergeBlocker: rules.mergeBlocker(counts),
+      migrationClash,
       nextStep: rules.nextStep({ pr, review: done, findings: doneFindings, notes, threads, running, finalPassDone, finalPassBlockers: done?.finalPassBlockers ?? 0, mergeBlocker: rules.mergeBlocker(counts) }),
       running,
       settings,
@@ -893,6 +962,7 @@ class ReviewService {
     for (const [field, allowed] of [
       ['replyMode', ['OFF', 'DRAFT', 'AUTO']],
       ['fixMode', ['OFF', 'MANUAL', 'AUTO']],
+      ['publishMode', ['MANUAL', 'AUTO']],
     ]) {
       if (input[field] && !allowed.includes(input[field])) throw new Error(`${field} must be one of ${allowed.join(', ')}.`);
     }
@@ -908,6 +978,8 @@ class ReviewService {
     try {
       const saved = this.store.saveRepo(merged);
       this.emitRaw({ type: 'repos' });
+      // A folder just named is read now, not at the next look two minutes away; one just cleared stops being said.
+      void this.migrations.check(saved.id).catch(() => {});
       return this.publicRepo(saved);
     } catch (error) {
       if (/UNIQUE/.test(String(error?.message))) throw new Error('That repository is already configured.');
@@ -1388,6 +1460,9 @@ class ReviewService {
       requestChanges: (args) => e.stance(str(args.repoId, 'A repository'), num(args.prId), 'requestChanges'),
       undoRequestChanges: (args) => e.stance(str(args.repoId, 'A repository'), num(args.prId), 'undoRequestChanges'),
       decline: (args) => e.decline(str(args.repoId, 'A repository'), num(args.prId), args.reason),
+      /** Read the branches for migration numbers now, rather than at the next look. */
+      checkMigrations: async (args) => ({ ok: true, clashes: await s.migrations.check(str(args.repoId, 'A repository')) }),
+      migrationClashes: (args) => ({ ok: true, clashes: s.store.migrationClashes(str(args.repoId, 'A repository')) }),
       checkConflicts: (args) => e.checkConflicts(str(args.repoId, 'A repository'), num(args.prId), { fetch: args.fetch !== false }),
       merge: (args) => e.merge(str(args.repoId, 'A repository'), num(args.prId), { message: args.message, closeSourceBranch: args.closeSourceBranch !== false, strategy: ['MERGE_COMMIT', 'SQUASH', 'FAST_FORWARD'].includes(args.strategy) ? args.strategy : 'MERGE_COMMIT' }),
 
