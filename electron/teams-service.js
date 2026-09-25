@@ -2,6 +2,7 @@
 
 const { TeamsStore } = require('./teams-store');
 const rules = require('./teams-rules');
+const { NoRoute } = require('./teams-bot');
 const { postWebhook, sendDirect, tokenCache, card, asText } = require('./teams-send');
 
 /** Often enough that "waits for the morning" is the morning, rarely enough to be nothing. */
@@ -29,6 +30,12 @@ class TeamsService {
     this.now = now;
     this.tokens = tokenCache();
     this.timer = null;
+    /** The Code Reviewer's bot, once main has made it. Private messages go through it when it can. */
+    this.bot = null;
+  }
+
+  setBot(bot) {
+    this.bot = bot;
   }
 
   // --- what it is set up to do ------------------------------------------------
@@ -57,8 +64,9 @@ class TeamsService {
       ready: hasWebhook || hasGraph,
       /** A room: the webhook posts as the app rather than as anybody. */
       channel: { ready: hasWebhook, via: 'webhook' },
-      /** One person, privately. The bot will go here when it exists. */
-      person: { ready: hasGraph, via: 'graph' },
+      /** One person, privately: as the bot to whoever has it installed, through Graph otherwise. */
+      person: { ready: hasGraph || Boolean(this.bot?.ready()), via: this.bot?.ready() ? (hasGraph ? 'bot-or-graph' : 'bot') : 'graph' },
+      bot: this.bot ? this.bot.state() : null,
       hasWebhook,
       hasGraph,
       tenantId: this.store.setting('graph.tenantId', ''),
@@ -210,6 +218,11 @@ class TeamsService {
 
   async send(appId, appName, input) {
     const message = rules.readMessage(input);
+    // Buttons that act on a pull request, and speaking as you, are the Code Reviewer's alone.
+    if (appId !== 'code-review') {
+      message.about = null;
+      message.voice = null;
+    }
     const app = this.store.seeApp(appId, appName);
     const settings = this.settings();
 
@@ -283,6 +296,18 @@ class TeamsService {
   async #toPerson(message, person) {
     const address = person?.address;
     if (!address) throw new Error('There is no Teams address for them.');
+    /*
+     * As the bot, unless it is you speaking. The bot can only write first to
+     * somebody who has it installed; anybody else is reached through Graph as
+     * before, so nothing that used to arrive stops arriving.
+     */
+    if (message.voice !== 'me' && this.bot?.canReach(address)) {
+      try {
+        return await this.bot.sendTo(address, message);
+      } catch (error) {
+        if (!(error instanceof NoRoute)) throw error;
+      }
+    }
     const credentials = {
       tenantId: this.store.setting('graph.tenantId'),
       clientId: this.store.setting('graph.clientId'),

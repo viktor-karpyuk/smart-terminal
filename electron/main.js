@@ -55,6 +55,7 @@ const buildTools = require('./build-tools');
 const { Updates, repoSlug } = require('./updates');
 const { ReviewService } = require('./review-service');
 const { TeamsService } = require('./teams-service');
+const { TeamsBot } = require('./teams-bot');
 const { resolvedPath } = require('./cli-env');
 
 /**
@@ -205,6 +206,8 @@ let db = null;
  */
 let reviewService = null;
 let teamsService = null;
+/** The Code Reviewer's bot: reads what Teams said from the Azure queue, and answers as the bot. */
+let teamsBot = null;
 /** Where the bus's MCP server lives and the socket it talks to, once messaging has opened it. */
 let reviewBusServer = null;
 let monitor = null;
@@ -278,6 +281,11 @@ const TEAMS_VERBS = {
   approve: (service, args) => service.approve(String(args.id ?? '')),
   skip: (service, args) => service.skip(String(args.id ?? '')),
   retry: (service, args) => service.retry(String(args.id ?? '')),
+  botState: (service) => ({ ok: true, bot: service.bot ? service.bot.state() : null }),
+  saveBot: (service, args) => {
+    if (!service.bot) throw new Error('The bot needs both Teams and the Code Reviewer running.');
+    return { ok: true, bot: service.bot.save(args.bot ?? {}) };
+  },
 };
 
 function createTeamsService() {
@@ -2107,6 +2115,19 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   // delivery extension promises the morning, and something has to bring it.
   teamsService?.start();
   reviewService = createReviewService();
+  if (teamsService && reviewService) {
+    teamsBot = new TeamsBot({
+      store: teamsService.store,
+      review: { call: (name, args) => reviewService.call(name, args) },
+      fetch: (url, init) => net.fetch(url, init),
+      log: (line) => console.log(`[teams-bot] ${line}`),
+      changed: () => teamsService.changed(),
+    });
+    teamsService.setBot(teamsBot);
+    reviewService.snoozed = (repoId, prId) => teamsBot.snoozed(repoId, prId);
+    // Only when it has been set up: an unconfigured bot asks nothing of anybody.
+    teamsBot.start();
+  }
 
   workspace = new JsonStore('workspace.json', { layout: null, sessions: [], settings: {} });
   migrateWorkspaceIntoDb();
@@ -2868,6 +2889,7 @@ app.on('will-quit', () => {
   kubeStreams.stopAll();
   // A `claude -p` nobody can see would go on spending on the person's account.
   reviewService?.stop();
+  teamsBot?.stop();
   // A Gradle client asked for a task list is a JVM that would otherwise
   // outlive the app by up to three minutes.
   buildTools.stopAll();
