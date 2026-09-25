@@ -3455,3 +3455,49 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
   background: var(--bg-elevated); border: 1px solid var(--danger); border-radius: var(--radius);
   box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35); cursor: pointer;
 }
+
+/* ---------- extensions from other people ---------- */
+
+.segmented.is-compact { gap: 1px; padding: 1px; border-radius: 6px; }
+.segmented.is-compact button { flex: none; white-space: nowrap; padding: 2px 8px; font-size: 11px; border-radius: 4px; }
+.extensions-spacer { flex: 1; }
+.extensions-catalog-error { font-size: 11px; color: var(--danger); white-space: nowrap; }
+.extensions-from-repo {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.extensions-from-repo .form-hint { grid-column: 1 / -1; }
+
+.extension-consent { display: flex; flex-direction: column; max-height: 86vh; }
+.extension-consent-body { padding: 14px 16px; overflow-y: auto; display: grid; gap: 10px; }
+.extension-consent-who { margin: 0; font-size: 13px; color: var(--text); }
+.extension-consent-error { margin: 0; color: var(--danger); font-size: 12.5px; line-height: 1.5; }
+.extension-consent-note { margin: 0; padding: 8px 10px; border-radius: 6px; font-size: 12px; line-height: 1.5; }
+.extension-consent-note.is-ok { background: color-mix(in srgb, var(--ok) 10%, transparent); color: var(--text); }
+.extension-consent-note.is-warn { background: color-mix(in srgb, var(--warn, #e0af68) 14%, transparent); color: var(--text); }
+.extension-consent-source { display: grid; grid-template-columns: 80px 1fr; gap: 4px 10px; margin: 0; font-size: 12px; }
+.extension-consent-source dt { color: var(--text-faint); }
+.extension-consent-source dd { margin: 0; color: var(--text-dim); min-width: 0; overflow-wrap: anywhere; }
+.extension-consent-source code { font-size: 11px; }
+.extension-consent-source .link-btn { font-size: 12px; padding: 0; }
+.extension-consent-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--border); }
+
+.extension-permissions { list-style: none; margin: 0 0 6px; padding: 0; display: grid; gap: 4px; }
+.extension-permissions li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+/* Anything that changes something, sends something or runs something reads a shade stronger. */
+.extension-permissions li.is-strong { color: var(--text); border-color: var(--border-strong); }

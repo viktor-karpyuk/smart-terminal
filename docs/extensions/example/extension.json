@@ -1,0 +1,20 @@
+{
+  "id": "branch-notes",
+  "name": "Branch notes",
+  "version": "1.0.0",
+  "author": "Your Name",
+  "summary": "The branches of a repository, newest first.",
+  "description": "An example: a view that lists the branches of the repository it is opened on. It only reads.",
+  "permissions": ["git.read"],
+  "contributes": {
+    "panels": [
+      {
+        "id": "branch-notes",
+        "title": "Branch notes",
+        "summary": "The branches of this repository.",
+        "needs": "repository",
+        "render": "panel.html"
+      }
+    ]
+  }
+}

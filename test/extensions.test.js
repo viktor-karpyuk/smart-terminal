@@ -95,7 +95,7 @@ test('a panel is read as a whole document, and never from outside its folder', (
   assert.deepEqual(boot.listens, ['spring'], 'it asked to hear about the runs, and only that');
   // A panel may only ask for what the app knows how to push.
   const asking = panelViews([
-    { id: 'x', status: 'installed', enabled: true, dir: __dirname, contributes: { panels: [{ id: 'p', render: 'a.html', listens: ['spring', 'clipboard', 'keys'] }] } },
+    { id: 'x', status: 'installed', enabled: true, builtIn: true, dir: __dirname, contributes: { panels: [{ id: 'p', render: 'a.html', listens: ['spring', 'clipboard', 'keys'] }] } },
   ]);
   assert.deepEqual(asking[0].listens, ['spring']);
 

@@ -193,6 +193,11 @@ contextBridge.exposeInMainWorld('api', {
     /** One picture, as a data URI, or null. Asked for when somebody looks. */
     picture: (id, file) => ipcRenderer.invoke('extensions:picture', { id, file }),
     enable: (id, on) => ipcRenderer.invoke('extensions:enable', { id, on }),
+    catalog: (refresh) => ipcRenderer.invoke('extensions:catalog', { refresh: Boolean(refresh) }),
+    inspect: (from) => ipcRenderer.invoke('extensions:inspect', from),
+    commit: (token) => ipcRenderer.invoke('extensions:commit', token),
+    discard: (token) => ipcRenderer.invoke('extensions:discard', token),
+    uninstall: (id) => ipcRenderer.invoke('extensions:uninstall', id),
     onChanged: (fn) => {
       const handler = (_e, payload) => fn(payload);
       ipcRenderer.on('extensions:changed', handler);
