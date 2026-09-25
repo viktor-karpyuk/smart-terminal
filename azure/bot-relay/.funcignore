@@ -1,0 +1,7 @@
+test/
+scripts/
+build/
+setup-azure-bot.sh
+README.md
+.env.local
+.gitignore
