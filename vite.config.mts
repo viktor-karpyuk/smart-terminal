@@ -11,9 +11,20 @@ import react from '@vitejs/plugin-react';
  * all. Naming the scheme here is what lets the app host those frames while
  * still saying it loads nothing else from anywhere.
  */
+/*
+ * `worker-src blob:` is what lets an extension's renderer run at all.
+ *
+ * A preview's code runs in a worker built from a blob (src/lib/extensionRender.ts).
+ * With no `worker-src`, the browser falls back to `script-src 'self'`, which a
+ * blob: URL is not — so in the packaged app every extension preview was refused
+ * before its first line, while development, which has no policy, showed them
+ * working. Only the app itself makes those blobs. A worker made from one takes
+ * this document's policy with it, so `connect-src 'none'` still keeps it off the
+ * network.
+ */
 const CSP =
   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-  "img-src 'self' data:; font-src 'self' data:; connect-src 'none'; frame-src panel:";
+  "img-src 'self' data:; font-src 'self' data:; connect-src 'none'; worker-src blob:; frame-src panel:";
 
 /**
  * The production bundle is fully local, so it gets a strict policy. Dev is left
