@@ -275,6 +275,57 @@ export function route(name: string): Channel | null {
   return null;
 }
 
+/**
+ * What an extension from outside the app may ask for, in words a person can
+ * decide about. The same list as electron/extension-permissions.js; a test holds
+ * them together.
+ */
+export const PERMISSIONS: Record<string, string> = {
+  'git.read': 'Read the repository open in its panel: history, branches, changes',
+  'git.write': 'Change that repository: commit, push, pull, switch and delete branches',
+  'kube.read': 'Read your Kubernetes clusters: resources, logs, events',
+  'kube.write': 'Change your clusters: delete, scale, restart, apply, forward ports',
+  'helm.read': 'Read Helm releases and their values',
+  'helm.write': 'Roll back or uninstall Helm releases',
+  build: 'Read Maven and Gradle projects',
+  spring: 'Run and stop Spring Boot applications',
+  review: 'Use the Code Reviewer: pull requests, findings, comments, merges',
+  teams: "Change the Teams connection's settings",
+  deliver: 'Send messages to people in Teams, in its own name',
+  terminal: 'Open terminals and Claude sessions about what it shows',
+};
+
+const KUBE_READ_STREAMS = new Set(['follow', 'stopFollow', 'watch', 'stopWatch']);
+
+/**
+ * The permission one call needs. Reading and changing are separate wherever the
+ * host already separates them; anything that opens a terminal or a Claude
+ * session is `terminal`, whichever extension area it comes from, because what
+ * it can lead to is the same.
+ */
+export function permissionFor(name: string): string | null {
+  const channel = route(name);
+  if (!channel) return null;
+  if (name === DELIVER) return 'deliver';
+  if (channel === 'app') return 'terminal';
+  if (channel === 'git') return (READ_VERBS as readonly string[]).includes(name) ? 'git.read' : 'git.write';
+  if (channel === 'kube') return (KUBE_READ as readonly string[]).includes(name.slice(5)) ? 'kube.read' : 'kube.write';
+  if (channel === 'kube-stream') return KUBE_READ_STREAMS.has(name.slice(5)) ? 'kube.read' : 'kube.write';
+  if (channel === 'helm') return (HELM_READ as readonly string[]).includes(name.slice(5)) ? 'helm.read' : 'helm.write';
+  return channel;
+}
+
+/**
+ * Whether this panel may make this call. What ships with the app may call
+ * anything; anything else only what its manifest asked for and its installer
+ * agreed to.
+ */
+export function permitted(view: { trusted?: boolean; permissions?: string[] }, name: string): boolean {
+  if (view.trusted) return true;
+  const needed = permissionFor(name);
+  return needed !== null && (view.permissions ?? []).includes(needed);
+}
+
 export function allowed(name: string): boolean {
   return route(name) !== null;
 }

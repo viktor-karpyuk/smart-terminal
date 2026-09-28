@@ -529,12 +529,38 @@ export interface ExtensionRow {
   /** What it looks like: the file names only, read one at a time when shown. */
   screenshots?: Array<{ file: string; caption: string }>;
   builtIn: boolean;
+  /** What it may ask the app to do, when it did not ship with the app. */
+  permissions: string[];
+  /** Where it was downloaded from, when it was. */
+  source: { repo: string; commit: string | null; ref: string | null; reviewed: boolean; installedAt: number | null } | null;
+  /** What the registry lists for it, when it lists it. */
+  listed?: { repo: string; commit: string; version: string; permissions: string[] };
+  /** Only in the registry; not on this machine. */
+  remote?: boolean;
   enabled: boolean;
   installedVersion: string | null;
   installedAt: number | null;
   /** `available` is an offer, `update` is a newer version than the one installed,
    *  and `gone` is one that was installed and whose folder is no longer there. */
   status: 'available' | 'installed' | 'update' | 'gone';
+}
+
+/** One extension downloaded and read, waiting for a yes. */
+export interface ExtensionOffer {
+  token: string;
+  id: string;
+  name: string;
+  version: string;
+  author: string | null;
+  summary: string;
+  permissions: Array<{ name: string; text: string; added: boolean }>;
+  contributes: { previews: number; panels: number };
+  repo: string;
+  commit: string;
+  ref: string | null;
+  how: string;
+  reviewed: boolean;
+  replacing: { version: string; downgrade: boolean } | null;
 }
 
 /** The gallery, and the rules the installed ones turn on. */
@@ -549,6 +575,8 @@ export interface ExtensionState {
     source: string | null;
     /** Which extension contributed it, and why its renderer could not be read. */
     from: string;
+    /** Shipped with the app. A preview from anywhere else runs with no network. */
+    trusted?: boolean;
     error?: string;
   }>;
   panels: ExtensionPanelView[];
@@ -612,6 +640,10 @@ export interface ExtensionPanelView {
   icon?: string | null;
   render: string;
   from: string;
+  /** Shipped with the app: may call anything the host offers. */
+  trusted?: boolean;
+  /** What it may call, when it did not ship with the app. */
+  permissions?: string[];
   source: string | null;
   error?: string;
 }
@@ -913,6 +945,15 @@ declare global {
         /** One of an extension's screenshots, as a data URI, or null. */
         picture(id: string, file: string): Promise<string | null>;
         enable(id: string, on: boolean): Promise<ExtensionState>;
+        /** The registry's listing folded into the gallery. Fetched only when asked. */
+        catalog(refresh?: boolean): Promise<ExtensionState & { catalog: { error: string | null; problems: number; url: string } }>;
+        /** Download and read one, installing nothing: what the consent screen shows. */
+        inspect(from: { repo?: string; id?: string }): Promise<{ ok: true; offer: ExtensionOffer } | { ok: false; error: string }>;
+        /** Install exactly what was inspected. */
+        commit(token: string): Promise<{ ok: true; state: ExtensionState } | { ok: false; error: string }>;
+        discard(token: string): Promise<{ ok: boolean }>;
+        /** Off the disk, for one that did not ship with the app. */
+        uninstall(id: string): Promise<{ ok: true; state: ExtensionState } | { ok: false; error: string }>;
         onChanged(fn: (state: ExtensionState) => void): () => void;
       };
       git: {
