@@ -1,0 +1,28 @@
+name: Validate
+
+on:
+  pull_request:
+    paths: [index.json]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: registry
+      - name: The index as it is on main
+        run: git -C registry show origin/${{ github.base_ref }}:index.json > base.json || echo '{"extensions":[]}' > base.json
+      - uses: actions/checkout@v4
+        with:
+          repository: viktor-karpyuk/smart-terminal
+          ref: main
+          path: app
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check the new and changed entries the way the app will
+        run: node app/scripts/validate-registry.js registry/index.json --changed-only base.json

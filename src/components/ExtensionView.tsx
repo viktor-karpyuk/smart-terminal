@@ -7,6 +7,9 @@ import {
   buildCommand,
   execCommand,
   needsConsent,
+  permitted,
+  permissionFor,
+  PERMISSIONS,
   normalisePath,
   panelDocument,
   readTheme,
@@ -328,6 +331,14 @@ function Frame({
         // something that does not exist is a bug its author has to be able to
         // see, and "no" with no noun in it tells nobody anything.
         reply(false, null, `"${name}" is not something an extension may ask the app to do`);
+        return;
+      }
+
+      // A downloaded extension may only do what it asked for when it was installed.
+      if (!permitted(view, name)) {
+        const needed = permissionFor(name);
+        const what = needed ? (PERMISSIONS[needed] ?? needed) : name;
+        reply(false, null, `${view.from} did not ask for permission to ${what.charAt(0).toLowerCase()}${what.slice(1)}`);
         return;
       }
 

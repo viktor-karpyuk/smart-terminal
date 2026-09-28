@@ -29,6 +29,9 @@ const {
   withPanelSources,
   readPicture,
 } = require('./extensions');
+const { withCatalog } = require('./extensions');
+const { registry: makeRegistry } = require('./extension-registry');
+const { installer: makeInstaller } = require('./extension-installer');
 const { parseReport, replyFor, wantsBrief, compactionNote } = require('./hooks');
 const { Autopilot, looksLikeADecision } = require('./autopilot');
 const { tabsInLayout, minimizedIds, sectionIds, sessionsToRestore, unaccountedTabs } = require('./restore');
@@ -1055,6 +1058,52 @@ function registerIpc() {
   ipcMain.handle('extensions:remove', (_e, id) => {
     db.removeExtension(id);
     return sendExtensions();
+  });
+
+  /*
+   * Extensions from other people: the registry's listing, and installing from a
+   * repository in two steps with the person in between. See
+   * extension-installer.js for why there are two.
+   */
+  ipcMain.handle('extensions:catalog', async (_e, { refresh = false } = {}) => {
+    const held = await extensionRegistry().list({ refresh });
+    catalog = held;
+    const state = sendExtensions();
+    return { ...state, catalog: { error: held.error, problems: held.problems.length, url: held.url } };
+  });
+
+  ipcMain.handle('extensions:inspect', async (_e, { repo, id } = {}) => {
+    try {
+      return { ok: true, offer: await extensionInstaller().inspect({ repo, id }) };
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  });
+
+  ipcMain.handle('extensions:commit', (_e, token) => {
+    try {
+      const manifest = extensionInstaller().commit(token);
+      db.installExtension(manifest);
+      return { ok: true, state: sendExtensions() };
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  });
+
+  ipcMain.handle('extensions:discard', (_e, token) => {
+    extensionInstaller().discard(token);
+    return { ok: true };
+  });
+
+  /** Off the disk and out of the record. Only for ones that did not ship with the app. */
+  ipcMain.handle('extensions:uninstall', (_e, id) => {
+    try {
+      extensionInstaller().uninstall(id);
+      db.removeExtension(id);
+      return { ok: true, state: sendExtensions() };
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
   });
 
   ipcMain.handle('extensions:enable', (_e, { id, on }) => {
@@ -2481,9 +2530,33 @@ function builtInExtensions() {
   return found;
 }
 
+/** What the registry last said. Read only when somebody opens Extensions, never at startup. */
+let catalog = null;
+let registryHandle = null;
+let installerHandle = null;
+
+function extensionRegistry() {
+  registryHandle ??= makeRegistry({ fetch: (...args) => net.fetch(...args) });
+  return registryHandle;
+}
+
+function extensionInstaller() {
+  if (!installerHandle) {
+    installerHandle = makeInstaller({
+      root: path.join(app.getPath('userData'), 'extensions'),
+      fetch: (...args) => net.fetch(...args),
+      registry: extensionRegistry(),
+      builtInIds: () => new Set(discover(path.join(app.getAppPath(), 'extensions'), { builtIn: true }).map((m) => m.id)),
+    });
+    // Whatever a crash or a closed window left half-done.
+    installerHandle.sweep();
+  }
+  return installerHandle;
+}
+
 /** The gallery, and the rules the renderer needs to act on it. */
 function extensionState() {
-  const rows = gallery(builtInExtensions(), db.installedExtensions());
+  const rows = withCatalog(gallery(builtInExtensions(), db.installedExtensions()), catalog?.entries ?? []);
   // The renderer needs the code, not a path to it: it runs in a worker built
   // from a blob, which has no filesystem to read one from.
   return {

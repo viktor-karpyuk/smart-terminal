@@ -1,0 +1,36 @@
+<style>
+  main { padding: 12px 14px; }
+  h1 { font-size: 13px; margin: 0 0 8px; }
+  li { color: var(--text-dim); padding: 2px 0; }
+  .error { color: var(--danger); }
+</style>
+<main>
+  <h1>Branches</h1>
+  <ul id="list"></ul>
+</main>
+<script>
+  // `host` is the only way out of this frame. Each call is checked against the
+  // permissions in extension.json; this one needs "git.read".
+  host.on('context', async () => {
+    const list = document.getElementById('list');
+    try {
+      const refs = await host.call('refs');
+      list.replaceChildren(
+        ...[...(refs.local ?? [])]
+          .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+          .map((branch) => {
+            const li = document.createElement('li');
+            li.textContent = branch.name + (branch.name === refs.current ? '  (checked out)' : '');
+            return li;
+          }),
+      );
+    } catch (error) {
+      list.innerHTML = '';
+      const li = document.createElement('li');
+      li.className = 'error';
+      li.textContent = error.message;
+      list.append(li);
+    }
+  });
+  host.ready();
+</script>
