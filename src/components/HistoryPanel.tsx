@@ -1,9 +1,26 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../state/store';
 import type { GroupRecord, HandoffRecord, HistorySession } from '../global';
 import { TranscriptViewer } from './TranscriptViewer';
 import { compactPath, formatBytes } from '../lib/labels';
 import { Popover } from './Popover';
+
+/**
+ * Where the list was left, for as long as the app is running.
+ *
+ * Opening a session to see what it was about unmounts the list, and closing
+ * History to go to one throws the whole panel away, so either way the list came
+ * back at the top and the person had to find their place again — usually after
+ * scrolling past a hundred sessions to get there. The tab, the search and how
+ * far down it was are kept here instead, per tab and search, and so is the
+ * session last opened, which is marked and kept in view when the list returns.
+ */
+const place = {
+  tab: 'sessions' as 'sessions' | 'groups' | 'handoffs',
+  query: '',
+  scroll: new Map<string, number>(),
+  last: null as string | null,
+};
 
 /**
  * Everything this app has ever run: when each session started, how long it lasted,
@@ -21,8 +38,22 @@ export function HistoryPanel() {
   const liveSessions = useStore((s) => s.sessions);
   const close = () => useStore.getState().setHistoryOpen(false);
 
-  const [query, setQuery] = useState('');
-  const [tab, setTab] = useState<'sessions' | 'groups' | 'handoffs'>('sessions');
+  const [query, setQuery] = useState(place.query);
+  const [tab, setTab] = useState<'sessions' | 'groups' | 'handoffs'>(place.tab);
+  const [last, setLast] = useState<string | null>(place.last);
+  useEffect(() => {
+    place.query = query;
+    place.tab = tab;
+  }, [query, tab]);
+
+  /*
+   * The sessions list, and whether this mount of it has been put back where it
+   * was. It is put back once, as soon as it has rows: before that there is
+   * nothing to scroll, and after it the person is the one scrolling.
+   */
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const placed = useRef(false);
+  const placeKey = `${tab}|${query.trim()}`;
   const [groups, setGroups] = useState<GroupRecord[]>([]);
   const [rows, setRows] = useState<HistorySession[]>([]);
   const [handoffs, setHandoffs] = useState<HandoffRecord[]>([]);
@@ -115,6 +146,30 @@ export function HistoryPanel() {
     if (tab === 'groups') window.api.history.groups({ limit: 100 }).then(setGroups);
   }, [tab]);
 
+  /*
+   * Back where it was left. Layout, not an ordinary effect, so the list is never
+   * painted at the top first and then jumps. The scroll is the part that
+   * matters; the session last opened is then kept in view, in case the list
+   * moved under it — something ran and rose, or new sessions arrived above.
+   */
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (!el || reading || tab !== 'sessions' || placed.current || rows.length === 0) return;
+    el.scrollTop = place.scroll.get(placeKey) ?? 0;
+    if (last) {
+      const row = el.querySelector<HTMLElement>(`[data-history-id="${CSS.escape(last)}"]`);
+      const box = row?.getBoundingClientRect();
+      const frame = el.getBoundingClientRect();
+      if (row && box && (box.top < frame.top || box.bottom > frame.bottom)) row.scrollIntoView({ block: 'center' });
+    }
+    placed.current = true;
+  }, [reading, tab, rows, placeKey, last]);
+
+  // A new search is a new list: it starts at its own top, not at the old one's depth.
+  useEffect(() => {
+    placed.current = false;
+  }, [placeKey]);
+
   return (
     <div className="modal-backdrop" onMouseDown={close}>
       <div className="modal modal-wide" onMouseDown={(event) => event.stopPropagation()}>
@@ -152,7 +207,15 @@ export function HistoryPanel() {
           </button>
         </header>
 
-        {reading && <TranscriptViewer session={reading} onBack={() => setReading(null)} />}
+        {reading && (
+          <TranscriptViewer
+            session={reading}
+            onBack={() => {
+              placed.current = false;
+              setReading(null);
+            }}
+          />
+        )}
 
         {!reading && tab === 'sessions' && (
           <>
@@ -210,7 +273,17 @@ export function HistoryPanel() {
               </div>
             )}
 
-            <div className="history-list">
+            <div
+              className="history-list"
+              ref={(el) => {
+                // A new list element is a new mount: it has not been put back yet.
+                if (el !== listRef.current) placed.current = false;
+                listRef.current = el;
+              }}
+              onScroll={(event) => {
+                if (placed.current) place.scroll.set(placeKey, event.currentTarget.scrollTop);
+              }}
+            >
               {restoreNote && <p className="usage-note">{restoreNote}</p>}
               {cleared !== null && (
                 <p className="usage-note">Removed {cleared} finished session{cleared === 1 ? '' : 's'}.</p>
@@ -255,7 +328,11 @@ export function HistoryPanel() {
                     </header>
                   )}
               {section.rows.map((row) => (
-                <article className={`history-row${picked.has(row.id) ? ' is-picked' : ''}`} key={row.id}>
+                <article
+                  className={`history-row${picked.has(row.id) ? ' is-picked' : ''}${last === row.id ? ' is-last' : ''}`}
+                  key={row.id}
+                  data-history-id={row.id}
+                >
                   {/*
                     Only what can actually come back is offered. A session running
                     in this window is already here, and a checkbox beside it would
@@ -280,7 +357,14 @@ export function HistoryPanel() {
                     <span className="history-pick is-empty" aria-hidden="true" />
                   )}
                   <span className="tab-dot" style={{ background: colours.get(row.profileId) ?? '#5c6370' }} />
-                  <button className="history-main history-open" onClick={() => setReading(row)}>
+                  <button
+                    className="history-main history-open"
+                    onClick={() => {
+                      place.last = row.id;
+                      setLast(row.id);
+                      setReading(row);
+                    }}
+                  >
                     <div className="history-title">
                       <strong>
                         {row.title || compactPath(where(row), homedir).split('/').pop() || 'session'}
@@ -331,14 +415,20 @@ export function HistoryPanel() {
                     isLive={Boolean(liveSessions[row.id])}
                     thisWindow={window.api.windowId}
                     onGoTo={() => {
+                      place.last = row.id;
                       setHistoryOpen(false);
                       focusSession(row.id, { startClaude: true });
                     }}
                     onGoToWindow={() => {
+                      place.last = row.id;
                       setHistoryOpen(false);
                       if (row.windowId) window.api.sessions.focusWindow(row.windowId);
                     }}
-                    onReopen={(asProfileId) => reopenSession(row.id, asProfileId)}
+                    onReopen={(asProfileId) => {
+                      place.last = row.id;
+                      setLast(row.id);
+                      return reopenSession(row.id, asProfileId);
+                    }}
                   />
                   {row.open && (
                     <button
