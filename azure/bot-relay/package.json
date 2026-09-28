@@ -1,0 +1,15 @@
+{
+  "name": "smart-terminal-bot-relay",
+  "private": true,
+  "version": "1.0.0",
+  "description": "The one piece of the Code Reviewer bot that has to live in Azure: it takes what Teams says to the bot and leaves it on a queue for Smart Terminal to pick up.",
+  "main": "src/functions/*.js",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.7.0",
+    "jose": "^5.9.6"
+  }
+}
