@@ -3575,3 +3575,6 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
   background: var(--bg-elevated); border: 1px solid var(--danger); border-radius: var(--radius);
   box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35); cursor: pointer;
 }
+
+/* The session last opened from History, so coming back to the list you can see where you were. */
+.history-row.is-last { box-shadow: inset 2px 0 0 var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
