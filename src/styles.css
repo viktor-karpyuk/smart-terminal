@@ -3501,3 +3501,6 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 }
 /* Anything that changes something, sends something or runs something reads a shade stronger. */
 .extension-permissions li.is-strong { color: var(--text); border-color: var(--border-strong); }
+
+/* The session last opened from History, so coming back to the list you can see where you were. */
+.history-row.is-last { box-shadow: inset 2px 0 0 var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
