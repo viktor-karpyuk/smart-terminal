@@ -445,3 +445,37 @@ test('anything may ask the app to deliver, and nothing may send as somebody else
   assert.equal(H.route('teams.approve'), 'teams');
   assert.equal(H.allowed('teams.nonsense'), false);
 });
+
+// ── permissions for extensions that did not ship with the app ──────────────
+{
+  const host = H;
+  const { PERMISSIONS } = require('../electron/extension-permissions');
+
+  test('the renderer and the main process know the same permissions, in the same words', () => {
+    assert.deepEqual(host.PERMISSIONS, PERMISSIONS);
+  });
+
+  test('every call an extension can make needs a permission that exists', () => {
+    const names = ['status', 'push', 'kube.list', 'kube.remove', 'kube.follow', 'kube.forward', 'kube.drain', 'kube.shell',
+      'helm.releases', 'helm.uninstall', 'build.tasks', 'build.run', 'spring.start', 'spring.ask', 'review.prs', 'review.merge',
+      'teams.saveSettings', 'deliver'];
+    const got = Object.fromEntries(names.map((name) => [name, host.permissionFor(name)]));
+    assert.deepEqual(got, {
+      status: 'git.read', push: 'git.write', 'kube.list': 'kube.read', 'kube.remove': 'kube.write', 'kube.follow': 'kube.read',
+      'kube.forward': 'kube.write', 'kube.drain': 'kube.write', 'kube.shell': 'terminal', 'helm.releases': 'helm.read',
+      'helm.uninstall': 'helm.write', 'build.tasks': 'build', 'build.run': 'terminal', 'spring.start': 'spring', 'spring.ask': 'terminal',
+      'review.prs': 'review', 'review.merge': 'review', 'teams.saveSettings': 'teams', deliver: 'deliver',
+    });
+    for (const permission of Object.values(got)) assert.ok(permission in PERMISSIONS, permission);
+  });
+
+  test('a downloaded panel may do what it asked for and nothing else; a shipped one anything', () => {
+    const reader = { trusted: false, permissions: ['git.read'] };
+    assert.equal(host.permitted(reader, 'status'), true);
+    assert.equal(host.permitted(reader, 'push'), false);
+    assert.equal(host.permitted(reader, 'kube.list'), false);
+    assert.equal(host.permitted(reader, 'no.such.thing'), false);
+    assert.equal(host.permitted({ trusted: true }, 'push'), true);
+    assert.equal(host.permitted({}, 'status'), false, 'no word about trust is not trust');
+  });
+}

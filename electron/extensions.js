@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { readPermissions, PERMISSIONS } = require('./extension-permissions');
 
 /**
  * Extensions: the parts of the app that ship with it but do not have to be on.
@@ -33,6 +34,8 @@ function validate(manifest) {
   if (!manifest.id || !/^[a-z0-9][a-z0-9-]*$/.test(manifest.id)) return 'needs a lowercase id';
   if (!manifest.name) return 'needs a name';
   if (!manifest.version || !/^\d+\.\d+\.\d+/.test(manifest.version)) return 'needs a version like 1.2.3';
+  const { error } = readPermissions(manifest.permissions);
+  if (error) return error;
   return null;
 }
 
@@ -57,6 +60,13 @@ function readManifest(dir) {
     id: manifest.id,
     name: manifest.name,
     version: manifest.version,
+    /*
+     * What it may ask the app to do. Only enforced for extensions that did not
+     * ship with the app; see extension-permissions.js.
+     */
+    permissions: readPermissions(manifest.permissions).permissions,
+    /** Where it was installed from, when it was installed from somewhere: repo and commit. */
+    source: readSource(dir),
     author: manifest.author ?? null,
     summary: manifest.summary ?? '',
     description: manifest.description ?? '',
@@ -72,6 +82,27 @@ function readManifest(dir) {
   };
 }
 
+/**
+ * The record the installer leaves beside a downloaded extension. Written by the
+ * app after unpacking, so an extension cannot bring its own and claim a
+ * provenance it does not have.
+ */
+function readSource(dir) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(dir, '.source.json'), 'utf8'));
+    if (!raw || typeof raw !== 'object' || !raw.repo) return null;
+    return {
+      repo: String(raw.repo),
+      commit: raw.commit ? String(raw.commit) : null,
+      ref: raw.ref ? String(raw.ref) : null,
+      reviewed: raw.reviewed === true,
+      installedAt: Number(raw.installedAt) || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Every extension under a directory, in name order. */
 function discover(root, { builtIn = false } = {}) {
   let entries = [];
@@ -82,7 +113,9 @@ function discover(root, { builtIn = false } = {}) {
   }
   const found = [];
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+    // Dot-folders are the installer's own: downloads being checked, and the old
+    // copy of an extension while a new one takes its place.
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
     const manifest = readManifest(path.join(root, entry.name));
     if (manifest) found.push({ ...manifest, builtIn });
   }
@@ -147,6 +180,8 @@ function gallery(available, installed) {
       description: '',
       contributes: {},
       builtIn: false,
+      permissions: [],
+      source: null,
       enabled: record.enabled !== false,
       screenshots: [],
       status: 'gone',
@@ -178,6 +213,9 @@ function previewRules(rows) {
         // knows how to draw.
         render: preview.render ? String(preview.render) : null,
         from: row.id,
+        // Shipped with the app: may call anything the host offers. Otherwise only what it asked for.
+        trusted: row.builtIn === true,
+        permissions: row.permissions ?? [],
         dir: row.dir ?? null,
       });
     }
@@ -240,6 +278,9 @@ function panelViews(rows) {
           needs,
           render: String(panel.render),
           from: row.id,
+          // Shipped with the app: may call anything the host offers. Otherwise only what it asked for.
+          trusted: row.builtIn === true,
+          permissions: row.permissions ?? [],
           dir: row.dir ?? null,
           error: `it needs "${needs}", which this app does not know how to provide`,
         });
@@ -252,7 +293,13 @@ function panelViews(rows) {
         needs: panel.needs ? String(panel.needs) : null,
         // Only the names the app knows: a panel is told about what it asked
         // for, and a stream it never asked for is a stream it never gets.
-        listens: Array.isArray(panel.listens) ? panel.listens.map(String).filter((name) => PANEL_LISTENS.includes(name)) : [],
+        // What the app pushes is data too: a downloaded panel hears only what it has permission to ask for.
+        listens: Array.isArray(panel.listens)
+          ? panel.listens
+            .map(String)
+            .filter((name) => PANEL_LISTENS.includes(name))
+            .filter((name) => row.builtIn === true || (row.permissions ?? []).includes(name))
+          : [],
         /*
          * A button of its own in the activity bar, while the extension is
          * installed and on. Only for a view about the app rather than a folder:
@@ -263,6 +310,9 @@ function panelViews(rows) {
         icon: PANEL_ICONS.includes(String(panel.icon)) ? String(panel.icon) : null,
         render: String(panel.render),
         from: row.id,
+        // Shipped with the app: may call anything the host offers. Otherwise only what it asked for.
+        trusted: row.builtIn === true,
+        permissions: row.permissions ?? [],
         dir: row.dir ?? null,
       });
     }
@@ -358,16 +408,84 @@ function withPanelSources(panels) {
  * on the rule rather than dropped — an extension that says it renders something
  * and then does not is worth a sentence on screen.
  */
+/**
+ * Run before a downloaded extension's renderer: no way to reach the network.
+ *
+ * A preview is handed the text of a file, and a renderer that could fetch could
+ * send that text anywhere. The packaged app's policy already refuses network to
+ * its workers; this does not rely on that. Every door is shut on the object and
+ * on each prototype it inherits from, and the constructors that could start a
+ * fresh worker with fresh globals go too.
+ */
+const NO_NETWORK = `;(function () {
+  var refuse = function () { throw new Error('an extension renderer has no network'); };
+  var names = ['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'importScripts', 'Worker', 'SharedWorker', 'WebTransport', 'BroadcastChannel'];
+  for (var o = self; o; o = Object.getPrototypeOf(o)) {
+    for (var i = 0; i < names.length; i += 1) {
+      try { Object.defineProperty(o, names[i], { value: refuse, writable: false, configurable: false }); } catch (e) {}
+    }
+  }
+})();
+`;
+
 function withSources(rules) {
   return rules.map((rule) => {
     if (!rule.render || !rule.dir) return { ...rule, source: null };
     // Nothing outside the extension's own folder, whatever the manifest says.
     const { source, error } = readInside(rule.dir, rule.render);
-    return error ? { ...rule, source: null, error: `its renderer: ${error}` } : { ...rule, source };
+    if (error) return { ...rule, source: null, error: `its renderer: ${error}` };
+    return { ...rule, source: rule.trusted ? source : NO_NETWORK + source };
   });
 }
 
+/**
+ * The registry's listing, folded into the gallery.
+ *
+ * Something listed and not on this machine is an offer, drawn from the listing.
+ * Something listed and installed from the registry is an update when the
+ * listing is newer. An extension that ships with the app is never replaced from
+ * the registry, even under the same id: the app's copy is the one it was built
+ * and tested with.
+ */
+function withCatalog(rows, entries) {
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const out = rows.map((row) => {
+    const entry = entries.find((candidate) => candidate.id === row.id);
+    if (!entry || row.builtIn) return row;
+    const listed = { repo: entry.repo, commit: entry.commit, version: entry.version, permissions: entry.permissions };
+    const newer = row.status !== 'gone' && compareVersions(entry.version, row.version) > 0;
+    return { ...row, listed, status: newer ? 'update' : row.status };
+  });
+  for (const entry of entries) {
+    if (byId.has(entry.id)) continue;
+    out.push({
+      id: entry.id,
+      name: entry.name,
+      version: entry.version,
+      author: entry.author,
+      summary: entry.summary,
+      description: entry.description,
+      contributes: {},
+      permissions: entry.permissions,
+      source: null,
+      listed: { repo: entry.repo, commit: entry.commit, version: entry.version, permissions: entry.permissions },
+      remote: true,
+      builtIn: false,
+      enabled: false,
+      screenshots: [],
+      installedVersion: null,
+      installedAt: null,
+      status: 'available',
+    });
+  }
+  return out;
+}
+
 module.exports = {
+  withCatalog,
+  NO_NETWORK,
+  readSource,
+  PERMISSIONS,
   PANEL_LISTENS,
   PANEL_ICONS,
   readManifest,
