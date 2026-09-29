@@ -229,6 +229,8 @@ contextBridge.exposeInMainWorld('api', {
     call: (name, args) => ipcRenderer.invoke('kube:call', { name, args }),
     stream: (id, op, args) => ipcRenderer.invoke('kube:stream', { id, op, args }),
     stopStream: (id) => ipcRenderer.invoke('kube:stream-stop', id),
+    forwards: (ids) => ipcRenderer.invoke('kube:forwards', ids),
+    openForward: (id) => ipcRenderer.invoke('kube:forward-open', id),
     onStream: (fn) => {
       const data = (_e, payload) => fn({ ...payload, done: false });
       const end = (_e, payload) => fn({ ...payload, done: true, text: '' });

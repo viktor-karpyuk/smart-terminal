@@ -361,6 +361,26 @@ function base(item, now) {
   };
 }
 
+/**
+ * The TCP ports a set of containers declares, with their names.
+ *
+ * UDP is left out on purpose: `kubectl port-forward` only carries TCP, and a
+ * port offered in the list that cannot work is worse than one not offered.
+ * The same number declared by two containers is one port.
+ */
+function portsOf(containers) {
+  const seen = new Set();
+  const out = [];
+  for (const container of containers ?? []) {
+    for (const port of container.ports ?? []) {
+      if (!port.containerPort || (port.protocol ?? 'TCP') !== 'TCP' || seen.has(port.containerPort)) continue;
+      seen.add(port.containerPort);
+      out.push({ port: port.containerPort, name: port.name ?? '', container: container.name ?? '' });
+    }
+  }
+  return out;
+}
+
 function podRow(item, now) {
   const containers = item.status?.containerStatuses ?? [];
   const wanted = item.spec?.containers?.length ?? containers.length;
@@ -399,6 +419,13 @@ function podRow(item, now) {
     forwardable: (item.spec?.containers ?? []).flatMap((container) =>
       (container.ports ?? []).map((port) => port.containerPort).filter(Boolean),
     ),
+    /*
+     * What a forward can be pointed at, and the ports it knows the names of.
+     * Offered even with none declared: a container listening on something it
+     * never declared is common, and the person usually knows the number.
+     */
+    forwardKind: 'pod',
+    forwardPorts: portsOf(item.spec?.containers),
     controlledBy: (item.metadata?.ownerReferences ?? [])[0]?.kind ?? '',
   };
 }
@@ -448,6 +475,9 @@ function deploymentRow(item, now) {
     revisioned: true,
     selector: selectorOf(item),
     paused: item.spec?.paused === true,
+    // kubectl picks one of its pods and forwards to that; the ports are the template's.
+    forwardKind: 'deployment',
+    forwardPorts: portsOf(item.spec?.template?.spec?.containers),
   };
 }
 
@@ -480,6 +510,7 @@ function replicaSetRow(item, now) {
     restartable: false,
     pausable: false,
     revisioned: false,
+    forwardKind: 'replicaset',
     /** Which Deployment this belongs to, since that is the thing to operate. */
     controlledBy: (item.metadata?.ownerReferences ?? [])[0]?.kind ?? '',
   };
@@ -501,6 +532,8 @@ function statefulSetRow(item, now) {
     configurable: true,
     revisioned: true,
     selector: selectorOf(item),
+    forwardKind: 'statefulset',
+    forwardPorts: portsOf(item.spec?.template?.spec?.containers),
   };
 }
 
@@ -593,6 +626,11 @@ function serviceRow(item, now) {
       .join(' '),
     selector: spec.selector ?? {},
     forwardable: (spec.ports ?? []).map((port) => port.port),
+    forwardKind: 'service',
+    // A service port is what the forward asks for; kubectl finds the pod and its target port.
+    forwardPorts: (spec.ports ?? [])
+      .filter((port) => (port.protocol ?? 'TCP') === 'TCP' && port.port)
+      .map((port) => ({ port: port.port, name: port.name ?? '' })),
   };
 }
 
@@ -2145,18 +2183,226 @@ function watchRow(kind, line, now = Date.now()) {
   return { type: event.type, row: { kind: object.kind ?? kind, ...shape.row(object, now) } };
 }
 
+/**
+ * What a forward can be aimed at. kubectl resolves every one of these but a pod
+ * to one of the pods it selects, which is also why only those survive the pod
+ * being replaced: asked again, they find the new one.
+ */
+const FORWARD_KINDS = new Set(['pod', 'service', 'deployment', 'statefulset', 'replicaset', 'daemonset']);
+
 /** The arguments for a port-forward. `local` may be 0, which lets the OS choose. */
 function forwardArgs({ kind = 'pod', name, local, remote, ...rest }) {
   const localPort = Number(local);
   const remotePort = Number(remote);
-  if (!Number.isInteger(remotePort) || remotePort <= 0) throw new Error('A port to forward to is required.');
-  if (!Number.isInteger(localPort) || localPort < 0) throw new Error('A local port is required, or 0 to be given one.');
+  const target = String(kind || 'pod').toLowerCase();
+  if (!FORWARD_KINDS.has(target)) throw new Error(`A ${kind} cannot be forwarded to.`);
+  if (!Number.isInteger(remotePort) || remotePort <= 0 || remotePort > 65535) throw new Error('A port to forward to is required.');
+  if (!Number.isInteger(localPort) || localPort < 0 || localPort > 65535) throw new Error('A local port is required, or 0 to be given one.');
   return [
     ...scope({ ...rest, forever: true }),
     'port-forward',
-    `${safeArg(kind, 'the kind')}/${safeArg(name, 'the name')}`,
+    `${target}/${safeArg(name, 'the name')}`,
     `${localPort}:${remotePort}`,
   ];
+}
+
+/**
+ * What went wrong with a forward, from what kubectl said, in four words.
+ *
+ * - `taken`: the local port is somebody else's. Trying again cannot help.
+ * - `gone`: what it pointed at does not exist. For a pod that is final — its
+ *   replacement has another name.
+ * - `dropped`: the connection went. The usual end of a forward that worked:
+ *   the pod was restarted, the laptop slept, the VPN blinked.
+ * - `refused`: one connection through it found nothing listening. The forward
+ *   itself is still up; the application is not.
+ */
+function forwardTrouble(text) {
+  const said = String(text || '');
+  if (/address already in use|unable to listen on (any of the requested )?ports?/i.test(said)) return 'taken';
+  if (/\bnot ?found\b|does not exist|no pods? (?:found|available)|unable to find|pod is not running|no such/i.test(said)) return 'gone';
+  if (/connection refused/i.test(said)) return 'refused';
+  if (/lost connection|connection reset|broken pipe|EOF|error copying|timed? ?out|unable to connect|dial tcp|TLS handshake|network is unreachable/i.test(said)) return 'dropped';
+  return null;
+}
+
+/** How long to wait before the next attempt, after `failures` in a row. */
+function forwardBackoff(failures) {
+  return Math.min(30_000, 1000 * 2 ** Math.max(0, failures - 1));
+}
+
+/**
+ * The forwards themselves, kept where they outlive a panel's frame.
+ *
+ * They used to be a process each and nothing more: the panel held the only
+ * record of which were running, and the panel's frame is rebuilt on ordinary
+ * layout changes — so after opening a terminal underneath, the ports were still
+ * open and the strip that showed them was empty. A forward is now a record here,
+ * and the panel asks for its own when it comes back.
+ *
+ * And a forward that worked is kept working. When the connection drops — the
+ * pod was replaced, the laptop slept — it is started again on the **same local
+ * port**, so whatever was pointed at it keeps working: the browser tab, the
+ * database client, the other service's configuration. A pod by name cannot be
+ * followed to its replacement and says so; a service or a workload can, because
+ * kubectl picks one of its pods afresh. It gives up after a run of attempts
+ * that never came up, and says why.
+ */
+const FORWARD_ATTEMPTS = 6;
+
+class Forwards {
+  #live = new Map();
+
+  constructor({ spawnProcess = spawn, env = environment, setTimer = setTimeout, clearTimer = clearTimeout, now = Date.now } = {}) {
+    this.spawnProcess = spawnProcess;
+    this.env = env;
+    this.setTimer = setTimer;
+    this.clearTimer = clearTimer;
+    this.now = now;
+  }
+
+  /** Start one. Throws on a request that could never work, before anything runs. */
+  async start(id, spec, { onChange = () => {}, onEnd = () => {} } = {}) {
+    this.stop(id);
+    forwardArgs(spec); // refused here, not in a process that dies a second later
+    const record = {
+      id,
+      context: spec.context ?? '',
+      namespace: spec.namespace ?? '',
+      kind: String(spec.kind || 'pod').toLowerCase(),
+      name: String(spec.name ?? ''),
+      remote: Number(spec.remote),
+      asked: Number(spec.local) || 0,
+      port: null,
+      state: 'starting',
+      error: null,
+      warning: null,
+      attempts: 0,
+      failures: 0,
+      startedAt: new Date(this.now()).toISOString(),
+      upAt: null,
+    };
+    const entry = { record, child: null, timer: null, stopped: false, onChange, onEnd, said: '' };
+    this.#live.set(id, entry);
+    await this.#run(entry);
+    return { ok: true, id, forward: { ...record } };
+  }
+
+  async #run(entry) {
+    const { record } = entry;
+    if (entry.stopped) return;
+    record.attempts += 1;
+    entry.said = '';
+    // Once it has had a port, it asks for that one again: whatever points at it keeps working.
+    const local = record.port ?? record.asked;
+    const args = forwardArgs({ context: record.context, namespace: record.namespace, kind: record.kind, name: record.name, remote: record.remote, local });
+    let child;
+    try {
+      child = this.spawnProcess('kubectl', args, { env: await this.env(), windowsHide: true });
+    } catch (error) {
+      return this.#give(entry, cleanError('', error));
+    }
+    entry.child = child;
+    const hear = (chunk, stream) => {
+      if (entry.child !== child) return;
+      const text = String(chunk);
+      const port = forwardedPort(text);
+      // kubectl says it twice, for IPv4 and IPv6; the second is not news.
+      if (port && record.state === 'up' && record.port === port) return;
+      if (port) {
+        record.port = port;
+        record.state = 'up';
+        record.error = null;
+        record.failures = 0;
+        record.upAt = new Date(this.now()).toISOString();
+        return entry.onChange({ ...record });
+      }
+      if (stream !== 'err' || !text.trim()) return;
+      entry.said = `${entry.said}${text}`.slice(-2000);
+      // One connection finding nothing listening is news, not an ending.
+      if (forwardTrouble(text) === 'refused') {
+        record.warning = `Nothing answered on ${record.remote} inside — is the application listening on it?`;
+        entry.onChange({ ...record });
+      }
+    };
+    child.stdout?.setEncoding?.('utf8');
+    child.stderr?.setEncoding?.('utf8');
+    child.stdout?.on('data', (chunk) => hear(chunk, 'out'));
+    child.stderr?.on('data', (chunk) => hear(chunk, 'err'));
+    child.on('error', (error) => { entry.said = `${entry.said}${cleanError('', error)}\n`; });
+    child.on('close', () => {
+      if (entry.child !== child) return;
+      entry.child = null;
+      if (entry.stopped) return;
+      this.#afterExit(entry);
+    });
+  }
+
+  #afterExit(entry) {
+    const { record } = entry;
+    const said = entry.said.trim().split('\n').filter(Boolean).pop() ?? '';
+    const trouble = forwardTrouble(entry.said);
+    const wasUp = record.state === 'up';
+    if (trouble === 'taken') {
+      return this.#give(entry, `Port ${record.port ?? record.asked} on this machine is already in use. Forward again and let it choose one.`);
+    }
+    if (trouble === 'gone' && record.kind === 'pod') {
+      return this.#give(entry, `${record.name} is gone. A pod that was replaced has a new name — forward the new one, or its deployment or service, which follow it.`);
+    }
+    record.failures = wasUp ? 1 : record.failures + 1;
+    if (record.failures >= FORWARD_ATTEMPTS) {
+      return this.#give(entry, `Gave up after ${record.failures} attempts${said ? `: ${said}` : ''}.`);
+    }
+    record.state = 'reconnecting';
+    record.error = said || 'The connection dropped.';
+    entry.onChange({ ...record });
+    entry.timer = this.setTimer(() => {
+      entry.timer = null;
+      void this.#run(entry);
+    }, forwardBackoff(record.failures));
+    entry.timer?.unref?.();
+  }
+
+  #give(entry, why) {
+    const { record } = entry;
+    record.state = 'failed';
+    record.error = why;
+    this.#live.delete(record.id);
+    entry.onChange({ ...record });
+    entry.onEnd({ id: record.id, forward: { ...record } });
+  }
+
+  stop(id) {
+    const entry = this.#live.get(id);
+    if (!entry) return false;
+    entry.stopped = true;
+    this.#live.delete(id);
+    if (entry.timer) this.clearTimer(entry.timer);
+    try {
+      entry.child?.kill('SIGTERM');
+    } catch {
+      /* already gone */
+    }
+    return true;
+  }
+
+  stopAll() {
+    for (const id of [...this.#live.keys()]) this.stop(id);
+  }
+
+  /** The records for these ids — the ones a panel owns — as they stand. */
+  list(ids) {
+    return (ids ?? []).map((id) => this.#live.get(String(id))?.record).filter(Boolean).map((record) => ({ ...record }));
+  }
+
+  get(id) {
+    const record = this.#live.get(String(id))?.record;
+    return record ? { ...record } : null;
+  }
+
+  get size() {
+    return this.#live.size;
+  }
 }
 
 /** The port a forward actually got, from the line kubectl prints when it starts. */
@@ -2323,6 +2569,11 @@ module.exports = {
   watchRow,
   forwardArgs,
   forwardedPort,
+  forwardTrouble,
+  forwardBackoff,
+  portsOf,
+  FORWARD_KINDS,
+  Forwards,
   // pure, and tested as such
   age,
   podStatus,
