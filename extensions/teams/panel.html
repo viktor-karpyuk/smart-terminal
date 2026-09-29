@@ -238,8 +238,40 @@
       '<span class="spacer"></span>' + connectionState(c) + '</div>';
     html += '</div>';
 
+    html += drawBot(c.bot);
+
     html += '<div class="banner">One connection, many senders. Anything in this app may ask this extension to deliver a message; each one shows up in <button class="btn" data-act="nav" data-view="apps" style="padding:1px 8px">Apps</button> with a switch of its own.</div>';
     return html + '</div>';
+  }
+
+  /*
+   * The Code Reviewer's bot: a direct message from the bot itself, with buttons
+   * that act on the pull request, and the developer able to answer. It needs
+   * the Azure half (azure/bot-relay/setup-azure-bot.sh), whose last stage lists
+   * exactly these five values.
+   */
+  function drawBot(b) {
+    if (!b) return '<div class="card"><strong>The Code Reviewer bot</strong><div class="help">Needs the Code Reviewer running as well.</div></div>';
+    var html = '<div class="card"><div class="row" style="margin-bottom:6px"><strong>The Code Reviewer bot</strong><span class="spacer"></span>' + botState(b) + '</div>';
+    html += '<div class="help" style="margin-bottom:10px">Private messages go out as the bot to whoever has the Code Reviewer app in Teams, and they can answer: look again, put the reminder off, mark a comment resolved, or fix it and push. Anybody who does not have the app yet is reached through the app registration above. What you write yourself always goes from your own account.</div>';
+    html += '<div class="cols" style="margin-bottom:10px">' +
+      '<label class="field"><span>Tenant ID</span><input type="text" class="mono" data-edit="botTenant" value="' + esc(edit('botTenant', b.tenantId)) + '"></label>' +
+      '<label class="field"><span>Bot app ID</span><input type="text" class="mono" data-edit="botAppId" value="' + esc(edit('botAppId', b.appId)) + '"></label>' +
+      '</div>' +
+      '<label class="field" style="margin-bottom:10px"><span>Bot secret</span><input type="password" data-edit="botSecret" placeholder="' + (b.hasSecret ? '•••••••• kept encrypted; type a new one to replace it' : 'BOT_APP_SECRET') + '" value="' + esc(edit('botSecret', '')) + '"></label>' +
+      '<label class="field" style="margin-bottom:10px"><span>Queue</span><input type="text" class="mono" data-edit="botQueue" placeholder="https://<account>.queue.core.windows.net/teams-inbound" value="' + esc(edit('botQueue', b.queueUrl)) + '"></label>' +
+      '<label class="field"><span>Queue key</span><input type="password" data-edit="botQueueSas" placeholder="' + (b.hasQueueKey ? '•••••••• kept encrypted; type a new one to replace it' : 'QUEUE_SAS') + '" value="' + esc(edit('botQueueSas', '')) + '"></label>' +
+      '<div class="help">All five are in <span class="mono">azure/bot-relay/.env.local</span> after the setup wizard. The two secrets are kept encrypted and never shown again.</div>';
+    html += '<div class="row" style="margin-top:12px"><button class="btn primary" data-act="save-bot"' + busyAttr('save-bot') + '>Save</button>' +
+      '<span class="spacer"></span><span class="faint">' + (b.people.length ? esc(b.people.length + (b.people.length === 1 ? ' person has' : ' people have') + ' the bot: ' + b.people.map(function (p) { return p.name || p.address || '?'; }).join(', ')) : 'Nobody has the bot installed yet.') + '</span></div>';
+    return html + '</div>';
+  }
+
+  function botState(b) {
+    if (!b.ready) return '<span class="chip">not set up</span>';
+    if (b.lastError) return '<span class="chip badc" title="' + esc(b.lastError) + '">' + esc(b.lastError) + '</span>';
+    if (b.lastHeard) return '<span class="chip okc">listening · last heard ' + esc(when(b.lastHeard)) + '</span>';
+    return '<span class="chip okc">listening</span>';
   }
 
   function connectionState(c) {
@@ -443,6 +475,18 @@
         // A secret typed here is forgotten the moment it is stored.
         delete state.edits.webhookUrl; delete state.edits.clientSecret;
         say('Saved.');
+        load();
+      });
+    },
+    'save-bot': function () {
+      var b = state.data.connection.bot || {};
+      var bot = {
+        tenantId: edit('botTenant', b.tenantId), appId: edit('botAppId', b.appId), queueUrl: edit('botQueue', b.queueUrl),
+        secret: edit('botSecret', ''), queueSas: edit('botQueueSas', ''),
+      };
+      act('save-bot', function () { return call('saveBot', { bot: bot }); }, function (result) {
+        delete state.edits.botSecret; delete state.edits.botQueueSas;
+        say(result && result.ok === false ? 'Not saved: ' + (result.error || 'no reason given') : 'Saved.', result && result.ok === false);
         load();
       });
     },

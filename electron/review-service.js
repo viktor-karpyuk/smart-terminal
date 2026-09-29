@@ -61,6 +61,8 @@ class ReviewService {
      */
     this.deliver = deliver ?? (async () => ({ ok: false, why: 'no-delivery' }));
     this.deliveryState = deliveryState ?? (() => ({ installed: false, ready: false }));
+    /** Whether the author asked, from Teams, not to be reminded about a pull request yet. Set by main. */
+    this.snoozed = () => false;
     /*
      * Everything the engine says, passed on — and one thing acted on.
      *
@@ -385,7 +387,8 @@ class ReviewService {
         rules: active,
         me: settings.me,
       });
-      if (found) out.push({ ...found, repoId: row.repoId, prId: row.pr.id, row });
+      // Put off by its author, from Teams: not due until then.
+      if (found && !this.snoozed(row.repoId, row.pr.id)) out.push({ ...found, repoId: row.repoId, prId: row.pr.id, row });
     }
     return out;
   }
@@ -634,6 +637,8 @@ class ReviewService {
       const who = to.person === true ? pr.author : to.person;
       out.person = await this.deliver({
         ...shared,
+        // You, in your own words: from your account, never from the bot.
+        voice: 'me',
         to: { handle: `${provider}:${who}`, display: who },
       }).catch((error) => ({ ok: false, why: 'failed', detail: String(error?.message ?? error) }));
     }

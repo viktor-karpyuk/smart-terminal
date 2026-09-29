@@ -176,6 +176,8 @@ function asMessage(due, { row, provider, me }) {
     links: pr.url ? [{ text: 'Open the pull request', url: pr.url }] : [],
     key: due.key,
     level: 'normal',
+    // So the bot can offer to look again, put it off, or fix it, right under the reminder.
+    about: row.repoId ? { repoId: row.repoId, prId: pr.id } : null,
   };
 }
 

@@ -37,6 +37,16 @@ function readMessage(input = {}) {
       .map((link) => ({ text: text(link.text, 80) || 'Open', url: text(link.url, 2000) })),
     key: text(input.key, 200) || null,
     level: input.level === 'urgent' ? 'urgent' : 'normal',
+    /*
+     * Two things only the app itself may say, and the service drops them from
+     * anybody else (see TeamsService.send): which pull request this is about,
+     * so the bot can put buttons on it, and that it is you speaking, so it goes
+     * out as you and not as the bot.
+     */
+    about: input.about && typeof input.about === 'object' && input.about.repoId && Number.isFinite(Number(input.about.prId))
+      ? { repoId: text(input.about.repoId, 200), prId: Number(input.about.prId) }
+      : null,
+    voice: input.voice === 'me' ? 'me' : null,
   };
 }
 
