@@ -1008,6 +1008,46 @@ class ReviewStore {
     this.run('UPDATE cr_finding SET review_id = ?, line_no = COALESCE(?, line_no) WHERE id = ?', reviewId, line ?? null, findingId);
   }
 
+  /**
+   * Earlier published comments that are still open, moved onto this review.
+   *
+   * An incremental review carries its predecessor's open findings itself. A
+   * full one — the first after a rebase or a force push, when the reviewed
+   * commit is no longer in the branch — carried nothing, so every comment
+   * already on the pull request fell off the screen: the review read "found
+   * nothing, 100%" while the author's answers to those comments sat there
+   * unanswered, and nothing would ever verify them again. They are threads on
+   * the pull request whatever happened to the history, so they belong to
+   * whatever review is current. Only published, still-open ones: a draft
+   * nobody published is that review's own business, and a settled one has
+   * nothing left to ask.
+   *
+   * Returns how many moved.
+   */
+  adoptLiveFindings(repoId, prId, reviewId) {
+    return Number(this.run(
+      `UPDATE cr_finding SET review_id = ? WHERE repo_id = ? AND pr_id = ? AND review_id <> ?
+         AND published_id IS NOT NULL AND dismissed_at IS NULL AND closed_at IS NULL
+         AND (resolution IS NULL OR resolution NOT IN ('RESOLVED', 'WONT_FIX'))`,
+      reviewId, repoId, prId, reviewId,
+    ).changes ?? 0);
+  }
+
+  /**
+   * The same, for every pull request whose comments were left behind before
+   * this existed. Each one's latest finished review adopts them; asking twice
+   * moves nothing the second time.
+   */
+  adoptAllLiveFindings() {
+    const latest = this.all(
+      `SELECT r.id, r.repo_id, r.pr_id FROM cr_review r JOIN (SELECT repo_id, pr_id, MAX(created_at) AS at FROM cr_review WHERE status = 'DONE' GROUP BY repo_id, pr_id) m
+         ON m.repo_id = r.repo_id AND m.pr_id = r.pr_id AND m.at = r.created_at WHERE r.status = 'DONE'`,
+    );
+    let moved = 0;
+    for (const row of latest) moved += this.adoptLiveFindings(row.repo_id, row.pr_id, row.id);
+    return moved;
+  }
+
   setResolution(findingId, resolution, note, by = 'VERIFY') {
     this.run('UPDATE cr_finding SET resolution = ?, resolution_note = ?, resolution_by = ? WHERE id = ?', resolution, note ?? null, by, findingId);
   }

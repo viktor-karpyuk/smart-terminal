@@ -136,6 +136,12 @@ class ReviewService {
     this.bus.sweep();
     this.store.orphanedRuns();
     this.store.orphanedFixes();
+    // Comments a review of rewritten history left behind, before reviews adopted them.
+    try {
+      this.store.adoptAllLiveFindings();
+    } catch {
+      /* a repair; the reviewer runs without it */
+    }
     this.auto.start();
   }
 
@@ -809,7 +815,16 @@ class ReviewService {
     const comments = this.store.comments(repoId, prId);
     const allFindings = this.store.findingsForPr(repoId, prId);
     const settings = this.settings();
-    const threads = rules.buildConversation({ findings: doneFindings, comments, replies });
+    /*
+     * Every thread that is on the pull request, not only the current review's.
+     *
+     * A comment verified as fixed stays with the review that published it, so
+     * built from the current review alone its thread — and an answer the author
+     * wrote in it — was not in the conversation at all.
+     */
+    const current = new Set(doneFindings.map((finding) => finding.id));
+    const earlier = allFindings.filter((finding) => finding.publishedId && !finding.askedBy && !current.has(finding.id));
+    const threads = rules.buildConversation({ findings: [...doneFindings, ...earlier], comments, replies });
     const fixes = this.store.fixesForPr(repoId, prId);
     const finalPassDone = Boolean(done?.finalPassHead && pr && done.finalPassHead === pr.headSha);
     const migrationClash = pr?.state === 'OPEN' ? clashFor(prId, this.store.migrationClashes(repoId)) : null;
