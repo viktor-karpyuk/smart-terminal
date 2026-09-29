@@ -232,7 +232,7 @@ const DELIVER = 'deliver';
  * somebody else.
  */
 const TEAMS_READ = ['overview', 'botState'] as const;
-const TEAMS_WRITE = ['saveConnection', 'saveSettings', 'test', 'saveChannel', 'forgetChannel', 'testChannel', 'setAppStance', 'setAppCap', 'matchPerson', 'approve', 'skip', 'retry', 'saveBot'] as const;
+const TEAMS_WRITE = ['saveConnection', 'saveSettings', 'test', 'saveChannel', 'forgetChannel', 'testChannel', 'compose', 'setAppStance', 'setAppCap', 'matchPerson', 'approve', 'skip', 'retry', 'saveBot'] as const;
 // `deliverFor` is deliberately absent: the app makes that call, naming the
 // caller itself, so no panel can send under another extension's name.
 const TEAMS_VERBS = new Map<string, Channel>(
@@ -290,7 +290,7 @@ export const PERMISSIONS: Record<string, string> = {
   build: 'Read Maven and Gradle projects',
   spring: 'Run and stop Spring Boot applications',
   review: 'Use the Code Reviewer: pull requests, findings, comments, merges',
-  teams: "Change the Teams connection's settings",
+  teams: "Change the Teams connection's settings, and send messages in your name",
   deliver: 'Send messages to people in Teams, in its own name',
   terminal: 'Open terminals and Claude sessions about what it shows',
 };

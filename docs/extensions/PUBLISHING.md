@@ -29,7 +29,7 @@ installing it reads this list first, in these words:
 | `build` | Read Maven and Gradle projects |
 | `spring` | Run and stop Spring Boot applications |
 | `review` | Use the Code Reviewer: pull requests, findings, comments, merges |
-| `teams` | Change the Teams connection's settings |
+| `teams` | Change the Teams connection's settings, and send messages in your name |
 | `deliver` | Send messages to people in Teams, in its own name |
 | `terminal` | Open terminals and Claude sessions about what it shows |
 

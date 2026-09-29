@@ -51,13 +51,29 @@
   .check { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
   .check input { width: 15px; height: 15px; accent-color: var(--accent); }
 
-  .way { display: flex; gap: 11px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
-  .way.on { border-color: var(--accent); background: var(--bg-panel); }
-  .way input { margin-top: 2px; width: 15px; height: 15px; accent-color: var(--accent); }
-  .way .what { font-weight: 600; }
-  .way .why { display: block; margin-top: 4px; color: var(--text-dim); line-height: 1.55; }
-  .way .costs { display: flex; gap: 16px; margin-top: 8px; }
-  .way .costs b { display: block; color: var(--text-faint); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 500; }
+  /* Two ways out, side by side and both at once: neither is picked over the other. */
+  .route { display: flex; flex-direction: column; gap: 10px; }
+  .route .head { display: flex; align-items: center; gap: 9px; }
+  .route .glyph { width: 28px; height: 28px; flex: none; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg-elevated); display: inline-flex; align-items: center; justify-content: center; color: var(--text-dim); font-weight: 700; }
+  .route.ready .glyph { border-color: color-mix(in srgb, var(--ok) 55%, var(--border)); color: var(--ok); }
+  .route .what { font-weight: 600; }
+  .route .why { color: var(--text-dim); line-height: 1.55; }
+  .route .costs { display: flex; gap: 16px; }
+  .route .costs b { display: block; color: var(--text-faint); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 500; }
+  .route hr { border: 0; border-top: 1px solid var(--border); margin: 2px 0; width: 100%; }
+  .route .foot { margin-top: auto; }
+  @media (max-width: 860px) { .cols.two { flex-direction: column; } }
+
+  .where { display: flex; gap: 10px; }
+  .where > label { flex: 1 1 0; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
+  .where > label.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  .where > label.off { opacity: 0.55; cursor: default; }
+  .where select, .where input[type="text"] { width: 100%; box-sizing: border-box; }
+  select { padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-input); color: var(--text); font: inherit; }
+  textarea { padding: 8px 9px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-input); color: var(--text); font: inherit; min-height: 96px; resize: vertical; line-height: 1.5; }
+  textarea:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .kind { display: inline-flex; align-items: baseline; gap: 5px; white-space: nowrap; }
+  .kind i { font-style: normal; color: var(--text-faint); }
 
   table.list { width: 100%; border-collapse: collapse; }
   table.list th { text-align: left; padding: 6px 10px; color: var(--text-faint); font-size: 0.87rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); white-space: nowrap; }
@@ -84,7 +100,7 @@
 (function () {
   'use strict';
 
-  var state = { started: false, showing: true, view: 'connection', data: null, error: null, busy: {}, edits: {} };
+  var state = { started: false, showing: true, view: 'connection', data: null, error: null, busy: {}, edits: {}, sendTo: { channel: false, person: false }, sent: null };
 
   function $(id) { return document.getElementById(id); }
   function esc(value) {
@@ -146,6 +162,7 @@
       else if (state.view === 'people') html = drawPeople();
       else if (state.view === 'delivery') html = drawDelivery();
       else if (state.view === 'outbox') html = drawOutbox();
+      else if (state.view === 'send') html = drawSend();
       else html = drawConnection();
     } catch (error) {
       html = '<div class="page"><div class="banner bad">This view could not be drawn: ' + esc(error && error.stack || error) + '</div></div>';
@@ -162,7 +179,7 @@
   }
 
   function drawTop() {
-    var tabs = [['connection', 'Connection'], ['apps', 'Apps'], ['people', 'People'], ['delivery', 'Delivery'], ['outbox', 'Outbox']];
+    var tabs = [['connection', 'Connection'], ['send', 'Send'], ['apps', 'Apps'], ['people', 'People'], ['delivery', 'Delivery'], ['outbox', 'Outbox']];
     var waiting = state.data ? state.data.waiting : 0;
     var html = '<span class="brand"><span class="mark">' + plane() + '</span>Teams</span>';
     tabs.forEach(function (tab) {
@@ -171,10 +188,10 @@
     });
     html += '<span class="spacer"></span>';
     if (state.data) {
+      // One chip per way out: both can be on, and each says so for itself.
       var c = state.data.connection;
-      html += c.ready
-        ? '<span class="chip okc">' + (c.way === 'webhook' ? 'posting to a channel' : 'direct messages') + '</span>'
-        : '<span class="chip warnc">not set up yet</span>';
+      html += '<span class="chip ' + (c.channel.ready ? 'okc' : '') + '" title="' + (c.channel.ready ? 'Can post in a channel' : 'No webhook yet') + '"># channel</span>' +
+        '<span class="chip ' + (c.person.ready ? 'okc' : '') + '" title="' + (c.person.ready ? 'Can message somebody directly' : 'No app registration or bot yet') + '">@ person</span>';
     }
     $('top').innerHTML = html;
   }
@@ -189,59 +206,75 @@
 
   /* ---------------------------------------------------------------- connection */
 
+  /*
+   * Two ways out, both at once.
+   *
+   * This used to be a radio button — webhook *or* app registration — and the
+   * screen drew only the half that was picked. So a machine set up to post in
+   * the team's room could not be seen, set up or tested for telling one person
+   * privately without switching the room off in the same click. Where a
+   * message goes is decided by who it is addressed to; this screen only says
+   * what each of the two needs, and whether it has it.
+   */
   function drawConnection() {
     var c = state.data.connection;
-    var webhook = c.way === 'webhook';
     var html = '<div class="page">';
-    html += '<div><h2>How this app reaches Teams</h2>' +
-      '<p class="lead">A panel in this app cannot reach the network at all — that is what keeps an extension safe to install. So the connection lives in the app itself, and this screen is the only place credentials are ever entered. Nothing that sends through this extension is told a tenant, a token or an address.</p></div>';
+    html += '<div><h2>Two ways out, both at once</h2>' +
+      '<p class="lead">A room and a person are two different errands. Set up either, or both: a message for a channel is posted there, a message for somebody goes to them privately — never one in place of the other. A panel in this app cannot reach the network, so the credentials live in the app itself and nothing that sends through here is told a tenant, a token or an address.</p></div>';
 
-    html += '<div class="cols">' +
-      way('webhook', webhook, 'Post in a channel',
-        'An Incoming Webhook URL from the channel you choose. Two minutes, no administrator, nothing to approve. Everyone in the channel sees every message.',
-        'a webhook URL', 'one channel', false) +
-      way('graph', !webhook, 'Message the person',
-        'An app registration in Entra ID with <span class="mono">Chat.ReadWrite</span> granted by an administrator. This is the only way a message arrives as a direct message rather than a post everybody reads.',
-        'app registration + admin consent', 'any person in the tenant', true) +
-      '</div>';
-
-    html += '<div class="card"><div class="row" style="margin-bottom:10px"><strong>' + (webhook ? 'The webhook' : 'App registration') + '</strong></div>';
-    if (webhook) {
-      html += '<label class="field"><span>Webhook URL</span>' +
-        '<input type="password" data-edit="webhookUrl" placeholder="' + (c.hasWebhook ? '•••••••• kept encrypted; type a new one to replace it' : 'https://…') + '" value="' + esc(edit('webhookUrl', '')) + '"></label>' +
-        '<div class="help">Kept encrypted beside the repository tokens, and never shown again.</div>';
-    } else {
-      html += '<div class="cols" style="margin-bottom:10px">' +
-        '<label class="field"><span>Tenant ID</span><input type="text" class="mono" data-edit="tenantId" value="' + esc(edit('tenantId', c.tenantId)) + '"></label>' +
-        '<label class="field"><span>Client ID</span><input type="text" class="mono" data-edit="clientId" value="' + esc(edit('clientId', c.clientId)) + '"></label>' +
-        '</div>' +
-        /*
-         * Who the message is from.
-         *
-         * A one-to-one chat in Teams has two people in it, and an app is not a
-         * person — so a direct message is between whoever is being told and a
-         * real account it comes from. It is also why a message arrives with a
-         * face on it rather than from something nameless.
-         */
-        '<label class="field" style="margin-bottom:10px"><span>Sent from</span>' +
-        '<input type="text" data-edit="sender" placeholder="you@yourcompany.com" value="' + esc(edit('sender', c.sender)) + '"></label>' +
-        '<div class="help" style="margin:-6px 0 10px">The account these messages come from. A chat has two people in it, so without one there is nobody at the other end of it.</div>' +
-        '<label class="field"><span>Client secret</span>' +
-        '<input type="password" data-edit="clientSecret" placeholder="' + (c.hasGraph ? '•••••••• kept encrypted; type a new one to replace it' : 'the secret from the app registration') + '" value="' + esc(edit('clientSecret', '')) + '"></label>' +
-        '<div class="help">Kept encrypted beside the repository tokens, and never shown again. Left empty, whatever is stored stays.</div>';
-    }
-    html += '<div class="row" style="margin-top:12px">' +
-      '<button class="btn primary" data-act="save-connection"' + busyAttr('save-connection') + '>Save</button>' +
-      '<label class="field" style="flex-direction:row;align-items:center;gap:7px">' +
-      '<input type="text" data-edit="testTo" placeholder="' + (webhook ? 'not needed — it goes to the channel' : 'somebody to send it to') + '" value="' + esc(edit('testTo', '')) + '" style="width:230px"' + (webhook ? ' disabled' : '') + '></label>' +
-      '<button class="btn" data-act="test"' + busyAttr('test') + '>Send a test message</button>' +
-      '<span class="spacer"></span>' + connectionState(c) + '</div>';
-    html += '</div>';
-
+    html += '<div class="cols two">' + drawChannelRoute(c) + drawPersonRoute(c) + '</div>';
     html += drawBot(c.bot);
-    html += drawRooms();
+    html += '<div class="banner">One connection, many senders. Anything in this app may ask this extension to deliver a message; each one shows up in <button class="btn" data-act="nav" data-view="apps" style="padding:1px 8px">Apps</button> with a switch of its own. To write something yourself, use <button class="btn" data-act="nav" data-view="send" style="padding:1px 8px">Send</button>.</div>';
+    return html + '</div>';
+  }
 
-    html += '<div class="banner">One connection, many senders. Anything in this app may ask this extension to deliver a message; each one shows up in <button class="btn" data-act="nav" data-view="apps" style="padding:1px 8px">Apps</button> with a switch of its own.</div>';
+  function routeHead(glyph, title, ready, readyText, notText) {
+    return '<div class="head"><span class="glyph">' + glyph + '</span><span class="what">' + title + '</span><span class="spacer"></span>' +
+      (ready ? '<span class="chip okc">' + readyText + '</span>' : '<span class="chip">' + notText + '</span>') + '</div>';
+  }
+
+  function drawChannelRoute(c) {
+    var html = '<div class="card route' + (c.channel.ready ? ' ready' : '') + '">';
+    html += routeHead('#', 'To a channel', c.channel.ready, 'ready', 'not set up');
+    html += '<div class="why">Posted as the app, in a channel where everybody reads it. For what the team should know: a review started, something waiting too long, two migrations with the same number.</div>';
+    html += '<div class="costs"><span><b>Needs</b>an Incoming Webhook URL</span><span><b>Setup</b>two minutes, no administrator</span></div>';
+    html += '<label class="field"><span>Default room — its webhook</span>' +
+      '<input type="password" data-edit="webhookUrl" placeholder="' + (c.hasWebhook ? '•••••••• kept encrypted; type a new one to replace it' : 'https://…') + '" value="' + esc(edit('webhookUrl', '')) + '"></label>' +
+      '<div class="help" style="margin-top:-6px">Where anything goes that names a room not listed below. Kept encrypted and never shown again.</div>';
+    html += '<hr>' + drawRooms();
+    html += '<div class="row foot">' +
+      '<button class="btn primary" data-act="save-channel-route"' + busyAttr('save-channel-route') + '>Save</button>' +
+      '<button class="btn" data-act="test-default-room"' + busyAttr('test-default-room') + (c.hasWebhook ? '' : ' disabled') + '>Send a test</button>' +
+      '<span class="spacer"></span>' + checkState(c.channel) + '</div>';
+    return html + '</div>';
+  }
+
+  function drawPersonRoute(c) {
+    var via = c.person.via === 'bot' ? 'ready · as the bot' : c.person.via === 'bot-or-graph' ? 'ready · bot, then registration' : 'ready';
+    var html = '<div class="card route' + (c.person.ready ? ' ready' : '') + '">';
+    html += routeHead('@', 'To a person', c.person.ready, via, 'not set up');
+    html += '<div class="why">A direct message only they see. For what is theirs to act on: a comment waiting on them, a reminder, your own words about their pull request.</div>';
+    html += '<div class="costs"><span><b>Needs</b>app registration + admin consent, or the bot below</span><span><b>Reaches</b>anyone in the tenant</span></div>';
+    html += '<div class="cols">' +
+      '<label class="field"><span>Tenant ID</span><input type="text" class="mono" data-edit="tenantId" value="' + esc(edit('tenantId', c.tenantId)) + '"></label>' +
+      '<label class="field"><span>Client ID</span><input type="text" class="mono" data-edit="clientId" value="' + esc(edit('clientId', c.clientId)) + '"></label>' +
+      '</div>' +
+      /*
+       * Who the message is from. A one-to-one chat in Teams has two people in
+       * it and an app is not a person, so a direct message is between whoever
+       * is being told and a real account it comes from.
+       */
+      '<label class="field"><span>Sent from</span>' +
+      '<input type="text" data-edit="sender" placeholder="you@yourcompany.com" value="' + esc(edit('sender', c.sender)) + '"></label>' +
+      '<div class="help" style="margin-top:-6px">The account these messages come from. A chat has two people in it, so without one there is nobody at the other end of it.</div>' +
+      '<label class="field"><span>Client secret</span>' +
+      '<input type="password" data-edit="clientSecret" placeholder="' + (c.hasGraph ? '•••••••• kept encrypted; type a new one to replace it' : 'the secret from the app registration') + '" value="' + esc(edit('clientSecret', '')) + '"></label>' +
+      '<div class="help" style="margin-top:-6px">Needs <span class="mono">Chat.ReadWrite</span> granted by an administrator. Kept encrypted; left empty, whatever is stored stays.</div>';
+    html += '<div class="row foot">' +
+      '<button class="btn primary" data-act="save-person-route"' + busyAttr('save-person-route') + '>Save</button>' +
+      '<input type="text" data-edit="testTo" placeholder="somebody@yourcompany.com" value="' + esc(edit('testTo', '')) + '" style="flex:1;min-width:150px">' +
+      '<button class="btn" data-act="test"' + busyAttr('test') + (c.person.ready ? '' : ' disabled') + '>Send a test</button>' +
+      '</div><div class="row"><span class="spacer"></span>' + checkState(c.person) + '</div>';
     return html + '</div>';
   }
 
@@ -254,7 +287,7 @@
   function drawBot(b) {
     if (!b) return '<div class="card"><strong>The Code Reviewer bot</strong><div class="help">Needs the Code Reviewer running as well.</div></div>';
     var html = '<div class="card"><div class="row" style="margin-bottom:6px"><strong>The Code Reviewer bot</strong><span class="spacer"></span>' + botState(b) + '</div>';
-    html += '<div class="help" style="margin-bottom:10px">Private messages go out as the bot to whoever has the Code Reviewer app in Teams, and they can answer: look again, put the reminder off, mark a comment resolved, or fix it and push. Anybody who does not have the app yet is reached through the app registration above. What you write yourself always goes from your own account.</div>';
+    html += '<div class="help" style="margin-bottom:10px">Private messages go out as the bot to whoever has the Code Reviewer app in Teams, and they can answer: look again, put the reminder off, mark a comment resolved, or fix it and push. Anybody who does not have the app yet is reached through the app registration under <em>To a person</em>. What you write yourself always goes from your own account.</div>';
     html += '<div class="cols" style="margin-bottom:10px">' +
       '<label class="field"><span>Tenant ID</span><input type="text" class="mono" data-edit="botTenant" value="' + esc(edit('botTenant', b.tenantId)) + '"></label>' +
       '<label class="field"><span>Bot app ID</span><input type="text" class="mono" data-edit="botAppId" value="' + esc(edit('botAppId', b.appId)) + '"></label>' +
@@ -285,36 +318,26 @@
    */
   function drawRooms() {
     var rooms = state.data.channels || [];
-    var html = '<div class="card"><div class="row" style="margin-bottom:6px"><strong>Rooms by name</strong></div>' +
-      '<div class="help" style="margin-bottom:10px">Each room is one channel’s Incoming Webhook, under the name senders ask for it by. Something sent to a name that is not here goes to the webhook above' + (state.data.connection.hasWebhook ? '' : ' — and there is none yet, so it would fail') + '.</div>';
+    var html = '<div><strong>Rooms by name</strong><div class="help" style="margin-bottom:8px">Each is one channel’s webhook, under the name senders ask for it by — the payments repository’s alerts in <span class="mono">payments-dev</span>, say.</div>';
     if (rooms.length) {
-      html += '<table style="margin-bottom:10px"><tbody>' + rooms.map(function (room) {
-        return '<tr><td class="mono">' + esc(room.name) + '</td><td>' + (room.hasWebhook ? '<span class="chip okc">webhook kept</span>' : '<span class="chip badc">no webhook</span>') + '</td>' +
-          '<td style="text-align:right"><button class="btn" data-act="test-room" data-name="' + esc(room.name) + '"' + busyAttr('room-' + room.name) + '>Send a test</button> ' +
+      html += '<table style="width:100%;margin-bottom:8px"><tbody>' + rooms.map(function (room) {
+        return '<tr><td class="mono"># ' + esc(room.name) + '</td><td>' + (room.hasWebhook ? '<span class="chip okc">webhook kept</span>' : '<span class="chip badc">no webhook</span>') + '</td>' +
+          '<td style="text-align:right"><button class="btn" data-act="test-room" data-name="' + esc(room.name) + '"' + busyAttr('room-' + room.name) + '>Test</button> ' +
           '<button class="btn" data-act="forget-room" data-name="' + esc(room.name) + '"' + busyAttr('room-' + room.name) + '>Forget</button></td></tr>';
       }).join('') + '</tbody></table>';
     }
     html += '<div class="row">' +
-      '<input type="text" data-edit="roomName" placeholder="payments-dev" value="' + esc(edit('roomName', '')) + '" style="width:170px">' +
-      '<input type="password" data-edit="roomUrl" placeholder="https://… the channel’s webhook URL" value="' + esc(edit('roomUrl', '')) + '" style="flex:1">' +
-      '<button class="btn primary" data-act="save-room"' + busyAttr('save-room') + '>Add the room</button></div>';
+      '<input type="text" data-edit="roomName" placeholder="payments-dev" value="' + esc(edit('roomName', '')) + '" style="width:130px">' +
+      '<input type="password" data-edit="roomUrl" placeholder="its webhook URL" value="' + esc(edit('roomUrl', '')) + '" style="flex:1;min-width:120px">' +
+      '<button class="btn" data-act="save-room"' + busyAttr('save-room') + '>Add</button></div>';
     return html + '</div>';
   }
 
-  function connectionState(c) {
-    if (c.checkError) return '<span class="chip badc" title="' + esc(c.checkError) + '">last try failed ' + esc(when(c.checkedAt)) + '</span>';
-    if (c.checkedAt) return '<span class="chip okc">reached Teams ' + esc(when(c.checkedAt)) + '</span>';
-    return '<span class="chip">never tried</span>';
-  }
-
-  function way(id, on, title, why, needs, reaches, recommended) {
-    return '<label class="way' + (on ? ' on' : '') + '">' +
-      '<input type="radio" name="way" data-act="way" data-way="' + id + '"' + (on ? ' checked' : '') + '>' +
-      '<span><span class="row"><span class="what">' + title + '</span>' +
-      (recommended ? '<span class="chip accent">what a direct message needs</span>' : '') + '</span>' +
-      '<span class="why">' + why + '</span>' +
-      '<span class="costs"><span><b>Needs</b>' + esc(needs) + '</span><span><b>Reaches</b>' + esc(reaches) + '</span></span>' +
-      '</span></label>';
+  /* When this way out was last proved, and what it said. */
+  function checkState(route) {
+    if (route.checkError) return '<span class="chip badc" title="' + esc(route.checkError) + '">last test failed ' + esc(when(route.checkedAt)) + '</span>';
+    if (route.checkedAt) return '<span class="chip okc">test arrived ' + esc(when(route.checkedAt)) + '</span>';
+    return '<span class="chip">never tested</span>';
   }
 
   /* --------------------------------------------------------------------- apps */
@@ -457,12 +480,19 @@
     rows.forEach(function (row) {
       html += '<tr><td class="faint">' + esc(when(row.createdAt)) + '</td>' +
         '<td class="faint">' + esc(row.appId) + '</td>' +
-        '<td class="wrap">' + esc(row.to || '—') + '</td>' +
+        '<td class="wrap">' + recipient(row.to) + '</td>' +
         '<td class="wrap">' + esc(row.title) + (row.key ? '<div class="faint mono">' + esc(row.key) + '</div>' : '') + '</td>' +
         '<td>' + messageState(row) + '</td>' +
-        '<td style="text-align:right">' + messageActions(row) + '</td></tr>';
+        '<td class="wrap" style="text-align:right">' + messageActions(row) + '</td></tr>';
     });
     return html + '</table></div>';
+  }
+
+  /* A room or a person, told apart at a glance: the outbox holds both. */
+  function recipient(to) {
+    if (!to) return '—';
+    if (to.charAt(0) === '#') return '<span class="kind"><i>#</i>' + esc(to.slice(1)) + '</span>';
+    return '<span class="kind"><i>@</i>' + esc(to) + '</span>';
   }
 
   function messageState(row) {
@@ -481,27 +511,132 @@
         '<button class="btn" data-act="skip" data-id="' + esc(row.id) + '"' + busyAttr('msg-' + row.id) + '>Not this one</button></span>';
     }
     if (row.state === 'FAILED') {
-      return '<span class="row" style="justify-content:flex-end"><span class="bad">' + esc(row.reason || '') + '</span>' +
+      // A reason from Microsoft is a paragraph; kept to a few lines, whole on hover,
+      // so it cannot squeeze the rest of the row down to a letter a line.
+      return '<span class="row" style="justify-content:flex-end;flex-wrap:nowrap;align-items:flex-start"><span class="bad" title="' + esc(row.reason || '') + '" style="white-space:normal;max-width:44ch;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;text-align:left">' + esc(row.reason || '') + '</span>' +
         '<button class="btn" data-act="retry" data-id="' + esc(row.id) + '"' + busyAttr('msg-' + row.id) + '>Try again</button></span>';
     }
     return '<span class="faint">' + esc(row.reason || '') + '</span>';
+  }
+
+  /* --------------------------------------------------------------------- send */
+
+  /*
+   * Saying something yourself: to a room, to a person, or to both at once.
+   *
+   * The same two errands the senders have, without a sender in between. Each
+   * destination is tried and reported on its own, so a room that took it and a
+   * person who did not are both said.
+   */
+  function drawSend() {
+    var c = state.data.connection;
+    var rooms = state.data.channels || [];
+    var to = state.sendTo;
+    var html = '<div class="page">';
+    html += '<div><h2>Say something yourself</h2>' +
+      '<p class="lead">Post in a channel, write to one person privately, or both with the same words. Sent now, whatever the hours — the limits on the Delivery tab protect people from a machine that will not stop, not from you pressing Send.</p></div>';
+
+    var roomOptions = (c.hasWebhook ? '<option value="">the default room</option>' : '') + rooms.map(function (room) {
+      return '<option value="' + esc(room.name) + '"' + (edit('sendRoom', '') === room.name ? ' selected' : '') + '># ' + esc(room.name) + '</option>';
+    }).join('');
+    var addresses = state.data.people.filter(function (one) { return one.address; });
+
+    html += '<div class="card" style="display:flex;flex-direction:column;gap:12px">';
+    html += '<div class="where">' +
+      '<label class="' + (!c.channel.ready ? 'off' : to.channel ? 'on' : '') + '"><span class="row"><input type="checkbox" data-act="send-where" data-where="channel"' + (to.channel ? ' checked' : '') + (c.channel.ready ? '' : ' disabled') + '><strong># In a channel</strong></span>' +
+      (c.channel.ready
+        ? '<select data-edit="sendRoom"' + (to.channel ? '' : ' disabled') + '>' + roomOptions + '</select><span class="help" style="margin:0">Everybody in it reads it. Posted as the app.</span>'
+        : '<span class="help" style="margin:0">No webhook yet — set one up on <a href="#" data-act="nav" data-view="connection">Connection</a>.</span>') +
+      '</label>' +
+      '<label class="' + (!c.person.ready ? 'off' : to.person ? 'on' : '') + '"><span class="row"><input type="checkbox" data-act="send-where" data-where="person"' + (to.person ? ' checked' : '') + (c.person.ready ? '' : ' disabled') + '><strong>@ To a person</strong></span>' +
+      (c.person.ready
+        ? '<input type="text" list="known-people" data-edit="sendPerson" placeholder="somebody@yourcompany.com" value="' + esc(edit('sendPerson', '')) + '"' + (to.person ? '' : ' disabled') + '>' +
+          '<datalist id="known-people">' + addresses.map(function (one) { return '<option value="' + esc(one.address) + '">' + esc(one.display || one.handle) + '</option>'; }).join('') + '</datalist>' +
+          '<span class="help" style="margin:0">Only they see it. ' + (c.hasGraph ? 'From ' + esc(c.sender) + '.' : 'From the bot.') + '</span>'
+        : '<span class="help" style="margin:0">No app registration or bot yet — set one up on <a href="#" data-act="nav" data-view="connection">Connection</a>.</span>') +
+      '</label></div>';
+
+    html += '<label class="field"><span>Title</span><input type="text" data-edit="sendTitle" placeholder="kubrik-pos-fe is frozen until 15:00" value="' + esc(edit('sendTitle', '')) + '"></label>';
+    html += '<label class="field"><span>Message</span><textarea data-edit="sendBody" placeholder="What you want to say">' + esc(edit('sendBody', '')) + '</textarea></label>';
+
+    // Only whether somewhere is chosen: what is typed is checked when it is sent,
+    // because typing does not redraw this and a button waiting for it never woke.
+    var ready = (to.channel && c.channel.ready) || (to.person && c.person.ready);
+    var label = to.channel && to.person ? 'Send to both' : to.person ? 'Send to them' : 'Post in the channel';
+    html += '<div class="row"><button class="btn primary" data-act="compose"' + busyAttr('compose') + (ready ? '' : ' disabled') + '>' + label + '</button>' +
+      '</div>' + (state.sent ? '<div style="display:flex;flex-direction:column;gap:6px">' + sentState() + '</div>' : '<div>' + sentState() + '</div>');
+    html += '</div>';
+    return html + '</div>';
+  }
+
+  /*
+   * What became of each half, one line each. Chips first, and a reason from
+   * Microsoft is a paragraph long: on one line it pushed the panel sideways.
+   */
+  function sentState() {
+    var r = state.sent;
+    if (!r) return '<span class="faint">Everything you send is in the Outbox, from <span class="mono">you</span>.</span>';
+    var line = function (glyph, where, one, word) {
+      return '<div class="banner ' + (one.ok ? 'good' : 'bad') + '" style="overflow-wrap:anywhere"><strong>' + glyph + ' ' + esc(where) + '</strong> — ' +
+        (one.ok ? word : 'did not go: ' + esc(one.detail || one.why || 'no reason given')) + '</div>';
+    };
+    var html = '';
+    if (r.channel) html += line('#', r.to.channel || 'the default room', r.channel, 'posted');
+    if (r.person) html += line('@', r.to.person, r.person, 'delivered');
+    return html;
   }
 
   /* ------------------------------------------------------------------ actions */
 
   var actions = {
     nav: function (el) { state.view = el.getAttribute('data-view'); draw(); },
-    way: function (el) {
-      act('save-connection', function () { return call('saveConnection', { connection: { way: el.getAttribute('data-way') } }); }, load);
-    },
-    'save-connection': function () {
-      var connection = state.data.connection.way === 'webhook'
-        ? { way: 'webhook', webhookUrl: edit('webhookUrl', '') }
-        : { way: 'graph', tenantId: edit('tenantId', state.data.connection.tenantId), clientId: edit('clientId', state.data.connection.clientId), sender: edit('sender', state.data.connection.sender), clientSecret: edit('clientSecret', '') };
-      act('save-connection', function () { return call('saveConnection', { connection: connection }); }, function () {
+    // Each way out is saved on its own: saving one never touches the other.
+    'save-channel-route': function () {
+      act('save-channel-route', function () { return call('saveConnection', { connection: { webhookUrl: edit('webhookUrl', '') } }); }, function () {
         // A secret typed here is forgotten the moment it is stored.
-        delete state.edits.webhookUrl; delete state.edits.clientSecret;
+        delete state.edits.webhookUrl;
         say('Saved.');
+        load();
+      });
+    },
+    'save-person-route': function () {
+      var c = state.data.connection;
+      var connection = { tenantId: edit('tenantId', c.tenantId), clientId: edit('clientId', c.clientId), sender: edit('sender', c.sender), clientSecret: edit('clientSecret', '') };
+      act('save-person-route', function () { return call('saveConnection', { connection: connection }); }, function () {
+        delete state.edits.clientSecret;
+        say('Saved.');
+        load();
+      });
+    },
+    'test-default-room': function () {
+      act('test-default-room', function () { return call('testChannel', { name: '' }); }, function (result) {
+        say(result.ok ? 'It arrived in the default room.' : 'It did not go: ' + (result.error || 'no reason given'), !result.ok);
+        load();
+      });
+    },
+    'send-where': function (el) {
+      state.sendTo[el.getAttribute('data-where')] = el.checked;
+      state.sent = null;
+      draw();
+    },
+    compose: function () {
+      var message = {
+        title: edit('sendTitle', ''),
+        body: edit('sendBody', ''),
+        channel: state.sendTo.channel ? edit('sendRoom', state.data.connection.hasWebhook ? '' : ((state.data.channels || [])[0] || { name: '' }).name) : null,
+        to: state.sendTo.person ? edit('sendPerson', '') : '',
+      };
+      act('compose', function () { return call('compose', { message: message }); }, function (result) {
+        state.sent = result;
+        state.sent.to = { channel: message.channel, person: message.to };
+        var went = [result.channel, result.person].filter(function (one) { return one && one.ok; }).length;
+        var tried = [result.channel, result.person].filter(Boolean).length;
+        if (went === tried) {
+          delete state.edits.sendTitle; delete state.edits.sendBody;
+          say(tried > 1 ? 'Posted in the channel and sent to them.' : result.channel ? 'Posted in the channel.' : 'Sent to them.');
+        } else {
+          say(went ? 'Only part of it went — see beside the button.' : 'It did not go — see beside the button.', true);
+        }
         load();
       });
     },
