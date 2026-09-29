@@ -624,6 +624,8 @@ function openForCarry(finding) {
  */
 function mergeBlocker(counts) {
   if (!counts.prHeadSha) return 'The pull request is not loaded.';
+  // Before everything the review says: a migration number taken twice breaks the deploy, whatever the code is like.
+  if (counts.migrationClash) return counts.migrationClash;
   if (!counts.hasReview) return 'It has not been reviewed.';
   if (counts.pendingFindings > 0) return `${counts.pendingFindings} finding(s) not published or dismissed.`;
   if (counts.pendingNotes > 0) return `${counts.pendingNotes} note(s) not published.`;
@@ -868,6 +870,7 @@ const FLAGS = {
   APPROVED: { label: 'Approved', mine: false },
   CHANGES_REQUESTED: { label: 'Changes requested', mine: false },
   DRAFT: { label: 'Draft', mine: false },
+  MIGRATION_CLASH: { label: 'Migration number taken', mine: true },
   MERGED: { label: 'Merged', mine: false },
   DECLINED: { label: 'Declined', mine: false },
 };
@@ -888,6 +891,7 @@ function prFlags(pr, facts) {
   if (facts.reviewing) flags.push('REVIEWING');
   if (facts.fixing) flags.push('FIXING');
   if (!isClosed) {
+    if (facts.migrationClash) flags.push('MIGRATION_CLASH');
     const newCode = Boolean(facts.reviewedSha && pr.headSha && facts.reviewedSha !== pr.headSha);
     if (!facts.reviewedSha && !facts.reviewing) flags.push('UNREVIEWED');
     else if (newCode) flags.push('STALE');

@@ -261,7 +261,7 @@ class ReviewEngine {
     if (result.notModified) {
       this.store.setPrMeta(repoId, { fetchedAt: stamp });
       // The list is the same; the target branch may not be. Whether each one still lands is asked again.
-      this.checkRepoConflicts(repoId).catch(() => {});
+      this.sweepBranches(repoId);
       return { prs: cachedRows, cached: false, notModified: true };
     }
     const fresh_ = [];
@@ -274,8 +274,21 @@ class ReviewEngine {
       for (const pr of fresh_) this.notify(`New PR · ${repo.name} #${pr.id}`, `${pr.title} — ${pr.author}`);
     }
     this.changed(repoId);
-    this.checkRepoConflicts(repoId).catch(() => {});
+    this.sweepBranches(repoId);
     return { prs: this.store.prs(repoId, { states: ['OPEN'] }), cached: false, fresh: fresh_ };
+  }
+
+  /**
+   * What is asked of the branches every time the list is read: whether each
+   * pull request lands, and then whatever else wants the branches that sweep
+   * just fetched — the migration numbers, today. After it rather than beside
+   * it, so the second reader sees the fetch and not the moment before it.
+   */
+  sweepBranches(repoId) {
+    this.checkRepoConflicts(repoId)
+      .catch(() => {})
+      .then(() => this.onBranches?.(repoId))
+      .catch(() => {});
   }
 
   /**
@@ -940,7 +953,7 @@ class ReviewEngine {
   }
 
   /** Every finding still waiting, then every note. One failing does not stop the rest. */
-  async publishAll(repoId, prId) {
+  async publishAll(repoId, prId, { notes: withNotes = true } = {}) {
     // The thread as it is now first: what was published elsewhere since it was last read is not published again.
     try {
       await this.syncComments(this.requireRepo(repoId), prId);
@@ -949,7 +962,8 @@ class ReviewEngine {
     }
     const review = this.store.latestDone(repoId, prId);
     const findings = review ? this.store.findingsForReview(review.id).filter((finding) => !rules.settled(finding)) : [];
-    const notes = this.store.notes(repoId, prId).filter((note) => !note.publishedId);
+    // A note is something a person wrote and chose not to say yet; only a person publishes one.
+    const notes = withNotes ? this.store.notes(repoId, prId).filter((note) => !note.publishedId) : [];
     let published = 0;
     const errors = [];
     for (const finding of findings) {
@@ -1062,6 +1076,14 @@ class ReviewEngine {
   async merge(repoId, prId, { message, closeSourceBranch = true, strategy = 'MERGE_COMMIT' } = {}) {
     const repo = this.requireRepo(repoId);
     const pr = this.prOrThrow(repoId, prId);
+    /*
+     * The one merge this refuses: the one that would put a migration number
+     * on its target twice. "Merge anyway" is for a gate that is about this
+     * review's opinion; this is about the deploy, and the answer is asked of
+     * the branches as they are now, not as the board last saw them.
+     */
+    const stop = await this.beforeMerge?.(repo, pr);
+    if (stop) throw new Error(stop);
     const text = String(message ?? '').trim() || `Merged in ${pr.sourceBranch} (pull request #${prId})\n\n${pr.title}`;
     const result = await this.forge.of(repo).merge(prId, { message: text, closeSourceBranch, strategy });
     this.store.setPref('merge.strategy', strategy);

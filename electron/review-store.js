@@ -180,12 +180,51 @@ const MIGRATIONS = [
    ALTER TABLE cr_finding_fix ADD COLUMN dropped_at TEXT;
    ALTER TABLE cr_finding_fix ADD COLUMN note TEXT;
    ALTER TABLE cr_repo ADD COLUMN check_command TEXT`,
+
+  /*
+   * 7 — a repository that looks after itself, and its migration numbers.
+   *
+   * `publish_mode` is whether a finished review goes on the pull request by
+   * itself. NULL is every repository from before, which is `MANUAL`: nothing
+   * a repository did not ask for starts being said in public.
+   *
+   * `migrations_path` is the folder the repository creates its numbered
+   * migrations in, relative to the clone. NULL is not watched.
+   *
+   * `alert_channel` is the room this repository's alerts go to, by the name
+   * the delivery extension knows it under. NULL is the reviewer's own room.
+   *
+   * `cr_migration_clash` is one number taken twice, as it stands now: which
+   * pull requests (or the target branch) carry it, and what the room was told.
+   * A row goes when the clash does. `signature` is who is in it, so a third
+   * pull request joining is news and the same two still clashing is not.
+   */
+  `ALTER TABLE cr_repo ADD COLUMN publish_mode TEXT;
+   ALTER TABLE cr_repo ADD COLUMN migrations_path TEXT;
+   ALTER TABLE cr_repo ADD COLUMN alert_channel TEXT;
+   CREATE TABLE IF NOT EXISTS cr_migration_clash (
+     repo_id TEXT NOT NULL, number TEXT NOT NULL, members TEXT NOT NULL, signature TEXT NOT NULL,
+     seen_at TEXT NOT NULL, notified_signature TEXT, notified_at TEXT, notify_result TEXT,
+     PRIMARY KEY (repo_id, number))`,
 ];
 
 const now = () => new Date().toISOString();
 const id = () => randomUUID();
 const bool = (value) => (value ? 1 : 0);
 const nul = (value) => (value === undefined || value === '' ? null : value);
+
+/**
+ * A folder inside the clone, as a path git understands: relative, forward
+ * slashes, no leading `./` or trailing `/`. Anything that climbs out of the
+ * clone is refused rather than tidied, because it names a folder that is not
+ * the repository's.
+ */
+function cleanFolder(value) {
+  const text = String(value ?? '').trim().replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/+$/, '').replace(/\/{2,}/g, '/');
+  if (!text) return '';
+  if (text.startsWith('/') || text.split('/').includes('..')) throw new Error('The migrations folder has to be a folder inside the repository, written relative to it.');
+  return text;
+}
 
 function repoRow(row, decrypt) {
   if (!row) return null;
@@ -220,6 +259,9 @@ function repoRow(row, decrypt) {
     hidden: Boolean(row.hidden),
     fixMode: row.fix_mode || 'MANUAL',
     checkCommand: row.check_command ?? null,
+    publishMode: row.publish_mode || 'MANUAL',
+    migrationsPath: row.migrations_path ?? null,
+    alertChannel: row.alert_channel ?? null,
   };
 }
 
@@ -501,11 +543,16 @@ class ReviewStore {
       input.fixMode ?? 'MANUAL',
       // Undefined leaves what is stored: the edit form may not carry it.
       input.checkCommand === undefined ? (existing?.check_command ?? null) : nul(String(input.checkCommand).trim()),
+      // The same for these three: an older caller that does not send them leaves them as they were.
+      input.publishMode === undefined ? (existing?.publish_mode ?? 'MANUAL') : input.publishMode || 'MANUAL',
+      input.migrationsPath === undefined ? (existing?.migrations_path ?? null) : nul(cleanFolder(input.migrationsPath)),
+      input.alertChannel === undefined ? (existing?.alert_channel ?? null) : nul(String(input.alertChannel ?? '').trim()),
     ];
     if (existing) {
       this.run(
         `UPDATE cr_repo SET name=?, local_path=?, token_cipher=?, project_kind=?, default_depth=?, default_model=?, auto_review=?,
-           skip_drafts=?, skip_titles=?, skip_authors=?, only_targets=?, reply_mode=?, hidden=?, fix_mode=?, check_command=? WHERE id=?`,
+           skip_drafts=?, skip_titles=?, skip_authors=?, only_targets=?, reply_mode=?, hidden=?, fix_mode=?, check_command=?,
+           publish_mode=?, migrations_path=?, alert_channel=? WHERE id=?`,
         ...values,
         existing.id,
       );
@@ -514,8 +561,9 @@ class ReviewStore {
     const repoId = input.id || id();
     this.run(
       `INSERT INTO cr_repo (name, local_path, token_cipher, project_kind, default_depth, default_model, auto_review, skip_drafts,
-         skip_titles, skip_authors, only_targets, reply_mode, hidden, fix_mode, check_command, id, provider, owner, slug, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         skip_titles, skip_authors, only_targets, reply_mode, hidden, fix_mode, check_command, publish_mode, migrations_path, alert_channel,
+         id, provider, owner, slug, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       ...values,
       repoId,
       input.provider,
@@ -533,7 +581,7 @@ class ReviewStore {
   /** Everything the repository owns goes with it; cascades cover reviews and findings, the rest by hand. */
   deleteRepo(repoId) {
     this.transaction(() => {
-      for (const table of ['cr_finding', 'cr_publication', 'cr_pr_comment', 'cr_local_note', 'cr_reply_draft', 'cr_pr', 'cr_pr_meta', 'cr_pr_approval', 'cr_pending_job', 'cr_guideline', 'cr_finding_fix', 'cr_bus_claim', 'cr_bus_touch', 'cr_migration_slot']) {
+      for (const table of ['cr_finding', 'cr_publication', 'cr_pr_comment', 'cr_local_note', 'cr_reply_draft', 'cr_pr', 'cr_pr_meta', 'cr_pr_approval', 'cr_pending_job', 'cr_guideline', 'cr_finding_fix', 'cr_bus_claim', 'cr_bus_touch', 'cr_migration_slot', 'cr_migration_clash']) {
         this.run(`DELETE FROM ${table} WHERE repo_id = ?`, repoId);
       }
       this.run('DELETE FROM cr_review WHERE repo_id = ?', repoId);
@@ -569,6 +617,48 @@ class ReviewStore {
   setConflicts(repoId, prId, paths) {
     this.run('UPDATE cr_pr SET conflicts = ?, conflicts_at = ? WHERE repo_id = ? AND pr_id = ?',
       paths == null ? null : JSON.stringify(paths), now(), repoId, Number(prId));
+  }
+
+  // --- migration numbers taken twice ---------------------------------------------
+
+  /** The clashes a repository has now, each with who is in it and what the room was told. */
+  migrationClashes(repoId) {
+    return this.all('SELECT * FROM cr_migration_clash WHERE repo_id = ? ORDER BY number', repoId).map((row) => ({
+      repoId: row.repo_id,
+      number: row.number,
+      members: JSON.parse(row.members),
+      signature: row.signature,
+      seenAt: row.seen_at,
+      notifiedSignature: row.notified_signature ?? null,
+      notifiedAt: row.notified_at ?? null,
+      notifyResult: row.notify_result ?? null,
+    }));
+  }
+
+  /**
+   * Replace a repository's clashes with the ones that stand now. A clash that
+   * was already known keeps when it was first seen and what the room was told;
+   * one that is gone is gone.
+   */
+  setMigrationClashes(repoId, clashes) {
+    this.transaction(() => {
+      const keep = new Set(clashes.map((clash) => clash.number));
+      for (const row of this.all('SELECT number FROM cr_migration_clash WHERE repo_id = ?', repoId)) {
+        if (!keep.has(row.number)) this.run('DELETE FROM cr_migration_clash WHERE repo_id = ? AND number = ?', repoId, row.number);
+      }
+      for (const clash of clashes) {
+        this.run(
+          `INSERT INTO cr_migration_clash (repo_id, number, members, signature, seen_at) VALUES (?,?,?,?,?)
+           ON CONFLICT(repo_id, number) DO UPDATE SET members = excluded.members, signature = excluded.signature`,
+          repoId, clash.number, JSON.stringify(clash.members), clash.signature, now(),
+        );
+      }
+    });
+  }
+
+  noteMigrationClashTold(repoId, number, signature, result) {
+    this.run('UPDATE cr_migration_clash SET notified_signature = ?, notified_at = ?, notify_result = ? WHERE repo_id = ? AND number = ?',
+      signature, now(), result, repoId, number);
   }
 
   upsertPr(repoId, pr, { fetched = true } = {}) {
@@ -1444,4 +1534,4 @@ class ReviewStore {
   }
 }
 
-module.exports = { ReviewStore, MIGRATIONS, repoRow, reviewRow, findingRow, commentRow, replyRow, prRow, fixRow };
+module.exports = { ReviewStore, MIGRATIONS, cleanFolder, repoRow, reviewRow, findingRow, commentRow, replyRow, prRow, fixRow };
