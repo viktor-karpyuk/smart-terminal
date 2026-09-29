@@ -3622,3 +3622,7 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 
 /* The session last opened from History, so coming back to the list you can see where you were. */
 .history-row.is-last { box-shadow: inset 2px 0 0 var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+
+/* Rows picked in a Files tree with ⌘-click or Shift-click: what Copy takes. */
+.files-row.is-picked { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.files-tree:focus { outline: none; }

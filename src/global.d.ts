@@ -1035,6 +1035,12 @@ declare global {
         move(from: string, dir: string): Promise<FileChange>;
         create(dir: string, name: string, kind: 'file' | 'folder'): Promise<FileChange>;
         duplicate(file: string): Promise<FileChange>;
+        copy(paths: string[]): Promise<{ ok: true; count: number } | { ok: false; error: string }>;
+        clipboard(): Promise<{ ok: boolean; paths: string[] }>;
+        paste(dir: string): Promise<
+          | { ok: boolean; copied: string[]; failed: Array<{ path: string; error: string }>; error: string | null }
+          | { ok: false; error: string }
+        >;
         trash(file: string): Promise<FileChange>;
       };
       system: {

@@ -499,7 +499,68 @@ async function duplicatePath(fileValue) {
   return { ok: true, path: target };
 }
 
+/**
+ * Copies of files and folders, pasted into a folder.
+ *
+ * Whatever is there already stays: a name that is taken gets the name Finder
+ * would give the copy, never the original's place. A folder cannot be pasted
+ * into itself or anywhere inside itself — that copy would never end. Links are
+ * copied as links rather than followed, so pasting a folder with a link to
+ * somewhere large in it does not copy somewhere large.
+ *
+ * Each item is copied or refused on its own, and the answer says which, so
+ * one unreadable file does not leave the person guessing about the other nine.
+ */
+async function copyInto(pathValues, dirValue) {
+  const dir = mustBeAbsolute(dirValue, 'The folder');
+  const stat = await fsp.stat(dir).catch(() => null);
+  if (!stat?.isDirectory()) throw new Error('That is not a folder to paste into.');
+  const list = Array.isArray(pathValues) ? pathValues : [];
+  if (!list.length) throw new Error('There is nothing to paste.');
+  const copied = [];
+  const failed = [];
+  for (const value of list) {
+    let from;
+    try {
+      from = mustBeAbsolute(value, 'What is pasted');
+      if (!(await exists(from))) throw new Error('it is not there any more');
+      const inside = path.relative(from, dir);
+      if (inside === '' || (!inside.startsWith('..') && !path.isAbsolute(inside))) {
+        throw new Error('a folder cannot be pasted inside itself');
+      }
+      const name = path.basename(from);
+      const target = path.join(dir, (await exists(path.join(dir, name))) ? await copyName(dir, name) : name);
+      await fsp.cp(from, target, { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true, preserveTimestamps: true });
+      copied.push(target);
+    } catch (error) {
+      failed.push({ path: String(value ?? ''), error: String(error?.message ?? error) });
+    }
+  }
+  return { ok: copied.length > 0, copied, failed, error: copied.length ? null : failed[0]?.error ?? 'Nothing was pasted.' };
+}
+
+/*
+ * The system clipboard's list of files, as macOS keeps it: a property list of
+ * paths under NSFilenamesPboardType. It is what Finder writes when you copy in
+ * it and reads when you paste in it, so the same list works both ways.
+ */
+const xmlEscape = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const xmlUnescape = (text) => String(text).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+
+function filenamesPlist(paths) {
+  return '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n' +
+    '<plist version="1.0"><array>' + paths.map((one) => `<string>${xmlEscape(one)}</string>`).join('') + '</array></plist>';
+}
+
+function readFilenamesPlist(text) {
+  return [...String(text ?? '').matchAll(/<string>([\s\S]*?)<\/string>/g)].map((match) => xmlUnescape(match[1])).filter((one) => path.isAbsolute(one));
+}
+
 module.exports = {
+  copyInto,
+  filenamesPlist,
+  readFilenamesPlist,
   listDir,
   findInTree,
   scoreName,
