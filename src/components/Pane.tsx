@@ -17,6 +17,7 @@ import { ExtensionsPanel } from './ExtensionsPanel';
 import { ExtensionView } from './ExtensionView';
 import { PlusIcon, ChevronDownIcon, MinimizeIcon, MaximizeIcon } from './icons';
 import { PanelTab } from './PanelTab';
+import { legible } from '../lib/looks';
 
 export function Pane({ leaf }: { leaf: LeafNode }) {
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -287,7 +288,9 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
             className={`tab-tail${lifting ? ' is-lifting' : ''}`}
             onDoubleClick={quickNewTab}
             draggable={leaf.tabs.length > 0}
-            data-tip="Drag to trade places with another section"
+            // A title, not a tip: the strip scrolls sideways, and a tip drawn
+            // beside it is clipped and adds room to scroll into.
+            title="Drag to trade places with another section"
             onDragStart={(event) => {
               event.dataTransfer.setData(PANE_MIME, leaf.id);
               event.dataTransfer.effectAllowed = 'move';
@@ -431,8 +434,9 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
 
       {activeSession && !panelIds.includes(leaf.active ?? '') && (
         <footer className="pane-status">
-          <span className="status-profile" style={{ color: activeProfile?.color }}>
-            ● {activeProfile?.name ?? 'account'}
+          <span className="status-profile" style={{ color: legible(activeProfile?.color ?? '') }}>
+            <span className="tab-dot" style={{ background: activeProfile?.color }} />
+            {activeProfile?.name ?? 'account'}
           </span>
           <PathLabel path={activeSession.cwd} home={homedir} className="status-cwd" />
           <span

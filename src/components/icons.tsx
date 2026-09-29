@@ -52,7 +52,7 @@ export function MonitorIcon() {
  */
 export function ClustersIcon() {
   return (
-    <svg {...base} aria-hidden>
+    <svg {...base} viewBox="0 0 14 14" aria-hidden>
       <circle cx="7" cy="7" r="5.1" />
       <circle cx="7" cy="7" r="1.7" />
       <path d="M7 1.9v3.4M7 8.7v3.4M1.9 7h3.4M8.7 7h3.4" />
@@ -105,7 +105,7 @@ export function SessionMark({ kind, color }: { kind: 'claude' | 'shell' | 'login
 /** Blocks that fit together — what an extension does to the app. */
 export function ExtensionsIcon() {
   return (
-    <svg {...base} aria-hidden>
+    <svg {...base} viewBox="0 0 14 14" aria-hidden>
       <path d="M2 5.2h4.2v4.2H2zM7.8 2.6h4.2v4.2H7.8zM7.8 8.4h4.2v4.2H7.8z" />
     </svg>
   );

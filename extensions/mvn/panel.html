@@ -80,7 +80,7 @@
   .tag.scope-test { color: var(--text-faint); }
   .tag.scope-provided, .tag.scope-runtime { color: var(--accent); }
   .tag.implied { opacity: 0.7; }
-  .row input[type="checkbox"] { margin: 0 2px 0 0; cursor: pointer; }
+  .row input[type="checkbox"] { margin: 0 2px 0 0; cursor: pointer; accent-color: var(--accent); }
   .play {
     margin-left: auto; opacity: 0; color: var(--accent); padding: 0 4px; border-radius: var(--radius);
     display: inline-flex; align-items: center; flex: 0 0 auto;
@@ -132,7 +132,7 @@
   }
   .foot .grow { flex: 1; }
   .foot .bad { color: var(--danger); }
-  .foot .stale { color: var(--git-new); }
+  .foot .stale { color: var(--warn, var(--git-new)); }
 
   .empty { padding: 30px 20px; color: var(--text-dim); text-align: center; }
   .empty strong { color: var(--text); }

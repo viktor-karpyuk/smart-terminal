@@ -1,4 +1,6 @@
 import type { Settings } from '../state/types';
+import { paletteById } from '../terminals/themes';
+import { setPreviewInk } from './preview';
 
 /**
  * The whole look of the app, as one choice.
@@ -383,7 +385,7 @@ export const CORNERS = {
 export type Corners = keyof typeof CORNERS;
 
 /** The type scale, at 100%. Every size in the stylesheet is one of these. */
-const TYPE_SCALE = { xs: 10, sm: 11, md: 12.5, base: 13, lg: 14 };
+const TYPE_SCALE = { xs: 10, sm: 11, md: 12.5, base: 13, lg: 14, xl: 16 };
 
 export function themeById(id: string, mode: 'dark' | 'light'): InterfaceTheme {
   const found = INTERFACE_THEMES.find((theme) => theme.id === id && theme.mode === mode);
@@ -420,6 +422,8 @@ export function applyLook(settings: Settings) {
   for (const [token, value] of Object.entries(theme.tokens)) root.style.setProperty(`--${token}`, value);
   root.style.setProperty('--git-new', theme.tokens.warn);
 
+  root.style.setProperty('--ink-mix', dark ? '100%' : '62%');
+
   const accent = settings.accent
     ? readableOn(settings.accent, theme.tokens['bg-panel'], dark)
     : theme.tokens.accent;
@@ -445,6 +449,45 @@ export function applyLook(settings: Settings) {
   root.style.setProperty('--r-lg', `${corners.lg}px`);
   root.style.setProperty('--r-modal', `${corners.modal}px`);
 
+  // Syntax colours for the editor and the previews, from the palette made for
+  // this theme — so code reads like the terminal beside it — and each one
+  // moved just far enough to read on the editor's background. Comments are
+  // meant to recede, so they are held to a lower bar.
+  const ink = paletteById(theme.palette)?.theme ?? {};
+  const bg = theme.tokens.bg;
+  const syntax: Record<string, [string | undefined, number]> = {
+    keyword: [ink.magenta, 4],
+    string: [ink.green, 4],
+    number: [dark ? ink.brightYellow : ink.yellow, 4],
+    fn: [ink.blue, 4],
+    type: [ink.brightCyan ?? ink.cyan, 4],
+    property: [ink.cyan, 4],
+    tag: [ink.yellow, 4],
+    invalid: [ink.red, 4],
+    comment: [ink.brightBlack, 2.6],
+  };
+  for (const [name, [colour, minimum]] of Object.entries(syntax)) {
+    if (colour) root.style.setProperty(`--syn-${name}`, readableOn(colour, bg, dark, minimum));
+  }
+  root.style.setProperty('--syn-punct', theme.tokens['text-dim']);
+
+  // Previews are documents of their own, so they are handed the same colours.
+  const syn = (name: string) => root.style.getPropertyValue(`--syn-${name}`);
+  setPreviewInk({
+    ink: theme.tokens.text,
+    dim: theme.tokens['text-dim'],
+    paper: theme.tokens.bg,
+    rule: theme.tokens.border,
+    inset: theme.tokens['bg-panel'],
+    link: accent,
+    key: syn('fn'),
+    str: syn('string'),
+    num: syn('number'),
+    cons: syn('keyword'),
+    quiet: syn('comment'),
+    tag: syn('tag'),
+  });
+
   // One attribute that changes whenever any of this does, for the things that
   // have to rebuild to follow it — an extension panel is its own document.
   root.setAttribute(
@@ -454,6 +497,22 @@ export function applyLook(settings: Settings) {
 }
 
 /* ---------- colour ---------- */
+
+/**
+ * A colour chosen for the dark themes, made readable on whatever theme is on.
+ *
+ * Account, group and file colours were picked against Midnight, and a pale
+ * green that sings on near-black all but disappears on white. On a light theme
+ * this blends the colour with the theme's own text colour, which is always
+ * dark there; on a dark theme `--ink-mix` is 100% and the colour is untouched.
+ *
+ * It is CSS rather than a computed hex on purpose: the answer changes the
+ * moment the theme does, with nothing to re-render and nothing to go stale.
+ */
+export function legible(colour: string): string {
+  if (!colour || colour === 'currentColor' || colour.startsWith('var(')) return colour;
+  return `color-mix(in srgb, ${colour} var(--ink-mix, 100%), var(--text))`;
+}
 
 function parse(hex: string): [number, number, number] {
   const value = hex.replace('#', '');
@@ -474,6 +533,18 @@ function luminance(colour: string) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
+/** Whether a background is light enough that dark-terminal colours will fade on it. */
+export function isLightSurface(colour: string | undefined) {
+  return Boolean(colour && /^#[0-9a-f]{6}$/i.test(colour) && luminance(colour) > 0.4);
+}
+
+/** `a` blended into `b` by `share` (0–1), as #rrggbb — for places that take no CSS. */
+export function mixHex(a: string, b: string, share: number) {
+  const x = parse(a);
+  const y = parse(b);
+  return hex(x.map((c, i) => c * share + y[i] * (1 - share)) as [number, number, number]);
+}
+
 export function contrast(a: string, b: string) {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
   return (hi + 0.05) / (lo + 0.05);
@@ -492,10 +563,10 @@ function withAlpha(colour: string, alpha: number) {
  * an accent per mode, the one colour is darkened or lightened towards legibility
  * and left alone when it is already there.
  */
-function readableOn(colour: string, surface: string, dark: boolean) {
+function readableOn(colour: string, on: string, dark: boolean, minimum = 4.5) {
   let rgb = parse(colour);
   const target: [number, number, number] = dark ? [255, 255, 255] : [0, 0, 0];
-  for (let step = 0; step < 20 && contrast(hex(rgb), surface) < 4.5; step++) {
+  for (let step = 0; step < 20 && contrast(hex(rgb), on) < minimum; step++) {
     rgb = rgb.map((c, i) => c + (target[i] - c) * 0.1) as [number, number, number];
   }
   return hex(rgb);

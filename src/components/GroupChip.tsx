@@ -3,6 +3,7 @@ import { useStore } from '../state/store';
 import type { GroupArrangement } from '../state/types';
 import { Popover } from './Popover';
 import { GROUP_MIME, SESSION_MIME } from '../lib/drag';
+import { legible } from '../lib/looks';
 
 const ARRANGEMENTS: Array<{ id: GroupArrangement; label: string; hint: string }> = [
   { id: 'tabs', label: 'Stack as tabs', hint: 'one pane' },
@@ -48,7 +49,7 @@ export function GroupChip({ groupId, leafId }: { groupId: string; leafId: string
       <button
         ref={chipRef}
         className={`group-chip${over ? ' is-drop-target' : ''}`}
-        style={{ color: group.color, borderColor: group.color }}
+        style={{ color: legible(group.color), borderColor: legible(group.color) }}
         onDragOver={(event) => {
           // The chip is the group made clickable, so it is also the group made
           // droppable: dragging a tab onto the label puts it in.
@@ -105,7 +106,7 @@ export function GroupChip({ groupId, leafId }: { groupId: string; leafId: string
       </button>
 
       {open && (
-        <Popover anchorEl={chipRef.current} onClose={() => setOpen(false)}>
+        <Popover anchorEl={chipRef.current} menu onClose={() => setOpen(false)}>
           <div className="popover-header">
             <span>{group.name}</span>
             <button className="link-btn" onClick={() => { setOpen(false); setRenaming(true); }}>
@@ -113,32 +114,40 @@ export function GroupChip({ groupId, leafId }: { groupId: string; leafId: string
             </button>
           </div>
 
-          <div className="group-swatches">
-            {['#7dcfff', '#f7768e', '#9ece6a', '#e0af68', '#bb9af7', '#41a6b5', '#ff9e64'].map((color) => (
-              <button
-                key={color}
-                className={`swatch${group.color === color ? ' is-selected' : ''}`}
-                style={{ background: color }}
-                aria-label={color}
-                onClick={() => updateGroup(groupId, { color })}
-              />
-            ))}
+          {/* The same two rows, drawn the same way, as a tab's own menu. */}
+          <div className="menu-row">
+            <span>Colour</span>
+            <div className="menu-swatches" role="radiogroup" aria-label="Group colour">
+              {['#7dcfff', '#f7768e', '#9ece6a', '#e0af68', '#bb9af7', '#41a6b5', '#ff9e64'].map((color) => (
+                <button
+                  key={color}
+                  className={`swatch${group.color === color ? ' is-selected' : ''}`}
+                  style={{ background: color }}
+                  role="radio"
+                  aria-checked={group.color === color}
+                  aria-label={color}
+                  onClick={() => updateGroup(groupId, { color })}
+                />
+              ))}
+            </div>
           </div>
-
-          <label className="field">
-            <span>Text size for this group</span>
-            <div className="segmented">
+          <div className="menu-row">
+            <span>Text size</span>
+            <div className="segmented is-compact" role="radiogroup" aria-label="Text size for this group">
               {SIZES.map((size) => (
                 <button
                   key={String(size)}
-                  className={group.fontSize === size ? 'is-on' : ''}
+                  className={(group.fontSize ?? null) === size ? 'is-on' : ''}
+                  role="radio"
+                  aria-checked={(group.fontSize ?? null) === size}
+                  title={size === null ? "The app's own text size" : `${size} pt`}
                   onClick={() => updateGroup(groupId, { fontSize: size })}
                 >
-                  {size ?? 'default'}
+                  {size ?? 'auto'}
                 </button>
               ))}
             </div>
-          </label>
+          </div>
 
           <div className="menu-label">Arrange its sessions</div>
           {ARRANGEMENTS.map((option) => (
@@ -209,7 +218,7 @@ export function GroupChip({ groupId, leafId }: { groupId: string; leafId: string
 
           <div className="menu-separator" />
           <button
-            className="menu-item"
+            className="menu-item is-danger"
             onClick={() => {
               setOpen(false);
               requestCloseGroup(groupId);
@@ -219,7 +228,7 @@ export function GroupChip({ groupId, leafId }: { groupId: string; leafId: string
             <kbd>reopen from History</kbd>
           </button>
           <button
-            className="menu-item is-danger"
+            className="menu-item"
             onClick={() => {
               setOpen(false);
               removeGroupOnly(groupId);
@@ -257,6 +266,7 @@ export function GroupTheseTabs({ leafId, tabs }: { leafId: string; tabs: string[
         ref={buttonRef}
         className="icon-btn"
         title={`Group the ${loose.length} ungrouped tabs in this pane`}
+        aria-label="Group these tabs"
         onClick={() => setNaming(true)}
       >
         &#9678;

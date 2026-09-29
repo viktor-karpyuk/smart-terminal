@@ -1,4 +1,5 @@
 import { useStore } from '../state/store';
+import { legible } from '../lib/looks';
 
 /**
  * Shown when a session's account reports it is out of usage. The conversation has
@@ -25,7 +26,7 @@ export function HandoffBanner({ sessionId }: { sessionId: string }) {
     <div className="handoff-banner">
       <div className="handoff-text">
         <strong>
-          <span style={{ color: current?.color }}>{current?.name ?? 'This account'}</span> is out of
+          <span style={{ color: legible(current?.color ?? '') }}>{current?.name ?? 'This account'}</span> is out of
           usage
         </strong>
         <small>
@@ -42,8 +43,8 @@ export function HandoffBanner({ sessionId }: { sessionId: string }) {
           candidates.map((profile) => (
             <button
               key={profile.id}
-              className="ghost-btn"
-              style={{ borderColor: profile.color, color: profile.color }}
+              className="ghost-btn is-tinted"
+              style={{ ['--tint' as string]: legible(profile.color) }}
               onClick={() => handoffSession(sessionId, profile.id)}
               title={authByProfile[profile.id]?.email ?? undefined}
             >

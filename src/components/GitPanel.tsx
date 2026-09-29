@@ -97,7 +97,7 @@ function BranchBar({ panelId, root }: { panelId: string; root: string }) {
         <BranchMenu panelId={panelId} root={root} anchorEl={chipRef.current} onClose={() => setOpen(false)} />
       )}
       <button ref={chipRef} className="git-branch" onClick={() => setOpen((was) => !was)} title="Branches">
-        <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="#e0af68" strokeWidth="1.3">
+        <svg width="12" height="12" viewBox="0 0 14 14" fill="none" strokeWidth="1.3" style={{ stroke: 'var(--git-new)' }}>
           <circle cx="3.6" cy="3.2" r="1.7" />
           <circle cx="3.6" cy="10.8" r="1.7" />
           <circle cx="10.4" cy="6.4" r="1.7" />
@@ -602,7 +602,7 @@ function TreeRow({
 }
 
 const LETTER_COLOUR: Record<string, string> = {
-  A: '#9ece6a', M: '#7aa2f7', D: '#f7768e', R: '#bb9af7', C: '#bb9af7', '?': '#e0af68', '!': '#f7768e',
+  A: 'var(--ok)', M: 'var(--accent)', D: 'var(--danger)', R: 'var(--violet)', C: 'var(--violet)', '?': 'var(--git-new)', '!': 'var(--danger)',
 };
 
 /** What each letter means, for the people who have not memorised git's alphabet. */
@@ -1026,7 +1026,7 @@ function FileRow({
         // Untracked takes its colour from the row instead, so that the letter and
         // the name are one mark rather than two, and so the light theme can pick
         // a tone that can actually be read on white.
-        style={file.untracked ? undefined : { color: LETTER_COLOUR[file.letter] ?? '#7b849c' }}
+        style={file.untracked ? undefined : { color: LETTER_COLOUR[file.letter] ?? 'var(--text-dim)' }}
         title={LETTER_MEANS[file.letter] ?? undefined}
       >
         {file.letter}
@@ -1527,7 +1527,7 @@ function Branches({ panelId }: { panelId: string }) {
         {repo?.tags.slice(0, 20).map((tag) => (
           <div key={tag.name} className="git-row is-quiet">
             <span className="git-tick" />
-            <span className="git-file-name" style={{ color: '#e0af68' }}>{tag.name}</span>
+            <span className="git-file-name" style={{ color: 'var(--warn)' }}>{tag.name}</span>
           </div>
         ))}
 

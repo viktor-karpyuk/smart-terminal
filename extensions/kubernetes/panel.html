@@ -30,7 +30,7 @@
   .subtab .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .subtab .ns { color: var(--text-faint); }
   .subtab .x {
-    flex: none; width: 16px; height: 16px; line-height: 14px; text-align: center; border-radius: 4px;
+    flex: none; width: 16px; height: 16px; line-height: 14px; text-align: center; border-radius: calc(var(--radius, 8px) / 2);
     color: var(--text-faint); font-size: 13px; visibility: hidden;
   }
   .subtab:hover .x, .subtab.on .x { visibility: visible; }
@@ -66,7 +66,7 @@
    * them showed up at the moment somebody was already committing to a click.
    */
   .btn.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
-  .btn.bad:hover { color: var(--danger); border-color: var(--danger); background: rgba(247, 118, 142, 0.10); }
+  .btn.bad:hover { color: var(--danger); border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
   .btn[disabled] { opacity: 0.4; pointer-events: none; }
   .gap { flex: 1; min-width: 8px; }
 
@@ -125,7 +125,7 @@
 
   table { border-collapse: collapse; width: 100%; font-size: 11.5px; }
   th.tick, td.tick { width: 24px; padding-right: 0; }
-  td.tick input, th.tick input { cursor: pointer; margin: 0; vertical-align: middle; }
+  td.tick input, th.tick input { cursor: pointer; margin: 0; vertical-align: middle; accent-color: var(--accent); }
   th.more, td.more { width: 22px; padding: 0; text-align: center; }
   td.more button { color: var(--text-faint); padding: 2px 4px; border-radius: var(--radius); opacity: 0; }
   tbody tr:hover td.more button, tbody tr.on td.more button { opacity: 1; }
@@ -156,11 +156,11 @@
 
   .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: baseline; }
   .dot.ok { background: var(--ok); }
-  .dot.warn { background: var(--git-new); }
+  .dot.warn { background: var(--warn, var(--git-new)); }
   .dot.bad { background: var(--danger); }
   .dot.idle { background: var(--text-faint); }
   .bad-text { color: var(--danger); }
-  .warn-text { color: var(--git-new); }
+  .warn-text { color: var(--warn, var(--git-new)); }
 
   aside {
     border-left: 1px solid var(--border); background: var(--bg-panel);
@@ -265,7 +265,7 @@
   .card b { display: block; font-size: 21px; font-weight: 500; line-height: 1.2; }
   .card span { font-size: 10.5px; color: var(--text-faint); }
   .card.bad b { color: var(--danger); }
-  .card.warn b { color: var(--git-new); }
+  .card.warn b { color: var(--warn, var(--git-new)); }
 
   /* Capacity: one bar carrying two facts, promised behind and used in front. */
   .gauges { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 10px; padding: 0 12px 12px; }
@@ -281,12 +281,12 @@
   .gauge-bar span { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 99px; }
   .gauge-req { background: var(--accent-soft); }
   .gauge-use { background: var(--accent); height: 4px !important; top: 2.5px !important; }
-  .gauge-use.is-over { background: var(--git-new); }
+  .gauge-use.is-over { background: var(--warn, var(--git-new)); }
   .gauge-foot { display: flex; justify-content: space-between; gap: 8px; font-size: 10px; color: var(--text-faint); }
   .gauge-foot i { display: inline-block; width: 7px; height: 7px; border-radius: 2px; margin-right: 5px; vertical-align: baseline; }
   .key-req { background: var(--accent-soft); }
   .key-use { background: var(--accent); }
-  .key-use.is-over { background: var(--git-new); }
+  .key-use.is-over { background: var(--warn, var(--git-new)); }
 
   /* Two blocks side by side where there is room, stacked where there is not. */
   .split { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 10px; padding: 0 12px 12px; }
@@ -312,7 +312,7 @@
   .meter-track { flex: 1; height: 6px; border-radius: 99px; background: var(--bg-input); overflow: hidden; }
   .meter-track.wide { flex: 2; }
   .meter-track i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
-  .meter-track i.is-warn { background: var(--git-new); }
+  .meter-track i.is-warn { background: var(--warn, var(--git-new)); }
   .meter-track i.is-bad { background: var(--danger); }
   .meter-num { flex: 0 0 auto; min-width: 34px; text-align: right; color: var(--text-dim); font-size: 10.5px; }
   .meter-legend { display: flex; gap: 7px; font-size: 9.5px; color: var(--text-faint); padding-top: 3px; }
@@ -338,7 +338,7 @@
   .pressure {
     margin: 0 12px 12px; padding: 8px 11px; font-size: 11.5px;
     border: 1px solid var(--danger); border-radius: var(--radius);
-    background: rgba(247, 118, 142, 0.08); color: var(--text);
+    background: color-mix(in srgb, var(--danger) 8%, transparent); color: var(--text);
   }
   .pressure b { color: var(--danger); font-weight: 600; }
 
@@ -348,14 +348,14 @@
    * origin of its own and cannot reach the app's stylesheet; a test compares the
    * rules that produce the spans, which is the half that can be wrong quietly.
    */
-  .y-key { color: #7aa2f7; }
-  .y-str { color: #9ece6a; }
-  .y-num { color: #ff9e64; }
-  .y-const, .y-anchor { color: #bb9af7; }
-  .y-tag, .y-block { color: #e0af68; }
-  .y-punct, .y-colon, .y-dash { color: #7b849c; }
-  .y-comment { color: #565f89; font-style: italic; }
-  .y-doc { color: #565f89; }
+  .y-key { color: var(--accent, #7aa2f7); }
+  .y-str { color: var(--ok, #9ece6a); }
+  .y-num { color: color-mix(in srgb, var(--danger, #f7768e) 45%, var(--warn, #e0af68)); }
+  .y-const, .y-anchor { color: var(--violet, #bb9af7); }
+  .y-tag, .y-block { color: var(--warn, #e0af68); }
+  .y-punct, .y-colon, .y-dash { color: var(--text-dim, #7b849c); }
+  .y-comment { color: var(--text-faint, #565f89); font-style: italic; }
+  .y-doc { color: var(--text-faint, #565f89); }
 
   /* A manifest is read far more often than it is edited: give it room. */
   pre.yaml, #yaml-edit {

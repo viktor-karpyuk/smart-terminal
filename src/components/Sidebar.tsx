@@ -10,6 +10,7 @@ import { compactPath } from '../lib/labels';
 import { PathLabel } from './PathLabel';
 import { Popover } from './Popover';
 import { AccountsIcon, AppearanceIcon, ClustersIcon, ExtensionsIcon, HistoryIcon, MonitorIcon, UsageIcon, OpenInSectionIcon, RefreshIcon } from './icons';
+import { legible } from '../lib/looks';
 
 /**
  * The narrowest the sidebar will sit at. With the switches down to icons what
@@ -298,7 +299,7 @@ function Folders() {
       {groups.map(([repo, ids]) => (
         <div className="sidebar-group" key={repo || 'loose'}>
           <div className="sidebar-group-header" title={repo || 'Not in a git repository'}>
-            <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke={repo ? '#e0af68' : '#565f79'} strokeWidth="1.3">
+            <svg width="11" height="11" viewBox="0 0 14 14" fill="none" strokeWidth="1.3" style={{ stroke: repo ? 'var(--git-new)' : 'var(--text-faint)' }}>
               {repo ? (
                 <>
                   <circle cx="3.6" cy="3.2" r="1.7" />
@@ -310,7 +311,7 @@ function Folders() {
                 <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
               )}
             </svg>
-            <span style={{ color: repo ? '#e0af68' : undefined }}>
+            <span className="sidebar-group-name" style={{ color: repo ? 'var(--git-new)' : undefined }}>
               {repo ? (repo.split('/').filter(Boolean).pop() ?? repo) : 'Not in a repository'}
             </span>
             <span className="sidebar-group-count">{ids.length}</span>
@@ -481,7 +482,7 @@ export function Sidebar() {
                         title={auth?.loggedIn ? `Signed in as ${auth.email}` : 'Not signed in'}
                       >
                         <span className="tab-dot" style={{ background: profile.color }} />
-                        <span style={{ color: profile.color }}>{profile.name}</span>
+                        <span className="sidebar-group-name" style={{ color: legible(profile.color) }}>{profile.name}</span>
                         <span className="sidebar-group-account">{auth?.loggedIn ? auth.email : ''}</span>
                         <span className="sidebar-group-count">{ids.length}</span>
                       </div>

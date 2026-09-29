@@ -82,12 +82,12 @@ export function MonitorPanel({ panelId }: { panelId: string }) {
 
         <section className="monitor-detail">
           {chosen === STORAGE && <Storage />}
-          {!chosen && <p className="usage-note">Pick a session to see how it is going.</p>}
+          {!chosen && <p className="empty-state">Pick a session to see how it is going.</p>}
           {chosen && chosen !== STORAGE && !current && (
-            <p className="usage-note">Reading its transcript…</p>
+            <p className="empty-state">Reading its transcript…</p>
           )}
           {current && !current.ok && (
-            <p className="usage-note">
+            <p className="empty-state">
               {current.reason === 'empty'
                 ? 'Nothing written yet — a session says nothing about itself until its first turn.'
                 : 'No conversation on disk for this session.'}
@@ -140,7 +140,7 @@ function FleetRow({
   const title = useStore((s) => s.sessions[sessionId]?.customTitle || s.sessions[sessionId]?.title || 'session');
   const colour = useStore((s) => {
     const owner = s.sessions[sessionId]?.profileId;
-    return (owner ? s.profiles.find((p) => p.id === owner)?.color : null) ?? '#7aa2f7';
+    return (owner ? s.profiles.find((p) => p.id === owner)?.color : null) ?? 'var(--text-faint)';
   });
   const worst = verdict?.ok ? verdict.worst : null;
   const share = verdict?.ok && verdict.context.window ? verdict.context.last / verdict.context.window : 0;

@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 
 interface Props {
   /** Anchor the menu under an element (a button that opens it). */
+  /** Laid out as a menu — rows close together — even when anchored to an element. */
+  menu?: boolean;
   anchorEl?: HTMLElement | null;
   /** Or anchor it at a point (a right-click). */
   anchorPoint?: { x: number; y: number } | null;
@@ -15,7 +17,7 @@ interface Props {
  * hidden` can clip it, and clamped to the viewport so a trigger near an edge
  * still gets a fully visible menu.
  */
-export function Popover({ anchorEl, anchorPoint, onClose, children }: Props) {
+export function Popover({ anchorEl, anchorPoint, menu, onClose, children }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
 
@@ -96,7 +98,7 @@ export function Popover({ anchorEl, anchorPoint, onClose, children }: Props) {
   return createPortal(
     <div
       ref={ref}
-      className={`popover${anchorPoint ? ' popover-menu' : ''}`}
+      className={`popover${anchorPoint || menu ? ' popover-menu' : ''}`}
       style={{
         top: position?.top ?? 0,
         left: position?.left ?? 0,

@@ -37,6 +37,12 @@ export function App() {
 
   useEffect(() => window.api.onMenuAction(({ id }) => handleMenuAction(id)), []);
 
+  // The platform on the root, for the few rules that differ — the title bar
+  // only leaves room for traffic lights where there are traffic lights.
+  useEffect(() => {
+    document.documentElement.dataset.platform = window.api.platform;
+  }, []);
+
   // Stamp the look on the root so every token follows it, and keep following
   // the OS while the setting says `system`.
   useEffect(() => {

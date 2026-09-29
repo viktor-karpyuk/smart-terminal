@@ -95,13 +95,76 @@ export function previewable(path: string, rules?: PreviewRule[]): boolean {
  * and cannot reach a stylesheet, and the colours have to be passed in anyway
  * because a frame cannot see the theme it is sitting in.
  */
+/** The colours a preview is painted in. */
+export interface PreviewInk {
+  ink: string;
+  dim: string;
+  paper: string;
+  rule: string;
+  inset: string;
+  link: string;
+  key: string;
+  str: string;
+  num: string;
+  cons: string;
+  quiet: string;
+  tag: string;
+}
+
+const DARK_INK: PreviewInk = {
+  ink: '#c0caf5',
+  dim: '#7f8ab0',
+  paper: '#1a1b26',
+  rule: '#2c3049',
+  inset: '#20222f',
+  link: '#7aa2f7',
+  key: '#7aa2f7',
+  str: '#9ece6a',
+  num: '#ff9e64',
+  cons: '#bb9af7',
+  quiet: '#565f89',
+  tag: '#e0af68',
+};
+
+const LIGHT_INK: PreviewInk = {
+  ink: '#2a2f3a',
+  dim: '#5d6577',
+  paper: '#ffffff',
+  rule: '#e3e6ee',
+  inset: '#f4f6fa',
+  link: '#2f6fdd',
+  key: '#2f6fdd',
+  str: '#3f7f3a',
+  num: '#b5540a',
+  cons: '#8250df',
+  quiet: '#8b93a7',
+  tag: '#8a5a12',
+};
+
+/**
+ * The app's current look, once it has one.
+ *
+ * A preview is a document of its own and cannot read the window's tokens, so
+ * the app hands them over whenever the look changes. Until it does — and in the
+ * tests, where there is no window — the two built-in sets stand in.
+ */
+let themedInk: PreviewInk | null = null;
+
+export function setPreviewInk(next: PreviewInk | null) {
+  themedInk = next;
+}
+
+export function inkFor(dark: boolean): PreviewInk {
+  return themedInk ?? (dark ? DARK_INK : LIGHT_INK);
+}
+
 function styles(dark: boolean): string {
-  const ink = dark ? '#c0caf5' : '#2a2f3a';
-  const dim = dark ? '#7f8ab0' : '#5d6577';
-  const paper = dark ? '#1a1b26' : '#ffffff';
-  const rule = dark ? '#2c3049' : '#e3e6ee';
-  const inset = dark ? '#20222f' : '#f4f6fa';
-  const link = dark ? '#7aa2f7' : '#2f6fdd';
+  const ink = inkFor(dark).ink;
+  const dim = inkFor(dark).dim;
+  const paper = inkFor(dark).paper;
+  const rule = inkFor(dark).rule;
+  const inset = inkFor(dark).inset;
+  const link = inkFor(dark).link;
 
   return `
     :root { color-scheme: ${dark ? 'dark' : 'light'}; }
@@ -424,14 +487,14 @@ function tagSpans(tag: string, offset: number): Span[] {
 }
 
 function xmlStyles(dark: boolean): string {
-  const ink = dark ? '#c0caf5' : '#2a2f3a';
-  const paper = dark ? '#1a1b26' : '#ffffff';
-  const name = dark ? '#7aa2f7' : '#2f6fdd';
-  const attr = dark ? '#bb9af7' : '#8250df';
-  const value = dark ? '#9ece6a' : '#3f7f3a';
-  const quiet = dark ? '#565f89' : '#8b93a7';
-  const rule = dark ? '#2c3049' : '#e3e6ee';
-  const inset = dark ? '#20222f' : '#f4f6fa';
+  const ink = inkFor(dark).ink;
+  const paper = inkFor(dark).paper;
+  const name = inkFor(dark).key;
+  const attr = inkFor(dark).cons;
+  const value = inkFor(dark).str;
+  const quiet = inkFor(dark).quiet;
+  const rule = inkFor(dark).rule;
+  const inset = inkFor(dark).inset;
 
   return `
     :root { color-scheme: ${dark ? 'dark' : 'light'}; }
@@ -634,14 +697,14 @@ function renderLine(line: Line, kind: 'dockerfile' | 'shell'): string {
 }
 
 function scriptStyles(dark: boolean): string {
-  const ink = dark ? '#c0caf5' : '#2a2f3a';
-  const paper = dark ? '#1a1b26' : '#ffffff';
-  const word = dark ? '#7aa2f7' : '#2f6fdd';
-  const str = dark ? '#9ece6a' : '#3f7f3a';
-  const quiet = dark ? '#565f89' : '#8b93a7';
-  const rule = dark ? '#2c3049' : '#e3e6ee';
-  const inset = dark ? '#20222f' : '#f4f6fa';
-  const mark = dark ? '#bb9af7' : '#8250df';
+  const ink = inkFor(dark).ink;
+  const paper = inkFor(dark).paper;
+  const word = inkFor(dark).key;
+  const str = inkFor(dark).str;
+  const quiet = inkFor(dark).quiet;
+  const rule = inkFor(dark).rule;
+  const inset = inkFor(dark).inset;
+  const mark = inkFor(dark).cons;
 
   return `
     :root { color-scheme: ${dark ? 'dark' : 'light'}; }
@@ -1110,16 +1173,16 @@ function renderYamlNode(node: YamlNode, depth: number, openTo: number): string {
 }
 
 function yamlStyles(dark: boolean): string {
-  const ink = dark ? '#c0caf5' : '#2a2f3a';
-  const paper = dark ? '#1a1b26' : '#ffffff';
-  const key = dark ? '#7aa2f7' : '#2f6fdd';
-  const str = dark ? '#9ece6a' : '#3f7f3a';
-  const num = dark ? '#ff9e64' : '#b5540a';
-  const cons = dark ? '#bb9af7' : '#8250df';
-  const quiet = dark ? '#565f89' : '#8b93a7';
-  const tag = dark ? '#e0af68' : '#8a5a12';
-  const rule = dark ? '#2c3049' : '#e3e6ee';
-  const inset = dark ? '#20222f' : '#f4f6fa';
+  const ink = inkFor(dark).ink;
+  const paper = inkFor(dark).paper;
+  const key = inkFor(dark).key;
+  const str = inkFor(dark).str;
+  const num = inkFor(dark).num;
+  const cons = inkFor(dark).cons;
+  const quiet = inkFor(dark).quiet;
+  const tag = inkFor(dark).tag;
+  const rule = inkFor(dark).rule;
+  const inset = inkFor(dark).inset;
 
   return `
     :root { color-scheme: ${dark ? 'dark' : 'light'}; }

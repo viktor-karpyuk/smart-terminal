@@ -23,14 +23,14 @@
   }
   .bar .grow { flex: 1; }
   .btn {
-    padding: 3px 9px; border-radius: 5px; font-size: 11.5px;
+    padding: 3px 9px; border-radius: calc(var(--radius, 8px) - 3px); font-size: 11.5px;
     border: 1px solid var(--border-strong); color: var(--text-dim);
     white-space: nowrap;
   }
   .btn:hover { color: var(--text); border-color: var(--accent); }
   .btn[disabled] { opacity: 0.4; cursor: not-allowed; }
   .btn.is-on { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
-  .icon-btn { padding: 2px 6px; border-radius: 5px; color: var(--text-dim); font-size: 13px; }
+  .icon-btn { padding: 2px 6px; border-radius: calc(var(--radius, 8px) - 3px); color: var(--text-dim); font-size: 13px; }
   .icon-btn:hover { color: var(--text); background: var(--bg-elevated); }
 
   .where { display: flex; align-items: center; gap: 6px; font-size: 11.5px; min-width: 0; }
@@ -44,7 +44,7 @@
   .find input {
     width: 170px; padding: 3px 7px; font: inherit; font-size: 11.5px;
     background: var(--bg-input); color: var(--text);
-    border: 1px solid var(--border-strong); border-radius: 5px;
+    border: 1px solid var(--border-strong); border-radius: calc(var(--radius, 8px) - 3px);
   }
   .find input:focus { outline: none; border-color: var(--accent); }
   .find .count { font-size: 10.5px; color: var(--text-faint); min-width: 46px; text-align: right; }
@@ -63,6 +63,9 @@
   .list { flex: 1; overflow: auto; position: relative; min-width: 0; }
   .spacer { position: relative; }
   #lanes { position: absolute; left: 0; top: 0; pointer-events: none; }
+  /* The lane colours are chosen for dark themes; on a light one thin lines in
+     them all but vanish, so the whole graph is drawn a shade deeper. */
+  :root.is-light #lanes { filter: brightness(0.72) saturate(1.25); }
   #rows { position: absolute; left: 0; top: 0; right: 0; }
 
   .row {
@@ -127,7 +130,7 @@
   .files { display: grid; gap: 1px; }
   .file {
     display: flex; align-items: center; gap: 7px; width: 100%;
-    padding: 2px 4px; border-radius: 4px; font-size: 11.5px; text-align: left;
+    padding: 2px 4px; border-radius: calc(var(--radius, 8px) / 2); font-size: 11.5px; text-align: left;
   }
   .file:hover { background: var(--bg-elevated); }
   .file .path { flex: 1; overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); direction: rtl; }
@@ -142,7 +145,7 @@
   /* The diff of one file, in the panel, because that is what a click was asking. */
   .patch {
     margin: 1px 0 5px; padding: 6px 8px; max-height: 320px; overflow: auto;
-    background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: calc(var(--radius, 8px) / 2);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 10.5px; line-height: 1.45; white-space: pre; tab-size: 2;
   }
@@ -164,7 +167,7 @@
   .naming input {
     flex: 1; min-width: 0; padding: 3px 7px; font: inherit; font-size: 11.5px;
     background: var(--bg-input); color: var(--text);
-    border: 1px solid var(--border-strong); border-radius: 5px;
+    border: 1px solid var(--border-strong); border-radius: calc(var(--radius, 8px) - 3px);
   }
   .naming input:focus { outline: none; border-color: var(--accent); }
 
@@ -220,6 +223,7 @@
 <script>
 (function () {
   'use strict';
+  if (getComputedStyle(document.documentElement).colorScheme === 'light') document.documentElement.classList.add('is-light');
 
   // ---------------------------------------------------------------- state
 

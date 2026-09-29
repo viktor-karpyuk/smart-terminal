@@ -1,7 +1,8 @@
 /**
  * An extension that brings its own code.
  *
- * It is handed `{ path, text, dark }` and returns a complete HTML document. It
+ * It is handed `{ path, text, dark }` — and, from the app, `ink`, its current
+ * colours, which it paints with when present — and returns a complete HTML document. It
  * runs in a worker: no DOM, no modules, no way to reach the app, the disk or the
  * page it will be shown on — and what it returns is put in a frame that runs no
  * scripts. So the worst an extension can do to a document is describe it badly.
@@ -86,18 +87,18 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
-function render({ path, text, dark }) {
+function render({ path, text, dark, ink: theme }) {
   const lines = String(text ?? '');
   const firstLine = lines.split('\n', 1)[0] ?? '';
   const delimiter = delimiterFor(path, firstLine);
   const rows = parse(lines, delimiter);
 
-  const ink = dark ? '#c0caf5' : '#2a2f3a';
-  const paper = dark ? '#1a1b26' : '#ffffff';
-  const rule = dark ? '#2c3049' : '#e3e6ee';
-  const inset = dark ? '#20222f' : '#f4f6fa';
-  const quiet = dark ? '#565f89' : '#8b93a7';
-  const num = dark ? '#ff9e64' : '#b5540a';
+  const ink = theme ? theme.ink : (dark ? '#c0caf5' : '#2a2f3a');
+  const paper = theme ? theme.paper : (dark ? '#1a1b26' : '#ffffff');
+  const rule = theme ? theme.rule : (dark ? '#2c3049' : '#e3e6ee');
+  const inset = theme ? theme.inset : (dark ? '#20222f' : '#f4f6fa');
+  const quiet = theme ? theme.quiet : (dark ? '#565f89' : '#8b93a7');
+  const num = theme ? theme.num : (dark ? '#ff9e64' : '#b5540a');
 
   if (!rows.length) {
     return `<!doctype html><meta charset="utf-8"><body style="background:${paper};color:${quiet};font:13px system-ui;padding:20px">Nothing in this file.</body>`;

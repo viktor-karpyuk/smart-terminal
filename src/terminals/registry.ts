@@ -126,6 +126,12 @@ export interface TerminalLook {
   letterSpacing: number;
   cursorBlink: boolean;
   cursorStyle: 'bar' | 'block' | 'underline';
+  /**
+   * The least contrast a character may have against its background. Programs
+   * pick their own colours — Claude's yellows and pale blues among them — and
+   * choose them for dark terminals; on a light one xterm nudges just those.
+   */
+  minimumContrastRatio: number;
   theme: ITheme;
 }
 
@@ -153,6 +159,7 @@ export function ensureTerminal(id: string, options: CreateOptions): TerminalHand
     letterSpacing: options.letterSpacing,
     cursorBlink: options.cursorBlink,
     cursorStyle: options.cursorStyle,
+    minimumContrastRatio: options.minimumContrastRatio,
     scrollback: options.scrollback,
     allowProposedApi: true,
     macOptionIsMeta: true,
@@ -441,6 +448,7 @@ export function applyAppearance(look: TerminalLook) {
     options.letterSpacing = look.letterSpacing;
     options.cursorBlink = look.cursorBlink;
     options.cursorStyle = look.cursorStyle;
+    options.minimumContrastRatio = look.minimumContrastRatio;
     options.theme = look.theme;
     handle.lastCols = 0;
     handle.lastRows = 0;

@@ -45,23 +45,37 @@ const theme = EditorView.theme(
     },
     '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--accent)' },
     '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': {
-      backgroundColor: 'rgba(122, 162, 247, 0.22)',
+      backgroundColor: 'color-mix(in srgb, var(--accent) 22%, transparent)',
     },
     '.cm-gutters': {
       backgroundColor: 'var(--bg)',
-      color: '#3d4459',
+      color: 'var(--text-faint)',
       border: 'none',
       paddingRight: '4px',
     },
     '.cm-activeLineGutter': { backgroundColor: 'transparent', color: 'var(--text-dim)' },
-    '.cm-activeLine': { backgroundColor: 'rgba(122, 162, 247, 0.05)' },
-    '.cm-selectionMatch': { backgroundColor: 'rgba(122, 162, 247, 0.16)' },
-    '.cm-searchMatch': { backgroundColor: 'rgba(224, 175, 104, 0.24)' },
-    '.cm-searchMatch.cm-searchMatch-selected': { backgroundColor: 'rgba(224, 175, 104, 0.42)' },
+    '.cm-activeLine': { backgroundColor: 'color-mix(in srgb, var(--accent) 5%, transparent)' },
+    '.cm-selectionMatch': { backgroundColor: 'color-mix(in srgb, var(--accent) 16%, transparent)' },
+    '.cm-searchMatch': { backgroundColor: 'color-mix(in srgb, var(--warn) 24%, transparent)' },
+    '.cm-searchMatch.cm-searchMatch-selected': {
+      backgroundColor: 'color-mix(in srgb, var(--warn) 42%, transparent)',
+    },
+    '.cm-tooltip, .cm-panels': { backgroundColor: 'var(--bg-panel)', color: 'var(--text)', borderColor: 'var(--border)' },
+    '.cm-panels input, .cm-panels button': {
+      color: 'var(--text)',
+      backgroundColor: 'var(--bg-input)',
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--r-sm)',
+    },
+    '.cm-matchingBracket, &.cm-focused .cm-matchingBracket': {
+      backgroundColor: 'color-mix(in srgb, var(--accent) 20%, transparent)',
+      outline: 'none',
+    },
     '.cm-scroller': { overflow: 'auto', lineHeight: '1.6' },
-    '.cm-panels': { backgroundColor: 'var(--bg-panel)', color: 'var(--text)' },
-    '.cm-panels input': { fontSize: '12px' },
+    '.cm-panels input': { fontSize: 'var(--fs-md)' },
   },
+  // Everything CodeMirror would colour by itself is coloured above from the
+  // theme's tokens, so its own dark-or-light defaults never show either way.
   { dark: true },
 );
 
@@ -70,13 +84,13 @@ const theme = EditorView.theme(
  * them so the two cannot drift apart.
  */
 const INK = {
-  key: '#7aa2f7',
-  str: '#9ece6a',
-  num: '#ff9e64',
-  const: '#bb9af7',
-  quiet: '#565f89',
-  tag: '#e0af68',
-  punct: '#7b849c',
+  key: 'var(--syn-fn)',
+  str: 'var(--syn-string)',
+  num: 'var(--syn-number)',
+  const: 'var(--syn-keyword)',
+  quiet: 'var(--syn-comment)',
+  tag: 'var(--syn-tag)',
+  punct: 'var(--syn-punct)',
 };
 
 const yamlTags = {
@@ -161,17 +175,17 @@ const xmlLanguage = previewLanguage((line, state) => {
 });
 
 const highlight = HighlightStyle.define([
-  { tag: [tags.keyword, tags.modifier, tags.controlKeyword], color: '#bb9af7' },
-  { tag: [tags.string, tags.special(tags.string)], color: '#9ece6a' },
-  { tag: [tags.comment, tags.blockComment, tags.lineComment], color: '#565f79', fontStyle: 'italic' },
-  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: '#7aa2f7' },
-  { tag: [tags.number, tags.bool, tags.null], color: '#ff9e64' },
-  { tag: [tags.typeName, tags.className, tags.namespace], color: '#2ac3de' },
-  { tag: [tags.propertyName, tags.attributeName], color: '#7dcfff' },
-  { tag: [tags.operator, tags.punctuation, tags.separator], color: '#7b849c' },
-  { tag: [tags.heading], color: '#7aa2f7', fontWeight: '600' },
-  { tag: [tags.link, tags.url], color: '#7dcfff', textDecoration: 'underline' },
-  { tag: [tags.invalid], color: '#f7768e' },
+  { tag: [tags.keyword, tags.modifier, tags.controlKeyword], color: 'var(--syn-keyword)' },
+  { tag: [tags.string, tags.special(tags.string)], color: 'var(--syn-string)' },
+  { tag: [tags.comment, tags.blockComment, tags.lineComment], color: 'var(--syn-comment)', fontStyle: 'italic' },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: 'var(--syn-fn)' },
+  { tag: [tags.number, tags.bool, tags.null], color: 'var(--syn-number)' },
+  { tag: [tags.typeName, tags.className, tags.namespace], color: 'var(--syn-type)' },
+  { tag: [tags.propertyName, tags.attributeName], color: 'var(--syn-property)' },
+  { tag: [tags.operator, tags.punctuation, tags.separator], color: 'var(--syn-punct)' },
+  { tag: [tags.heading], color: 'var(--syn-fn)', fontWeight: '600' },
+  { tag: [tags.link, tags.url], color: 'var(--syn-property)', textDecoration: 'underline' },
+  { tag: [tags.invalid], color: 'var(--syn-invalid)' },
 
   // And the ones the preview defines, in the preview's colours.
   { tag: yamlTags['y-key'], color: INK.key },

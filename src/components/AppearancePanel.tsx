@@ -71,7 +71,7 @@ export function AppearancePanel() {
       <div className="modal settings" onMouseDown={(event) => event.stopPropagation()}>
         <header className="modal-header">
           <h2>Settings</h2>
-          <button className="ghost-btn tiny" onClick={close} aria-label="Close">
+          <button className="ghost-btn tiny modal-close" onClick={close} aria-label="Close">
             &times;
           </button>
         </header>

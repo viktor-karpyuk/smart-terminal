@@ -3,6 +3,7 @@ import { useStore } from '../state/store';
 import type { DropSide } from '../state/types';
 import { Popover } from './Popover';
 import { compactPath } from '../lib/labels';
+import { legible } from '../lib/looks';
 
 interface Props {
   leafId: string;
@@ -89,7 +90,7 @@ export function NewSessionMenu({ leafId, anchorEl, cwdHint, side = 'center', onC
           <li key={profile.id}>
             <button className="profile-row" onClick={() => open(profile.id, 'claude')}>
               <span className="tab-dot" style={{ background: profile.color }} />
-              <span className="profile-name" style={{ color: profile.color }}>
+              <span className="profile-name" style={{ color: legible(profile.color) }}>
                 {profile.name}
               </span>
               <span className="profile-hint">

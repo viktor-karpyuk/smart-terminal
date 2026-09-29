@@ -4,6 +4,7 @@ import { useStore } from '../state/store';
 import { allTabs } from '../state/layout';
 import { SplitRightIcon, SplitDownIcon, EvenSplitsIcon, MaximizeIcon } from './icons';
 import { UsageGauge } from './UsageGauge';
+import { legible } from '../lib/looks';
 
 export function TitleBar() {
   const settings = useStore((s) => s.settings);
@@ -57,7 +58,7 @@ export function TitleBar() {
         {activeProfile && (
           <span
             className="titlebar-chip"
-            style={{ borderColor: activeProfile.color, color: activeProfile.color }}
+            style={{ borderColor: legible(activeProfile.color), color: legible(activeProfile.color) }}
             title={
               authByProfile[activeProfile.id]?.loggedIn
                 ? `Signed in as ${authByProfile[activeProfile.id].email}`

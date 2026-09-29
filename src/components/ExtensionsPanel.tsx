@@ -142,7 +142,7 @@ export function ExtensionsPanel() {
         </div>
 
         <div className="extension-detail">
-          {!open && <p className="usage-note">Pick one to read what it does.</p>}
+          {!open && <p className="empty-state">Pick one to read what it does.</p>}
           {open && <Detail row={open} onReview={(id) => inspect({ id })} />}
         </div>
       </div>

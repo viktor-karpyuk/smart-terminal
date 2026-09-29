@@ -46,7 +46,7 @@
 
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); opacity: 0.5; }
   .dot.up { background: var(--ok); opacity: 1; }
-  .dot.busy { background: #d9a441; opacity: 1; animation: pulse 1.2s ease-in-out infinite; }
+  .dot.busy { background: var(--warn, #d9a441); opacity: 1; animation: pulse 1.2s ease-in-out infinite; }
   .dot.bad { background: var(--danger); opacity: 1; }
   .dot.off { background: var(--text-faint); opacity: 0.7; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
@@ -64,7 +64,7 @@
   }
   .pill { padding: 2px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--border); color: var(--text-dim); }
   .pill.up { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
-  .pill.busy { color: #d9a441; border-color: color-mix(in srgb, #d9a441 45%, var(--border)); }
+  .pill.busy { color: var(--warn, #d9a441); border-color: color-mix(in srgb, var(--warn, #d9a441) 45%, var(--border)); }
   .pill.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
   .url { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--accent); cursor: pointer; }
   .url:hover { text-decoration: underline; }
@@ -104,14 +104,14 @@
   .a-u { text-decoration: underline; }
   .a-red { color: var(--danger); }
   .a-green { color: var(--ok); }
-  .a-yellow { color: #d9a441; }
+  .a-yellow { color: var(--warn, #d9a441); }
   .a-blue { color: var(--accent); }
-  .a-magenta { color: #b48ead; }
-  .a-cyan { color: #5fb3b3; }
+  .a-magenta { color: var(--violet, #b48ead); }
+  .a-cyan { color: var(--info, #5fb3b3); }
   .a-white { color: var(--text); }
   .a-black { color: var(--text-dim); }
   .console-empty { padding: 30px 14px; color: var(--text-dim); line-height: 1.6; max-width: 560px; }
-  .console-empty code { font-family: ui-monospace, Menlo, monospace; background: var(--bg-elevated); padding: 1px 5px; border-radius: 3px; }
+  .console-empty code { font-family: ui-monospace, Menlo, monospace; background: var(--bg-elevated); padding: 1px 5px; border-radius: calc(var(--radius, 8px) / 2); }
 
   /* The configuration. */
   form.config { padding: 12px 14px 24px; display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 10px 14px; align-items: start; max-width: 760px; }
@@ -164,6 +164,7 @@
   .method { display: inline-block; min-width: 46px; font-weight: 600; font-size: 10.5px; color: var(--accent); }
   .loading { color: var(--text-faint); padding: 14px 12px; }
   .faint { color: var(--text-faint); }
+  input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 </style>
 
 <div id="app">

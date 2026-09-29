@@ -28,7 +28,7 @@ export function UpdatePanel() {
       <div className="modal modal-narrow" onMouseDown={(event) => event.stopPropagation()}>
         <header className="modal-header">
           <h2>Updates</h2>
-          <button className="ghost-btn tiny" onClick={close}>
+          <button className="ghost-btn tiny modal-close" onClick={close} aria-label="Close">
             &times;
           </button>
         </header>

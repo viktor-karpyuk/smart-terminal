@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { FOLLOW_APP, resolveTerminalTheme } from '../terminals/themes';
-import { activeTheme, isDarkMode } from '../lib/looks';
+import { activeTheme, isDarkMode, isLightSurface } from '../lib/looks';
 import { generateSessionName } from '../lib/names';
 import { shortContext, terminalSetup } from '../lib/extensionHost';
 import { whatItDid } from '../lib/gitUpdate';
@@ -172,6 +172,7 @@ export function terminalLook(settings: Settings): TerminalLook {
     letterSpacing: settings.terminalLetterSpacing,
     cursorBlink: settings.cursorBlink,
     cursorStyle: settings.cursorStyle,
+    minimumContrastRatio: isLightSurface(currentTerminalTheme(settings).background) ? 4.5 : 1,
     theme: currentTerminalTheme(settings),
   };
 }
