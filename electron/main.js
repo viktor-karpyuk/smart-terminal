@@ -231,6 +231,8 @@ const repos = new RepoWatcher({ emit: (root, kind) => send('tree:changed', { roo
  * screen accounts for, which is a worse bug than the panel not having one.
  */
 const kubeStreams = new kube.Streams();
+/** Forwarded ports: records that outlive a panel's frame, and reconnect when a connection drops. */
+const kubeForwards = new kube.Forwards();
 const kubeStreamOwners = new Map();
 
 /**
@@ -613,6 +615,7 @@ function createWindow(windowId = randomUUID(), bounds = null) {
     for (const [streamId, owner] of [...kubeStreamOwners]) {
       if (owner !== windowId) continue;
       kubeStreams.stop(streamId);
+      kubeForwards.stop(streamId);
       kubeStreamOwners.delete(streamId);
     }
     // A window the app took down on its way out is meant to come back next launch.
@@ -1641,6 +1644,27 @@ function registerIpc() {
     };
 
     /*
+     * A forward is a record rather than a process: it says where it stands
+     * (starting, up on which port, reconnecting, failed and why), and it is
+     * started again on the same local port when its connection drops.
+     */
+    if (op === 'portForward') {
+      kubeStreamOwners.set(streamId, windowId);
+      try {
+        return await kubeForwards.start(streamId, args ?? {}, {
+          onChange: (forward) => push('kube:stream-data', { id: streamId, forward }),
+          onEnd: (payload) => {
+            kubeStreamOwners.delete(streamId);
+            push('kube:stream-end', payload);
+          },
+        });
+      } catch (error) {
+        kubeStreamOwners.delete(streamId);
+        return { ok: false, error: String(error?.message ?? error) };
+      }
+    }
+
+    /*
      * A watch is turned into rows here rather than sent on raw.
      *
      * The API server has seventeen kilobytes to say about a pod whose restart
@@ -1877,7 +1901,23 @@ function registerIpc() {
 
   ipcMain.handle('kube:stream-stop', (_e, id) => {
     kubeStreamOwners.delete(String(id ?? ''));
-    return { ok: kubeStreams.stop(String(id ?? '')) };
+    const forward = kubeForwards.stop(String(id ?? ''));
+    return { ok: kubeStreams.stop(String(id ?? '')) || forward };
+  });
+
+  /** The forwards these ids name, as they stand — for a panel whose frame was rebuilt. */
+  ipcMain.handle('kube:forwards', (_e, ids) => ({ ok: true, forwards: kubeForwards.list(Array.isArray(ids) ? ids.map(String) : []) }));
+
+  /*
+   * Open a forward in the browser. Only ever `http://localhost:<the port it
+   * got>` — the panel names a forward, never an address, so it cannot use this
+   * to open anything else.
+   */
+  ipcMain.handle('kube:forward-open', async (_e, id) => {
+    const forward = kubeForwards.get(String(id ?? ''));
+    if (!forward?.port || forward.state !== 'up') return { ok: false, error: 'That forward is not up.' };
+    await shell.openExternal(`http://localhost:${forward.port}/`);
+    return { ok: true };
   });
 
   ipcMain.handle('db:sessions', (_e, options) => db.listSessions(options || {}));
@@ -2971,6 +3011,7 @@ function retireLegacyWorkspace() {
 let springStopped = false;
 app.on('will-quit', () => {
   kubeStreams.stopAll();
+  kubeForwards.stopAll();
   // A `claude -p` nobody can see would go on spending on the person's account.
   reviewService?.stop();
   teamsBot?.stop();

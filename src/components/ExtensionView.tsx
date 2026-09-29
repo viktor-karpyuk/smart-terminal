@@ -422,6 +422,15 @@ function Frame({
         streams.current.delete(id);
         return window.api.kube.stopStream(id);
       }
+      // A panel only ever reads or opens forwards it started itself.
+      if (verb === 'forwards') {
+        return window.api.kube.forwards([...streams.current]);
+      }
+      if (verb === 'openForward') {
+        const id = String(args.id ?? '');
+        if (!streams.current.has(id)) return { ok: false, error: 'that is not a forward this panel started' };
+        return window.api.kube.openForward(id);
+      }
       const id = crypto.randomUUID();
       streams.current.add(id);
       const op =

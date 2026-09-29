@@ -534,6 +534,20 @@
     display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px;
     border: 1px solid var(--border); border-radius: 99px; font-size: 10.5px;
   }
+  .pill.up { border-color: color-mix(in srgb, var(--ok, #3fb950) 55%, var(--border)); color: var(--text); }
+  .pill.retry { border-color: color-mix(in srgb, var(--warn, #d29922) 60%, var(--border)); }
+  .pill .addr { font-family: "JetBrains Mono", "SF Mono", Menlo, ui-monospace, monospace; cursor: pointer; }
+  .pill .addr:hover { text-decoration: underline; }
+  .pill .btn { padding: 0 4px; }
+  /* The forward dialog: one form, not two questions in a row. */
+  .fw-ports { display: flex; flex-wrap: wrap; gap: 5px; margin: 4px 0 10px; }
+  .fw-port { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--border);
+    border-radius: var(--radius); cursor: pointer; font-size: 11.5px; }
+  .fw-port.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .fw-port .dim { font-size: 10.5px; }
+  .fw-row { display: grid; grid-template-columns: 110px 1fr; gap: 8px; align-items: center; margin: 6px 0; }
+  .fw-row input[type=number] { font: inherit; color: var(--text); background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 7px; width: 110px; }
   .ask {
     display: flex; gap: 6px; align-items: center; margin-top: 7px;
   }
@@ -593,6 +607,8 @@
     /** The workload being configured, what it is now, and what it would be. */
     config: null,
     forwards: [],
+    /** Forwards to open in the browser the moment they are up, by id. */
+    openWhenUp: {},
     /** Whether a request is in the air, and how long the last one took. */
     busy: false, tookMs: 0, showing: true, started: false,
     /** Whether a caret is in the YAML box, and what has been typed into it. */
@@ -1160,6 +1176,7 @@
    * only sensible answer, the same one a bare `kubectl` would use.
    */
   function start() {
+    recoverForwards();
     if (state.context) return loadForContext();
     return call('kube.contexts').then(function (result) {
       var first = (result.contexts || [])[0];
@@ -2663,7 +2680,11 @@
       buttons.push('<button class="btn' + (row.suspended ? ' on' : '') + '" data-do="suspend">' +
         (row.suspended ? 'Resume' : 'Suspend') + '</button>');
     }
-    if ((row.forwardable || []).length) buttons.push('<button class="btn" data-do="forward">Forward…</button>');
+    // A pod that is not running has nothing to forward to; everything else lets kubectl pick one that is.
+    if (row.forwardKind && (row.forwardKind !== 'pod' || row.status === 'Running')) {
+      var mine = forwardsOf(row).length;
+      buttons.push('<button class="btn" data-do="forward" title="Reach a port of it from this machine">Forward…' + (mine ? ' <span class="dim">(' + mine + ')</span>' : '') + '</button>');
+    }
     if (row.kind === 'Node') {
       buttons.push('<button class="btn" data-do="cordon">' + (row.schedulable ? 'Cordon' : 'Uncordon') + '</button>');
       buttons.push('<span class="gap"></span><button class="btn bad" data-do="drain">Drain…</button>');
@@ -4350,17 +4371,19 @@
       return;
     }
 
-    // A port-forward talking. The line that matters is the first one.
+    // A forward saying where it stands. The app keeps the record; this is its latest word.
+    if (payload.forward) {
+      if (!payload.done) { keepForward(payload.forward); return; }
+      state.forwards = state.forwards.filter(function (one) { return one.id !== payload.id; });
+      delete state.openWhenUp[payload.id];
+      drawBar();
+      if (state.selected) drawDetailButtonsSoon();
+      if (payload.forward.state === 'failed') say(payload.forward.name + ':' + payload.forward.remote + ' stopped forwarding. ' + (payload.forward.error || ''), true);
+      return;
+    }
     for (var f = 0; f < state.forwards.length; f += 1) {
-      var forward = state.forwards[f];
-      if (forward.id !== payload.id) continue;
-      if (payload.done) { state.forwards.splice(f, 1); drawBar(); return; }
-      var match = /Forwarding from (?:127\.0\.0\.1|\[::1\]):(\d+)/.exec(String(payload.text || ''));
-      if (match) { forward.local = Number(match[1]); forward.up = true; drawBar(); }
-      else if (payload.stream === 'err' && String(payload.text).trim()) {
-        forward.error = String(payload.text).trim().split('\n')[0];
-        drawBar();
-      }
+      if (state.forwards[f].id !== payload.id) continue;
+      if (payload.done) { state.forwards.splice(f, 1); drawBar(); }
       return;
     }
   });
@@ -4696,17 +4719,9 @@
       return;
     }
     if (what === 'forward') {
-      var ports = row.forwardable || [];
-      askFor('Which port of ' + row.name + '? It declares ' + ports.join(', '), String(ports[0]))
-        .then(function (remote) {
-          if (remote == null) return null;
-          return askFor('On which local port? 0 lets the machine choose one.', String(remote))
-            .then(function (local) {
-              if (local == null) return null;
-              forward(row, Number(remote), Number(local));
-              return null;
-            });
-        });
+      forwardDialog(row).then(function (choice) {
+        if (choice) forward(row, choice.remote, choice.local, choice.open);
+      });
     }
   }
 
@@ -4776,15 +4791,139 @@
     }).catch(function (error) { say(String(error.message || error), true); });
   }
 
-  function forward(row, remote, local) {
+  /**
+   * Forward a port of this object to this machine.
+   *
+   * The forward itself is kept by the app, not by this frame: it outlives the
+   * frame being rebuilt, and it is started again on the same local port when
+   * its connection drops, so whatever was pointed at it keeps working.
+   */
+  function forward(row, remote, local, open) {
     call('kube.forward', {
       context: state.context, namespace: row.namespace,
-      kind: row.kind === 'Service' ? 'service' : 'pod', name: row.name,
+      kind: row.forwardKind || 'pod', name: row.name,
       remote: remote, local: local,
     }).then(function (result) {
-      state.forwards.push({ id: result.id, name: row.name, remote: remote, local: local, up: false });
-      drawBar();
+      var record = result.forward || { id: result.id, name: row.name, kind: row.forwardKind, remote: remote, asked: local, port: null, state: 'starting' };
+      if (open) state.openWhenUp[record.id] = true;
+      keepForward(record);
     }).catch(function (error) { say(String(error.message || error), true); });
+  }
+
+  /** Put a forward's latest word into the list, and act on it. */
+  function keepForward(record) {
+    var at = -1;
+    for (var i = 0; i < state.forwards.length; i += 1) if (state.forwards[i].id === record.id) at = i;
+    if (at >= 0) state.forwards[at] = record; else state.forwards.push(record);
+    if (record.state === 'up' && state.openWhenUp[record.id]) {
+      delete state.openWhenUp[record.id];
+      openForward(record.id);
+    }
+    drawBar();
+    // Only a forward appearing changes the count on the button; a state change does not need the pane redrawn.
+    if (at < 0 && state.selected) drawDetailButtonsSoon();
+  }
+
+  /** The forwards pointed at one object. */
+  function forwardsOf(row) {
+    return state.forwards.filter(function (one) {
+      return one.name === row.name && (one.namespace || '') === (row.namespace || '') && (!one.context || one.context === state.context);
+    });
+  }
+
+  function openForward(id) {
+    call('kube.openForward', { id: id }).catch(function (error) { say(String(error.message || error), true); });
+  }
+
+  /** The ones this panel already had, after its frame was rebuilt or it was opened again. */
+  function recoverForwards() {
+    call('kube.forwards').then(function (result) {
+      state.forwards = (result.forwards || []).filter(function (one) { return one.state !== 'failed'; });
+      drawBar();
+    }).catch(function () { /* nothing held; an empty strip is the truth */ });
+  }
+
+  var buttonsTimer = 0;
+  function drawDetailButtonsSoon() {
+    if (buttonsTimer) return;
+    buttonsTimer = setTimeout(function () { buttonsTimer = 0; if (state.selected) drawDetail(); }, 250);
+  }
+
+  /**
+   * One form: which port inside, which port here, and whether to open it.
+   *
+   * The ports it declares are offered with their names, because "http 8080"
+   * and "metrics 9090" say which one you want and two numbers do not. Any other
+   * number can be typed — a container listening on a port it never declared is
+   * ordinary, and the person usually knows it.
+   */
+  function forwardDialog(row) {
+    return new Promise(function (resolve) {
+      var existing = document.getElementById('prompt');
+      if (existing) existing.remove();
+      var ports = row.forwardPorts || (row.forwardable || []).map(function (port) { return { port: port, name: '' }; });
+      var first = ports.length ? ports[0].port : '';
+      var through = row.forwardKind === 'pod' ? '' :
+        '<div class="dim" style="margin:-4px 0 10px;font-size:11px">kubectl picks one of its pods, and picks again if that one goes — the forward follows it.</div>';
+
+      var box = document.createElement('div');
+      box.id = 'prompt';
+      box.style.cssText = 'position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,0.45);z-index:9';
+      box.innerHTML = '<form style="background:var(--bg-panel);border:1px solid var(--border-strong);' +
+        'border-radius:var(--radius);padding:14px 16px;min-width:320px;max-width:82vw">' +
+        '<div style="margin-bottom:8px"><strong>Forward a port of ' + esc(row.name) + '</strong> <span class="dim">' + esc(row.namespace || '') + ' · ' + esc(state.context || '') + '</span></div>' +
+        through +
+        (ports.length
+          ? '<div class="dim" style="font-size:11px">It declares</div><div class="fw-ports">' + ports.map(function (port) {
+              return '<span class="fw-port" data-port="' + port.port + '">' + port.port +
+                (port.name ? ' <span class="dim">' + esc(port.name) + '</span>' : '') +
+                (port.container && ports.length > 1 ? ' <span class="dim">· ' + esc(port.container) + '</span>' : '') + '</span>';
+            }).join('') + '</div>'
+          : '<div class="dim" style="font-size:11px;margin-bottom:8px">It declares no ports. Type the one the application listens on.</div>') +
+        '<label class="fw-row"><span>Port inside</span><input type="number" id="fw-remote" min="1" max="65535" value="' + esc(String(first)) + '" required></label>' +
+        '<label class="fw-row"><span>Port here</span><span><input type="number" id="fw-local" min="0" max="65535" value="' + esc(String(first)) + '"> <span class="dim" style="font-size:11px">0 or empty: any free one</span></span></label>' +
+        '<label style="display:flex;gap:6px;align-items:center;margin-top:8px"><input type="checkbox" id="fw-open"> Open it in the browser when it is up</label>' +
+        '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">' +
+        '<button type="button" class="btn" id="prompt-no">Cancel</button>' +
+        '<button type="submit" class="btn go">Forward</button></div></form>';
+      document.body.appendChild(box);
+
+      var remote = document.getElementById('fw-remote');
+      var local = document.getElementById('fw-local');
+      var mark = function () {
+        box.querySelectorAll('.fw-port').forEach(function (chip) { chip.classList.toggle('on', chip.dataset.port === remote.value); });
+      };
+      // The local port follows the remote one until somebody changes it on purpose.
+      var localTouched = false;
+      local.addEventListener('input', function () { localTouched = true; });
+      remote.addEventListener('input', function () { if (!localTouched) local.value = remote.value; mark(); });
+      box.querySelectorAll('.fw-port').forEach(function (chip) {
+        chip.addEventListener('click', function () {
+          remote.value = chip.dataset.port;
+          if (!localTouched) local.value = chip.dataset.port;
+          mark();
+        });
+      });
+      mark();
+      remote.focus();
+      remote.select();
+
+      var close = function (value) {
+        if (!box.parentNode) return;
+        box.remove();
+        resolve(value);
+      };
+      box.querySelector('#prompt-no').addEventListener('click', function () { close(null); });
+      box.addEventListener('keydown', function (event) { if (event.key === 'Escape') close(null); });
+      box.querySelector('form').addEventListener('submit', function (event) {
+        event.preventDefault();
+        var r = Number(remote.value);
+        var l = local.value === '' ? 0 : Number(local.value);
+        if (!Number.isInteger(r) || r < 1 || r > 65535) { remote.focus(); return; }
+        if (!Number.isInteger(l) || l < 0 || l > 65535) { local.focus(); return; }
+        close({ remote: r, local: l, open: document.getElementById('fw-open').checked });
+      });
+    });
   }
 
   /**
@@ -4813,26 +4952,58 @@
     return rows.filter(function (row) { return state.picked.indexOf(row.uid) >= 0; });
   }
 
+  /**
+   * Every forward this panel holds, and where each stands.
+   *
+   * The address is the thing people want, so it is the thing drawn largest:
+   * clicked, it is copied. The cluster is named only when it is not the one on
+   * screen, because a forward into production is still open while you are
+   * looking at staging.
+   */
   function drawBar() {
     if (!state.forwards.length) { $('bar').innerHTML = ''; return; }
     $('bar').innerHTML = '<span class="dim">Forwarding</span>' + state.forwards.map(function (forward) {
-      var label = forward.error
-        ? '<span class="bad-text">' + esc(forward.error) + '</span>'
-        : forward.up
-          ? 'localhost:' + forward.local + ' → ' + esc(forward.name) + ':' + forward.remote
-          : 'starting ' + esc(forward.name) + ':' + forward.remote + '…';
-      return '<span class="pill">' + label +
-        '<button class="btn" data-stop="' + esc(forward.id) + '" style="padding:0 4px">✕</button></span>';
+      var target = esc(forward.kind && forward.kind !== 'pod' ? forward.kind + '/' + forward.name : forward.name) + ':' + forward.remote;
+      var where = forward.context && forward.context !== state.context ? ' <span class="dim">(' + esc(forward.context) + ')</span>' : '';
+      var tip = (forward.namespace ? forward.namespace + ' · ' : '') + (forward.context || '') + (forward.warning ? '\n' + forward.warning : '');
+      var label;
+      var cls = '';
+      if (forward.state === 'up') {
+        cls = ' up';
+        label = '<span class="addr" data-copy-forward="' + esc(forward.id) + '" title="Copy the address">localhost:' + forward.port + '</span> → ' + target + where +
+          (forward.warning ? ' <span class="warn-text" title="' + esc(forward.warning) + '">⚠</span>' : '') +
+          '<button class="btn" data-open-forward="' + esc(forward.id) + '" title="Open http://localhost:' + forward.port + ' in the browser">↗</button>';
+      } else if (forward.state === 'reconnecting') {
+        cls = ' retry';
+        label = '<span class="spin">↻</span> ' + (forward.port ? 'localhost:' + forward.port + ' → ' : '') + target + where +
+          ' <span class="dim" title="' + esc(forward.error || '') + '">reconnecting</span>';
+      } else if (forward.state === 'failed') {
+        label = target + ' <span class="bad-text">' + esc(forward.error || 'stopped') + '</span>';
+      } else {
+        label = 'starting ' + target + where + '…';
+      }
+      return '<span class="pill' + cls + '" title="' + esc(tip) + '">' + label +
+        '<button class="btn" data-stop="' + esc(forward.id) + '" title="Stop forwarding">✕</button></span>';
     }).join('');
   }
 
   $('bar').addEventListener('click', function (event) {
+    var open = event.target.closest('[data-open-forward]');
+    if (open) { openForward(open.dataset.openForward); return; }
+    var copy = event.target.closest('[data-copy-forward]');
+    if (copy) {
+      var held = state.forwards.filter(function (one) { return one.id === copy.dataset.copyForward; })[0];
+      if (held && held.port) { host.emit('copy', { text: 'localhost:' + held.port }); say('Copied localhost:' + held.port + '.'); }
+      return;
+    }
     var button = event.target.closest('[data-stop]');
     if (!button) return;
     var id = button.dataset.stop;
     call('kube.stopForward', { id: id }).catch(function () {});
+    delete state.openWhenUp[id];
     state.forwards = state.forwards.filter(function (forward) { return forward.id !== id; });
     drawBar();
+    if (state.selected) drawDetailButtonsSoon();
   });
 
   /**
