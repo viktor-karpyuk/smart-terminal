@@ -655,3 +655,46 @@ test('what you write says which half did not go, without hiding the half that di
   const bad = await service.compose({ title: 'x', to: 'bchavez' });
   assert.equal(bad.person.why, 'no-address', 'a name is not an address, and it says so before trying');
 });
+
+test('what you write without a title keeps every line, not just the first', { skip }, async () => {
+  const { service } = setup();
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+
+  await service.compose({ body: 'Frozen until 15:00\nNothing merges into main.\nAsk me first.', channel: '' });
+  const [row] = service.store.messages();
+  assert.equal(row.title, 'Frozen until 15:00');
+  assert.equal(row.body, 'Nothing merges into main.\nAsk me first.');
+});
+
+test('what you write yourself does not spend the day a machine has with them', { skip }, async () => {
+  const { service } = setup();
+  graph(service);
+  service.store.setAppStance('code-review', 'ALLOW');
+  assert.equal(service.settings().perPersonPerDay, 1);
+
+  assert.equal((await service.compose({ title: 'a note by hand', to: 'b@kubrik.com' })).person.ok, true);
+  const reminder = await service.send('code-review', 'Code Reviewer', { to: { email: 'b@kubrik.com' }, title: 'waiting on you', key: 'r-after-note' });
+  assert.equal(reminder.ok, true, 'the reminder still goes: the ceiling is about machines, not about you');
+});
+
+test('the default room is its own place, not a room that happens to be called “default”', { skip }, async () => {
+  const { service, calls } = setup({ fail: (url) => url === 'https://example.invalid/hook' && calls.length === 1 });
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  service.saveChannel({ name: 'default', webhookUrl: 'https://example.invalid/a-room-called-default' });
+
+  const out = await service.compose({ title: 'to the default room', channel: '' });
+  assert.equal(out.channel.ok, false, 'the first try fails');
+  assert.equal((await service.retry(out.channel.id)).ok, true);
+  assert.deepEqual(calls.map((call) => call.url), ['https://example.invalid/hook', 'https://example.invalid/hook'],
+    'and the retry goes where the first try went, not into the room named default');
+  assert.equal(service.store.message(out.channel.id).to, '# the default room');
+});
+
+test('a room name that cleans to nothing is asked about, not taken for the default', { skip }, async () => {
+  const { service, calls } = setup();
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  assert.equal((await service.testChannel('#')).error, 'Which room?');
+  assert.equal((await service.testChannel('## ')).error, 'Which room?');
+  assert.equal(calls.length, 0);
+  assert.equal(service.connection().channel.checkedAt, null, 'and nothing was recorded as the channel’s test');
+});

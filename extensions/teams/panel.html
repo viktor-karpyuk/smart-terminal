@@ -491,7 +491,7 @@
   /* A room or a person, told apart at a glance: the outbox holds both. */
   function recipient(to) {
     if (!to) return '—';
-    if (to.charAt(0) === '#') return '<span class="kind"><i>#</i>' + esc(to.slice(1)) + '</span>';
+    if (to.charAt(0) === '#') return '<span class="kind"><i>#</i>' + esc(to.slice(1).trim()) + '</span>';
     return '<span class="kind"><i>@</i>' + esc(to) + '</span>';
   }
 

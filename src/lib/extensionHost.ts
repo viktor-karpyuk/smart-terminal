@@ -290,7 +290,7 @@ export const PERMISSIONS: Record<string, string> = {
   build: 'Read Maven and Gradle projects',
   spring: 'Run and stop Spring Boot applications',
   review: 'Use the Code Reviewer: pull requests, findings, comments, merges',
-  teams: "Change the Teams connection's settings, and send messages in your name",
+  teams: "Change the Teams connection's settings",
   deliver: 'Send messages to people in Teams, in its own name',
   terminal: 'Open terminals and Claude sessions about what it shows',
 };
@@ -316,12 +316,26 @@ export function permissionFor(name: string): string | null {
 }
 
 /**
+ * Calls no permission can grant: only what ships with the app may make them.
+ *
+ * `teams.compose` sends in your name and skips every rule that protects the
+ * person on the other end — the hours, the ceilings, asking first — because
+ * it is meant to be you pressing Send on the Teams screen. Behind the `teams`
+ * permission, every extension already granted that to change a setting could
+ * have written to anybody, as you, as often as it liked, and nobody would have
+ * been asked again. An extension that wants to say something has `deliver`,
+ * which goes through all of those rules.
+ */
+const SHIPPED_ONLY = new Set(['teams.compose']);
+
+/**
  * Whether this panel may make this call. What ships with the app may call
  * anything; anything else only what its manifest asked for and its installer
  * agreed to.
  */
 export function permitted(view: { trusted?: boolean; permissions?: string[] }, name: string): boolean {
   if (view.trusted) return true;
+  if (SHIPPED_ONLY.has(name)) return false;
   const needed = permissionFor(name);
   return needed !== null && (view.permissions ?? []).includes(needed);
 }

@@ -53,12 +53,7 @@ class TeamsService {
   connection() {
     const hasWebhook = Boolean(this.store.secret('webhook.url'));
     const channels = this.channels();
-    // A direct message needs somebody it is from, so a registration without one
-    // is not ready — saying it is would be a green light in front of a failure.
-    const hasGraph = Boolean(
-      this.store.setting('graph.tenantId') && this.store.setting('graph.clientId') &&
-      this.store.secret('graph.clientSecret') && this.store.setting('graph.sender'),
-    );
+    const hasGraph = this.#hasGraph();
     const botReady = Boolean(this.bot?.ready());
     const channel = { ready: hasWebhook || channels.length > 0, via: 'webhook', ...this.#check('channel') };
     const person = { ready: hasGraph || botReady, via: botReady ? (hasGraph ? 'bot-or-graph' : 'bot') : 'graph', ...this.#check('person') };
@@ -82,6 +77,17 @@ class TeamsService {
       checkedAt: latest?.checkedAt ?? null,
       checkError: latest?.checkError ?? null,
     };
+  }
+
+  /*
+   * A direct message needs somebody it is from, so a registration without one
+   * is not ready — saying it is would be a green light in front of a failure.
+   */
+  #hasGraph() {
+    return Boolean(
+      this.store.setting('graph.tenantId') && this.store.setting('graph.clientId') &&
+      this.store.secret('graph.clientSecret') && this.store.setting('graph.sender'),
+    );
   }
 
   /** When one way out was last tried, and what it said. */
@@ -322,16 +328,22 @@ class TeamsService {
     // it was sent and then marked FAILED keeps a time that never happened, and
     // the first thing to ask "when did this go" gets a wrong answer.
     const row = record('SENDING', null);
+    const result = await this.#attempt(row, person, () => this.deliver(message, person));
+    this.changed();
+    return result;
+  }
+
+  /** A row already written as being tried, put on the wire, and written down as what became of it. */
+  async #attempt(row, person, go) {
     try {
-      await this.deliver(message, person);
+      await go();
       this.store.markSent(row.id);
       if (person) this.store.notePersonSent(person.handle);
-      this.changed();
       return { ok: true, id: row.id };
     } catch (error) {
-      this.store.markFailed(row.id, String(error?.message ?? error));
-      this.changed();
-      return { ok: false, why: 'failed', detail: String(error?.message ?? error), id: row.id };
+      const detail = String(error?.message ?? error);
+      this.store.markFailed(row.id, detail);
+      return { ok: false, why: 'failed', detail, id: row.id };
     }
   }
 
@@ -347,6 +359,9 @@ class TeamsService {
    * same time, which is the shape this has now.
    */
   async deliver(message, person) {
+    // The default room by no name at all, which no room called "default" can be
+    // taken for — so a retry goes where the first try went.
+    if (message.defaultRoom) return this.#toDefaultRoom(message);
     if (message.to.channel) return this.#toChannel(message);
     return this.#toPerson(message, person);
   }
@@ -538,23 +553,26 @@ class TeamsService {
    *
    * No name is the default room — the webhook anything lands in when the room
    * it asks for was never set up — and that is the one the screen's own
-   * "Send a test" for a channel means.
+   * "Send a test" for a channel means. Only that one is kept as the channel's
+   * record: a named room proving itself is not the default room proving itself.
    */
   async testChannel(name) {
     const clean = channelName(name);
+    // Something that cleans to nothing ("#", spaces) named a room and named it
+    // badly; only no name at all means the default one.
+    if (!clean && String(name ?? '').trim()) return { ok: false, error: 'Which room?' };
     if (!clean && !this.store.secret('webhook.url')) return { ok: false, error: 'There is no default webhook to test yet — paste one and save it first.' };
-    const message = rules.readMessage({
-      to: { channel: clean || 'default' },
+    const message = this.#forRoom(clean, {
       title: clean ? `Smart Terminal can post in ${clean}` : 'Smart Terminal can post here',
       body: 'Nothing is wrong. Somebody pressed “Send a test message” for this room to find out whether its webhook works.',
     });
     try {
-      await (clean ? this.deliver(message, null) : this.#toDefaultRoom(message));
-      this.#noteCheck('channel', null);
+      await this.deliver(message, null);
+      if (!clean) this.#noteCheck('channel', null);
       this.changed();
       return { ok: true };
     } catch (error) {
-      this.#noteCheck('channel', error);
+      if (!clean) this.#noteCheck('channel', error);
       this.changed();
       return { ok: false, error: String(error?.message ?? error) };
     }
@@ -579,18 +597,20 @@ class TeamsService {
     const heading = String(title ?? '').trim();
     const text = String(body ?? '').trim();
     if (!heading && !text) throw new Error('There is nothing to say.');
-    const room = channel === null || channel === undefined || channel === false ? null : channelName(channel === true ? '' : channel);
+    const room = channel == null || channel === false ? null : channelName(channel === true ? '' : channel);
     const address = String(to ?? '').trim();
     if (room === null && !address) throw new Error('Choose a room, somebody to tell, or both.');
 
-    const shared = { title: heading || text.split('\n')[0].slice(0, 120), body: heading ? text : '', level: 'urgent', key: null };
+    // With no title, the first line stands in for one — and the rest is still said.
+    const [first, ...rest] = text.split('\n');
+    const shared = heading
+      ? { title: heading, body: text, level: 'urgent', key: null }
+      : { title: first.slice(0, 120), body: first.length > 120 ? text : rest.join('\n').trim(), level: 'urgent', key: null };
     const out = { channel: null, person: null };
 
     if (room !== null) {
-      const message = rules.readMessage({ ...shared, to: { channel: room || 'default' } });
-      out.channel = await this.#sendNow(message, null, `#${room || 'default'}`, () => (
-        room ? this.deliver(message, null) : this.#toDefaultRoom(message)
-      ));
+      const message = this.#forRoom(room, shared);
+      out.channel = await this.#sendNow(message, null, room ? `#${room}` : '# the default room', () => this.deliver(message, null));
     }
 
     if (address) {
@@ -599,7 +619,7 @@ class TeamsService {
       } else {
         const message = rules.readMessage({ ...shared, to: { email: address } });
         // Your words, from your own account when there is one; the bot otherwise.
-        message.voice = this.connection().hasGraph ? 'me' : null;
+        message.voice = this.#hasGraph() ? 'me' : null;
         const person = this.store.rememberPerson({ handle: `email:${address}`, address, matchedBy: 'EMAIL' });
         out.person = await this.#sendNow(message, person, address, () => this.deliver(message, person));
       }
@@ -607,6 +627,18 @@ class TeamsService {
 
     this.changed();
     return { ok: true, ...out };
+  }
+
+  /**
+   * A message for a room by name, or for the default room when there is none.
+   *
+   * The mark is set after `readMessage`, which drops it: only this service can
+   * say "the default room", never a sender.
+   */
+  #forRoom(name, input) {
+    const message = rules.readMessage({ ...input, to: { channel: name || 'the default room' } });
+    if (!name) message.defaultRoom = true;
+    return message;
   }
 
   /** The webhook there always was, asked for by no name at all. */
@@ -622,15 +654,7 @@ class TeamsService {
       appId: 'you', key: null, personId: person?.id ?? null, to,
       title: message.title, body: message.body, payload: message, state: 'SENDING', reason: null,
     });
-    try {
-      await go();
-      this.store.markSent(row.id);
-      if (person) this.store.notePersonSent(person.handle);
-      return { ok: true, id: row.id };
-    } catch (error) {
-      this.store.markFailed(row.id, String(error?.message ?? error));
-      return { ok: false, why: 'failed', detail: String(error?.message ?? error), id: row.id };
-    }
+    return this.#attempt(row, person, go);
   }
 
   overview() {
