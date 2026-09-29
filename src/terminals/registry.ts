@@ -117,12 +117,23 @@ function parkingLot(): HTMLDivElement {
   return park;
 }
 
-export interface CreateOptions {
+/** How a terminal is drawn: everything the settings decide about it. */
+export interface TerminalLook {
   fontSize: number;
   fontFamily: string;
+  fontWeight: '300' | '400' | '500';
+  lineHeight: number;
+  letterSpacing: number;
   cursorBlink: boolean;
-  scrollback: number;
+  cursorStyle: 'bar' | 'block' | 'underline';
   theme: ITheme;
+}
+
+/** Bold is one step heavier than whatever regular is. */
+const BOLDER = { '300': '500', '400': '600', '500': '700' } as const;
+
+export interface CreateOptions extends TerminalLook {
+  scrollback: number;
   onData: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
   onTitle: (title: string) => void;
@@ -136,12 +147,12 @@ export function ensureTerminal(id: string, options: CreateOptions): TerminalHand
   const term = new Terminal({
     fontSize: options.fontSize,
     fontFamily: options.fontFamily,
-    fontWeight: '400',
-    fontWeightBold: '600',
-    lineHeight: 1.2,
-    letterSpacing: 0,
+    fontWeight: options.fontWeight,
+    fontWeightBold: BOLDER[options.fontWeight] ?? '600',
+    lineHeight: options.lineHeight,
+    letterSpacing: options.letterSpacing,
     cursorBlink: options.cursorBlink,
-    cursorStyle: 'bar',
+    cursorStyle: options.cursorStyle,
     scrollback: options.scrollback,
     allowProposedApi: true,
     macOptionIsMeta: true,
@@ -419,17 +430,18 @@ export function selectAllIn(id: string | null) {
   if (id) handles.get(id)?.term.selectAll();
 }
 
-export function applyAppearance(
-  fontSize: number,
-  fontFamily: string,
-  cursorBlink: boolean,
-  theme: ITheme,
-) {
+export function applyAppearance(look: TerminalLook) {
   for (const handle of handles.values()) {
-    handle.term.options.fontSize = fontSize;
-    handle.term.options.fontFamily = fontFamily;
-    handle.term.options.cursorBlink = cursorBlink;
-    handle.term.options.theme = theme;
+    const options = handle.term.options;
+    options.fontSize = look.fontSize;
+    options.fontFamily = look.fontFamily;
+    options.fontWeight = look.fontWeight;
+    options.fontWeightBold = BOLDER[look.fontWeight] ?? '600';
+    options.lineHeight = look.lineHeight;
+    options.letterSpacing = look.letterSpacing;
+    options.cursorBlink = look.cursorBlink;
+    options.cursorStyle = look.cursorStyle;
+    options.theme = look.theme;
     handle.lastCols = 0;
     handle.lastRows = 0;
     fitTerminal(handle.id);

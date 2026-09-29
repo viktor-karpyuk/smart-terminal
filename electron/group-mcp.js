@@ -212,7 +212,7 @@ async function callTool(name, args = {}) {
       parts.push(
         '',
         `Also running, but outside your reach: ${reply.beyond.map((s) => s.name + (s.group ? ` (group ${s.group})` : '')).join(', ')}.`,
-        'If you were asked to talk to one of those, say so: the user can widen the reach to every session in Appearance → Session monitor, or put both sessions in the same group.',
+        'If you were asked to talk to one of those, say so: the user can widen the reach to every session in Settings → Sessions, or put both sessions in the same group.',
       );
     }
     return text(parts.join('\n'));

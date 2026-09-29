@@ -36,6 +36,7 @@
   --r-sm: 4px;
   --r-md: 6px;
   --r-lg: 8px;
+  --r-modal: 10px;
   --radius: var(--r-lg);
   --titlebar-h: 38px;
   /* One width for every floating menu: the session menu and the group menu sit
@@ -1098,7 +1099,7 @@ input:focus, textarea:focus { border-color: var(--accent); }
   flex-direction: column;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
-  border-radius: 10px;
+  border-radius: var(--r-modal);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
   overflow: hidden;
 }
@@ -1716,6 +1717,99 @@ input[type='checkbox'] { accent-color: var(--accent); }
 }
 
 input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; border: none; background: none; }
+
+/* ---------- settings ---------- */
+
+/*
+ * One window for everything that can be set, a section at a time. A fixed
+ * height, so moving between sections does not make the window jump about.
+ */
+.modal.settings { width: min(940px, 94vw); height: min(720px, 86vh); }
+.settings-body { flex: 1; }
+.settings-nav { flex-basis: 196px; }
+.settings-nav .profile-nav-item { padding: 7px 10px; }
+.settings-nav-text { display: grid; gap: 1px; min-width: 0; }
+.settings-nav-text > span { font-weight: 600; color: inherit; }
+.settings-nav-text small { font-size: var(--fs-xs); color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.settings-nav .profile-nav-item.is-selected .settings-nav-text > span { color: var(--accent); }
+
+.settings-page { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 22px 28px; display: flex; flex-direction: column; gap: 22px; }
+.settings-page > * { flex: none; }
+
+.settings-group { display: grid; gap: 10px; }
+.settings-group + .settings-group { padding-top: 18px; border-top: 1px solid var(--border); }
+.settings-group > h3 { margin: 0; font-size: var(--fs-base); font-weight: 600; color: var(--text); }
+.settings-group > .form-hint { margin-top: -4px; max-width: 62ch; }
+
+/* A setting: what it is on the left, the control on the right, lined up down the page. */
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 30px; }
+.settings-row-text { display: grid; gap: 2px; min-width: 0; font-size: var(--fs-md); color: var(--text); }
+.settings-row-text small { font-size: var(--fs-sm); line-height: 1.45; color: var(--text-faint); max-width: 52ch; }
+.settings-row-control { flex: 0 0 auto; display: flex; justify-content: flex-end; min-width: 0; max-width: 60%; }
+.settings-row-control select { min-width: 200px; }
+.settings-row.is-toggle { cursor: pointer; }
+.settings-row.is-toggle .checkbox { padding: 0; }
+.settings-row.is-disabled { opacity: 0.5; cursor: not-allowed; }
+.settings-input { width: 220px; }
+
+.settings-slider { display: flex; align-items: center; gap: 10px; width: 280px; }
+.settings-slider output { flex: 0 0 64px; text-align: right; font-size: var(--fs-sm); color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+.settings-foot { display: flex; justify-content: flex-end; }
+
+/* Themes, each drawn as a small picture of the app wearing it. */
+.theme-set { display: grid; gap: 8px; margin-top: 4px; }
+.theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.theme-card { display: grid; gap: 6px; padding: 6px; border-radius: var(--r-lg); border: 1px solid var(--border); background: var(--bg-input); text-align: left; transition: border-color 120ms ease, transform 120ms ease; }
+.theme-card:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+.theme-card.is-selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.theme-mock { display: flex; height: 64px; border-radius: var(--r-md); border: 1px solid; overflow: hidden; }
+.theme-mock-side { flex: 0 0 28%; display: grid; align-content: start; gap: 5px; padding: 8px 6px; border-right: 1px solid; }
+.theme-mock-side i { display: block; height: 4px; border-radius: 2px; }
+.theme-mock-side i:first-child { width: 80%; }
+.theme-mock-side i:nth-child(2) { width: 60%; opacity: 0.6; }
+.theme-mock-side i:nth-child(3) { width: 70%; opacity: 0.6; }
+.theme-mock-main { position: relative; flex: 1; display: grid; align-content: start; gap: 5px; padding: 12px 8px 6px; }
+.theme-mock-main i { display: block; height: 3px; border-radius: 2px; opacity: 0.9; }
+.theme-mock-tab { position: absolute; top: 0; left: 8px; width: 30%; height: 2px; border-radius: 0 0 2px 2px; }
+.theme-card-name { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; padding: 0 2px; font-size: var(--fs-sm); color: var(--text); min-width: 0; }
+.theme-card-name > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.theme-card-name em { flex: none; font-style: normal; font-size: var(--fs-xs); color: var(--accent); }
+
+/* Accent: the theme's own, eight offered, and any colour at all. */
+.accent-swatches { flex-wrap: wrap; gap: 8px; }
+.accent-swatches .swatch { width: 24px; height: 24px; }
+.swatch.is-theme { position: relative; }
+.swatch.is-theme::after { content: 'A'; position: absolute; inset: 0; display: grid; place-items: center; font-size: var(--fs-xs); font-weight: 700; color: var(--on-accent); }
+.swatch.is-custom { position: relative; overflow: hidden; cursor: pointer; background: conic-gradient(#f7768e, #e0af68, #9ece6a, #7dcfff, #7aa2f7, #bb9af7, #f7768e); }
+.swatch.is-custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; padding: 0; border: none; }
+
+.corner-option, .cursor-option { display: inline-flex; align-items: center; gap: 6px; }
+.corner-option i { width: 10px; height: 10px; border-top: 1.5px solid currentColor; border-left: 1.5px solid currentColor; }
+
+/* The cursor as it will be drawn: a bar, a block, or a line under the text. */
+.cursor-glyph { display: inline-block; vertical-align: text-bottom; background: var(--cursor); }
+.cursor-glyph.is-bar { width: 2px; height: 1.1em; }
+.cursor-glyph.is-block { width: 0.6em; height: 1.1em; opacity: 0.85; }
+.cursor-glyph.is-underline { width: 0.6em; height: 2px; }
+.cursor-glyph.is-blinking { animation: cursor-blink 1.1s steps(1) infinite; }
+@keyframes cursor-blink { 50% { opacity: 0; } }
+.cursor-option .cursor-glyph { height: 0.95em; }
+.cursor-option .cursor-glyph.is-underline { height: 2px; }
+
+/* The terminal as it will look, pinned above its settings while they change. */
+.term-preview {
+  position: sticky;
+  top: -8px;
+  z-index: 1;
+  margin-top: -8px;
+  padding: 12px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: 0 8px 20px -12px rgba(0, 0, 0, 0.5);
+  white-space: pre;
+  overflow: hidden;
+}
 
 /* ---------- usage in the title bar ---------- */
 
@@ -3622,3 +3716,5 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 
 /* The session last opened from History, so coming back to the list you can see where you were. */
 .history-row.is-last { box-shadow: inset 2px 0 0 var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+
+@media (prefers-reduced-motion: reduce) { .theme-card, .theme-card:hover { transition: none; transform: none; } .cursor-glyph.is-blinking { animation: none; } }

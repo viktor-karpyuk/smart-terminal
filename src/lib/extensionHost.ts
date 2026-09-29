@@ -975,6 +975,10 @@ export const THEME_TOKENS = [
   'danger',
   'ok',
   'git-new',
+  'warn',
+  'info',
+  'violet',
+  'on-accent',
   'radius',
 ];
 

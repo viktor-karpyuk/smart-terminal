@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { FOLLOW_APP, resolveTerminalTheme } from '../terminals/themes';
+import { activeTheme, isDarkMode } from '../lib/looks';
 import { generateSessionName } from '../lib/names';
 import { shortContext, terminalSetup } from '../lib/extensionHost';
 import { whatItDid } from '../lib/gitUpdate';
@@ -58,6 +59,7 @@ import {
   getTerminal,
   readTail,
   writeToTerminal,
+  type TerminalLook,
 } from '../terminals/registry';
 
 /** Panels whose terminal is being started, so a second press cannot start another. */
@@ -96,6 +98,15 @@ const DEFAULT_SETTINGS: Settings = {
   limitPattern:
     'usage limit reached|reached your usage limit|limit will reset|out of (?:credits|usage)|rate limit exceeded',
   theme: 'system',
+  darkTheme: 'midnight',
+  lightTheme: 'paper',
+  accent: null,
+  uiScale: 1,
+  corners: 'soft',
+  terminalLineHeight: 1.2,
+  terminalLetterSpacing: 0,
+  terminalFontWeight: '400',
+  cursorStyle: 'bar',
   terminalPalette: FOLLOW_APP,
   terminalOverrides: {},
   sessionMessaging: 'group',
@@ -140,17 +151,29 @@ export function panelLabel(panel: Panel | undefined | null): string {
 
 /** Whether the interface is currently dark, resolving `system` against the OS. */
 export function isDarkAppearance(theme: Settings['theme']) {
-  if (theme === 'dark') return true;
-  if (theme === 'light') return false;
-  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  return isDarkMode(theme);
 }
 
 export function currentTerminalTheme(settings: Settings) {
   return resolveTerminalTheme(
     settings.terminalPalette,
     settings.terminalOverrides,
-    isDarkAppearance(settings.theme),
+    activeTheme(settings).palette,
   );
+}
+
+/** Everything a terminal is drawn with, from the settings. */
+export function terminalLook(settings: Settings): TerminalLook {
+  return {
+    fontSize: settings.fontSize,
+    fontFamily: settings.fontFamily,
+    fontWeight: settings.terminalFontWeight,
+    lineHeight: settings.terminalLineHeight,
+    letterSpacing: settings.terminalLetterSpacing,
+    cursorBlink: settings.cursorBlink,
+    cursorStyle: settings.cursorStyle,
+    theme: currentTerminalTheme(settings),
+  };
 }
 
 /** Recent output per session, so a limit notice split across chunks is still matched. */
@@ -2770,20 +2793,18 @@ export const useStore = create<State>((set, get) => ({
       window.api.history.setRecordDefault(after.recordConversations);
     }
 
+    const look = terminalLook(after);
+    const was = terminalLook(before);
     if (
-      after.fontSize !== before.fontSize ||
-      after.fontFamily !== before.fontFamily ||
-      after.cursorBlink !== before.cursorBlink ||
-      after.theme !== before.theme ||
-      after.terminalPalette !== before.terminalPalette ||
-      after.terminalOverrides !== before.terminalOverrides
+      after.terminalOverrides !== before.terminalOverrides ||
+      (Object.keys(look) as Array<keyof TerminalLook>).some(
+        (key) => key !== 'theme' && look[key] !== was[key],
+      ) ||
+      JSON.stringify(look.theme) !== JSON.stringify(was.theme)
     ) {
-      applyAppearance(
-        after.fontSize,
-        after.fontFamily,
-        after.cursorBlink,
-        currentTerminalTheme(after),
-      );
+      applyAppearance(look);
+      // A tab or group with a size of its own keeps it.
+      applyGroupAppearance(get);
     }
     schedulePersist(get);
   },

@@ -118,11 +118,17 @@ export function ExtensionView({ panelId, showing = true }: { panelId: string; sh
 
 /** The appearance stamped on the root, followed as it changes. */
 function useAppliedTheme(): string {
-  const read = () => document.documentElement.dataset.theme ?? '';
+  // The theme, the accent, the text size and the corners all live in `data-look`,
+  // so a panel rebuilds for any of them and not only for light against dark.
+  const read = () =>
+    `${document.documentElement.dataset.theme ?? ''} ${document.documentElement.dataset.look ?? ''}`;
   const [theme, setTheme] = useState(read);
   useEffect(() => {
     const observer = new MutationObserver(() => setTheme(read()));
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme', 'data-look'],
+    });
     setTheme(read());
     return () => observer.disconnect();
   }, []);

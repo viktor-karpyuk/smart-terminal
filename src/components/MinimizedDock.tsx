@@ -69,7 +69,7 @@ function DockedSection({ id }: { id: string }) {
   const restoreSection = useStore((s) => s.restoreSection);
 
   if (!section || !live) return null;
-  const colour = section.colour ?? '#7aa2f7';
+  const colour = section.colour ?? 'var(--accent)';
 
   return (
     <button
@@ -78,7 +78,7 @@ function DockedSection({ id }: { id: string }) {
       onClick={() => restoreSection(id)}
       title={`${section.label} — a whole section, ${live} tab${live === 1 ? '' : 's'}\nClick to put it back where it was`}
     >
-      <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke={colour} strokeWidth="1.3">
+      <svg width="12" height="12" viewBox="0 0 14 14" fill="none" strokeWidth="1.3" style={{ stroke: colour }}>
         <rect x="1.4" y="2.4" width="11.2" height="9.2" rx="1.4" />
         <path d="M5.6 2.4v9.2" />
       </svg>
@@ -100,11 +100,11 @@ function DockedPanel({ panelId }: { panelId: string }) {
   return (
     <button
       className="dock-item is-panel"
-      style={{ ['--dock-tint' as string]: '#7aa2f7' }}
+      style={{ ['--dock-tint' as string]: 'var(--accent)' }}
       onClick={() => restore(panelId)}
       title={[`${name} — set aside`, root, 'Click to bring it back'].join('\n')}
     >
-      <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="#7aa2f7" strokeWidth="1.3">
+      <svg width="11" height="11" viewBox="0 0 14 14" fill="none" strokeWidth="1.3" style={{ stroke: 'var(--accent)' }}>
         <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
       </svg>
       <span className="dock-name">{name}</span>

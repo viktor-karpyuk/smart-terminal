@@ -22,7 +22,7 @@ function buildMenu(send, newWindow, reopenWindow = () => {}) {
               { type: 'separator' },
               { label: 'Accounts…', accelerator: 'Cmd+,', click: action('profiles') },
               { label: 'Usage limits…', accelerator: 'Cmd+U', click: action('usage') },
-              { label: 'Appearance…', accelerator: 'Cmd+Shift+,', click: action('appearance') },
+              { label: 'Settings…', accelerator: 'Cmd+Shift+,', click: action('appearance') },
               { type: 'separator' },
               { role: 'hide' },
               { role: 'hideOthers' },

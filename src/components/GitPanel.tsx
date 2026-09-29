@@ -1341,7 +1341,7 @@ function Lanes({ commit, index, commits }: { commit: GitCommit; index: number; c
         );
       })}
 
-      <circle cx={x(commit.lane)} cy={y} r={commit.merge ? 5 : 4} fill={commit.merge ? commit.colour : '#0b0d13'} stroke={commit.colour} />
+      <circle cx={x(commit.lane)} cy={y} r={commit.merge ? 5 : 4} fill={commit.merge ? commit.colour : undefined} stroke={commit.colour} style={commit.merge ? undefined : { fill: 'var(--bg)' }} />
     </g>
   );
 }

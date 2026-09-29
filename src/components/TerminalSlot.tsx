@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
-import { currentTerminalTheme, useStore } from '../state/store';
+import { terminalLook, useStore } from '../state/store';
 import { attachTerminal, ensureTerminal, fitTerminal, parkTerminal } from '../terminals/registry';
 
 /**
@@ -16,11 +16,8 @@ export function TerminalSlot({ sessionId }: { sessionId: string }) {
     if (!slot) return;
 
     ensureTerminal(sessionId, {
-      fontSize: settings.fontSize,
-      fontFamily: settings.fontFamily,
-      cursorBlink: settings.cursorBlink,
+      ...terminalLook(settings),
       scrollback: settings.scrollback,
-      theme: currentTerminalTheme(settings),
       onData: (data) => useStore.getState().sendInput(sessionId, data),
       onResize: (cols, rows) => useStore.getState().notifyResize(sessionId, cols, rows),
       onTitle: (title) => useStore.getState().setTitle(sessionId, title),

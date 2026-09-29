@@ -351,7 +351,7 @@ function FolderItem({ panelId, homedir }: { panelId: string; homedir: string }) 
         if (leaf) focusPanel(leaf.id, panelId);
       }}
     >
-      <svg width="12" height="12" viewBox="0 0 14 14" fill="#7aa2f7" stroke="none" style={{ flex: '0 0 auto' }}>
+      <svg width="12" height="12" viewBox="0 0 14 14" stroke="none" style={{ fill: 'var(--accent)', flex: '0 0 auto' }}>
         <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
       </svg>
       <div className="sidebar-item-text">
@@ -1026,7 +1026,7 @@ function ActivityBar() {
       <button className="activity" onClick={() => setHistoryOpen(true)} data-tip="History (⌘Y)" aria-label="History">
         <HistoryIcon />
       </button>
-      <button className="activity" onClick={() => setAppearanceOpen(true)} data-tip="Appearance (⇧⌘,)" aria-label="Appearance">
+      <button className="activity" onClick={() => setAppearanceOpen(true)} data-tip="Settings (⇧⌘,)" aria-label="Settings">
         <AppearanceIcon />
       </button>
     </nav>

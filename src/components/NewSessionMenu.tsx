@@ -140,7 +140,7 @@ export function NewSessionMenu({ leafId, anchorEl, cwdHint, side = 'center', onC
         }}
       >
         <span>
-          <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="#7aa2f7" strokeWidth="1.3" style={{ marginRight: 7, verticalAlign: -1 }}>
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none" strokeWidth="1.3" style={{ stroke: 'var(--accent)', marginRight: 7, verticalAlign: -1 }}>
             <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
           </svg>
           File system
