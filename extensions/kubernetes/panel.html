@@ -332,9 +332,28 @@
   }
   pre.yaml { margin: 0; padding: 10px 12px; white-space: pre; overflow: auto; }
 
-  .containers { width: 100%; font-size: 11px; }
-  .containers td { padding: 2px 0; }
-  .containers td.dim { padding-left: 10px; word-break: break-all; }
+  /*
+   * One container per row: its name and its log button on top, its image under
+   * both. They were three cells of a table, and an image is a registry address
+   * with no spaces in it — the table gave it the width, and the name was left a
+   * column one letter wide.
+   */
+  .containers { display: grid; gap: 7px; font-size: 11px; }
+  .container-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 8px;
+    row-gap: 1px;
+  }
+  .container-name { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+  .container-image {
+    grid-column: 1 / -1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-family: "JetBrains Mono", "SF Mono", Menlo, ui-monospace, monospace;
+    font-size: 10.5px;
+  }
 
   .chips { display: flex; flex-wrap: wrap; gap: 4px; }
   .chip {
@@ -3203,15 +3222,15 @@
     var containers = row.containers || [];
     if (!containers.length) return '';
     var isPod = row.kind === 'Pod';
-    return block('Containers', '<table class="containers"><tbody>' + containers.map(function (container) {
+    return block('Containers', '<div class="containers">' + containers.map(function (container) {
       var name = container.name || String(container);
-      return '<tr>' +
-        '<td class="grow">' + esc(name) +
-          (container.init ? '<span class="dim"> · init</span>' : '') + '</td>' +
-        '<td class="dim">' + esc(container.image || '') + '</td>' +
-        (isPod ? '<td><button class="btn" data-container-log="' + esc(name) + '">Log</button></td>' : '') +
-        '</tr>';
-    }).join('') + '</tbody></table>');
+      return '<div class="container-row">' +
+        '<div class="container-name">' + esc(name) +
+          (container.init ? '<span class="dim"> · init</span>' : '') + '</div>' +
+        (isPod ? '<button class="btn" data-container-log="' + esc(name) + '">Log</button>' : '<span></span>') +
+        (container.image ? '<div class="container-image dim">' + esc(container.image) + '</div>' : '') +
+        '</div>';
+    }).join('') + '</div>');
   }
 
   function labelsBlock(row) {
@@ -4219,6 +4238,16 @@
         out.push(terms[n].textContent + ': ' + (value ? value.textContent : ''));
       }
       return out.join('\n');
+    }
+    if (node.classList && node.classList.contains('containers')) {
+      // Name and image, one container per line, as the table read before it; the Log button is not text.
+      var found = [];
+      node.querySelectorAll('.container-row').forEach(function (row) {
+        var name = row.querySelector('.container-name');
+        var image = row.querySelector('.container-image');
+        found.push([name ? name.textContent.trim() : '', image ? image.textContent.trim() : ''].filter(Boolean).join('\t'));
+      });
+      return found.join('\n');
     }
     if (node.tagName === 'TABLE') {
       /*
