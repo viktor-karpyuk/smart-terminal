@@ -539,6 +539,11 @@
   .pill .addr { font-family: "JetBrains Mono", "SF Mono", Menlo, ui-monospace, monospace; cursor: pointer; }
   .pill .addr:hover { text-decoration: underline; }
   .pill .btn { padding: 0 4px; }
+  .pill.failed { border-color: color-mix(in srgb, var(--danger) 55%, var(--border)); }
+  /* In the table, beside the name: this one is reachable from here right now. */
+  .fw-mark { margin-left: 6px; font-size: 10px; color: var(--ok, #3fb950); white-space: nowrap; }
+  .fw-mark.retry { color: var(--warn, #d29922); }
+  .detail-forwards { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; font-size: 11px; color: var(--text-dim); }
   /* The forward dialog: one form, not two questions in a row. */
   .fw-ports { display: flex; flex-wrap: wrap; gap: 5px; margin: 4px 0 10px; }
   .fw-port { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--border);
@@ -1791,7 +1796,7 @@
   function cell(row, column) {
     var value = row[column];
     if (column === 'name') {
-      return '<td class="name"><span class="dot ' + esc(row.health || 'idle') + '"></span>' + esc(value) + '</td>';
+      return '<td class="name"><span class="dot ' + esc(row.health || 'idle') + '"></span>' + esc(value) + forwardMark(row) + '</td>';
     }
     if (column === 'status') {
       var klass = row.health === 'bad' ? 'bad-text' : row.health === 'warn' ? 'warn-text' : 'dim';
@@ -2634,6 +2639,7 @@
             : esc(chosen.kind)) +
           (chosen.namespace ? ' · ' + esc(chosen.namespace) : '') + ' · ' + esc(chosen.age) + ' old</small>' +
         '<div class="detail-actions">' + actionsFor(chosen) + '</div>' +
+        detailForwards(chosen) +
         '<div class="ask">' +
           '<input id="question" placeholder="Ask Claude something about this" />' +
           '<button class="btn go" data-do="ask">Ask</button>' +
@@ -4374,11 +4380,19 @@
     // A forward saying where it stands. The app keeps the record; this is its latest word.
     if (payload.forward) {
       if (!payload.done) { keepForward(payload.forward); return; }
-      state.forwards = state.forwards.filter(function (one) { return one.id !== payload.id; });
       delete state.openWhenUp[payload.id];
-      drawBar();
-      if (state.selected) drawDetailButtonsSoon();
-      if (payload.forward.state === 'failed') say(payload.forward.name + ':' + payload.forward.remote + ' stopped forwarding. ' + (payload.forward.error || ''), true);
+      /*
+       * A forward that failed stays in the strip, saying why, until it is tried
+       * again or dismissed. A toast that went away was how a port stopped
+       * working without anybody knowing which one, or since when.
+       */
+      if (payload.forward.state === 'failed') keepForward(payload.forward);
+      else {
+        state.forwards = state.forwards.filter(function (one) { return one.id !== payload.id; });
+        drawBar();
+        drawTableSoon();
+        if (state.selected) drawDetailButtonsSoon();
+      }
       return;
     }
     for (var f = 0; f < state.forwards.length; f += 1) {
@@ -4800,7 +4814,7 @@
    */
   function forward(row, remote, local, open) {
     call('kube.forward', {
-      context: state.context, namespace: row.namespace,
+      context: row.context || state.context, namespace: row.namespace,
       kind: row.forwardKind || 'pod', name: row.name,
       remote: remote, local: local,
     }).then(function (result) {
@@ -4814,7 +4828,13 @@
   function keepForward(record) {
     var at = -1;
     for (var i = 0; i < state.forwards.length; i += 1) if (state.forwards[i].id === record.id) at = i;
+    var before = at >= 0 ? state.forwards[at].state + ':' + state.forwards[at].port : null;
     if (at >= 0) state.forwards[at] = record; else state.forwards.push(record);
+    if (before !== record.state + ':' + record.port) {
+      drawTableSoon();
+      // The selected object's own pills say the same thing the strip does.
+      if (before !== null && state.selected && forwardsOf(state.selected).some(function (one) { return one.id === record.id; })) drawDetailButtonsSoon();
+    }
     if (record.state === 'up' && state.openWhenUp[record.id]) {
       delete state.openWhenUp[record.id];
       openForward(record.id);
@@ -4822,6 +4842,32 @@
     drawBar();
     // Only a forward appearing changes the count on the button; a state change does not need the pane redrawn.
     if (at < 0 && state.selected) drawDetailButtonsSoon();
+  }
+
+  var tableTimer = 0;
+  /** The name column shows forwards; redrawn when one starts, comes up, drops or ends — not per line kubectl prints. */
+  function drawTableSoon() {
+    if (tableTimer) return;
+    tableTimer = setTimeout(function () { tableTimer = 0; if (state.table) drawTable(); }, 120);
+  }
+
+  /** `⇄ :54321` beside a name that is reachable from here right now. */
+  function forwardMark(row) {
+    if (!row || !row.forwardKind) return '';
+    var live = forwardsOf(row).filter(function (one) { return one.state === 'up' || one.state === 'reconnecting'; });
+    if (!live.length) return '';
+    var retrying = live.some(function (one) { return one.state === 'reconnecting'; });
+    var ports = live.filter(function (one) { return one.port; }).map(function (one) { return ':' + one.port; });
+    return '<span class="fw-mark' + (retrying ? ' retry' : '') + '" title="' +
+      esc(live.map(function (one) { return 'localhost:' + (one.port || '…') + ' → ' + one.remote + (one.state === 'reconnecting' ? ' (reconnecting)' : ''); }).join('\n')) +
+      '">⇄ ' + esc(ports.join(' ') || '…') + '</span>';
+  }
+
+  /** This object's forwards, in its own pane, with the same controls as the strip. */
+  function detailForwards(row) {
+    var mine = forwardsOf(row);
+    if (!mine.length) return '';
+    return '<div class="detail-forwards"><span>Forwarding</span>' + mine.map(pillFor).join('') + '</div>';
   }
 
   /** The forwards pointed at one object. */
@@ -4863,6 +4909,12 @@
       if (existing) existing.remove();
       var ports = row.forwardPorts || (row.forwardable || []).map(function (port) { return { port: port, name: '' }; });
       var first = ports.length ? ports[0].port : '';
+      /*
+       * Here, below 1024 is a port only root may take on Linux — so 80 inside
+       * is offered as 8080 here, 443 as 8443. Anything else keeps its number,
+       * which is the one people expect to type into a browser.
+       */
+      var here = function (port) { port = Number(port); return port && port < 1024 ? port + 8000 : port || ''; };
       var through = row.forwardKind === 'pod' ? '' :
         '<div class="dim" style="margin:-4px 0 10px;font-size:11px">kubectl picks one of its pods, and picks again if that one goes — the forward follows it.</div>';
 
@@ -4871,7 +4923,7 @@
       box.style.cssText = 'position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,0.45);z-index:9';
       box.innerHTML = '<form style="background:var(--bg-panel);border:1px solid var(--border-strong);' +
         'border-radius:var(--radius);padding:14px 16px;min-width:320px;max-width:82vw">' +
-        '<div style="margin-bottom:8px"><strong>Forward a port of ' + esc(row.name) + '</strong> <span class="dim">' + esc(row.namespace || '') + ' · ' + esc(state.context || '') + '</span></div>' +
+        '<div style="margin-bottom:8px"><strong>Forward a port of ' + esc(row.name) + '</strong> <span class="dim">' + esc(row.namespace || '') + ' · ' + esc(shortContext(state.context || '')) + '</span></div>' +
         through +
         (ports.length
           ? '<div class="dim" style="font-size:11px">It declares</div><div class="fw-ports">' + ports.map(function (port) {
@@ -4881,11 +4933,11 @@
             }).join('') + '</div>'
           : '<div class="dim" style="font-size:11px;margin-bottom:8px">It declares no ports. Type the one the application listens on.</div>') +
         '<label class="fw-row"><span>Port inside</span><input type="number" id="fw-remote" min="1" max="65535" value="' + esc(String(first)) + '" required></label>' +
-        '<label class="fw-row"><span>Port here</span><span><input type="number" id="fw-local" min="0" max="65535" value="' + esc(String(first)) + '"> <span class="dim" style="font-size:11px">0 or empty: any free one</span></span></label>' +
+        '<label class="fw-row"><span>Port here</span><span><input type="number" id="fw-local" min="0" max="65535" value="' + esc(String(here(first))) + '"> <span class="dim" style="font-size:11px">0 or empty: any free one</span></span></label>' +
         '<label style="display:flex;gap:6px;align-items:center;margin-top:8px"><input type="checkbox" id="fw-open"> Open it in the browser when it is up</label>' +
         '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:12px">' +
         '<button type="button" class="btn" id="prompt-no">Cancel</button>' +
-        '<button type="submit" class="btn go">Forward</button></div></form>';
+        '<button type="button" class="btn go" id="prompt-yes">Forward</button></div></form>';
       document.body.appendChild(box);
 
       var remote = document.getElementById('fw-remote');
@@ -4896,11 +4948,11 @@
       // The local port follows the remote one until somebody changes it on purpose.
       var localTouched = false;
       local.addEventListener('input', function () { localTouched = true; });
-      remote.addEventListener('input', function () { if (!localTouched) local.value = remote.value; mark(); });
+      remote.addEventListener('input', function () { if (!localTouched) local.value = here(remote.value); mark(); });
       box.querySelectorAll('.fw-port').forEach(function (chip) {
         chip.addEventListener('click', function () {
           remote.value = chip.dataset.port;
-          if (!localTouched) local.value = chip.dataset.port;
+          if (!localTouched) local.value = here(chip.dataset.port);
           mark();
         });
       });
@@ -4913,16 +4965,32 @@
         box.remove();
         resolve(value);
       };
-      box.querySelector('#prompt-no').addEventListener('click', function () { close(null); });
-      box.addEventListener('keydown', function (event) { if (event.key === 'Escape') close(null); });
-      box.querySelector('form').addEventListener('submit', function (event) {
-        event.preventDefault();
+      var submit = function () {
         var r = Number(remote.value);
         var l = local.value === '' ? 0 : Number(local.value);
         if (!Number.isInteger(r) || r < 1 || r > 65535) { remote.focus(); return; }
         if (!Number.isInteger(l) || l < 0 || l > 65535) { local.focus(); return; }
         close({ remote: r, local: l, open: document.getElementById('fw-open').checked });
-      });
+      };
+      // Not a form submit: the frame is sandboxed without allow-forms, so a submit never fires.
+      onAnswer(box, submit, function () { close(null); });
+    });
+  }
+
+  /**
+   * Enter and the button answer a dialog; Escape and Cancel close it.
+   *
+   * Wired by hand because this frame's sandbox is `allow-scripts` alone, and
+   * without `allow-forms` the browser drops a form submission before any
+   * `submit` event exists — so a dialog built on one looked right and did
+   * nothing at all when OK or Enter was pressed. Scale and Forward both were.
+   */
+  function onAnswer(box, yes, no) {
+    box.querySelector('#prompt-yes').addEventListener('click', yes);
+    box.querySelector('#prompt-no').addEventListener('click', no);
+    box.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') { event.preventDefault(); no(); }
+      else if (event.key === 'Enter' && event.target.tagName === 'INPUT') { event.preventDefault(); yes(); }
     });
   }
 
@@ -4962,32 +5030,49 @@
    */
   function drawBar() {
     if (!state.forwards.length) { $('bar').innerHTML = ''; return; }
-    $('bar').innerHTML = '<span class="dim">Forwarding</span>' + state.forwards.map(function (forward) {
-      var target = esc(forward.kind && forward.kind !== 'pod' ? forward.kind + '/' + forward.name : forward.name) + ':' + forward.remote;
-      var where = forward.context && forward.context !== state.context ? ' <span class="dim">(' + esc(forward.context) + ')</span>' : '';
-      var tip = (forward.namespace ? forward.namespace + ' · ' : '') + (forward.context || '') + (forward.warning ? '\n' + forward.warning : '');
-      var label;
-      var cls = '';
-      if (forward.state === 'up') {
-        cls = ' up';
-        label = '<span class="addr" data-copy-forward="' + esc(forward.id) + '" title="Copy the address">localhost:' + forward.port + '</span> → ' + target + where +
-          (forward.warning ? ' <span class="warn-text" title="' + esc(forward.warning) + '">⚠</span>' : '') +
-          '<button class="btn" data-open-forward="' + esc(forward.id) + '" title="Open http://localhost:' + forward.port + ' in the browser">↗</button>';
-      } else if (forward.state === 'reconnecting') {
-        cls = ' retry';
-        label = '<span class="spin">↻</span> ' + (forward.port ? 'localhost:' + forward.port + ' → ' : '') + target + where +
-          ' <span class="dim" title="' + esc(forward.error || '') + '">reconnecting</span>';
-      } else if (forward.state === 'failed') {
-        label = target + ' <span class="bad-text">' + esc(forward.error || 'stopped') + '</span>';
-      } else {
-        label = 'starting ' + target + where + '…';
-      }
-      return '<span class="pill' + cls + '" title="' + esc(tip) + '">' + label +
-        '<button class="btn" data-stop="' + esc(forward.id) + '" title="Stop forwarding">✕</button></span>';
-    }).join('');
+    $('bar').innerHTML = '<span class="dim">Forwarding</span>' + state.forwards.map(pillFor).join('');
   }
 
-  $('bar').addEventListener('click', function (event) {
+  function pillFor(forward) {
+    var target = esc(forward.kind && forward.kind !== 'pod' ? forward.kind + '/' + forward.name : forward.name) + ':' + forward.remote;
+    var where = forward.context && forward.context !== state.context ? ' <span class="dim">(' + esc(shortContext(forward.context)) + ')</span>' : '';
+    var tip = (forward.namespace ? forward.namespace + ' · ' : '') + shortContext(forward.context || '') + (forward.warning ? '\n' + forward.warning : '');
+    var label;
+    var cls = '';
+    if (forward.state === 'up') {
+      cls = ' up';
+      label = '<span class="addr" data-copy-forward="' + esc(forward.id) + '" title="Copy the address">localhost:' + forward.port + '</span> → ' + target + where +
+        (forward.warning ? ' <span class="warn-text" title="' + esc(forward.warning) + '">⚠</span>' : '') +
+        '<button class="btn" data-open-forward="' + esc(forward.id) + '" title="Open http://localhost:' + forward.port + ' in the browser">↗</button>';
+    } else if (forward.state === 'reconnecting') {
+      cls = ' retry';
+      label = '<span class="spin">↻</span> ' + (forward.port ? 'localhost:' + forward.port + ' → ' : '') + target + where +
+        ' <span class="dim" title="' + esc(forward.error || '') + '">reconnecting</span>';
+    } else if (forward.state === 'failed') {
+      cls = ' failed';
+      label = target + where + ' <span class="bad-text">' + esc(forward.error || 'stopped') + '</span>' +
+        '<button class="btn" data-retry-forward="' + esc(forward.id) + '" title="Forward it again">Try again</button>';
+    } else {
+      label = 'starting ' + target + where + '…';
+    }
+    return '<span class="pill' + cls + '" title="' + esc(tip) + '">' + label +
+      '<button class="btn" data-stop="' + esc(forward.id) + '" title="' + (forward.state === 'failed' ? 'Dismiss' : 'Stop forwarding') + '">✕</button></span>';
+  }
+
+  // The strip and the detail pane draw the same pills; one listener serves both.
+  document.addEventListener('click', function (event) {
+    if (!event.target.closest || !event.target.closest('#bar, .detail-forwards')) return;
+    var retry = event.target.closest('[data-retry-forward]');
+    if (retry) {
+      var failed = state.forwards.filter(function (one) { return one.id === retry.dataset.retryForward; })[0];
+      if (!failed) return;
+      state.forwards = state.forwards.filter(function (one) { return one.id !== failed.id; });
+      drawBar();
+      // The port it had, so whatever pointed at it works again — unless that port was the trouble.
+      var taken = /already in use/i.test(failed.error || '');
+      forward({ context: failed.context, namespace: failed.namespace, name: failed.name, forwardKind: failed.kind }, failed.remote, taken ? 0 : (failed.port || failed.asked || 0), false);
+      return;
+    }
     var open = event.target.closest('[data-open-forward]');
     if (open) { openForward(open.dataset.openForward); return; }
     var copy = event.target.closest('[data-copy-forward]');
@@ -4999,10 +5084,13 @@
     var button = event.target.closest('[data-stop]');
     if (!button) return;
     var id = button.dataset.stop;
-    call('kube.stopForward', { id: id }).catch(function () {});
+    var gone = state.forwards.filter(function (one) { return one.id === id; })[0];
+    // A failed one is already stopped; dismissing it asks nothing of the app.
+    if (!gone || gone.state !== 'failed') call('kube.stopForward', { id: id }).catch(function () {});
     delete state.openWhenUp[id];
     state.forwards = state.forwards.filter(function (forward) { return forward.id !== id; });
     drawBar();
+    drawTableSoon();
     if (state.selected) drawDetailButtonsSoon();
   });
 
@@ -5030,7 +5118,7 @@
         'background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);padding:5px 8px" />' +
         '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:11px">' +
         '<button type="button" class="btn" id="prompt-no">Cancel</button>' +
-        '<button type="submit" class="btn go">OK</button></div></form>';
+        '<button type="button" class="btn go" id="prompt-yes">OK</button></div></form>';
       document.body.appendChild(box);
 
       var field = document.getElementById('prompt-value');
@@ -5042,12 +5130,7 @@
         box.remove();
         resolve(value);
       };
-      box.querySelector('#prompt-no').addEventListener('click', function () { close(null); });
-      box.addEventListener('keydown', function (event) { if (event.key === 'Escape') close(null); });
-      box.querySelector('form').addEventListener('submit', function (event) {
-        event.preventDefault();
-        close(field.value);
-      });
+      onAnswer(box, function () { close(field.value); }, function () { close(null); });
     });
   }
 
