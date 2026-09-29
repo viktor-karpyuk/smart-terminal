@@ -5,7 +5,38 @@
    * like comes from the app's own tokens — so it is the app's light or dark, its
    * accent and its radius, without knowing which of them it is in.
    */
-  #app { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto auto; height: 100%; min-height: 0; }
+  #app { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto auto auto; height: 100%; min-height: 0; }
+
+  /*
+   * Subtabs: several places in one cluster at once — a namespace's pods in
+   * one, the deployments of another in the next — each with its own view,
+   * namespace, filter, sort and selection. What belongs to the cluster rather
+   * than to a place (the logs at the bottom, the forwards, the namespaces) is
+   * shared between them.
+   */
+  .subtabs {
+    display: flex; align-items: stretch; gap: 1px; min-width: 0;
+    padding: 0 6px; border-bottom: 1px solid var(--border); background: var(--bg-panel);
+    overflow-x: auto; scrollbar-width: none;
+  }
+  .subtabs::-webkit-scrollbar { display: none; }
+  .subtab {
+    display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 70px; max-width: 220px;
+    padding: 4px 6px 4px 10px; font-size: 11.5px; color: var(--text-dim);
+    border-bottom: 2px solid transparent; cursor: pointer; user-select: none;
+  }
+  .subtab:hover { color: var(--text); background: var(--bg-elevated); }
+  .subtab.on { color: var(--text); border-bottom-color: var(--accent); }
+  .subtab .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .subtab .ns { color: var(--text-faint); }
+  .subtab .x {
+    flex: none; width: 16px; height: 16px; line-height: 14px; text-align: center; border-radius: 4px;
+    color: var(--text-faint); font-size: 13px; visibility: hidden;
+  }
+  .subtab:hover .x, .subtab.on .x { visibility: visible; }
+  .subtab .x:hover { background: var(--border); color: var(--text); }
+  .subtab-new { flex: none; padding: 0 9px; color: var(--text-faint); font-size: 15px; }
+  .subtab-new:hover { color: var(--text); background: var(--bg-elevated); }
 
   .top {
     display: flex; align-items: center; gap: 8px;
@@ -504,6 +535,8 @@
     <button class="btn" id="reload" title="Refresh now">Refresh</button>
   </header>
 
+  <div class="subtabs" id="subtabs" role="tablist" aria-label="Places in this cluster"></div>
+
   <div class="body" id="body" style="position: relative">
     <nav id="nav"></nav>
     <main>
@@ -563,6 +596,8 @@
     disk: null, diskByHost: null,
     /** Where this cluster's Prometheus is, and what it has said so far. */
     prom: { checked: false, found: null, series: {}, minutes: 60 },
+    /** The subtabs: each one a place (see placeNow), and which is in front. Null until there is a second. */
+    tabs: null, tabAt: 0,
   };
 
   var $ = function (id) { return document.getElementById(id); };
@@ -602,7 +637,18 @@
    * a stale one.
    */
   function remember() {
-    host.emit('remember', {
+    var here = placeNow();
+    host.emit('remember', assign(assign({}, here), {
+      // Every subtab's place, with the one in front as it is right now.
+      tabs: state.tabs ? state.tabs.map(function (tab, at) { return at === state.tabAt ? here : tab.place; }) : null,
+      tabAt: state.tabAt,
+    }));
+    drawTabs();
+  }
+
+  /** Where this panel is looking, as one value: what a subtab holds. */
+  function placeNow() {
+    return {
       view: state.view,
       only: state.only,
       sort: state.sort,
@@ -611,8 +657,8 @@
       // By name rather than by uid: a pod that was replaced while the frame was
       // being rebuilt has a new uid and the same name, and the name is the one
       // the person was reading.
-      selected: state.selected ? { name: state.selected.name, tab: state.detail.tab } : null,
-    });
+      selected: state.selected ? { name: state.selected.name, tab: state.detail.tab } : (state.wanted ? { name: state.wanted, tab: state.detail.tab } : null),
+    };
   }
 
   /** Put it back, before anything is asked of the cluster. */
@@ -631,6 +677,126 @@
     // to be put back too — a filter that is applied and not shown is a table
     // that is missing rows for no reason anybody can see.
     if (state.search) $('search').value = state.search;
+    if (Array.isArray(saved.tabs) && saved.tabs.length > 1) {
+      state.tabs = saved.tabs.map(function (place) { return { place: place, table: null }; });
+      state.tabAt = Math.min(Math.max(0, Number(saved.tabAt) || 0), state.tabs.length - 1);
+    }
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * Subtabs.
+   *
+   * A place is what `remember` already kept for a rebuilt frame — the view,
+   * the namespace, the filter, the sort and what was selected — so a subtab is
+   * one of those, and switching is putting one away and taking another out.
+   * The table a subtab last showed is kept with it and shown at once while it
+   * is asked for again, so switching back does not flash an empty page.
+   * ---------------------------------------------------------------------- */
+  function tabTitle(place) {
+    var view = place.view || { type: 'overview' };
+    var what = view.type === 'overview' ? 'Overview'
+      : view.type === 'stats' ? 'Stats'
+        : view.type === 'helm' ? 'Helm releases'
+          : LABELS[view.name] || (known(view.name) || {}).kind || view.name || 'View';
+    var bits = [what];
+    if (place.selected && place.selected.name) bits.push(place.selected.name);
+    else if (place.search) bits.push('“' + place.search + '”');
+    return { label: bits.join(' · '), namespace: view.type === 'overview' ? '' : (place.namespace || 'all') };
+  }
+
+  function drawTabs() {
+    var strip = $('subtabs');
+    if (!strip) return;
+    var tabs = state.tabs || [{ place: null }];
+    strip.innerHTML = tabs.map(function (tab, at) {
+      var title = tabTitle(at === state.tabAt ? placeNow() : tab.place);
+      return '<div class="subtab' + (at === state.tabAt ? ' on' : '') + '" role="tab" aria-selected="' + (at === state.tabAt) + '" data-subtab="' + at + '"' +
+        ' title="' + esc(title.label + (title.namespace ? ' in ' + title.namespace : '')) + '">' +
+        // The namespace first: it is what tells two subtabs of the same kind apart, and a long name trims from the end.
+        '<span class="label">' + (title.namespace ? '<span class="ns">' + esc(title.namespace) + '</span> ' : '') + esc(title.label) + '</span>' +
+        (tabs.length > 1 ? '<button class="x" data-subtab-close="' + at + '" title="Close this subtab" aria-label="Close">×</button>' : '') +
+        '</div>';
+    }).join('') +
+      '<button class="subtab-new" data-subtab-new title="Open another place in this cluster (⌘-click anything to open it in a new one)" aria-label="New subtab">+</button>';
+  }
+
+  /** Keep what is in front with its subtab before anything else is shown. */
+  function putAway() {
+    if (!state.tabs) state.tabs = [{ place: null, table: null }];
+    var tab = state.tabs[state.tabAt];
+    tab.place = placeNow();
+    tab.table = state.view.type === 'kind' || state.view.type === 'helm' ? state.table : null;
+  }
+
+  /** Take a place out and look at it. */
+  function takeOut(place, table) {
+    place = place || { view: { type: 'overview' } };
+    stopWatch();
+    state.picked = [];
+    state.view = place.view || { type: 'overview' };
+    state.only = place.only || null;
+    state.sort = place.sort || { column: null, dir: 1 };
+    state.namespace = place.namespace || '';
+    state.search = place.search || '';
+    $('search').value = state.search;
+    state.selected = null;
+    state.detailData = {};
+    state.wanted = place.selected && place.selected.name ? place.selected.name : null;
+    state.detail = { tab: place.selected && place.selected.tab ? place.selected.tab : 'overview' };
+    state.table = table || null;
+    if (state.view.type === 'kind') {
+      var group = groupHolding(state.view.name);
+      if (group) openGroups()[group] = true;
+    }
+    drawTop();
+    drawNav();
+    remember();
+    load(Boolean(table));
+  }
+
+  function switchTab(at) {
+    if (!state.tabs || at === state.tabAt || !state.tabs[at]) return;
+    putAway();
+    state.tabAt = at;
+    takeOut(state.tabs[at].place, state.tabs[at].table);
+  }
+
+  /** A new subtab: the place given, or this one without its selection. */
+  function newTab(place) {
+    putAway();
+    var here = placeNow();
+    var start = place || { view: here.view, namespace: here.namespace, sort: here.sort, only: here.only, search: here.search, selected: null };
+    state.tabs.push({ place: start, table: null });
+    state.tabAt = state.tabs.length - 1;
+    takeOut(start, null);
+  }
+
+  function closeTab(at) {
+    if (!state.tabs || state.tabs.length < 2 || !state.tabs[at]) return;
+    if (at !== state.tabAt) {
+      putAway();
+      state.tabs.splice(at, 1);
+      if (at < state.tabAt) state.tabAt -= 1;
+      if (state.tabs.length < 2) state.tabs = null, state.tabAt = 0;
+      remember();
+      return;
+    }
+    state.tabs.splice(at, 1);
+    state.tabAt = Math.min(at, state.tabs.length - 1);
+    var next = state.tabs[state.tabAt];
+    if (state.tabs.length < 2) { state.tabs = null; state.tabAt = 0; }
+    takeOut(next.place, next.table);
+  }
+
+  /** Where a click on this element would go, for opening it in a subtab of its own instead. */
+  function placeFor(el) {
+    var ns = state.namespace;
+    if (el.dataset.kind) return { view: { type: 'kind', name: el.dataset.kind }, namespace: ns };
+    if (el.dataset.go) return { view: { type: 'kind', name: el.dataset.go }, namespace: ns, only: el.dataset.only || null, sort: el.dataset.sort ? { column: el.dataset.sort, dir: -1 } : null };
+    if (el.dataset.namespace != null && el.hasAttribute('data-namespace')) return { view: { type: 'kind', name: 'pods' }, namespace: el.dataset.namespace };
+    if (el.dataset.view === 'overview') return { view: { type: 'overview' } };
+    if (el.dataset.view === 'helm') return { view: { type: 'helm' }, namespace: ns };
+    return null;
   }
 
   /** Where we are, as every call below needs it. */
@@ -4833,6 +4999,42 @@
     });
   }
 
+  $('subtabs').addEventListener('click', function (event) {
+    var close = event.target.closest('[data-subtab-close]');
+    if (close) { event.stopPropagation(); closeTab(Number(close.dataset.subtabClose)); return; }
+    if (event.target.closest('[data-subtab-new]')) { newTab(null); return; }
+    var tab = event.target.closest('[data-subtab]');
+    if (tab) switchTab(Number(tab.dataset.subtab));
+  });
+  // The middle button closes a subtab, as it closes a tab everywhere else.
+  $('subtabs').addEventListener('auxclick', function (event) {
+    var tab = event.target.closest('[data-subtab]');
+    if (tab && event.button === 1) { event.preventDefault(); closeTab(Number(tab.dataset.subtab)); }
+  });
+
+  /*
+   * ⌘-click (or the middle button) on anything that goes somewhere opens it in
+   * a new subtab and leaves this one where it is. Caught before the ordinary
+   * handlers, which would otherwise take this subtab there as well.
+   */
+  function openElsewhere(event) {
+    var el = event.target.closest('[data-kind], [data-go], [data-namespace], [data-view=overview], [data-view=helm]');
+    if (!el || el.closest('#subtabs')) return false;
+    var place = placeFor(el);
+    if (!place) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    newTab(place);
+    return true;
+  }
+  document.addEventListener('click', function (event) {
+    if (event.metaKey || event.ctrlKey) openElsewhere(event);
+  }, true);
+  document.addEventListener('auxclick', function (event) {
+    if (event.button === 1) openElsewhere(event);
+  }, true);
+
+  drawTabs();
   draw();
   host.ready();
 </script>
