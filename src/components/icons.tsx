@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 /**
  * Small inline icons for the sidebar's tools. Drawn rather than borrowed from a
  * font so they line up at the same optical weight and follow `currentColor`.
@@ -127,3 +129,65 @@ export function AppearanceIcon() {
     </svg>
   );
 }
+
+/** Open something in a section of its own: a frame with an arrow leaving it. */
+export function OpenInSectionIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M6.5 1.6h3.9v3.9M10.4 1.6 5.6 6.4" />
+      <path d="M8.6 7.2v2.1a1.1 1.1 0 0 1-1.1 1.1H2.7a1.1 1.1 0 0 1-1.1-1.1V4.5a1.1 1.1 0 0 1 1.1-1.1h2.1" />
+    </svg>
+  );
+}
+
+/** Ask again. Turns while the asking is going on. */
+export function RefreshIcon({ spinning = false }: { spinning?: boolean }) {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={spinning ? 'is-spinning' : undefined}
+    >
+      <path d="M10.2 5.9A4.2 4.2 0 1 1 8.9 2.9" />
+      <path d="M9.4 1.2v2.2H7.2" />
+    </svg>
+  );
+}
+
+/*
+ * The toolbar's own marks. They were Unicode arrows and boxes, each drawn by
+ * whichever font had the character, so no two were the same size or weight.
+ * One grid, one stroke, like the sidebar's.
+ */
+function ToolIcon({ children }: { children: ReactNode }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {children}
+    </svg>
+  );
+}
+
+export const SplitRightIcon = () => (
+  <ToolIcon><rect x="1.6" y="2.1" width="10.8" height="9.8" rx="1.6" /><path d="M7 2.1v9.8" /></ToolIcon>
+);
+export const SplitDownIcon = () => (
+  <ToolIcon><rect x="1.6" y="2.1" width="10.8" height="9.8" rx="1.6" /><path d="M1.6 7h10.8" /></ToolIcon>
+);
+export const EvenSplitsIcon = () => (
+  <ToolIcon><rect x="1.6" y="2.1" width="10.8" height="9.8" rx="1.6" /><path d="M7 2.1v9.8M1.6 7h10.8" /></ToolIcon>
+);
+export const MaximizeIcon = ({ restore = false }: { restore?: boolean }) => (
+  <ToolIcon>
+    {restore ? <path d="M5.4 1.8v3.6H1.8M8.6 12.2V8.6h3.6M5.4 5.4 1.8 1.8M8.6 8.6l3.6 3.6" /> : <path d="M8.4 1.8h3.8v3.8M5.6 12.2H1.8V8.4M12.2 1.8 8.2 5.8M1.8 12.2l4-4" />}
+  </ToolIcon>
+);
+export const PlusIcon = () => <ToolIcon><path d="M7 2.6v8.8M2.6 7h8.8" /></ToolIcon>;
+export const ChevronDownIcon = () => <ToolIcon><path d="M4 5.6 7 8.6l3-3" /></ToolIcon>;
+export const MinimizeIcon = () => <ToolIcon><path d="M3 7h8" /></ToolIcon>;

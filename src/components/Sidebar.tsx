@@ -9,15 +9,7 @@ import { shortContext } from '../lib/extensionHost';
 import { compactPath } from '../lib/labels';
 import { PathLabel } from './PathLabel';
 import { Popover } from './Popover';
-import {
-  AccountsIcon,
-  AppearanceIcon,
-  ClustersIcon,
-  ExtensionsIcon,
-  HistoryIcon,
-  MonitorIcon,
-  UsageIcon,
-} from './icons';
+import { AccountsIcon, AppearanceIcon, ClustersIcon, ExtensionsIcon, HistoryIcon, MonitorIcon, UsageIcon, OpenInSectionIcon, RefreshIcon } from './icons';
 
 /**
  * The narrowest the sidebar will sit at. With the switches down to icons what
@@ -583,7 +575,7 @@ function ClustersList() {
                   .then(() => useStore.getState().probeClusters(true));
               }}
             >
-              {probing ? '·' : '⟳'}
+              <RefreshIcon spinning={probing} />
             </button>
           }
         />
@@ -799,7 +791,7 @@ function MonitorList() {
                 useStore.getState().openMonitor();
               }}
             >
-              ⇱
+              <OpenInSectionIcon />
             </button>
           }
         />
