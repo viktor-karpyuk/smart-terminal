@@ -993,3 +993,76 @@ test('the check command is kept on the repository, and an edit that omits it lea
   await service.call('saveRepo', { repo: { ...service.store.repo(repo.id), token: '', checkCommand: '' } });
   assert.equal(service.store.repo(repo.id).checkCommand, null);
 });
+
+/*
+ * The pull request this was found on: the author answered a published comment,
+ * then rebased. The next review could not be incremental — the reviewed commit
+ * was gone from the branch — so it read everything afresh, found nothing, and
+ * the comment with its answer disappeared from the screen: "0 findings, 100%",
+ * and two answers nobody would ever see.
+ */
+test('a review of rewritten history keeps the comments already on the pull request, and their answers', { skip }, async () => {
+  const { service, repo, forgeState, w } = setup([
+    async () => ({ structured: { summary: 's', findings: [finding()] } }),
+    async () => ({ structured: { summary: 'Nothing new.', findings: [] } }),
+  ]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  await service.call('publishAll', { repoId: repo.id, prId: 7 });
+  forgeState.comments.push({ commentId: '900', author: 'Ana', body: 'fixed it', inlinePath: 'app.js', inlineLine: 2, deleted: false, createdOn: new Date(Date.now() + 1e6).toISOString(), parentId: '100' });
+
+  // Rewritten, not added to: the reviewed commit is no longer in the branch.
+  fs.writeFileSync(path.join(w.seed, 'app.js'), 'function add(a, b) {\n  return a + b;\n}\n// done\n');
+  git(w.seed, 'commit', '-q', '--amend', '-am', 'change, rebased');
+  git(w.seed, 'push', '-q', '-f', 'origin', 'feature');
+  forgeState.prs[0].headSha = git(w.seed, 'rev-parse', 'HEAD');
+  await service.call('refreshPrs', { repoId: repo.id });
+
+  const second = await service.call('review', { repoId: repo.id, prId: 7 });
+  assert.equal(second.ok, true, second.error);
+  const view = await service.call('pr', { repoId: repo.id, prId: 7 });
+  assert.equal(view.done.headSha, forgeState.prs[0].headSha, 'the rebased commit is what was reviewed');
+  assert.equal(view.done.previousReviewId, null, 'a full review, as it has to be after a rebase');
+  assert.deepEqual(view.findings.map((one) => one.title), ['add subtracts'], 'the published comment came with it');
+  assert.equal(view.threads.length, 1);
+  assert.equal(view.threads[0].state, 'NEEDS_ANSWER', 'and the answer to it is still waiting on us');
+  assert.notEqual(view.readiness.percent, 100);
+});
+
+test('a comment verified as fixed on an earlier review is still in the conversation', { skip }, async () => {
+  const { service, repo, forgeState, w } = setup([
+    async () => ({ structured: { summary: 's', findings: [finding()] } }),
+    async () => ({ structured: { summary: 'Nothing new.', findings: [] } }),
+  ]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  await service.call('publishAll', { repoId: repo.id, prId: 7 });
+  const first = service.store.findingsForPr(repo.id, 7)[0];
+  service.store.setResolution(first.id, 'RESOLVED', 'fixed');
+  forgeState.comments.push({ commentId: '901', author: 'Ana', body: 'done, with a test', inlinePath: 'app.js', inlineLine: 2, deleted: false, createdOn: new Date(Date.now() + 1e6).toISOString(), parentId: '100' });
+  fs.writeFileSync(path.join(w.seed, 'app.js'), 'function add(a, b) {\n  return a + b;\n}\n');
+  git(w.seed, 'commit', '-q', '-am', 'fix');
+  git(w.seed, 'push', '-q', 'origin', 'feature');
+  forgeState.prs[0].headSha = git(w.seed, 'rev-parse', 'HEAD');
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7, forceFull: true });
+
+  const view = await service.call('pr', { repoId: repo.id, prId: 7 });
+  assert.equal(view.findings.length, 0, 'a settled comment stays with the review that published it');
+  assert.deepEqual(view.threads.map((thread) => [thread.title, thread.entries.map((entry) => entry.author)]), [['add subtracts', ['Ana']]]);
+});
+
+test('comments left behind before reviews adopted them are brought back once', { skip }, async () => {
+  const { service, repo } = setup([async () => ({ structured: { summary: 's', findings: [finding()] } })]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  await service.call('publishAll', { repoId: repo.id, prId: 7 });
+  // What the old code left: a newer finished review that knows nothing of the comment.
+  const later = service.store.startReview({ repoId: repo.id, prId: 7, prTitle: 't', headSha: 'f00', depth: 'LIGHT', kind: 'GENERIC', model: 'haiku', auto: true, prAuthor: 'Ana' });
+  service.store.finishReview(later, { body: 'nothing', costUsd: 0 });
+  assert.equal((await service.call('pr', { repoId: repo.id, prId: 7 })).findings.length, 0);
+
+  assert.equal(service.store.adoptAllLiveFindings(), 1);
+  assert.equal(service.store.adoptAllLiveFindings(), 0, 'twice is once');
+  assert.deepEqual((await service.call('pr', { repoId: repo.id, prId: 7 })).findings.map((one) => one.title), ['add subtracts']);
+});

@@ -621,6 +621,9 @@ class ReviewEngine {
         }
         this.activity.line(key, `Earlier findings: ${carry.stillOpen} still open, ${carry.fixed} fixed, ${carry.obsolete} no longer apply.`);
       }
+      // Whatever is still open on the pull request from any earlier review — above all after a full review of rewritten history.
+      const adopted = this.store.adoptLiveFindings(repoId, prId, reviewId);
+      if (adopted) this.activity.line(key, `${adopted} earlier published comment(s) are still open; kept with this review.`);
 
       const spanish = rules.isSpanish(language);
       let body = rules.renderMarkdown(parsed.summary, parsed.findings, language);
