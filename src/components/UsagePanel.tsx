@@ -24,7 +24,7 @@ export function UsagePanel() {
           </button>
         </header>
 
-        <div className="usage-body">
+        <div className="modal-scroll">
           {profiles.map((profile) => {
             const report = usageByProfile[profile.id];
             const loading = usageLoading[profile.id];

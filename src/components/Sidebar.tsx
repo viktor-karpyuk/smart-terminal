@@ -888,7 +888,7 @@ function LauncherButton({ viewId, title, icon }: { viewId: string; title: string
  */
 function TeamsIcon() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
       {/* The square and the T are one path, so the T is a hole rather than a stroke. */}
       <path fillRule="evenodd" d="M11.5 4h8a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5h-8a2.5 2.5 0 0 1-2.5-2.5v-11a2.5 2.5 0 0 1 2.5-2.5zM12.3 7.5h6.4v1.8h-2.3v7.2h-1.8v-7.2h-2.3z" />
       <circle cx="5.7" cy="5.9" r="3.1" />
@@ -900,7 +900,7 @@ function TeamsIcon() {
 /** A paper plane: something being sent somewhere, in the stroke the rest use. */
 function SendIcon() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.95" strokeLinecap="round" strokeLinejoin="round">
       <path d="M22 2 11 13" />
       <path d="M22 2 15 22l-4-9-9-4z" />
     </svg>
@@ -909,7 +909,7 @@ function SendIcon() {
 
 function ReviewIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
+    <svg width="17" height="17" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round">
       <circle cx="3.2" cy="3" r="1.3" />
       <circle cx="3.2" cy="11" r="1.3" />
       <path d="M3.2 4.3v5.4M3.2 7.6c0-1.6 1.2-2.4 2.8-2.4" />
@@ -959,7 +959,7 @@ function ActivityBar() {
         aria-pressed={settings.sidebarShowSessions}
         onClick={() => updateSettings({ sidebarShowSessions: !settings.sidebarShowSessions })}
       >
-        <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2">
+        <svg width="17" height="17" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.15">
           <rect x="1.4" y="2.4" width="11.2" height="9.2" rx="1.6" />
           <path d="M4 6.2l1.8 1.6L4 9.4M7.6 9.6h2.6" />
         </svg>
@@ -973,7 +973,7 @@ function ActivityBar() {
         aria-pressed={settings.sidebarShowFolders}
         onClick={() => updateSettings({ sidebarShowFolders: !settings.sidebarShowFolders })}
       >
-        <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2">
+        <svg width="17" height="17" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.15">
           <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
         </svg>
         {folderCount > 0 && <span className="activity-count">{folderCount}</span>}

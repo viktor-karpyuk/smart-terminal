@@ -601,6 +601,26 @@ function TreeRow({
   );
 }
 
+/**
+ * Lane colours, from the theme rather than from the layout.
+ *
+ * The layout still sends a colour per lane, picked for dark themes; thin lines
+ * in it vanish on a light one. The lane's index is all that is needed, and the
+ * theme's own semantic colours are already chosen to read on its background.
+ * Lane 0 is the accent, which is where HEAD usually runs.
+ */
+const LANE_INK = [
+  'var(--accent)',
+  'var(--ok)',
+  'var(--violet)',
+  'var(--warn)',
+  'var(--info)',
+  'var(--danger)',
+  'var(--syn-number)',
+  'var(--syn-type)',
+];
+const laneInk = (lane: number) => LANE_INK[lane % LANE_INK.length];
+
 const LETTER_COLOUR: Record<string, string> = {
   A: 'var(--ok)', M: 'var(--accent)', D: 'var(--danger)', R: 'var(--violet)', C: 'var(--violet)', '?': 'var(--git-new)', '!': 'var(--danger)',
 };
@@ -1321,7 +1341,7 @@ function Lanes({ commit, index, commits }: { commit: GitCommit; index: number; c
           y1={y - ROW / 2}
           x2={x(lane.lane)}
           y2={y + ROW / 2}
-          stroke={lane.colour}
+          style={{ stroke: laneInk(lane.lane) }}
         />
       ))}
 
@@ -1331,17 +1351,22 @@ function Lanes({ commit, index, commits }: { commit: GitCommit; index: number; c
         // not simply stop in mid-air at the bottom of the list.
         const endY = target === -1 ? y + ROW : target * ROW + ROW / 2;
         return edge.from === edge.to ? (
-          <line key={edge.sha + edge.to} x1={x(edge.from)} y1={y} x2={x(edge.to)} y2={endY} stroke={edge.colour} />
+          <line key={edge.sha + edge.to} x1={x(edge.from)} y1={y} x2={x(edge.to)} y2={endY} style={{ stroke: laneInk(edge.to) }} />
         ) : (
           <path
             key={edge.sha + edge.to}
             d={`M${x(edge.from)} ${y} C ${x(edge.from)} ${y + ROW * 0.6}, ${x(edge.to)} ${endY - ROW * 0.6}, ${x(edge.to)} ${endY}`}
-            stroke={edge.colour}
+            style={{ stroke: laneInk(edge.to) }}
           />
         );
       })}
 
-      <circle cx={x(commit.lane)} cy={y} r={commit.merge ? 5 : 4} fill={commit.merge ? commit.colour : undefined} stroke={commit.colour} style={commit.merge ? undefined : { fill: 'var(--bg)' }} />
+      <circle
+        cx={x(commit.lane)}
+        cy={y}
+        r={commit.merge ? 5 : 4}
+        style={{ stroke: laneInk(commit.lane), fill: commit.merge ? laneInk(commit.lane) : 'var(--bg)' }}
+      />
     </g>
   );
 }

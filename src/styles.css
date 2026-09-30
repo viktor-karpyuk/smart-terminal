@@ -860,19 +860,12 @@ input:focus, textarea:focus { border-color: var(--accent); }
 
 /* ------------------------------------------------------------------ updates */
 
-.update-body { display: grid; gap: 16px; }
 .form-section h3.update-headline {
   display: flex;
   align-items: center;
   gap: 7px;
   margin: 0 0 4px;
-  /* A sentence, not a section label — the surrounding rule sets it in small
-     caps, which is right for "APPEARANCE" and shouting for this. */
-  font-size: var(--fs-base);
-  font-weight: 600;
-  text-transform: none;
-  letter-spacing: normal;
-  color: var(--text);
+  font-size: var(--fs-lg);
 }
 .form-section h3.update-headline.is-error { color: var(--danger); }
 .update-dot {
@@ -1551,7 +1544,9 @@ input[type='checkbox'] { accent-color: var(--accent); }
 /* ---------- usage limits ---------- */
 
 .modal-narrow { width: min(560px, 92vw); }
-.usage-body { padding: 14px; display: grid; gap: 16px; overflow-y: auto; }
+/* The scrolling body of a single-page dialog — Usage, Updates — with Settings' margins. */
+.modal-scroll { padding: 18px 22px 24px; display: grid; gap: 16px; align-content: start; overflow-y: auto; }
+.checkbox-hint { display: block; margin-top: 2px; font-size: var(--fs-sm); color: var(--text-faint); }
 
 .usage-account { display: grid; gap: 10px; }
 .usage-account-header { display: flex; align-items: center; gap: 8px; font-size: var(--fs-md); font-weight: 600; }
