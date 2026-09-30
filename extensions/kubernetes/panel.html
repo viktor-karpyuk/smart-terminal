@@ -37,6 +37,15 @@
   .subtab .x:hover { background: var(--border); color: var(--text); }
   .subtab-new { flex: none; padding: 0 9px; color: var(--text-faint); font-size: 15px; }
   .subtab-new:hover { color: var(--text); background: var(--bg-elevated); }
+  /* Splitting a place off into a pane of its own, to put two side by side. The
+     same two icons the app's own panes use for the same thing. */
+  .subtab-tools { display: flex; align-items: center; gap: 1px; margin-left: auto; padding-left: 8px; flex: none; }
+  .subtab-tool {
+    display: grid; place-items: center; width: 24px; height: 22px; border-radius: var(--radius);
+    color: var(--text-faint);
+  }
+  .subtab-tool:hover { color: var(--text); background: var(--bg-elevated); }
+  .subtab-tool svg { width: 14px; height: 14px; }
 
   .top {
     display: flex; align-items: center; gap: 8px;
@@ -776,7 +785,66 @@
         (tabs.length > 1 ? '<button class="x" data-subtab-close="' + at + '" title="Close this subtab" aria-label="Close">×</button>' : '') +
         '</div>';
     }).join('') +
-      '<button class="subtab-new" data-subtab-new title="Open another place in this cluster (⌘-click anything to open it in a new one)" aria-label="New subtab">+</button>';
+      '<button class="subtab-new" data-subtab-new title="Open another place in this cluster (⌘-click anything to open it in a new one)" aria-label="New subtab">+</button>' +
+      '<span class="subtab-tools">' +
+        '<button class="subtab-tool" data-subtab-split="right" title="Open this subtab in a pane to the right, to compare the two (right-click a subtab for more)" aria-label="Open to the right">' + ICON_SPLIT_RIGHT + '</button>' +
+        '<button class="subtab-tool" data-subtab-split="bottom" title="Open this subtab in a pane below" aria-label="Open below">' + ICON_SPLIT_DOWN + '</button>' +
+      '</span>';
+  }
+
+  var ICON_SPLIT_RIGHT = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M8 2.5v11"/></svg>';
+  var ICON_SPLIT_DOWN = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M1.5 8h13"/></svg>';
+
+  /** A subtab's place, whether or not it is the one in front. */
+  function placeOf(at) {
+    if (!state.tabs || at === state.tabAt) return placeNow();
+    return (state.tabs[at] && state.tabs[at].place) || { view: { type: 'overview' } };
+  }
+
+  /**
+   * A subtab in an app pane of its own, beside this one.
+   *
+   * The app's panes already split, resize, maximise, minimise and drag; a copy
+   * of this panel in one of them, starting at the same place, is two places in
+   * one cluster side by side without a second, smaller set of all of that in
+   * here. This one stays where it is: comparing needs both.
+   */
+  function openBeside(at, side) {
+    host.emit('openBeside', { side: side, resume: assign(assign({}, placeOf(at)), { tabs: null, tabAt: 0 }) });
+  }
+
+  function subtabMenu(at, near) {
+    closeRowMenu();
+    var many = state.tabs && state.tabs.length > 1;
+    var menu = document.createElement('div');
+    menu.className = 'row-menu';
+    menu.innerHTML =
+      '<button class="btn" data-subtab-menu="right">Open to the right</button>' +
+      '<button class="btn" data-subtab-menu="bottom">Open below</button>' +
+      '<button class="btn" data-subtab-menu="duplicate">Duplicate</button>' +
+      (many ? '<button class="btn" data-subtab-menu="close">Close</button>' +
+        '<button class="btn" data-subtab-menu="others">Close the others</button>' : '');
+    document.body.appendChild(menu);
+    menu.style.left = Math.max(6, Math.min(near.clientX, window.innerWidth - menu.offsetWidth - 6)) + 'px';
+    menu.style.top = (near.clientY + 2) + 'px';
+    menu.addEventListener('click', function (click) {
+      var button = click.target.closest('[data-subtab-menu]');
+      if (!button) return;
+      var what = button.dataset.subtabMenu;
+      closeRowMenu();
+      if (what === 'right' || what === 'bottom') openBeside(at, what);
+      else if (what === 'duplicate') newTab(assign({}, placeOf(at)));
+      else if (what === 'close') closeTab(at);
+      else if (what === 'others') {
+        var keep = placeOf(at);
+        putAway();
+        state.tabs = null;
+        state.tabAt = 0;
+        takeOut(keep, null);
+        drawTabs();
+      }
+    });
+    setTimeout(function () { document.addEventListener('click', closeRowMenu, { once: true }); }, 0);
   }
 
   /** Keep what is in front with its subtab before anything else is shown. */
@@ -5405,8 +5473,16 @@
     var close = event.target.closest('[data-subtab-close]');
     if (close) { event.stopPropagation(); closeTab(Number(close.dataset.subtabClose)); return; }
     if (event.target.closest('[data-subtab-new]')) { newTab(null); return; }
+    var split = event.target.closest('[data-subtab-split]');
+    if (split) { openBeside(state.tabAt, split.dataset.subtabSplit); return; }
     var tab = event.target.closest('[data-subtab]');
     if (tab) switchTab(Number(tab.dataset.subtab));
+  });
+  $('subtabs').addEventListener('contextmenu', function (event) {
+    var tab = event.target.closest('[data-subtab]');
+    if (!tab) return;
+    event.preventDefault();
+    subtabMenu(Number(tab.dataset.subtab), event);
   });
   // The middle button closes a subtab, as it closes a tab everywhere else.
   $('subtabs').addEventListener('auxclick', function (event) {

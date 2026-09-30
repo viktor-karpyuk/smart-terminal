@@ -2545,7 +2545,10 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 /* Behind another tab: kept alive, taking no room. `display: none` also stops
    the frame being laid out or given animation frames, which is the point. */
 .extension-view[hidden] { display: none; }
+.extension-frame-slot { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .extension-frame { flex: 1; width: 100%; border: 0; display: block; background: var(--bg); }
+/* Where a frame waits between two panes, still running: see frameKeeper. */
+.extension-frame-lot { position: fixed; left: -10000px; top: 0; width: 800px; height: 600px; overflow: hidden; visibility: hidden; pointer-events: none; }
 .extension-view.is-empty { display: grid; place-content: center; padding: 24px; }
 .extension-view.is-empty p { max-width: 44ch; color: var(--text-dim); font-size: var(--fs-md); line-height: 1.6; text-align: center; }
 
