@@ -7,6 +7,7 @@ import {
   buildCommand,
   execCommand,
   needsConsent,
+  consentAction,
   permitted,
   permissionFor,
   PERMISSIONS,
@@ -234,6 +235,8 @@ function Frame({
    * had just set up and stopped the log you were following.
    */
   const streams = useRef(streamsFor(panelId));
+  /** Batches somebody said yes to: how many more calls of that verb and kind the yes still covers. */
+  const approvedBatches = useRef(new Map<string, { verb: string; kind: string; left: number }>());
   /*
    * Questions wait their turn rather than overwrite one another: one promise
    * chain per frame, each link putting its question up and clearing the dialog
@@ -344,7 +347,18 @@ function Frame({
 
       const args = (message.args ?? {}) as Record<string, unknown>;
       const question = needsConsent(name, args);
-      if (question) {
+      /*
+       * A batch is asked about once. The panel names the batch; the first call
+       * of it carries the question for all of them, and the rest of the same
+       * batch are let through for a minute — not for ever, and never for a
+       * batch nobody said yes to.
+       */
+      const batch = typeof args.batch === 'string' ? args.batch : '';
+      const covered = batch ? approvedBatches.current.get(batch) : undefined;
+      // Only the rest of what was asked about: the same verb, the same kind, and no more of them than were counted.
+      if (question && covered && covered.verb === name && covered.kind === String(args.kind ?? '') && covered.left > 0) {
+        covered.left -= 1;
+      } else if (question) {
         /*
          * Asked one at a time, because there is one dialog.
          *
@@ -357,6 +371,10 @@ function Frame({
         if (!yes) {
           reply(false, null, 'the person said no');
           return;
+        }
+        if (batch && Number(args.count) > 1) {
+          approvedBatches.current.set(batch, { verb: name, kind: String(args.kind ?? ''), left: Number(args.count) - 1 });
+          setTimeout(() => approvedBatches.current.delete(batch), 60_000);
         }
       }
 
@@ -864,7 +882,7 @@ function Frame({
                 Cancel
               </button>
               <button className="danger-btn" onClick={() => asking.answer(true)}>
-                Do it
+                {consentAction(asking.question)}
               </button>
             </div>
           </div>

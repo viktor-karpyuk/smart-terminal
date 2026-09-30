@@ -555,6 +555,8 @@ function daemonSetRow(item, now) {
     revisioned: true,
     selector: selectorOf(item),
     misscheduled: status.numberMisscheduled ?? 0,
+    forwardKind: 'daemonset',
+    forwardPorts: portsOf(item.spec?.template?.spec?.containers),
   };
 }
 
@@ -2313,6 +2315,8 @@ class Forwards {
         record.port = port;
         record.state = 'up';
         record.error = null;
+        // A fresh connection has not been refused by anything yet: a warning from before it is history.
+        record.warning = null;
         record.failures = 0;
         record.upAt = new Date(this.now()).toISOString();
         return entry.onChange({ ...record });

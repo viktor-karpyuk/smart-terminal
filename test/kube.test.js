@@ -829,6 +829,8 @@ test('the rows that can be forwarded say so, with the ports they know', () => {
   const pod = kube.shapeFor('Pod').row({ metadata: { name: 'api-1', namespace: 'web' }, spec: { containers: [{ name: 'api' }] }, status: { phase: 'Running' } }, NOW);
   assert.equal(pod.forwardKind, 'pod', 'a pod that declares nothing can still be forwarded to a port somebody types');
   assert.equal(pod.status, 'Running', 'what the panel checks before offering the button');
+  const daemons = kube.shapeFor('DaemonSet').row({ metadata: { name: 'agent', namespace: 'ops' }, spec: { template }, status: {} }, NOW);
+  assert.equal(daemons.forwardKind, 'daemonset', 'forwardable by kubectl, so offered too');
   assert.deepEqual(pod.forwardPorts, []);
 });
 
@@ -910,12 +912,17 @@ test('a local port somebody else has is said at once, not retried', async () => 
 });
 
 test('nothing listening inside is a warning; the forward stays up', async () => {
-  const { forwards, spawned } = fakeKubectl();
+  const { forwards, spawned, tick } = fakeKubectl();
   await forwards.start('f4', { kind: 'pod', name: 'api-1', remote: 8081, local: 0 });
   spawned[0].say('Forwarding from 127.0.0.1:60000 -> 8081\n');
   spawned[0].complain('E0929 an error occurred forwarding 60000 -> 8081: connect: connection refused\n');
   assert.equal(forwards.get('f4').state, 'up');
   assert.match(forwards.get('f4').warning, /Nothing answered on 8081/);
+  // The application came up after all, the connection dropped and came back: the old warning is history.
+  spawned[0].die('error: lost connection to pod\n');
+  await tick();
+  spawned[1].say('Forwarding from 127.0.0.1:60000 -> 8081\n');
+  assert.equal(forwards.get('f4').warning, null);
 });
 
 test('a forward that never comes up gives up, and a stopped one is not started again', async () => {

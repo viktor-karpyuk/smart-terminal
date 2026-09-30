@@ -390,7 +390,11 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
     // Several at once first: the count is the part that is easy to get wrong,
     // and one question for the lot beats five that get waved through.
     if (name === 'kube.remove' && Number(args.count) > 1) {
-      return `Delete ${String(args.count)} ${String(args.kind ?? 'object')}s${where}?\n\nNothing brings them back.`;
+      // Ticked across namespaces, the first one's namespace is not where they are.
+      const spread = Number(args.spread) > 1
+        ? ` across ${String(args.spread)} namespaces${args.context ? ` on ${clusterName(String(args.context))}` : ''}`
+        : where;
+      return `Delete ${String(args.count)} ${String(args.kind ?? 'object')}s${spread}?\n\nNothing brings them back.`;
     }
     if (name === 'kube.remove') return `Delete ${what}${where}?\n\nNothing brings it back.`;
     // A dry run is a question, not a change: the server validates it and throws
@@ -563,8 +567,33 @@ export function publishes(goal: string): boolean {
 /** " in namespace prod on cluster X" — the half of the question that is usually the answer. */
 function whereItIs(args: Record<string, unknown>): string {
   const namespace = args?.namespace ? ` in namespace ${String(args.namespace)}` : '';
-  const context = args?.context ? ` on ${String(args.context)}` : '';
+  const context = args?.context ? ` on ${clusterName(String(args.context))}` : '';
   return `${namespace}${context}`;
+}
+
+/**
+ * A context the way people say it.
+ *
+ * An EKS context is an ARN — `arn:aws:eks:sa-east-1:532465846520:cluster/kubrik-k8s`
+ * — and a question with that in the middle is read past, which is the opposite
+ * of what the cluster name is there for. The name and its region are what tell
+ * two clusters apart; the account number never is, to the person clicking.
+ */
+export function clusterName(context: string): string {
+  const eks = /^arn:aws:eks:([^:]+):\d+:cluster\/(.+)$/.exec(context);
+  return eks ? `${eks[2]} (${eks[1]})` : shortContext(context);
+}
+
+/**
+ * What the confirming button says: the verb the question starts with.
+ *
+ * Every question here opens with the thing that will happen — Delete, Scale,
+ * Drain, Force-push, Merge — so the button can say it too. "Do it" made every
+ * dialog look the same, which is how people learn to click through them.
+ */
+export function consentAction(question: string): string {
+  const verb = /^[A-Za-z][\w-]*/.exec(String(question ?? '').trim())?.[0];
+  return verb ? verb.charAt(0).toUpperCase() + verb.slice(1) : 'Continue';
 }
 
 /**
