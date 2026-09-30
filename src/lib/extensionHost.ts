@@ -113,7 +113,7 @@ const KUBE_WRITE = [
  * kind for changes — which is the same shape as the other two and replaces the
  * asking-again that a table would otherwise have to do.
  */
-const KUBE_STREAM = ['follow', 'stopFollow', 'forward', 'stopForward', 'watch', 'stopWatch', 'drain'] as const;
+const KUBE_STREAM = ['follow', 'stopFollow', 'forward', 'stopForward', 'forwards', 'openForward', 'watch', 'stopWatch', 'drain'] as const;
 
 /**
  * The two that reach into the app rather than into a cluster.
@@ -295,7 +295,7 @@ export const PERMISSIONS: Record<string, string> = {
   terminal: 'Open terminals and Claude sessions about what it shows',
 };
 
-const KUBE_READ_STREAMS = new Set(['follow', 'stopFollow', 'watch', 'stopWatch']);
+const KUBE_READ_STREAMS = new Set(['follow', 'stopFollow', 'watch', 'stopWatch', 'forwards']);
 
 /**
  * The permission one call needs. Reading and changing are separate wherever the
