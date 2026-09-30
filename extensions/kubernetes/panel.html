@@ -147,6 +147,11 @@
   }
   .row-menu .btn { border-color: transparent; text-align: left; }
   .row-menu .btn:hover { border-color: var(--border); }
+  .row-menu .btn { display: flex; align-items: baseline; gap: 14px; min-width: 190px; }
+  .menu-hint { margin-left: auto; max-width: 180px; overflow: hidden; text-overflow: ellipsis; color: var(--text-faint); font-size: 10.5px; }
+  .menu-rule { border: 0; border-top: 1px solid var(--border); margin: 3px 2px; }
+  .detail-head h3 { cursor: copy; }
+  .detail-head h3:hover { color: var(--accent); }
 
   th {
     position: sticky; top: 0; z-index: 1; text-align: left; font-weight: 550;
@@ -213,7 +218,18 @@
   /* Full strength, not the dimmed grey the rest of the prose uses: a log is
      read line by line, often at speed, and dim text is the wrong trade there. */
   .dock-body pre { color: var(--text); }
-  .log-line.err { color: var(--danger); }
+  .log-line.err, .log-line.lvl-bad { color: var(--danger); }
+  .log-line.lvl-warn { color: var(--git-new); }
+  .log-line.lvl-debug { color: var(--text-faint); }
+  .log-line.log-note { color: var(--text-faint); font-style: italic; }
+  /* When it was written: there to be read, set back so the message leads. */
+  .log-ts { color: var(--text-faint); }
+  /* The sixteen ANSI colours, in the same ink as the YAML below. */
+  .a-0 { color: #545c7e; } .a-1 { color: #f7768e; } .a-2 { color: #9ece6a; } .a-3 { color: #e0af68; }
+  .a-4 { color: #7aa2f7; } .a-5 { color: #bb9af7; } .a-6 { color: #7dcfff; } .a-7 { color: var(--text); }
+  .a-8 { color: #737aa2; } .a-9 { color: #ff7a93; } .a-10 { color: #b9f27c; } .a-11 { color: #ff9e64; }
+  .a-12 { color: #7da6ff; } .a-13 { color: #c0a8ff; } .a-14 { color: #0db9d7; } .a-15 { color: var(--text); }
+  .a-bold { font-weight: 650; } .a-dim { opacity: 0.7; } .a-italic { font-style: italic; } .a-under { text-decoration: underline; }
 
   .yaml-tools { display: flex; align-items: center; gap: 5px; margin-bottom: 7px; flex-wrap: wrap; }
   /* Stuck to the top of the pane: a form long enough to scroll is a form whose
@@ -546,7 +562,21 @@
   }
   .dock-tools input:focus, .dock-tools select:focus { outline: none; border-color: var(--accent); }
   .dock-body { overflow: auto; padding: 7px 10px 10px; min-height: 0; }
-  .hit { background: var(--accent-soft); color: var(--accent); }
+  .hit { background: var(--accent-soft); color: var(--accent); border-radius: 2px; }
+  mark.hit { background: color-mix(in srgb, var(--git-new) 30%, transparent); color: inherit; }
+  mark.hit.now { background: var(--git-new); color: var(--bg); }
+  .btn.icon { display: inline-grid; place-items: center; padding: 3px 6px; min-width: 26px; }
+  .btn.icon svg { width: 13px; height: 13px; display: block; }
+  .log-find { display: inline-flex; align-items: center; gap: 3px; }
+  .log-find #log-count { font-size: 10.5px; white-space: nowrap; min-width: 0; }
+  .dock { position: relative; }
+  /* Scrolled up in a followed log: the new lines are below, and this says how many. */
+  .log-latest {
+    position: absolute; right: 20px; bottom: 12px; z-index: 5;
+    padding: 4px 10px; border-radius: 99px; font-size: 11px;
+    background: var(--accent); color: var(--bg); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  }
+  .log-latest[hidden] { display: none; }
 
   .bar {
     display: flex; align-items: center; gap: 7px; padding: 5px 10px;
@@ -584,6 +614,18 @@
     border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 7px; }
   .ask input:focus { outline: none; border-color: var(--accent); }
   .spin { display: inline-block; animation: turn 0.9s linear infinite; }
+  .btn.with-icon { display: inline-flex; align-items: center; gap: 6px; }
+  .btn.with-icon svg, .top .btn.icon svg { width: 13px; height: 13px; flex: none; }
+  .top .btn.icon { display: inline-grid; place-items: center; padding: 4px 7px; }
+  /* Refreshing: the arrow turns while a question is in the air, and only then. */
+  #reload.is-busy svg { animation: turn 0.9s linear infinite; }
+  .refresh-group { display: inline-flex; align-items: center; gap: 6px; }
+  .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); flex: none; }
+  #live.on .live-dot { background: var(--ok); box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent); animation: beat 2.4s ease-out infinite; }
+  @keyframes beat { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 55%, transparent); } 70%, 100% { box-shadow: 0 0 0 5px transparent; } }
+  /* When it was last true, and whether the last try failed. */
+  .fresh { font-size: 10.5px; color: var(--text-faint); white-space: nowrap; min-width: 0; }
+  .fresh.is-stale { color: var(--danger); cursor: help; }
   @keyframes turn { to { transform: rotate(360deg); } }
 </style>
 
@@ -592,9 +634,12 @@
     <span id="cluster" class="cluster-name"></span>
     <select id="namespace" title="Which namespace"></select>
     <input id="search" placeholder="Filter by name, namespace or status" />
-    <button class="btn" id="terminal" title="Open a terminal aimed at this cluster and namespace">Terminal</button>
-    <button class="btn" id="live" title="Refresh on a timer">Live</button>
-    <button class="btn" id="reload" title="Refresh now">Refresh</button>
+    <button class="btn with-icon" id="terminal" title="Open a terminal aimed at this cluster and namespace"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4.5 6.5 6.5 8l-2 1.5M8 10h3"/></svg>Terminal</button>
+    <span class="refresh-group">
+      <button class="btn with-icon" id="live" title="Keep this up to date by itself"><span class="live-dot"></span>Live</button>
+      <span class="fresh" id="fresh"></span>
+      <button class="btn icon" id="reload" title="Refresh now" aria-label="Refresh now"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg></button>
+    </span>
   </header>
 
   <div class="subtabs" id="subtabs" role="tablist" aria-label="Places in this cluster"></div>
@@ -1108,9 +1153,45 @@
   }
 
   var loadToken = 0;
+  /** Seconds, minutes or hours since `then`, as short as it can be said. */
+  function sinceText(then) {
+    var s = Math.max(0, Math.round((Date.now() - then) / 1000));
+    if (s < 5) return 'just now';
+    if (s < 60) return s + 's ago';
+    if (s < 3600) return Math.floor(s / 60) + 'm ago';
+    return Math.floor(s / 3600) + 'h ago';
+  }
+
+  /**
+   * How fresh what is on screen is. A table that updates itself says so, and
+   * says when it stopped managing to — otherwise a dashboard that lost its
+   * connection an hour ago looks exactly like one that is live.
+   */
+  function drawFresh() {
+    var reload = $('reload');
+    if (reload) reload.classList.toggle('is-busy', Boolean(state.busy));
+    var fresh = $('fresh');
+    if (!fresh) return;
+    fresh.classList.toggle('is-stale', Boolean(state.stale));
+    if (state.stale) {
+      fresh.textContent = 'refresh failed';
+      fresh.title = state.stale + (state.updatedAt ? '\n\nWhat is shown is from ' + sinceText(state.updatedAt) + '. Refresh to try again.' : '');
+    } else if (state.updatedAt) {
+      fresh.textContent = (state.watch.id ? 'watching · ' : '') + sinceText(state.updatedAt);
+      fresh.title = state.watch.id
+        ? 'Changes arrive as they happen; read in full ' + sinceText(state.updatedAt)
+        : 'Read ' + sinceText(state.updatedAt) + (state.live ? '; Live reads it again by itself' : '');
+    } else {
+      fresh.textContent = '';
+      fresh.title = '';
+    }
+  }
+  setInterval(function () { if (state.showing !== false && !document.hidden) drawFresh(); }, 5000);
+
   function load(quiet) {
     var mine = (loadToken += 1);
     state.busy = true;
+    drawFresh();
     var started = Date.now();
     if (!quiet) { state.loading = true; state.error = null; draw(); }
 
@@ -1130,6 +1211,9 @@
       if (mine !== loadToken) return;
       state.loading = false;
       state.error = null;
+      state.stale = null;
+      state.updatedAt = Date.now();
+      drawFresh();
       /*
        * Where it is, said again on every load and not only when somebody
        * navigates.
@@ -1170,9 +1254,22 @@
     }).catch(function (error) {
       state.busy = false;
       state.tookMs = Date.now() - started;
-      if (mine !== loadToken) return;
+      if (mine !== loadToken) { drawFresh(); return; }
       state.loading = false;
+      /*
+       * A refresh that failed behind a table that is already there leaves the
+       * table there. One dropped connection used to swap forty good rows for a
+       * red sentence, which is less true than the rows were; now the rows stay
+       * and the header says they are no longer being kept up to date.
+       */
+      var shown = state.view.type === 'overview' ? state.overview : state.table;
+      if (quiet && shown) {
+        state.stale = String(error.message || error);
+        drawFresh();
+        return;
+      }
       state.error = String(error.message || error);
+      drawFresh();
       draw();
     });
   }
@@ -1578,6 +1675,7 @@
           return;
         }
         state.watch.id = result.id;
+        drawFresh();
         state.watch.kind = kind;
         state.watch.of = what;
       })
@@ -1673,7 +1771,8 @@
       }),
     ).join('');
     $('namespace').innerHTML = namespaces;
-    $('live').className = 'btn' + (state.live ? ' on' : '');
+    $('live').className = 'btn with-icon' + (state.live ? ' on' : '');
+    drawFresh();
   }
 
   /**
@@ -1707,7 +1806,12 @@
     remember();
     draw();
   });
-  $('reload').addEventListener('click', function () { load(); });
+  // In place: what is there stays there until the new answer replaces it, and
+  // the arrow turning is what says it is being asked.
+  $('reload').addEventListener('click', function () {
+    if (state.error || !(state.view.type === 'overview' ? state.overview : state.table)) load();
+    else load(true);
+  });
   $('live').addEventListener('click', function () {
     state.live = !state.live;
     drawTop();
@@ -1839,7 +1943,29 @@
     return '<div class="note waiting"><span class="spin">◐</span> Reading ' + esc(shortContext(state.context || '') || 'the cluster') + '…</div>';
   }
 
+  /**
+   * Whether somebody is selecting text inside `el` right now.
+   *
+   * The table and the detail pane are drawn with `innerHTML`, and a refresh
+   * landing between selecting a pod's name and pressing ⌘C took the selection
+   * with it — every ten seconds, or on every change a watch reported. So a
+   * redraw that nobody asked for waits until the selection is let go of.
+   */
+  function selectingIn(el) {
+    var picked = window.getSelection && window.getSelection();
+    if (!el || !picked || picked.isCollapsed || !picked.rangeCount) return false;
+    return el.contains(picked.anchorNode) || el.contains(picked.focusNode);
+  }
+  var heldBack = { table: false, detail: false };
+  document.addEventListener('selectionchange', function () {
+    var picked = window.getSelection();
+    if (picked && !picked.isCollapsed) return;
+    if (heldBack.table) { heldBack.table = false; if (state.table) drawTable(); }
+    if (heldBack.detail) { heldBack.detail = false; drawDetail(); }
+  });
+
   function drawTable() {
+    if (selectingIn($('table'))) { heldBack.table = true; return; }
     closeRowMenu();
     if (state.error) {
       $('table').innerHTML = '<div class="note error">' + esc(state.error) + '</div>' + advice(state.error);
@@ -1950,6 +2076,8 @@
     }
     var row = event.target.closest('tr[data-uid]');
     if (!row) return;
+    // The end of dragging across a name to copy it, not a click on the row.
+    if (selectingIn(row)) return;
     select(row.dataset.uid);
   });
 
@@ -2711,6 +2839,7 @@
      * yet.
      */
     if (state.editing && !force) return;
+    if (!force && state.selected && selectingIn(document.querySelector('aside .detail-body'))) { heldBack.detail = true; return; }
     var chosen = state.selected;
     $('body').className = 'body' + (chosen ? ' with-detail' : '');
     applyColumns();
@@ -3921,7 +4050,19 @@
    * scrollback than a log viewer beside a table is for, and Copy takes what is
    * there whatever the number.
    */
-  var LOG_CAP = 2000;
+  var LOG_CAP = 20000;
+  /** How many lines back a log starts, as offered in the dock. */
+  var LOG_TAILS = [200, 1000, 5000, 20000];
+
+  function newLog(fields) {
+    return assign({
+      id: null, namespace: '', context: state.context, containers: [], container: null,
+      lines: [], pending: '', drawn: 0, following: false, wrap: true, loading: false,
+      // Search: what is typed, whether the rest is hidden, and which hit is current.
+      search: '', filter: false, hit: 0,
+      times: false, tail: 1000, unseen: 0,
+    }, fields);
+  }
 
   function openLog(row, container) {
     for (var i = 0; i < state.logs.length; i += 1) {
@@ -3932,10 +4073,7 @@
         // Already open, but on another container — this asked for a particular one.
         if (container && open.container !== container) {
           open.container = container;
-          open.lines = [];
-          open.drawn = 0;
-          drawDock();
-          readLog(open, false);
+          restartLog(open);
           return;
         }
         drawDock();
@@ -3944,15 +4082,30 @@
     }
     var all = row.containers || [];
     var containers = all.filter(function (c) { return !c.init; });
-    state.logs.push({
-      id: null, name: row.name, namespace: row.namespace, context: state.context,
+    state.logs.push(newLog({
+      name: row.name, namespace: row.namespace,
       containers: all, container: container || (containers[0] || all[0] || {}).name || null,
-      lines: [], pending: '', drawn: 0, following: false, wrap: true, search: '', loading: false,
-    });
+    }));
     state.logAt = state.logs.length - 1;
     state.dockOpen = true;
-    drawDock();
-    readLog(state.logs[state.logAt], false);
+    /*
+     * Followed from the start. A log is opened to watch what a pod is doing, and
+     * a still picture that has to be told to move was one more click every time
+     * — the history comes with it anyway, as many lines back as the dock says.
+     */
+    followLog(state.logs[state.logAt]);
+  }
+
+  /** Read again with what changed — a container, the timestamps, how far back. */
+  function restartLog(log) {
+    if (log.following) { stopFollowing(log); followLog(log); }
+    else readLog(log, log.showingPrevious);
+  }
+
+  function stopFollowing(log) {
+    if (log.id) call('kube.stopFollow', { id: log.id }).catch(function () {});
+    log.id = null;
+    log.following = false;
   }
 
   function currentLog() { return state.logs[state.logAt] || null; }
@@ -3965,11 +4118,7 @@
    * the log dock is already for.
    */
   function openStreamTab(title, id) {
-    state.logs.push({
-      id: id, name: title, namespace: '', context: state.context, oneOff: true,
-      containers: [], container: null,
-      lines: [], pending: '', drawn: 0, following: true, wrap: true, search: '', loading: false,
-    });
+    state.logs.push(newLog({ id: id, name: title, oneOff: true, following: true }));
     state.logAt = state.logs.length - 1;
     state.dockOpen = true;
     drawDock();
@@ -3990,16 +4139,16 @@
   function readLog(log, previous) {
     log.showingPrevious = Boolean(previous);
     log.loading = true;
-    log.following = false;
-    if (log.id) { call('kube.stopFollow', { id: log.id }).catch(function () {}); log.id = null; }
+    stopFollowing(log);
+    log.unseen = 0;
     drawDock();
     call('kube.logs', {
       context: log.context, namespace: log.namespace, pod: log.name,
-      container: log.container || undefined, tail: 1000, previous: previous || false,
+      container: log.container || undefined, tail: log.tail, previous: previous || false, timestamps: log.times,
     }).then(function (result) {
       log.loading = false;
       var text = String(result.text || '');
-      log.lines = text ? text.split('\n').map(function (line) { return { text: line }; }) : [];
+      log.lines = text ? text.replace(/\n$/, '').split('\n').map(function (line) { return { text: line }; }) : [];
       log.pending = '';
       if (previous && !text.trim()) say('That container has no previous run to show.');
       drawDock(true);
@@ -4011,21 +4160,16 @@
   }
 
   function followLog(log) {
-    if (log.following) {
-      if (log.id) call('kube.stopFollow', { id: log.id }).catch(function () {});
-      log.id = null;
-      log.following = false;
-      drawDock();
-      return;
-    }
+    if (log.following) { stopFollowing(log); drawDock(); return; }
     log.following = true;
     log.showingPrevious = false;
     log.lines = [];
     log.pending = '';
-    drawDock();
+    log.unseen = 0;
+    drawDock(true);
     call('kube.follow', {
       context: log.context, namespace: log.namespace, pod: log.name,
-      container: log.container || undefined, tail: 200,
+      container: log.container || undefined, tail: log.tail, timestamps: log.times,
     }).then(function (result) { log.id = result.id; })
       .catch(function (error) {
         log.following = false;
@@ -4034,15 +4178,111 @@
       });
   }
 
+  /* ---------------------------------------------------------------------- *
+   * A line of a log, as it reads.
+   *
+   * Three things turn a wall of text into something that can be scanned: the
+   * colours the program itself asked for (ANSI, which used to arrive as
+   * `[32m` in the middle of every line), the level each line was logged at,
+   * and the time it was logged, set back so it does not compete with the
+   * message.
+   * ---------------------------------------------------------------------- */
+  var ANSI = /\x1b\[([0-9;]*)m/g;
+  var ANSI_OTHER = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r/g;
+
+  /** The text without any escape sequences: what is searched, copied and saved. */
+  function plainLine(text) {
+    return String(text).replace(ANSI, '').replace(ANSI_OTHER, '');
+  }
+
+  var LEVEL_WORD_BAD = /\b(ERROR|FATAL|PANIC|CRITICAL|CRIT|SEVERE|EMERG|Exception|Traceback)\b|^\s*(Caused by:|at [\w$.<>]+\()|^[EF]\d{4} /;
+  var LEVEL_KEY_BAD = /\b(level|lvl|severity)["']?\s*[=:]\s*["']?(error|err|fatal|panic|crit|critical|emerg|alert)\b/i;
+  var LEVEL_WORD_WARN = /\b(WARN|WARNING)\b|^W\d{4} /;
+  var LEVEL_KEY_WARN = /\b(level|lvl|severity)["']?\s*[=:]\s*["']?(warn|warning)\b/i;
+  var LEVEL_WORD_DEBUG = /\b(DEBUG|TRACE)\b/;
+  var LEVEL_KEY_DEBUG = /\b(level|lvl|severity)["']?\s*[=:]\s*["']?(debug|trace)\b/i;
+
+  /** The level a line was logged at, from the words loggers actually use. Case matters for the bare words: "no errors" is not an error. */
+  function levelOf(plain) {
+    var head = plain.length > 400 ? plain.slice(0, 400) : plain;
+    if (LEVEL_WORD_BAD.test(head) || LEVEL_KEY_BAD.test(head)) return 'bad';
+    if (LEVEL_WORD_WARN.test(head) || LEVEL_KEY_WARN.test(head)) return 'warn';
+    if (LEVEL_WORD_DEBUG.test(head) || LEVEL_KEY_DEBUG.test(head)) return 'debug';
+    return '';
+  }
+
+  var STAMP = /^(\d{4}-\d\d-\d\d[T ][\d:.,]+(?:Z|[+-]\d\d:?\d\d)?)(\s)/;
+
+  /** ANSI SGR codes as classes: the sixteen colours, bold and dim. Backgrounds are left to the theme. */
+  function ansiHtml(text, term) {
+    if (text.indexOf('\x1b') < 0) return markUp(text.replace(/\r/g, ''), term);
+    var out = '';
+    var classes = {};
+    var fg = null;
+    var last = 0;
+    var match;
+    var flush = function (piece) {
+      piece = piece.replace(ANSI_OTHER, '');
+      if (!piece) return;
+      var names = Object.keys(classes).filter(function (k) { return classes[k]; });
+      if (fg != null) names.push('a-' + fg);
+      out += names.length ? '<span class="' + names.join(' ') + '">' + markUp(piece, term) + '</span>' : markUp(piece, term);
+    };
+    ANSI.lastIndex = 0;
+    while ((match = ANSI.exec(text))) {
+      flush(text.slice(last, match.index));
+      last = ANSI.lastIndex;
+      var codes = match[1] ? match[1].split(';').map(Number) : [0];
+      for (var i = 0; i < codes.length; i += 1) {
+        var code = codes[i];
+        if (code === 0) { classes = {}; fg = null; }
+        else if (code === 1) classes['a-bold'] = true;
+        else if (code === 2) classes['a-dim'] = true;
+        else if (code === 3) classes['a-italic'] = true;
+        else if (code === 4) classes['a-under'] = true;
+        else if (code === 22) { classes['a-bold'] = false; classes['a-dim'] = false; }
+        else if (code === 23) classes['a-italic'] = false;
+        else if (code === 24) classes['a-under'] = false;
+        else if (code >= 30 && code <= 37) fg = code - 30;
+        else if (code >= 90 && code <= 97) fg = code - 90 + 8;
+        else if (code === 39) fg = null;
+        // 256-colour and true-colour foregrounds: skip their arguments.
+        else if ((code === 38 || code === 48) && codes[i + 1] === 5) i += 2;
+        else if ((code === 38 || code === 48) && codes[i + 1] === 2) i += 4;
+      }
+    }
+    flush(text.slice(last));
+    return out;
+  }
+
   function shownLines(log) {
-    if (!log.search) return log.lines;
+    if (!log.search || !log.filter) return log.lines;
     var term = log.search.toLowerCase();
-    return log.lines.filter(function (line) { return line.text.toLowerCase().indexOf(term) >= 0; });
+    return log.lines.filter(function (line) { return plainLine(line.text).toLowerCase().indexOf(term) >= 0; });
+  }
+
+  /** How many lines of the log hold the search term. */
+  function matchCount(log) {
+    if (!log.search) return 0;
+    var term = log.search.toLowerCase();
+    var n = 0;
+    for (var i = 0; i < log.lines.length; i += 1) if (plainLine(log.lines[i].text).toLowerCase().indexOf(term) >= 0) n += 1;
+    return n;
   }
 
   /** One line of a log, as it appears. */
   function lineHtml(line, term) {
-    return '<span class="log-line' + (line.err ? ' err' : '') + '">' + markUp(line.text, term) + '</span>';
+    if (line.plain == null) line.plain = plainLine(line.text);
+    if (line.level == null) line.level = levelOf(line.plain);
+    var text = line.text;
+    var stamp = '';
+    var at = STAMP.exec(text);
+    if (at) {
+      stamp = '<span class="log-ts">' + esc(at[1]) + '</span>' + at[2];
+      text = text.slice(at[0].length);
+    }
+    var klass = 'log-line' + (line.err ? ' err' : '') + (line.level ? ' lvl-' + line.level : '') + (line.note ? ' log-note' : '');
+    return '<span class="' + klass + '">' + stamp + ansiHtml(text, term) + '</span>';
   }
 
   /** The search term, marked where it was found. Everything else is escaped first. */
@@ -4054,12 +4294,40 @@
     var rest = safe;
     var at = rest.toLowerCase().indexOf(needle.toLowerCase());
     while (at >= 0) {
-      out += rest.slice(0, at) + '<span class="hit">' + rest.slice(at, at + needle.length) + '</span>';
+      out += rest.slice(0, at) + '<mark class="hit">' + rest.slice(at, at + needle.length) + '</mark>';
       rest = rest.slice(at + needle.length);
       at = rest.toLowerCase().indexOf(needle.toLowerCase());
     }
     return out + rest;
   }
+
+  /** Put the current hit in view and say which it is. `step` moves it first. */
+  function showHit(log, step) {
+    var hits = document.querySelectorAll('#log-lines .hit');
+    var count = document.getElementById('log-count');
+    if (!hits.length) {
+      if (count) count.textContent = log.search ? 'no matches' : '';
+      return;
+    }
+    var was = document.querySelector('#log-lines .hit.now');
+    if (was) was.classList.remove('now');
+    log.hit = ((log.hit || 0) + (step || 0) + hits.length) % hits.length;
+    var now = hits[log.hit];
+    now.classList.add('now');
+    if (step) now.scrollIntoView({ block: 'center' });
+    if (count) count.textContent = (log.hit + 1) + ' of ' + hits.length;
+  }
+
+  var LOG_ICONS = {
+    wrap: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 4h12M2 8h9.5a2.5 2.5 0 0 1 0 5H8m1.5-1.8L8 13l1.5 1.8M2 12h3"/></svg>',
+    times: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.3 1.6"/></svg>',
+    clear: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><path d="M3.8 12.2l8.4-8.4"/></svg>',
+    copy: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V3.8c0-.7-.6-1.3-1.3-1.3H3.8c-.7 0-1.3.6-1.3 1.3v5.4c0 .7.6 1.3 1.3 1.3h1.7"/></svg>',
+    save: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M8 2.5v8m-3-3 3 3 3-3M3 12.5v1h10v-1"/></svg>',
+    up: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 10l4-4 4 4"/></svg>',
+    down: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 6l4 4 4-4"/></svg>',
+    filter: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M2.5 3h11l-4.2 5v4.5l-2.6 1V8z"/></svg>',
+  };
 
   function drawDock(toBottom) {
     var slot = document.getElementById('dock-slot');
@@ -4072,47 +4340,59 @@
     var log = currentLog();
     var tabs = state.logs.map(function (entry, at) {
       return '<span class="dock-tab' + (at === state.logAt ? ' on' : '') + '" data-log="' + at + '">' +
-        '<span class="dot ' + (entry.following ? 'ok' : 'idle') + '"></span>' +
-        '<span class="what" title="' + esc(entry.namespace + '/' + entry.name) + '">' + esc(entry.name) + '</span>' +
-        '<button class="x" data-close="' + at + '">✕</button></span>';
+        '<span class="dot ' + (entry.following ? 'ok' : 'idle') + '" title="' + (entry.following ? 'Following' : 'Not following') + '"></span>' +
+        '<span class="what" title="' + esc((entry.namespace ? entry.namespace + '/' : '') + entry.name + (entry.container ? ' · ' + entry.container : '')) + '">' + esc(entry.name) + '</span>' +
+        '<button class="x" data-close="' + at + '" title="Close this log" aria-label="Close">✕</button></span>';
     }).join('');
 
     // A drain shares the dock with the logs because it reads like one, but it is
     // not a pod: Follow and Previous would call `kubectl logs` on a pod named
     // "drain ip-10-0-1-2", which is nothing.
-    var isLog = log.namespace !== null && log.namespace !== undefined && !log.oneOff;
+    var isLog = !log.oneOff;
     var containers = (log.containers || []).length > 1
-      ? '<select id="log-container">' + log.containers.map(function (container) {
+      ? '<select id="log-container" title="Which container">' + log.containers.map(function (container) {
           return '<option value="' + esc(container.name) + '"' + (container.name === log.container ? ' selected' : '') +
             '>' + esc(container.name) + (container.init ? ' (init)' : '') + '</option>';
         }).join('') + '</select>'
       : '';
+    var tails = '<select id="log-tail" title="How far back to start">' + LOG_TAILS.map(function (n) {
+      return '<option value="' + n + '"' + (n === log.tail ? ' selected' : '') + '>last ' + (n >= 1000 ? n / 1000 + 'k' : n) + ' lines</option>';
+    }).join('') + '</select>';
 
     var shown = shownLines(log);
-    var count = log.search ? shown.length + ' of ' + log.lines.length : '';
+    var count = log.search ? (log.filter ? shown.length + ' of ' + log.lines.length : matchCount(log) + ' lines match') : '';
+    var icon = function (what, name, title, on) {
+      return '<button class="btn icon' + (on ? ' on' : '') + '" data-do="' + what + '" title="' + esc(title) + '" aria-label="' + esc(title) + '">' + LOG_ICONS[name] + '</button>';
+    };
 
-    var tools = (isLog ? containers : '') +
-      '<input id="log-search" placeholder="Search this log" value="' + esc(log.search) + '" />' +
-      (count ? '<span class="dim" id="log-count">' + esc(count) + '</span>' : '') +
+    var tools = (isLog ? containers + tails : '') +
+      '<span class="log-find">' +
+        '<input id="log-search" placeholder="Search this log" value="' + esc(log.search) + '" title="Enter for the next match, ⇧Enter for the one before" />' +
+        '<span class="dim" id="log-count">' + esc(count) + '</span>' +
+        (log.search && !log.filter ? icon('log-prev', 'up', 'Previous match (⇧Enter)') + icon('log-next', 'down', 'Next match (Enter)') : '') +
+        icon('log-filter', 'filter', log.filter ? 'Showing only the lines that match — show them all' : 'Show only the lines that match', log.filter) +
+      '</span>' +
       (isLog
-        ? '<button class="btn' + (log.following ? ' on' : '') + '" data-do="follow">' +
-          (log.following ? 'Following' : 'Follow') + '</button>' +
-          '<button class="btn" data-do="previous" title="The log of the run that stopped">Previous</button>'
+        ? '<button class="btn' + (log.following ? ' on' : '') + '" data-do="follow" title="' + (log.following ? 'Stop following' : 'Keep adding lines as they are written') + '">' +
+          (log.following ? '● Following' : 'Follow') + '</button>' +
+          '<button class="btn' + (log.showingPrevious ? ' on' : '') + '" data-do="previous" title="The log of the run that stopped — usually the one that says why">Previous</button>' +
+          icon('log-times', 'times', log.times ? 'Hide when each line was written' : 'Show when each line was written', log.times)
         : '') +
-      '<button class="btn' + (log.wrap ? ' on' : '') + '" data-do="wrap">Wrap</button>' +
-      '<button class="btn" data-do="copy-log">Copy</button>' +
-      '<button class="btn" data-do="save-log" title="Save this log to a file">Download</button>' +
-      (isLog ? '<button class="btn" data-do="ask-log" title="Open a Claude session about this pod">Ask Claude</button>' : '') +
-      '<button class="btn' + (state.dockFull ? ' on' : '') + '" data-do="dock-full" title="' +
+      icon('wrap', 'wrap', log.wrap ? 'Stop wrapping long lines' : 'Wrap long lines', log.wrap) +
+      icon('log-clear', 'clear', 'Clear what is shown (keeps following)') +
+      icon('copy-log', 'copy', 'Copy ' + (log.search && log.filter ? 'the matching lines' : 'the whole log')) +
+      icon('save-log', 'save', 'Save this log to a file') +
+      (isLog ? '<button class="btn" data-do="ask-log" title="Open a Claude session about this pod, with this log">Ask Claude</button>' : '') +
+      '<button class="btn icon' + (state.dockFull ? ' on' : '') + '" data-do="dock-full" title="' +
         (state.dockFull ? 'Give the table its room back' : 'Fit the log to the window') + '">' +
         (state.dockFull ? '⤡' : '⤢') + '</button>' +
-      '<button class="btn" data-do="dock" title="' + (state.dockOpen ? 'Put the log away' : 'Bring the log back') +
+      '<button class="btn icon" data-do="dock" title="' + (state.dockOpen ? 'Put the log away' : 'Bring the log back') +
         '">' + (state.dockOpen ? '▾' : '▴') + '</button>';
 
     var body = log.loading
       ? '<div class="dim">reading…</div>'
       : !shown.length
-        ? '<div class="dim">' + (log.search ? 'Nothing in this log matches.' : 'Nothing in the log.') + '</div>'
+        ? '<div class="dim">' + (log.search && log.filter ? 'Nothing in this log matches.' : log.following ? 'Waiting for the first line…' : 'Nothing in the log.') + '</div>'
         : '<pre id="log-lines" class="' + (log.wrap ? '' : 'wrapless') + '">' +
           shown.map(function (line) { return lineHtml(line, log.search); }).join('\n') + '</pre>';
 
@@ -4134,9 +4414,11 @@
 
     slot.innerHTML = '<div class="dock' + (full ? ' is-full' : '') + '" style="' +
       (state.dockOpen && !full ? 'height:' + state.dock + 'px' : '') + '">' +
-      '<div class="dock-grip" id="dock-grip"></div>' +
+      '<div class="dock-grip" id="dock-grip" title="Drag to resize"></div>' +
       '<div class="dock-tabs">' + tabs + '<span class="dock-tools">' + tools + '</span></div>' +
-      (state.dockOpen ? '<div class="dock-body" id="dock-body">' + body + '</div>' : '') +
+      (state.dockOpen ? '<div class="dock-body" id="dock-body">' + body + '</div>' +
+        '<button class="log-latest" id="log-latest" data-do="log-latest"' + (log.unseen && log.following ? '' : ' hidden') + '>↓ ' +
+        '<span id="log-unseen">' + log.unseen + '</span> new</button>' : '') +
       '</div>';
 
     /*
@@ -4151,7 +4433,17 @@
     if (state.dockOpen) {
       var pane = document.getElementById('dock-body');
       if (pane) pane.scrollTop = toBottom || (log.following && wasAtBottom) ? pane.scrollHeight : wasAt;
+      if (log.search && !log.filter) showHit(log, 0);
     }
+  }
+
+  /** A followed log's "new lines below" button, kept in step without a redraw. */
+  function drawUnseen(log) {
+    var button = document.getElementById('log-latest');
+    if (!button) return;
+    button.hidden = !(log.unseen && log.following);
+    var n = document.getElementById('log-unseen');
+    if (n) n.textContent = log.unseen;
   }
 
   /**
@@ -4175,9 +4467,9 @@
 
     var added = log.lines.slice(log.drawn || 0);
     log.drawn = log.lines.length;
-    if (log.search) {
+    if (log.search && log.filter) {
       var term = log.search.toLowerCase();
-      added = added.filter(function (line) { return line.text.toLowerCase().indexOf(term) >= 0; });
+      added = added.filter(function (line) { return plainLine(line.text).toLowerCase().indexOf(term) >= 0; });
     }
 
     var pane = document.getElementById('dock-body');
@@ -4190,15 +4482,27 @@
       // The cap, kept in the DOM as well as in the array.
       var over = pre.childElementCount - LOG_CAP;
       for (var i = 0; i < over; i += 1) if (pre.firstChild) pre.removeChild(pre.firstChild);
+      if (!atBottom) { log.unseen += added.length; drawUnseen(log); }
     }
 
     if (log.search) {
       var count = document.getElementById('log-count');
-      if (count) count.textContent = shownLines(log).length + ' of ' + log.lines.length;
+      if (count && log.filter) count.textContent = shownLines(log).length + ' of ' + log.lines.length;
     }
     if (atBottom && pane) pane.scrollTop = pane.scrollHeight;
     return true;
   }
+
+  // Scrolling back down to the end is reading the new lines.
+  document.addEventListener('scroll', function (event) {
+    if (!event.target || event.target.id !== 'dock-body') return;
+    var log = currentLog();
+    var pane = event.target;
+    if (log && log.unseen && pane.scrollHeight - pane.scrollTop - pane.clientHeight < 40) {
+      log.unseen = 0;
+      drawUnseen(log);
+    }
+  }, true);
 
   document.addEventListener('click', function (event) {
     var close = event.target.closest('[data-close]');
@@ -4223,6 +4527,7 @@
     var log = currentLog();
     if (!log) return;
     log.search = event.target.value;
+    log.hit = 0;
     var at = event.target.selectionStart;
     drawDock();
     var field = document.getElementById('log-search');
@@ -4230,13 +4535,30 @@
   });
 
   document.addEventListener('change', function (event) {
-    if (event.target.id !== 'log-container') return;
+    if (event.target.id !== 'log-container' && event.target.id !== 'log-tail') return;
     var log = currentLog();
     if (!log) return;
-    log.container = event.target.value;
-    if (log.following) { followLog(log); followLog(log); }
-    else readLog(log, false);
+    if (event.target.id === 'log-tail') log.tail = Number(event.target.value) || 1000;
+    else log.container = event.target.value;
+    restartLog(log);
   });
+
+  // Enter walks the matches, as it does in every find bar; Escape lets go of the search.
+  document.addEventListener('keydown', function (event) {
+    if (event.target.id !== 'log-search') return;
+    var log = currentLog();
+    if (!log) return;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (log.filter) return;
+      showHit(log, event.shiftKey ? -1 : 1);
+    } else if (event.key === 'Escape' && log.search) {
+      event.preventDefault();
+      event.stopPropagation();
+      log.search = '';
+      drawDock();
+    }
+  }, true);
 
   /* Dragging the dock taller. Bounded, so it can neither vanish nor take the whole panel. */
   /**
@@ -4276,7 +4598,7 @@
     menu.addEventListener('click', function (click) {
       var button = click.target.closest('[data-log-menu]');
       if (!button) return;
-      var whole = shown.map(function (line) { return line.text; }).join('\n');
+      var whole = shown.map(function (line) { return plainLine(line.text); }).join('\n');
       if (button.dataset.logMenu === 'selection') {
         host.emit('copy', { text: selected });
         say('Copied ' + selected.split('\n').length + ' lines.');
@@ -4501,7 +4823,7 @@
         log.following = false;
         log.id = null;
         if (log.pending) { log.lines.push({ text: log.pending }); log.pending = ''; }
-        log.lines.push({ text: '— the log ended —' });
+        log.lines.push({ text: '— the log ended —', note: true });
         drawDock();
         return;
       }
@@ -4731,6 +5053,17 @@
       if (what === 'follow') { followLog(log); return; }
       if (what === 'previous') { readLog(log, true); return; }
       if (what === 'wrap') { log.wrap = !log.wrap; drawDock(); return; }
+      if (what === 'log-next' || what === 'log-prev') { showHit(log, what === 'log-next' ? 1 : -1); return; }
+      if (what === 'log-filter') { log.filter = !log.filter; log.hit = 0; drawDock(); return; }
+      if (what === 'log-times') { log.times = !log.times; restartLog(log); return; }
+      if (what === 'log-clear') { log.lines = []; log.pending = ''; log.unseen = 0; drawDock(); return; }
+      if (what === 'log-latest') {
+        var pane = document.getElementById('dock-body');
+        if (pane) pane.scrollTop = pane.scrollHeight;
+        log.unseen = 0;
+        drawUnseen(log);
+        return;
+      }
       if (what === 'dock') { state.dockOpen = !state.dockOpen; drawDock(true); return; }
       // Filling the window is also a way of opening it — asking for a bigger log
       // while it is shut and getting nothing would be the wrong answer.
@@ -4741,12 +5074,12 @@
         return;
       }
       if (what === 'save-log') {
-        var whole = shownLines(log).map(function (line) { return line.text; }).join('\n');
-        host.emit('save', { name: log.name + '.log', text: whole });
+        var whole = shownLines(log).map(function (line) { return plainLine(line.text); }).join('\n');
+        host.emit('save', { name: log.name + (log.container ? '-' + log.container : '') + '.log', text: whole });
         return;
       }
       if (what === 'copy-log') {
-        var text = shownLines(log).map(function (line) { return line.text; }).join('\n');
+        var text = shownLines(log).map(function (line) { return plainLine(line.text); }).join('\n');
         // A frame with no same-origin has no clipboard of its own, so the app
         // is asked to do it — the same door everything else goes through.
         host.emit('copy', { text: text });
@@ -5312,6 +5645,96 @@
       onAnswer(box, function () { close(field.value); }, function () { close(null); });
     });
   }
+
+  /* ---------------------------------------------------------------------- *
+   * Copying, from wherever the pointer is.
+   *
+   * A row's name, the value in one cell, the whole row, or the command that
+   * gets the same object from a terminal — by right-clicking it, the gesture
+   * a table answers everywhere else. And anywhere else in the panel, whatever
+   * is selected. The frame has no clipboard of its own, so every one of these
+   * goes through the app.
+   * ---------------------------------------------------------------------- */
+  function copyText(text, what) {
+    host.emit('copy', { text: text });
+    say('Copied ' + (what || (text.length > 60 ? text.split('\n').length + ' line' + (text.indexOf('\n') >= 0 ? 's' : '') : text)) + '.');
+  }
+
+  function menuAt(items, near) {
+    closeRowMenu();
+    var menu = document.createElement('div');
+    menu.className = 'row-menu';
+    menu.innerHTML = items.map(function (item, at) {
+      if (item === '-') return '<hr class="menu-rule" />';
+      return '<button class="btn" data-menu-item="' + at + '"' + (item.disabled ? ' disabled' : '') + '>' + esc(item.label) +
+        (item.hint ? '<span class="menu-hint">' + esc(item.hint) + '</span>' : '') + '</button>';
+    }).join('');
+    document.body.appendChild(menu);
+    var below = window.innerHeight - near.clientY > menu.offsetHeight + 8;
+    menu.style.left = Math.max(6, Math.min(near.clientX, window.innerWidth - menu.offsetWidth - 6)) + 'px';
+    menu.style.top = Math.max(6, below ? near.clientY + 2 : near.clientY - menu.offsetHeight - 2) + 'px';
+    menu.addEventListener('click', function (click) {
+      var button = click.target.closest('[data-menu-item]');
+      if (!button) return;
+      var item = items[Number(button.dataset.menuItem)];
+      closeRowMenu();
+      if (item && item.run) item.run();
+    });
+    setTimeout(function () { document.addEventListener('click', closeRowMenu, { once: true }); }, 0);
+  }
+
+  /** The kubectl line that reads this object, aimed at the same cluster this panel is. */
+  function kubectlFor(row) {
+    var kind = (row.kind || titleOf(state.view.name) || '').toLowerCase();
+    return 'kubectl --context ' + shellWord(state.context || '') +
+      (row.namespace ? ' -n ' + shellWord(row.namespace) : '') + ' get ' + shellWord(kind) + ' ' + shellWord(row.name) + ' -o yaml';
+  }
+  function shellWord(value) {
+    value = String(value);
+    return /^[\w@%+=:,./-]+$/.test(value) ? value : "'" + value.replace(/'/g, "'\\''") + "'";
+  }
+
+  document.addEventListener('contextmenu', function (event) {
+    // The log answers for itself (see above), and a field keeps its own menu.
+    if (event.target.closest('.dock-body, #subtabs, input, textarea, select')) return;
+    var selected = String(window.getSelection() || '');
+    var tr = event.target.closest('#table tbody tr[data-uid]');
+    var row = null;
+    if (tr && state.table) {
+      row = (state.table.rows || []).filter(function (one) { return one.uid === tr.dataset.uid; })[0] || null;
+    }
+    if (!row && !selected) return;
+    event.preventDefault();
+
+    var items = [];
+    if (selected) items.push({ label: 'Copy selection', hint: selected.length > 40 ? selected.split('\n').length + ' lines' : '', run: function () { copyText(selected); } });
+    if (row) {
+      if (items.length) items.push('-');
+      items.push({ label: 'Copy name', hint: row.name, run: function () { copyText(row.name); } });
+      if (row.namespace) items.push({ label: 'Copy namespace/name', run: function () { copyText(row.namespace + '/' + row.name); } });
+      var td = event.target.closest('td');
+      var cells = tr.children;
+      var index = Array.prototype.indexOf.call(cells, td);
+      var heading = index >= 0 ? document.querySelectorAll('#table thead th')[index] : null;
+      var value = td && !td.classList.contains('name') && !td.querySelector('button, input') ? td.textContent.trim() : '';
+      if (value && heading) {
+        items.push({ label: 'Copy ' + heading.textContent.replace(/[↑↓]/g, '').trim().toLowerCase(), hint: value, run: function () { copyText(value); } });
+      }
+      items.push({ label: 'Copy row', run: function () { copyText(cellsOf(tr).join('\t'), 'the row'); } });
+      items.push({ label: 'Copy kubectl command', hint: 'get -o yaml', run: function () { copyText(kubectlFor(row), 'the kubectl command'); } });
+      items.push('-');
+      items.push({ label: 'Open', run: function () { select(row.uid); } });
+      if (row.kind === 'Pod') items.push({ label: 'Show log', run: function () { openLog(row); } });
+    }
+    menuAt(items, event);
+  });
+
+  // The name at the top of the detail pane copies itself: it is the thing most often wanted from it.
+  document.addEventListener('click', function (event) {
+    var name = event.target.closest('.detail-head h3');
+    if (!name || !state.selected || String(window.getSelection() || '')) return;
+    copyText(state.selected.name);
+  });
 
   /* ---------------------------------------------------------------------- *
    * Keys, the timer, and starting up.
