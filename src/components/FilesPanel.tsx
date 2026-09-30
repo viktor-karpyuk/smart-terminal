@@ -24,10 +24,92 @@ import { isInside, nameProblem, parentOf } from '../lib/fileOps';
  */
 const pendingRenames = new Set<string>();
 
-/** A word to the person about a change to the tree that did not happen, shown by the panel that asked. */
-const noticeListeners = new Map<string, (text: string) => void>();
-function tell(panelId: string, text: string) {
-  noticeListeners.get(panelId)?.(text);
+/** A word to the person about a change to the tree, shown by the panel that asked. Red unless it went well. */
+const noticeListeners = new Map<string, (notice: { text: string; good: boolean }) => void>();
+function tell(panelId: string, text: string, good = false) {
+  noticeListeners.get(panelId)?.({ text, good });
+}
+
+/*
+ * Picking several rows, and copying and pasting them.
+ *
+ * A plain click does what it always did — opens a file, folds a folder — and
+ * forgets what was picked. ⌘-click (Ctrl elsewhere) picks or unpicks one row
+ * without opening it; Shift-click picks every row between the last one clicked
+ * and this one, in the order they are on screen. ⌘C copies what is picked, or
+ * the row last clicked when nothing is; ⌘V pastes into the folder last
+ * clicked, or beside the file last clicked, or into the root.
+ */
+function rowClick(event: React.MouseEvent, panelId: string, path: string): boolean {
+  const store = useStore.getState();
+  const now = store.filesPicked[panelId] ?? { paths: [], anchor: null };
+  if (event.metaKey || event.ctrlKey) {
+    const paths = now.paths.includes(path) ? now.paths.filter((one) => one !== path) : [...now.paths, path];
+    store.setFilesPicked(panelId, paths, path);
+    return true;
+  }
+  if (event.shiftKey && now.anchor) {
+    const rows = [...document.querySelectorAll<HTMLElement>(`[data-files-panel="${CSS.escape(panelId)}"] [data-files-path]`)]
+      .map((row) => row.dataset.filesPath as string);
+    const a = rows.indexOf(now.anchor);
+    const b = rows.indexOf(path);
+    if (a >= 0 && b >= 0) {
+      const range = rows.slice(Math.min(a, b), Math.max(a, b) + 1);
+      store.setFilesPicked(panelId, [...new Set([...now.paths, ...range])], now.anchor);
+      return true;
+    }
+  }
+  // An ordinary click: nothing picked any more, and this is where ⌘V pastes and Shift-click starts from.
+  store.setFilesPicked(panelId, [], path);
+  return false;
+}
+
+/** What ⌘C copies: what is picked, or else the row last clicked. */
+function copyTargets(panelId: string, fallback: string | null): string[] {
+  const now = useStore.getState().filesPicked[panelId];
+  if (now?.paths.length) return now.paths;
+  return fallback ? [fallback] : [];
+}
+
+/** The folder a paste lands in: a folder itself, or the folder a file is in. */
+function pasteDir(path: string | null, root: string): string {
+  if (!path) return root;
+  const dirs = useStore.getState().dirs;
+  const isDir = Object.keys(dirs).includes(path) || Boolean(dirs[parentOf(path)]?.entries.find((entry) => entry.path === path)?.isDirectory);
+  return isDir ? path : parentOf(path);
+}
+
+async function copyNow(panelId: string, paths: string[]) {
+  if (!paths.length) return;
+  const problem = await useStore.getState().copyEntries(paths);
+  if (problem) tell(panelId, problem);
+  else tell(panelId, paths.length === 1 ? `Copied ${paths[0].split('/').pop()}.` : `Copied ${paths.length} items.`, true);
+}
+
+async function pasteNow(panelId: string, dir: string) {
+  const { note, bad } = await useStore.getState().pasteInto(dir);
+  tell(panelId, note, !bad);
+}
+
+function treeKeys(event: React.KeyboardEvent, panelId: string, root: string) {
+  // Only the tree's own keys: typing in the find box or renaming a row is typing.
+  const target = event.target as HTMLElement;
+  if (target.closest('input, textarea, [contenteditable="true"]')) return;
+  const mod = event.metaKey || event.ctrlKey;
+  const anchor = useStore.getState().filesPicked[panelId]?.anchor ?? null;
+  if (mod && event.key.toLowerCase() === 'c') {
+    event.preventDefault();
+    void copyNow(panelId, copyTargets(panelId, anchor));
+  } else if (mod && event.key.toLowerCase() === 'v') {
+    event.preventDefault();
+    void pasteNow(panelId, pasteDir(anchor, root));
+  } else if (mod && event.key.toLowerCase() === 'a') {
+    event.preventDefault();
+    const rows = [...document.querySelectorAll<HTMLElement>(`[data-files-panel="${CSS.escape(panelId)}"] [data-files-path]`)];
+    useStore.getState().setFilesPicked(panelId, rows.map((row) => row.dataset.filesPath as string));
+  } else if (event.key === 'Escape') {
+    useStore.getState().setFilesPicked(panelId, []);
+  }
 }
 
 /**
@@ -57,7 +139,7 @@ export function FilesPanel({ panelId }: { panelId: string }) {
    * looked at.
    */
   const [selection, setSelection] = useState<{ from: number; to: number; text: string; path: string } | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ text: string; good: boolean } | null>(null);
   useEffect(() => {
     noticeListeners.set(panelId, setNotice);
     return () => {
@@ -80,7 +162,13 @@ export function FilesPanel({ panelId }: { panelId: string }) {
   return (
     <div className="files-panel">
       {/* The tree never moves, whatever is open on the right. */}
-      <div className="files-tree" style={{ flexBasis: panel.treeWidth ?? 236 }}>
+      <div
+        className="files-tree"
+        style={{ flexBasis: panel.treeWidth ?? 236 }}
+        data-files-panel={panelId}
+        tabIndex={-1}
+        onKeyDown={(event) => treeKeys(event, panelId, panel.root!)}
+      >
         <TreeHeader panelId={panelId} root={panel.root} homedir={homedir} />
         {panel.find?.trim() ? (
           <NarrowedTree panelId={panelId} root={panel.root} query={panel.find} />
@@ -91,8 +179,8 @@ export function FilesPanel({ panelId }: { panelId: string }) {
           </DropZone>
         )}
         {notice && (
-          <div className="git-notice is-floating is-bad" onClick={() => setNotice(null)}>
-            {notice}
+          <div className={`git-notice is-floating${notice.good ? '' : ' is-bad'}`} onClick={() => setNotice(null)}>
+            {notice.text}
           </div>
         )}
       </div>
@@ -595,6 +683,21 @@ function EntryMenu({
     onClose();
     fn();
   };
+  /*
+   * What Copy takes: everything picked when this row is one of them, which is
+   * what right-clicking a selection means everywhere; otherwise this row alone.
+   */
+  const pickedHere = useStore((s) => s.filesPicked[panelId]?.paths ?? []);
+  const copying = pickedHere.includes(entry.path) ? pickedHere : [entry.path];
+  // Asked when the menu opens, so it can say how many — from here or from Finder.
+  const [pasteCount, setPasteCount] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    void window.api.files.clipboard().then((answer) => alive && setPasteCount(answer.paths.length));
+    return () => {
+      alive = false;
+    };
+  }, []);
   const leafId = leafOfTab(layout, panelId)?.id;
   // A new thing goes into this folder, or beside this file.
   const into = entry.isDirectory ? entry.path : parentOf(entry.path);
@@ -659,6 +762,19 @@ function EntryMenu({
       />
       <MenuRow label="Move to Trash" danger onClick={act(onTrash)} />
       <div className="menu-separator" />
+      <MenuRow
+        label={copying.length > 1 ? `Copy ${copying.length} items` : 'Copy'}
+        hint="⌘C"
+        onClick={act(() => void copyNow(panelId, copying))}
+      />
+      {pasteCount > 0 && (
+        <MenuRow
+          label={pasteCount === 1 ? 'Paste' : `Paste ${pasteCount} items`}
+          hint={entry.isDirectory ? 'into this folder' : 'beside it'}
+          onClick={act(() => void pasteNow(panelId, into))}
+        />
+      )}
+      <div className="menu-separator" />
       <MenuRow label="Copy path" onClick={act(() => navigator.clipboard?.writeText(entry.path))} />
       <MenuRow label="Show in Finder" onClick={act(() => window.api.files.reveal(entry.path))} />
     </Popover>
@@ -700,6 +816,7 @@ function DropZone({
   onClick,
   onContextMenu,
   title,
+  path,
   draggable,
   onDragStart,
   onDragEnd,
@@ -709,9 +826,11 @@ function DropZone({
   className: string;
   style?: React.CSSProperties;
   children: React.ReactNode;
-  onClick?: () => void;
+  onClick?: (event: React.MouseEvent) => void;
   onContextMenu?: (event: React.MouseEvent) => void;
   title?: string;
+  /** The row's own path, so a Shift-click can find the rows between two. */
+  path?: string;
   draggable?: boolean;
   onDragStart?: (event: React.DragEvent) => void;
   onDragEnd?: () => void;
@@ -724,6 +843,7 @@ function DropZone({
       className={`${className}${over ? ' is-drop' : ''}`}
       style={style}
       title={title}
+      data-files-path={path}
       draggable={draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
@@ -1355,6 +1475,7 @@ function Row({
   const folderStyle = useStore((s) => s.settings.folderStyle);
   const renameEntry = useStore((s) => s.renameEntry);
   const trashEntry = useStore((s) => s.trashEntry);
+  const picked = useStore((s) => Boolean(s.filesPicked[panelId]?.paths.includes(entry.path)));
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [asking, setAsking] = useState(false);
@@ -1372,7 +1493,7 @@ function Row({
     if (problem) tell(panelId, problem);
   };
 
-  const rowClass = `files-row${isOpen ? ' is-open' : ''}${entry.noise ? ' is-noise' : ''}${dragging ? ' is-dragging' : ''}${matched ? ' is-match' : ''}`;
+  const rowClass = `files-row${picked ? ' is-picked' : ''}${isOpen ? ' is-open' : ''}${entry.noise ? ' is-noise' : ''}${dragging ? ' is-dragging' : ''}${matched ? ' is-match' : ''}`;
   const rowStyle = { paddingLeft: 6 + depth * 12 };
   const onContextMenu = (event: React.MouseEvent) => {
     event.preventDefault();
@@ -1467,10 +1588,14 @@ function Row({
           className={rowClass}
           style={rowStyle}
           title={entry.path}
+          path={entry.path}
           draggable={!renaming}
           onDragStart={onDragStart}
           onDragEnd={() => setDragging(false)}
-          onClick={() => !renaming && toggleDir(panelId, entry.path)}
+          onClick={(event) => {
+            if (renaming) return;
+            if (!rowClick(event, panelId, entry.path)) toggleDir(panelId, entry.path);
+          }}
           onContextMenu={onContextMenu}
         >
           {body}
@@ -1480,10 +1605,14 @@ function Row({
           className={rowClass}
           style={rowStyle}
           title={entry.path}
+          data-files-path={entry.path}
           draggable={!renaming}
           onDragStart={onDragStart}
           onDragEnd={() => setDragging(false)}
-          onClick={() => !renaming && openFile(panelId, entry.path)}
+          onClick={(event) => {
+            if (renaming) return;
+            if (!rowClick(event, panelId, entry.path)) openFile(panelId, entry.path);
+          }}
           onContextMenu={onContextMenu}
         >
           {body}

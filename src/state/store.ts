@@ -636,6 +636,13 @@ interface State {
   moveEntry(path: string, dir: string): Promise<string | null>;
   createEntry(panelId: string, dir: string, name: string, kind: 'file' | 'folder'): Promise<string | null>;
   duplicateEntry(path: string): Promise<string | null>;
+  /** What is ticked in a Files panel's tree, in the order it was ticked, and the row a Shift-click reaches from. */
+  filesPicked: Record<string, { paths: string[]; anchor: string | null }>;
+  setFilesPicked(panelId: string, paths: string[], anchor?: string | null): void;
+  /** Files and folders onto the clipboard, where Finder can paste them too. */
+  copyEntries(paths: string[]): Promise<string | null>;
+  /** Copies of whatever files the clipboard holds, into a folder. Says what happened, in words. */
+  pasteInto(dir: string): Promise<{ note: string; bad: boolean }>;
   trashEntry(path: string): Promise<string | null>;
   setMonitorSession(panelId: string, sessionId: string | null): void;
   refreshAnalysis(sessionId: string, force?: boolean): Promise<void>;
@@ -772,6 +779,8 @@ function schedulePersist(get: () => State) {
   }, 400);
 }
 
+const baseName = (path: string) => path.split('/').filter(Boolean).pop() ?? path;
+
 export const useStore = create<State>((set, get) => ({
   ready: false,
   profiles: [],
@@ -813,6 +822,7 @@ export const useStore = create<State>((set, get) => ({
   repos: {},
   buffers: {},
   dirs: {},
+  filesPicked: {},
 
   async init() {
     if (initStarted) return;
@@ -2514,6 +2524,36 @@ export const useStore = create<State>((set, get) => ({
     await get().loadDir(dir);
     if (kind === 'file' && result.path) await get().openFile(panelId, result.path);
     return null;
+  },
+
+  setFilesPicked(panelId, paths, anchor) {
+    set((prev) => ({
+      filesPicked: {
+        ...prev.filesPicked,
+        [panelId]: { paths, anchor: anchor === undefined ? prev.filesPicked[panelId]?.anchor ?? null : anchor },
+      },
+    }));
+  },
+
+  async copyEntries(paths) {
+    const result = await window.api.files.copy(paths);
+    return result.ok ? null : result.error ?? 'Could not copy that.';
+  },
+
+  async pasteInto(dir) {
+    const result = await window.api.files.paste(dir);
+    await get().loadDir(dir);
+    if (!('copied' in result)) return { note: result.error ?? 'Nothing was pasted.', bad: true };
+    const done = result.copied.length;
+    const failed = result.failed.length;
+    if (!done) return { note: result.error ?? 'Nothing was pasted.', bad: true };
+    const what = done === 1 ? baseName(result.copied[0]) : `${done} items`;
+    return {
+      note: failed
+        ? `Pasted ${what}. ${failed} could not be: ${result.failed[0].error}.`
+        : `Pasted ${what}.`,
+      bad: failed > 0,
+    };
   },
 
   async duplicateEntry(path) {
