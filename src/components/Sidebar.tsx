@@ -587,19 +587,37 @@ function ClustersList() {
         <p className="sidebar-empty">{loaded ? 'No clusters in kubeconfig.' : 'Reading kubeconfig…'}</p>
       )}
       {names.map((name) => (
-        <ClusterRow key={name} name={name} onMenu={setMenu} />
+        <ClusterRow key={name} name={name} note={sameNameNote(name, names)} onMenu={setMenu} />
       ))}
       {menu && <ClusterMenu name={menu.name} x={menu.x} y={menu.y} onClose={() => setMenu(null)} />}
     </List>
   );
 }
 
+/**
+ * What tells two contexts with the same short name apart.
+ *
+ * Two contexts often point at one cluster — the ARN EKS wrote and the alias
+ * somebody gave it — and both shortened to "kubrik-k8s" twice, with nothing to
+ * choose between them. Only said when there is a clash: the region of an EKS
+ * ARN, and "alias" for the plain one.
+ */
+function sameNameNote(name: string, names: string[]): string | null {
+  const short = shortContext(name);
+  if (!names.some((other) => other !== name && shortContext(other) === short)) return null;
+  const eks = /^arn:aws:eks:([^:]+):/.exec(name);
+  if (eks) return eks[1];
+  return name === short ? 'alias' : null;
+}
+
 /** One cluster: whether it answers, and what it is called by people. */
 function ClusterRow({
   name,
+  note,
   onMenu,
 }: {
   name: string;
+  note: string | null;
   onMenu(at: { name: string; x: number; y: number }): void;
 }) {
   const reach = useStore((s) => s.clusters.reach[name]);
@@ -622,6 +640,7 @@ function ClusterRow({
     >
       <span className={`cluster-dot is-${state}`} />
       <span className="sidebar-item-title">{shortContext(name)}</span>
+      {note && <span className="cluster-note">{note}</span>}
       {/* Which one a plain `kubectl` uses. Worth marking, precisely because
           nothing this app does depends on it. */}
       {isDefault && <span className="cluster-default" title="What a plain kubectl uses">default</span>}

@@ -4,7 +4,7 @@ import { generateSessionName } from '../lib/names';
 import { shortContext, terminalSetup } from '../lib/extensionHost';
 import { whatItDid } from '../lib/gitUpdate';
 import { launchPlan } from '../lib/launcher';
-import { forgetPanel } from '../lib/panelHolds';
+import { forgetPanel, whereEachPanelWas } from '../lib/panelHolds';
 import { baseOf, movedPath, moveProblem, nameProblem, parentOf } from '../lib/fileOps';
 import { arrangeGroup, moveGroupTo } from './groups';
 import { closePane, movePane, panePlace, restorePaneAt, splitEmpty, splitOffTabs, swapPanes } from './layout';
@@ -623,6 +623,11 @@ interface State {
   openExtensions(): void;
   /** Open a view an extension contributes, on a folder. */
   openExtensionView(viewId: string, root: string | null): void;
+  /**
+   * A second copy of an extension's panel, split off beside the one that asked,
+   * starting where that one says. Two places in one cluster side by side.
+   */
+  openExtensionBeside(fromPanelId: string, resume: unknown, side: 'right' | 'bottom'): void;
   /** A view from its activity-bar button: in the section in front, bringing the one open copy over if there is one. */
   launchExtensionView(viewId: string): void;
   /** Show a file somewhere sensible — the app decides where, the asker does not. */
@@ -3356,6 +3361,27 @@ export const useStore = create<State>((set, get) => ({
      * is not a folder and follows nothing.
      */
     if (root && view?.needs !== 'kubernetes') followTree(panelId, root);
+    schedulePersist(get);
+  },
+
+  openExtensionBeside(fromPanelId, resume, side) {
+    const state = get();
+    const from = state.panels[fromPanelId];
+    const leaf = leafOfTab(state.layout, fromPanelId);
+    if (!from || from.kind !== 'extension' || !leaf) return;
+    const panelId = crypto.randomUUID();
+    // Handed to the new frame when it says it is ready, as a rebuilt one would be.
+    whereEachPanelWas.set(panelId, resume ?? null);
+    set((prev) => {
+      const layout = dropTab(prev.layout, panelId, leaf.id, side);
+      return {
+        panels: { ...prev.panels, [panelId]: { ...from, id: panelId } },
+        layout,
+        activeLeafId: leafOfTab(layout, panelId)?.id ?? prev.activeLeafId,
+        // Side by side is the point; a maximised section would hide the new one.
+        zoomedLeafId: null,
+      };
+    });
     schedulePersist(get);
   },
 

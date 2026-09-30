@@ -1,3 +1,5 @@
+import { dropFrame } from './frameKeeper';
+
 /**
  * What an extension panel is holding on to, kept outside the frame.
  *
@@ -19,9 +21,6 @@ export const whereEachPanelWas = new Map<string, unknown>();
 /** The Claude session a cluster panel talks to, one per panel. */
 export const claudeForPanel = new Map<string, string>();
 
-/** Panels already given one, so a rebuilt frame does not open a second. */
-export const alreadyOffered = new Set<string>();
-
 /** What each panel started and still owns: a followed log, a held-open port. */
 const streamsByPanel = new Map<string, Set<string>>();
 
@@ -42,5 +41,6 @@ export function forgetPanel(panelId: string) {
   streamsByPanel.delete(panelId);
   whereEachPanelWas.delete(panelId);
   claudeForPanel.delete(panelId);
-  alreadyOffered.delete(panelId);
+  dropFrame(panelId);
+  void window.api.extensions.stagePanel(panelId, null);
 }
