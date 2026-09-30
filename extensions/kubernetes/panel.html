@@ -102,7 +102,8 @@
     display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
     padding: 4px 10px; color: var(--text-dim); font-size: 12px;
   }
-  .nav-group { padding: 4px 10px; }
+  .nav-group { padding: 4px 10px; white-space: nowrap; }
+  .nav-group .group-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .nav-group:hover { color: var(--text); }
   .nav-group.is-open { color: var(--text-dim); }
   /* Big enough to read as a state rather than as punctuation: this is the one
@@ -151,6 +152,11 @@
   tbody tr:hover { background: var(--bg-elevated); }
   tbody tr.on { background: var(--accent-soft); }
   .name { color: var(--text); }
+  /* A name is clipped, not allowed to push every other column off the side:
+     the status is the thing people scan for, and it was the first to go.
+     The whole name is in the tooltip and in the detail pane. */
+  td.name .label { display: inline-block; max-width: 46ch; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+  .with-detail td.name .label { max-width: 30ch; }
   .dim { color: var(--text-dim); }
   .mono { font-family: "JetBrains Mono", "SF Mono", Menlo, ui-monospace, monospace; font-size: 10.5px; }
 
@@ -175,7 +181,15 @@
   .detail-head h3 { margin: 0 0 2px; font-size: 12.5px; font-weight: 550; word-break: break-all; }
   .detail-head small { color: var(--text-dim); font-size: 10.5px; }
   .detail-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
-  .tabs { display: flex; gap: 2px; padding: 5px 8px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  /* One line, always: the tabs scroll sideways when there are many, and Copy
+     stays at the right end instead of dropping to a line of its own on the
+     kinds with six tabs. */
+  .tabs { display: flex; align-items: center; gap: 2px; padding: 5px 8px; border-bottom: 1px solid var(--border); flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs > * { flex: none; }
+  .tabs > .spacer { flex: 1; }
+  /* The last button of the row — Copy, All — stays at the right edge even while the tabs scroll under it. */
+  .tabs > .btn:last-child { position: sticky; right: 0; background: var(--bg-panel); box-shadow: -14px 0 10px -4px var(--bg-panel); }
   .tabs button { padding: 3px 8px; border-radius: var(--radius); color: var(--text-dim); font-size: 11px; }
   .tabs button:hover { background: var(--bg-elevated); color: var(--text); }
   .tabs button.on { background: var(--accent-soft); color: var(--accent); }
@@ -395,7 +409,8 @@
   /* Not decoration: it is what makes a copied chip a label selector. */
   .chip i { font-style: normal; color: var(--text-faint); opacity: .6; margin: 0 2px; }
 
-  pre.describe { margin: 0; font-size: 11px; line-height: 1.5; white-space: pre-wrap; }
+  /* Kept in kubectl's own columns: wrapped, a label's continuation lines landed under the wrong heading. */
+  pre.describe { margin: 0; font-size: 11px; line-height: 1.5; white-space: pre; overflow-x: auto; }
 
   /* A block of text with a heading and a way to take a copy of just that. */
   .block { margin: 12px 0 0; }
@@ -660,7 +675,11 @@
     });
   }
 
-  function say(text, bad) { host.emit('notify', { text: text, kind: bad ? 'bad' : 'ok' }); }
+  function say(text, bad) {
+    // Cancelling a question the app asked is an answer, not a failure: nothing to report.
+    if (bad && /the person said no/.test(String(text))) return;
+    host.emit('notify', { text: text, kind: bad ? 'bad' : 'ok' });
+  }
 
   /**
    * Where this panel is, told to the app so it can be put back.
@@ -779,7 +798,7 @@
     state.namespace = place.namespace || '';
     state.search = place.search || '';
     $('search').value = state.search;
-    state.selected = null;
+    leaveDetail();
     state.detailData = {};
     state.wanted = place.selected && place.selected.name ? place.selected.name : null;
     state.detail = { tab: place.selected && place.selected.tab ? place.selected.tab : 'overview' };
@@ -921,7 +940,7 @@
     var open = openGroups();
     var heading = function (title, count) {
       return '<button class="nav-group' + (open[title] ? ' is-open' : '') + '" data-group="' + esc(title) + '">' +
-        '<span class="twist">' + (open[title] ? '▾' : '▸') + '</span>' + esc(title) +
+        '<span class="twist">' + (open[title] ? '▾' : '▸') + '</span><span class="group-title">' + esc(title) + '</span>' +
         (count ? '<span class="count">' + count + '</span>' : '') + '</button>';
     };
 
@@ -1010,7 +1029,7 @@
       var group = groupHolding(view.name);
       if (group) openGroups()[group] = true;
     }
-    state.selected = null;
+    leaveDetail();
     state.search = '';
     $('search').value = '';
     state.sort = extras.sort || { column: null, dir: 1 };
@@ -1611,7 +1630,7 @@
 
   $('namespace').addEventListener('change', function (event) {
     state.namespace = event.target.value;
-    state.selected = null;
+    leaveDetail();
     remember();
     load();
   });
@@ -1743,6 +1762,15 @@
   /** How many rows are drawn at once. Past this, scrolling costs more than it is worth. */
   var CAP = 700;
 
+  /**
+   * What an empty pane says while the cluster is being asked: what it is
+   * waiting for, where the eye already is — not a blank page with a spinner the
+   * size of a letter up in the corner.
+   */
+  function waiting() {
+    return '<div class="note waiting"><span class="spin">◐</span> Reading ' + esc(shortContext(state.context || '') || 'the cluster') + '…</div>';
+  }
+
   function drawTable() {
     closeRowMenu();
     if (state.error) {
@@ -1751,7 +1779,7 @@
     }
     if (!state.table) {
       $('table').innerHTML = state.loading
-        ? ''
+        ? waiting()
         : '<div class="note">' + (state.started ? 'Nothing loaded.' : 'Waiting to be looked at.') + '</div>';
       return;
     }
@@ -1796,7 +1824,7 @@
   function cell(row, column) {
     var value = row[column];
     if (column === 'name') {
-      return '<td class="name"><span class="dot ' + esc(row.health || 'idle') + '"></span>' + esc(value) + forwardMark(row) + '</td>';
+      return '<td class="name" title="' + esc(value) + '"><span class="dot ' + esc(row.health || 'idle') + '"></span><span class="label">' + esc(value) + '</span>' + forwardMark(row) + '</td>';
     }
     if (column === 'status') {
       var klass = row.health === 'bad' ? 'bad-text' : row.health === 'warn' ? 'warn-text' : 'dim';
@@ -1810,7 +1838,7 @@
     if (column === 'ports' || column === 'clusterIP' || column === 'address') {
       return '<td class="dim mono">' + esc(value) + '</td>';
     }
-    return '<td class="dim">' + esc(value == null ? '' : value) + '</td>';
+    return '<td class="dim">' + esc(value == null ? '' : plainValue(value)) + '</td>';
   }
 
   $('table').addEventListener('click', function (event) {
@@ -1878,6 +1906,21 @@
   }
 
   /**
+   * Going somewhere else leaves the object behind — and any edit of it.
+   *
+   * Only the selection used to be cleared, so an edit half-typed in YAML or
+   * Configure kept `editing` set: the pane that guards typing refused to go
+   * away, its Apply had no object to apply to, × and Escape did nothing, and
+   * the new table would not redraw either. Somebody who clicks Pods in the
+   * middle of an edit has chosen to leave it.
+   */
+  function leaveDetail() {
+    stopEditing();
+    state.config = null;
+    state.selected = null;
+  }
+
+  /**
    * Shut the detail pane, and stop reading what it was showing.
    *
    * Not only `state.selected = null`: a detail pane that is closed but still
@@ -1906,14 +1949,17 @@
   /** The row the open ⋮ menu belongs to, and what was selected before it opened. */
   var menuRow = null;
   var menuWas = null;
+  var menuAway = null;
 
   function openRowMenu(uid, near) {
+    // A menu opened over another one: what was selected before *either* of them is what a click-away restores.
+    var prior = menuRow ? menuWas : state.selected;
     closeRowMenu();
     var rows = (state.table && state.table.rows) || [];
     var row = null;
     for (var i = 0; i < rows.length; i += 1) if (rows[i].uid === uid) row = rows[i];
     if (!row) return;
-    menuWas = state.selected;
+    menuWas = prior;
     menuRow = row;
     state.selected = row;
 
@@ -1939,7 +1985,8 @@
      * ten seconds later — opened the detail pane on a row nobody had asked for.
      */
     setTimeout(function () {
-      document.addEventListener('click', function (click) {
+      document.addEventListener('click', menuAway = function (click) {
+        menuAway = null;
         var chose = click.target.closest && click.target.closest('.row-menu');
         var mine = menuRow === row;
         var before = menuWas;
@@ -1955,6 +2002,8 @@
   function closeRowMenu() {
     var open = document.querySelector('.row-menu');
     if (open) open.remove();
+    // The click-away of a menu that is gone must not act on the next one.
+    if (menuAway) { document.removeEventListener('click', menuAway); menuAway = null; }
     menuRow = null;
     menuWas = null;
   }
@@ -2054,7 +2103,7 @@
       return;
     }
     var data = state.overview;
-    if (!data) { $('table').innerHTML = state.loading ? '' : '<div class="note">Nothing loaded.</div>'; return; }
+    if (!data) { $('table').innerHTML = state.loading ? waiting() : '<div class="note">Nothing loaded.</div>'; return; }
 
     /*
      * Every one of these is a question with an answer somewhere else, so every
@@ -2346,7 +2395,7 @@
   function drawStats() {
     var data = state.overview;
     var focus = state.view.focus;
-    if (!data) { $('table').innerHTML = state.loading ? '' : '<div class="note">Nothing loaded.</div>'; return; }
+    if (!data) { $('table').innerHTML = state.loading ? waiting() : '<div class="note">Nothing loaded.</div>'; return; }
 
     var tabs = ['cpu', 'memory', 'disk'].map(function (which) {
       return '<button class="btn' + (focus === which ? ' on' : '') + '" data-stat="' + which + '">' +
@@ -2628,6 +2677,20 @@
       state.detail.tab = 'overview';
     }
 
+    /*
+     * What somebody is typing to Claude survives the pane being redrawn.
+     *
+     * The pane is rebuilt on every quiet refresh — ten seconds — and on every
+     * change of a forward, and the question box went with it: half a sentence
+     * and the cursor, gone while it was being written. Kept for the same
+     * object only; a question about another pod is not this one's.
+     */
+    var asking = document.getElementById('question');
+    var kept = asking && state.questionFor === chosen.uid
+      ? { text: asking.value, focused: document.activeElement === asking, from: asking.selectionStart, to: asking.selectionEnd }
+      : null;
+    state.questionFor = chosen.uid;
+
     aside.innerHTML =
       '<div class="detail-head">' +
         // A pane that opens on a click has to close on one. Escape closes it too.
@@ -2657,6 +2720,15 @@
           : '') +
       '</div>' +
       '<div class="detail-body" id="detail-body">' + detailBody(chosen) + '</div>';
+
+    if (kept && kept.text) {
+      var again = document.getElementById('question');
+      again.value = kept.text;
+      if (kept.focused) {
+        again.focus();
+        try { again.setSelectionRange(kept.from, kept.to); } catch (error) { /* a caret where there is none */ }
+      }
+    }
   }
 
   function actionsFor(row) {
@@ -2691,14 +2763,19 @@
       var mine = forwardsOf(row).length;
       buttons.push('<button class="btn" data-do="forward" title="Reach a port of it from this machine">Forward…' + (mine ? ' <span class="dim">(' + mine + ')</span>' : '') + '</button>');
     }
+    var removing = [];
     if (row.kind === 'Node') {
       buttons.push('<button class="btn" data-do="cordon">' + (row.schedulable ? 'Cordon' : 'Uncordon') + '</button>');
-      buttons.push('<span class="gap"></span><button class="btn bad" data-do="drain">Drain…</button>');
+      removing.push('<button class="btn bad" data-do="drain">Drain…</button>');
     }
-    // A gap between what reads and what removes, so the last button is not the
-    // next one along from Restart.
-    buttons.push('<span class="gap"></span><button class="btn bad" data-do="delete">Delete</button>');
-    return buttons.join('');
+    removing.push('<button class="btn bad" data-do="delete">Delete…</button>');
+    /*
+     * Always the same shape: what reads and operates on the left, in the same
+     * order on every kind, and what takes something away together at the far
+     * right behind one gap. Two gaps left Drain floating in the middle of a
+     * node's row, a different place from every other destructive button.
+     */
+    return buttons.join('') + '<span class="gap"></span>' + removing.join('');
   }
 
   /**
@@ -3389,18 +3466,36 @@
       */
     var skip = ['uid', 'labels', 'containers', 'forwardable', 'health', 'scalable', 'restartable', 'createdAt',
       'kind', 'selector', 'revisioned', 'pausable', 'suspendable', 'triggerable', 'ownsJobs', 'owner',
-      'configurable', 'paused', 'suspended', 'schedulable'];
+      'configurable', 'paused', 'suspended', 'schedulable', 'forwardKind', 'forwardPorts'];
     var facts = Object.keys(row).filter(function (key) {
       // The flags that say what the buttons above may do are not facts about the
       // object; they are already on screen, as buttons.
-      return skip.indexOf(key) < 0 && row[key] !== '' && row[key] != null && typeof row[key] !== 'object';
+      // A yes/no is a flag for the buttons, never a fact anybody reads here.
+      return skip.indexOf(key) < 0 && row[key] !== '' && row[key] != null && typeof row[key] !== 'object' && typeof row[key] !== 'boolean';
     });
     if (!facts.length) return '';
     return block('Summary', '<dl class="facts">' + facts.map(function (key) {
-      var value = String(row[key]);
+      var value = plainValue(row[key]);
       var tone = key === 'status' ? ' class="' + esc(row.health || '') + '-text"' : '';
       return '<dt>' + esc(HEADINGS[key] || key) + '</dt><dd' + tone + '>' + esc(value) + '</dd>';
     }).join('') + '</dl>');
+  }
+
+  /**
+   * A value as a person reads it: kubectl's `<none>` is a dash, and a size the
+   * API gives in kibibytes — a node's 3927668Ki — is given in the unit it is
+   * thought of in.
+   */
+  function plainValue(value) {
+    var text = String(value);
+    if (text === '<none>' || text === '<unset>') return '—';
+    var size = /^(\d+)(Ki|Mi)$/.exec(text);
+    if (size) {
+      var mib = Number(size[1]) / (size[2] === 'Ki' ? 1024 : 1);
+      if (mib >= 1024) return (mib / 1024).toFixed(1).replace(/\.0$/, '') + ' GiB';
+      if (size[2] === 'Ki' && mib >= 1) return Math.round(mib) + ' MiB';
+    }
+    return text;
   }
 
   /**
@@ -4532,12 +4627,22 @@
        */
       var verb = what === 'pick-delete' ? 'kube.remove' : 'kube.restart';
       var first = chosen[0];
+      /*
+       * One batch, named: the app asks once for it and then lets the rest of
+       * the same batch through. Each call used to be asked about on its own
+       * after the first, which was five questions for five pods — and the
+       * first one named the first pod's namespace even when the ticks spanned
+       * three.
+       */
+      var batch = 'batch-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+      var spread = chosen.map(function (row) { return row.namespace || ''; })
+        .filter(function (ns, at, all) { return all.indexOf(ns) === at; }).length;
       call(verb, {
         context: state.context, namespace: first.namespace, kind: first.kind,
-        name: first.name, count: chosen.length,
+        name: first.name, count: chosen.length, spread: spread, batch: batch,
       }).then(function () {
         var rest = chosen.slice(1).map(function (row) {
-          return call(verb, { context: state.context, namespace: row.namespace, kind: row.kind, name: row.name })
+          return call(verb, { context: state.context, namespace: row.namespace, kind: row.kind, name: row.name, count: chosen.length, spread: spread, batch: batch })
             .then(function () { return null; })
             .catch(function (error) { return row.name + ': ' + String(error.message || error); });
         });
@@ -4728,8 +4833,10 @@
       return;
     }
     if (what === 'delete') {
-      run(call('kube.remove', at), 'Deleting ' + row.name + '.');
-      state.selected = null;
+      // The pane goes when the object does, not when the question is asked: a Cancel keeps it.
+      run(call('kube.remove', at), 'Deleting ' + row.name + '.', function () {
+        if (state.selected && state.selected.uid === row.uid) { state.selected = null; remember(); draw(); }
+      });
       return;
     }
     if (what === 'forward') {
@@ -4797,8 +4904,9 @@
       .catch(function (error) { say(String(error.message || error), true); });
   }
 
-  function run(promise, done) {
+  function run(promise, done, then) {
     promise.then(function () {
+      if (then) then();
       say(done);
       // A change is not visible until the cluster agrees it happened.
       setTimeout(function () { load(true); }, 900);
@@ -4873,7 +4981,9 @@
   /** The forwards pointed at one object. */
   function forwardsOf(row) {
     return state.forwards.filter(function (one) {
-      return one.name === row.name && (one.namespace || '') === (row.namespace || '') && (!one.context || one.context === state.context);
+      // By kind too: a Service and a Deployment both called `api` are two different things to forward to.
+      return one.name === row.name && (one.kind || 'pod') === (row.forwardKind || 'pod') &&
+        (one.namespace || '') === (row.namespace || '') && (!one.context || one.context === state.context);
     });
   }
 
@@ -4989,7 +5099,8 @@
     box.querySelector('#prompt-yes').addEventListener('click', yes);
     box.querySelector('#prompt-no').addEventListener('click', no);
     box.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape') { event.preventDefault(); no(); }
+      // Stopped here: the panel's own Escape closes the detail pane, and one key should close one thing.
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); no(); }
       else if (event.key === 'Enter' && event.target.tagName === 'INPUT') { event.preventDefault(); yes(); }
     });
   }
@@ -5162,13 +5273,21 @@
       closeDetail();
       return;
     }
-    if (event.key === '/' && document.activeElement !== $('search')) {
+    /*
+     * The panel's own keys never reach into somebody's typing. `/` jumped to
+     * the filter from the image field of Configure — so `registry.io/app` could
+     * not be typed — and ↓ in the YAML editor moved to the next row and threw
+     * the edit away. Anything a person is typing into keeps its keys.
+     */
+    var typing = event.target && /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName || '') || (event.target && event.target.isContentEditable);
+    if (typing) return;
+    if (document.getElementById('prompt')) return;
+    if (event.key === '/') {
       event.preventDefault();
       $('search').focus();
       return;
     }
     if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && state.table) {
-      if (document.activeElement === $('search') || document.activeElement.id === 'question') return;
       var rows = visible();
       if (!rows.length) return;
       var at = -1;
