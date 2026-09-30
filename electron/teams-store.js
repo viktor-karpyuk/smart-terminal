@@ -362,7 +362,10 @@ class TeamsStore {
   /** How many one person has had since a moment, whoever sent them. */
   sentToSince(personId, sinceIso) {
     if (!personId) return 0;
-    const row = this.get("SELECT COUNT(*) AS n FROM tm_message WHERE person_id = ? AND state = 'SENT' AND sent_at >= ?", String(personId), sinceIso);
+    // What you wrote yourself is not counted: the ceiling protects somebody from
+    // the machines, and a note you typed at ten must not hold back the
+    // reminder the Code Reviewer has for them at eleven.
+    const row = this.get("SELECT COUNT(*) AS n FROM tm_message WHERE person_id = ? AND state = 'SENT' AND sent_at >= ? AND app_id <> 'you'", String(personId), sinceIso);
     return Number(row?.n) || 0;
   }
 }

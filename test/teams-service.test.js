@@ -570,3 +570,131 @@ test('a room keeps its webhook out of sight, and can be forgotten', { skip }, ()
   assert.deepEqual(service.channels(), []);
   assert.equal(service.webhookFor('payments'), null);
 });
+
+// ---------------------------------------------------------- both ways at once
+
+/*
+ * The screen used to be a radio button, and so did the thinking behind it: a
+ * machine was "a webhook one" or "a registration one". Both are wanted at the
+ * same time — the team's room told that a review started, the author told
+ * privately that something waits on them — and each is set up, proved and
+ * used without touching the other.
+ */
+test('a room and a person are both reachable at once, each by its own way', { skip }, async () => {
+  const { service, calls } = setup();
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  graph(service);
+  service.store.setAppStance('code-review', 'ALLOW');
+  assert.deepEqual([service.connection().channel.ready, service.connection().person.ready], [true, true]);
+
+  const room = await service.send('code-review', 'Code Reviewer', { to: { channel: 'reviews' }, title: 'PR #43 is being reviewed', key: 'r1' });
+  const posted = calls.length;
+  const person = await service.send('code-review', 'Code Reviewer', { to: { email: 'b@kubrik.com' }, title: 'a word in your ear', key: 'p1' });
+
+  assert.deepEqual([room.ok, person.ok], [true, true]);
+  assert.deepEqual(calls.slice(0, posted).map((call) => call.url), ['https://example.invalid/hook'], 'the room went on the webhook');
+  assert.ok(calls.slice(posted).every((call) => !call.url.includes('example.invalid/hook')), 'and the person never went into the room');
+  assert.ok(calls.slice(posted).some((call) => call.url.endsWith('/chats/chat-1/messages')), 'but into a chat of their own');
+});
+
+test('saving one way out leaves the other as it was', { skip }, () => {
+  const { service } = setup();
+  graph(service);
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  assert.equal(service.connection().person.ready, true, 'the webhook did not switch the registration off');
+  service.saveConnection({ tenantId: 't2', clientId: 'c', sender: 'me@kubrik.com', clientSecret: '' });
+  assert.equal(service.connection().channel.ready, true, 'nor the registration the webhook');
+  assert.equal(service.connection().way, undefined, 'and there is no switch between them any more');
+});
+
+test('each way out is tested on its own, and remembers how that went', { skip }, async () => {
+  const { service, calls } = setup({ fail: (url) => url.includes('/v1.0/chats') });
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  graph(service);
+
+  assert.match((await service.test('')).error, /Type somebody/, 'a person test needs a person, whatever else is set up');
+  assert.equal((await service.testChannel('')).ok, true, 'no name is the default room');
+  assert.equal(calls.at(-1).url, 'https://example.invalid/hook');
+  assert.equal((await service.test('b@kubrik.com')).ok, false);
+
+  const c = service.connection();
+  assert.ok(c.channel.checkedAt && !c.channel.checkError, 'the room proved itself');
+  assert.match(c.person.checkError, /opening the chat/, 'and the person route says why it did not');
+});
+
+test('what you write goes to the room and the person together, each answered for', { skip }, async () => {
+  // Late at night: none of the rules for machines hold back somebody pressing Send.
+  const { service, calls } = setup({ at: new Date('2026-09-23T23:30:00').getTime() });
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  service.saveChannel({ name: 'payments', webhookUrl: 'https://example.invalid/payments' });
+  graph(service);
+
+  const out = await service.compose({ title: 'Frozen until 15:00', body: 'Nothing merges into main.', channel: 'payments', to: 'b@kubrik.com' });
+  assert.deepEqual([out.channel.ok, out.person.ok], [true, true]);
+  assert.equal(calls[0].url, 'https://example.invalid/payments');
+  assert.ok(calls.some((call) => call.url.endsWith('/chats/chat-1/messages')));
+
+  const rows = service.store.messages();
+  assert.deepEqual(rows.map((row) => [row.appId, row.state]).sort(), [['you', 'SENT'], ['you', 'SENT']], 'both in the outbox, from you');
+  assert.ok(rows.some((row) => row.to === '#payments'));
+  assert.ok(!service.store.apps().some((app) => app.id === 'you'), 'and you are not an extension asking for permission');
+});
+
+test('what you write says which half did not go, without hiding the half that did', { skip }, async () => {
+  const { service } = setup();
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  graph(service);
+
+  const out = await service.compose({ title: 'hello', channel: '', to: 'nobody@elsewhere.com' });
+  assert.equal(out.channel.ok, true, 'the default room took it');
+  assert.equal(out.person.ok, false);
+  assert.match(out.person.detail, /Teams has nobody at nobody@elsewhere.com/);
+
+  await assert.rejects(service.compose({ title: 'x' }), /room, somebody to tell, or both/);
+  await assert.rejects(service.compose({ channel: '' }), /nothing to say/);
+  const bad = await service.compose({ title: 'x', to: 'bchavez' });
+  assert.equal(bad.person.why, 'no-address', 'a name is not an address, and it says so before trying');
+});
+
+test('what you write without a title keeps every line, not just the first', { skip }, async () => {
+  const { service } = setup();
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+
+  await service.compose({ body: 'Frozen until 15:00\nNothing merges into main.\nAsk me first.', channel: '' });
+  const [row] = service.store.messages();
+  assert.equal(row.title, 'Frozen until 15:00');
+  assert.equal(row.body, 'Nothing merges into main.\nAsk me first.');
+});
+
+test('what you write yourself does not spend the day a machine has with them', { skip }, async () => {
+  const { service } = setup();
+  graph(service);
+  service.store.setAppStance('code-review', 'ALLOW');
+  assert.equal(service.settings().perPersonPerDay, 1);
+
+  assert.equal((await service.compose({ title: 'a note by hand', to: 'b@kubrik.com' })).person.ok, true);
+  const reminder = await service.send('code-review', 'Code Reviewer', { to: { email: 'b@kubrik.com' }, title: 'waiting on you', key: 'r-after-note' });
+  assert.equal(reminder.ok, true, 'the reminder still goes: the ceiling is about machines, not about you');
+});
+
+test('the default room is its own place, not a room that happens to be called “default”', { skip }, async () => {
+  const { service, calls } = setup({ fail: (url) => url === 'https://example.invalid/hook' && calls.length === 1 });
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  service.saveChannel({ name: 'default', webhookUrl: 'https://example.invalid/a-room-called-default' });
+
+  const out = await service.compose({ title: 'to the default room', channel: '' });
+  assert.equal(out.channel.ok, false, 'the first try fails');
+  assert.equal((await service.retry(out.channel.id)).ok, true);
+  assert.deepEqual(calls.map((call) => call.url), ['https://example.invalid/hook', 'https://example.invalid/hook'],
+    'and the retry goes where the first try went, not into the room named default');
+  assert.equal(service.store.message(out.channel.id).to, '# the default room');
+});
+
+test('a room name that cleans to nothing is asked about, not taken for the default', { skip }, async () => {
+  const { service, calls } = setup();
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  assert.equal((await service.testChannel('#')).error, 'Which room?');
+  assert.equal((await service.testChannel('## ')).error, 'Which room?');
+  assert.equal(calls.length, 0);
+  assert.equal(service.connection().channel.checkedAt, null, 'and nothing was recorded as the channel’s test');
+});

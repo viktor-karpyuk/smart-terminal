@@ -232,7 +232,7 @@ const DELIVER = 'deliver';
  * somebody else.
  */
 const TEAMS_READ = ['overview', 'botState'] as const;
-const TEAMS_WRITE = ['saveConnection', 'saveSettings', 'test', 'saveChannel', 'forgetChannel', 'testChannel', 'setAppStance', 'setAppCap', 'matchPerson', 'approve', 'skip', 'retry', 'saveBot'] as const;
+const TEAMS_WRITE = ['saveConnection', 'saveSettings', 'test', 'saveChannel', 'forgetChannel', 'testChannel', 'compose', 'setAppStance', 'setAppCap', 'matchPerson', 'approve', 'skip', 'retry', 'saveBot'] as const;
 // `deliverFor` is deliberately absent: the app makes that call, naming the
 // caller itself, so no panel can send under another extension's name.
 const TEAMS_VERBS = new Map<string, Channel>(
@@ -316,12 +316,26 @@ export function permissionFor(name: string): string | null {
 }
 
 /**
+ * Calls no permission can grant: only what ships with the app may make them.
+ *
+ * `teams.compose` sends in your name and skips every rule that protects the
+ * person on the other end — the hours, the ceilings, asking first — because
+ * it is meant to be you pressing Send on the Teams screen. Behind the `teams`
+ * permission, every extension already granted that to change a setting could
+ * have written to anybody, as you, as often as it liked, and nobody would have
+ * been asked again. An extension that wants to say something has `deliver`,
+ * which goes through all of those rules.
+ */
+const SHIPPED_ONLY = new Set(['teams.compose']);
+
+/**
  * Whether this panel may make this call. What ships with the app may call
  * anything; anything else only what its manifest asked for and its installer
  * agreed to.
  */
 export function permitted(view: { trusted?: boolean; permissions?: string[] }, name: string): boolean {
   if (view.trusted) return true;
+  if (SHIPPED_ONLY.has(name)) return false;
   const needed = permissionFor(name);
   return needed !== null && (view.permissions ?? []).includes(needed);
 }

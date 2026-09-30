@@ -283,6 +283,8 @@ const TEAMS_VERBS = {
   saveChannel: (service, args) => ({ ok: true, channels: service.saveChannel(args.channel ?? {}) }),
   forgetChannel: (service, args) => ({ ok: true, channels: service.forgetChannel(String(args.name ?? '')) }),
   testChannel: (service, args) => service.testChannel(String(args.name ?? '')),
+  // Your own words, from the Teams screen: to a room, to a person, or both at once.
+  compose: (service, args) => service.compose(args.message ?? {}),
   // Signing in as yourself: a code to type at Microsoft, and the way back out.
   signIn: (service) => service.signIn(),
   signOut: (service) => ({ ok: true, connection: service.signOut() }),

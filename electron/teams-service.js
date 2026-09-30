@@ -40,44 +40,67 @@ class TeamsService {
 
   // --- what it is set up to do ------------------------------------------------
 
-  /** How it reaches Teams, and whether it can. Never includes a secret. */
   /**
-   * The two ways out, each answered for on its own.
+   * The two ways out, each answered for on its own. Never includes a secret.
    *
-   * `ready` used to mean "the one way that is switched on works". There is no
-   * one way: a room and a person are reached differently and both are wanted,
-   * so each says for itself whether it can carry anything. `way` is still read
-   * for the screens that have not caught up, and for nothing else.
+   * There is no "way" any more. It was a radio button — webhook *or* app
+   * registration — and the screen drew only the half that was picked, so a
+   * machine could be set up to post in a room or to tell somebody privately
+   * but never be seen to do both. A room and a person are two errands, both
+   * wanted at once, and each says for itself whether it can carry anything and
+   * when it was last proved.
    */
   connection() {
-    const way = this.store.setting('way', 'graph');
     const hasWebhook = Boolean(this.store.secret('webhook.url'));
     const channels = this.channels();
-    // A direct message needs somebody it is from, so a registration without one
-    // is not ready — saying it is would be a green light in front of a failure.
-    const hasGraph = Boolean(
-      this.store.setting('graph.tenantId') && this.store.setting('graph.clientId') &&
-      this.store.secret('graph.clientSecret') && this.store.setting('graph.sender'),
-    );
+    const hasGraph = this.#hasGraph();
+    const botReady = Boolean(this.bot?.ready());
+    const channel = { ready: hasWebhook || channels.length > 0, via: 'webhook', ...this.#check('channel') };
+    const person = { ready: hasGraph || botReady, via: botReady ? (hasGraph ? 'bot-or-graph' : 'bot') : 'graph', ...this.#check('person') };
+    // The newest of the two proofs, for anything that still reads one.
+    const latest = [channel, person].filter((one) => one.checkedAt).sort((a, b) => b.checkedAt.localeCompare(a.checkedAt))[0];
     return {
-      way,
       // Anything at all can be said, which is what a sender asks before trying.
-      ready: hasWebhook || channels.length > 0 || hasGraph,
+      ready: channel.ready || person.ready,
       /** A room: the webhook posts as the app rather than as anybody. */
-      channel: { ready: hasWebhook || channels.length > 0, via: 'webhook' },
+      channel,
       /** The rooms that have a webhook of their own, by name. Names only: a URL is a secret. */
-      channels: channels.map((channel) => channel.name),
+      channels: channels.map((one) => one.name),
       /** One person, privately: as the bot to whoever has it installed, through Graph otherwise. */
-      person: { ready: hasGraph || Boolean(this.bot?.ready()), via: this.bot?.ready() ? (hasGraph ? 'bot-or-graph' : 'bot') : 'graph' },
+      person,
       bot: this.bot ? this.bot.state() : null,
       hasWebhook,
       hasGraph,
       tenantId: this.store.setting('graph.tenantId', ''),
       clientId: this.store.setting('graph.clientId', ''),
       sender: this.store.setting('graph.sender', ''),
-      checkedAt: this.store.setting('checkedAt'),
-      checkError: this.store.setting('checkError'),
+      checkedAt: latest?.checkedAt ?? null,
+      checkError: latest?.checkError ?? null,
     };
+  }
+
+  /*
+   * A direct message needs somebody it is from, so a registration without one
+   * is not ready — saying it is would be a green light in front of a failure.
+   */
+  #hasGraph() {
+    return Boolean(
+      this.store.setting('graph.tenantId') && this.store.setting('graph.clientId') &&
+      this.store.secret('graph.clientSecret') && this.store.setting('graph.sender'),
+    );
+  }
+
+  /** When one way out was last tried, and what it said. */
+  #check(what) {
+    return {
+      checkedAt: this.store.setting(`check.${what}.at`),
+      checkError: this.store.setting(`check.${what}.error`),
+    };
+  }
+
+  #noteCheck(what, error) {
+    this.store.setSetting(`check.${what}.at`, new Date(this.now()).toISOString());
+    this.store.setSetting(`check.${what}.error`, error ? String(error?.message ?? error) : null);
   }
 
   settings() {
@@ -105,18 +128,16 @@ class TeamsService {
     };
   }
 
-  saveConnection({ way, webhookUrl, tenantId, clientId, clientSecret, sender } = {}) {
+  saveConnection({ webhookUrl, tenantId, clientId, clientSecret, sender } = {}) {
     /*
      * Refuse first, write second.
      *
-     * A URL that is not https used to be stored as the way before it was
-     * checked, so a rejected save still left the connection switched to a
-     * webhook it had not kept.
+     * A URL that is not https is not kept, and nothing else in the same save
+     * is written either.
      */
     const url = typeof webhookUrl === 'string' ? webhookUrl.trim() : null;
     if (url && !/^https:\/\//i.test(url)) throw new Error('A webhook URL has to be https.');
 
-    if (way === 'webhook' || way === 'graph') this.store.setSetting('way', way);
     /*
      * An empty box is "leave it alone", not "erase it".
      *
@@ -307,16 +328,22 @@ class TeamsService {
     // it was sent and then marked FAILED keeps a time that never happened, and
     // the first thing to ask "when did this go" gets a wrong answer.
     const row = record('SENDING', null);
+    const result = await this.#attempt(row, person, () => this.deliver(message, person));
+    this.changed();
+    return result;
+  }
+
+  /** A row already written as being tried, put on the wire, and written down as what became of it. */
+  async #attempt(row, person, go) {
     try {
-      await this.deliver(message, person);
+      await go();
       this.store.markSent(row.id);
       if (person) this.store.notePersonSent(person.handle);
-      this.changed();
       return { ok: true, id: row.id };
     } catch (error) {
-      this.store.markFailed(row.id, String(error?.message ?? error));
-      this.changed();
-      return { ok: false, why: 'failed', detail: String(error?.message ?? error), id: row.id };
+      const detail = String(error?.message ?? error);
+      this.store.markFailed(row.id, detail);
+      return { ok: false, why: 'failed', detail, id: row.id };
     }
   }
 
@@ -332,6 +359,9 @@ class TeamsService {
    * same time, which is the shape this has now.
    */
   async deliver(message, person) {
+    // The default room by no name at all, which no room called "default" can be
+    // taken for — so a retry goes where the first try went.
+    if (message.defaultRoom) return this.#toDefaultRoom(message);
     if (message.to.channel) return this.#toChannel(message);
     return this.#toPerson(message, person);
   }
@@ -490,54 +520,141 @@ class TeamsService {
     this.timer = null;
   }
 
-  /** Say something to yourself, to find out whether any of this works. */
+  /**
+   * A test message to one person, to find out whether a direct message works.
+   *
+   * Asked for what it needs rather than tried and refused for a reason that
+   * sounds like a different problem — it used to answer "there is no Teams
+   * address for them" when what it meant was "you did not type one".
+   */
   async test(to) {
-    const way = this.store.setting('way', 'graph');
-    /*
-     * A webhook has one channel and needs nobody named; a direct message has
-     * nowhere to go without somebody. Asked for what it needs, rather than
-     * tried and refused for a reason that sounds like a different problem —
-     * it used to answer "there is no Teams address for them" when what it
-     * meant was "you did not type one".
-     */
-    if (way !== 'webhook' && !String(to ?? '').trim()) {
-      return { ok: false, error: 'Type somebody to send it to — a direct message has to go to a person.' };
-    }
+    const address = String(to ?? '').trim();
+    if (!address) return { ok: false, error: 'Type somebody to send it to — a direct message has to go to a person.' };
     const message = rules.readMessage({
-      to: to && to.trim() ? { email: to.trim() } : { channel: 'test' },
+      to: { email: address },
       title: 'Smart Terminal can reach you here',
       body: 'Nothing is wrong. Somebody pressed “Send a test message” to find out whether this works.',
     });
     try {
-      const person = message.to.email ? this.store.rememberPerson({ handle: `email:${message.to.email}`, address: message.to.email, matchedBy: 'EMAIL' }) : null;
+      const person = this.store.rememberPerson({ handle: `email:${message.to.email}`, address: message.to.email, matchedBy: 'EMAIL' });
       await this.deliver(message, person);
-      this.store.setSetting('checkedAt', new Date(this.now()).toISOString());
-      this.store.setSetting('checkError', null);
+      this.#noteCheck('person', null);
       this.changed();
       return { ok: true };
     } catch (error) {
-      this.store.setSetting('checkedAt', new Date(this.now()).toISOString());
-      this.store.setSetting('checkError', String(error?.message ?? error));
+      this.#noteCheck('person', error);
       this.changed();
       return { ok: false, error: String(error?.message ?? error) };
     }
   }
 
-  /** A test message to one named room, so each webhook can be proved on its own. */
+  /**
+   * A test message to one room, so each webhook can be proved on its own.
+   *
+   * No name is the default room — the webhook anything lands in when the room
+   * it asks for was never set up — and that is the one the screen's own
+   * "Send a test" for a channel means. Only that one is kept as the channel's
+   * record: a named room proving itself is not the default room proving itself.
+   */
   async testChannel(name) {
     const clean = channelName(name);
-    if (!clean) return { ok: false, error: 'Which room?' };
-    const message = rules.readMessage({
-      to: { channel: clean },
-      title: `Smart Terminal can post in ${clean}`,
+    // Something that cleans to nothing ("#", spaces) named a room and named it
+    // badly; only no name at all means the default one.
+    if (!clean && String(name ?? '').trim()) return { ok: false, error: 'Which room?' };
+    if (!clean && !this.store.secret('webhook.url')) return { ok: false, error: 'There is no default webhook to test yet — paste one and save it first.' };
+    const message = this.#forRoom(clean, {
+      title: clean ? `Smart Terminal can post in ${clean}` : 'Smart Terminal can post here',
       body: 'Nothing is wrong. Somebody pressed “Send a test message” for this room to find out whether its webhook works.',
     });
     try {
       await this.deliver(message, null);
+      if (!clean) this.#noteCheck('channel', null);
+      this.changed();
       return { ok: true };
     } catch (error) {
+      if (!clean) this.#noteCheck('channel', error);
+      this.changed();
       return { ok: false, error: String(error?.message ?? error) };
     }
+  }
+
+  // --- saying something yourself ----------------------------------------------
+
+  /**
+   * A message you write here, to a room, to a person, or to both at once.
+   *
+   * The same two errands the senders have, without a sender in between: the
+   * room is told as the app, the person is told privately. Each is tried and
+   * answered for on its own, so a room that took it and a person who did not
+   * are both said rather than one hiding the other.
+   *
+   * Nothing is judged. The hours, the ceilings and the "never twice" all
+   * protect somebody from a machine that will not stop, and none of them is
+   * about you pressing Send. It is still written in the outbox, from `you`,
+   * like everything else that went out.
+   */
+  async compose({ title, body, channel, to } = {}) {
+    const heading = String(title ?? '').trim();
+    const text = String(body ?? '').trim();
+    if (!heading && !text) throw new Error('There is nothing to say.');
+    const room = channel == null || channel === false ? null : channelName(channel === true ? '' : channel);
+    const address = String(to ?? '').trim();
+    if (room === null && !address) throw new Error('Choose a room, somebody to tell, or both.');
+
+    // With no title, the first line stands in for one — and the rest is still said.
+    const [first, ...rest] = text.split('\n');
+    const shared = heading
+      ? { title: heading, body: text, level: 'urgent', key: null }
+      : { title: first.slice(0, 120), body: first.length > 120 ? text : rest.join('\n').trim(), level: 'urgent', key: null };
+    const out = { channel: null, person: null };
+
+    if (room !== null) {
+      const message = this.#forRoom(room, shared);
+      out.channel = await this.#sendNow(message, null, room ? `#${room}` : '# the default room', () => this.deliver(message, null));
+    }
+
+    if (address) {
+      if (!address.includes('@')) {
+        out.person = { ok: false, why: 'no-address', detail: 'A person is reached by their Teams address — something@yourcompany.com.' };
+      } else {
+        const message = rules.readMessage({ ...shared, to: { email: address } });
+        // Your words, from your own account when there is one; the bot otherwise.
+        message.voice = this.#hasGraph() ? 'me' : null;
+        const person = this.store.rememberPerson({ handle: `email:${address}`, address, matchedBy: 'EMAIL' });
+        out.person = await this.#sendNow(message, person, address, () => this.deliver(message, person));
+      }
+    }
+
+    this.changed();
+    return { ok: true, ...out };
+  }
+
+  /**
+   * A message for a room by name, or for the default room when there is none.
+   *
+   * The mark is set after `readMessage`, which drops it: only this service can
+   * say "the default room", never a sender.
+   */
+  #forRoom(name, input) {
+    const message = rules.readMessage({ ...input, to: { channel: name || 'the default room' } });
+    if (!name) message.defaultRoom = true;
+    return message;
+  }
+
+  /** The webhook there always was, asked for by no name at all. */
+  #toDefaultRoom(message) {
+    const url = this.store.secret('webhook.url');
+    if (!url) throw new Error('There is no default webhook — paste one under “To a channel” first.');
+    return postWebhook(this.fetch, url, message);
+  }
+
+  /** Written as being tried, then as what became of it — the same life as any other message. */
+  async #sendNow(message, person, to, go) {
+    const row = this.store.addMessage({
+      appId: 'you', key: null, personId: person?.id ?? null, to,
+      title: message.title, body: message.body, payload: message, state: 'SENDING', reason: null,
+    });
+    return this.#attempt(row, person, go);
   }
 
   overview() {
