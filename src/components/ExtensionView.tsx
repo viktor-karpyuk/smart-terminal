@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { alreadyOffered, claudeForPanel, streamsFor, whereEachPanelWas } from '../lib/panelHolds';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { claudeForPanel, streamsFor, whereEachPanelWas } from '../lib/panelHolds';
+import { attachFrame, parkFrame } from '../lib/frameKeeper';
 import { useStore } from '../state/store';
 import { leafOfTab, parentOf } from '../state/layout';
 import type { ExtensionPanelView } from '../global';
@@ -7,6 +8,7 @@ import {
   buildCommand,
   execCommand,
   needsConsent,
+  consentAction,
   permitted,
   permissionFor,
   PERMISSIONS,
@@ -96,7 +98,14 @@ export function ExtensionView({ panelId, showing = true }: { panelId: string; sh
   // document rebuilt on it read the old colours — and on "system" the OS can
   // switch with no setting changing at all.
   return (
-    <Frame key={`${view.from}:${view.id}:${theme}`} panelId={panelId} view={view} root={root} showing={showing} />
+    <Frame
+      key={`${view.from}:${view.id}:${theme}`}
+      frameKey={`${view.from}:${view.id}:${theme}`}
+      panelId={panelId}
+      view={view}
+      root={root}
+      showing={showing}
+    />
   );
 }
 
@@ -151,18 +160,51 @@ function useAppliedTheme(): string {
  * that no longer exists is not a session to hand a briefing to.
  */
 
+/** The document each kept frame was last given, so a frame that moved is not given it again. */
+const loadedDoc = new WeakMap<HTMLIFrameElement, string>();
+
 function Frame({
+  frameKey,
   panelId,
   view,
   root,
   showing,
 }: {
+  frameKey: string;
   panelId: string;
   view: ExtensionPanelView;
   root: string | null;
   showing: boolean;
 }) {
-  const frame = useRef<HTMLIFrameElement>(null);
+  const frame = useRef<HTMLIFrameElement | null>(null);
+  const slot = useRef<HTMLDivElement>(null);
+  /*
+   * The frame is not a React child: it is made once per panel and moved from
+   * pane to pane, so a pane changing shape does not reload it. See frameKeeper.
+   */
+  const [attached, setAttached] = useState<HTMLIFrameElement | null>(null);
+  useLayoutEffect(() => {
+    if (!slot.current) return;
+    const { frame: mine } = attachFrame(panelId, frameKey, slot.current, () => {
+      const made = document.createElement('iframe');
+      made.className = 'extension-frame';
+      made.title = view.title;
+      // Scripts, and nothing else. Without `allow-same-origin` the document
+      // is in an origin of its own, which is what makes everything below the
+      // only way it can reach the app.
+      made.setAttribute('sandbox', 'allow-scripts');
+      return made;
+    });
+    frame.current = mine;
+    setAttached(mine);
+    return () => {
+      // Nobody is looking while it waits for its next pane.
+      mine.contentWindow?.postMessage({ type: 'showing', payload: { showing: false } }, '*');
+      parkFrame(panelId, mine);
+    };
+    // The title is read once, when the frame is made.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [panelId, frameKey]);
   const revealFile = useStore((s) => s.revealFile);
   const [notice, setNotice] = useState<{ text: string; bad: boolean } | null>(null);
 
@@ -201,8 +243,8 @@ function Frame({
    * its own document with its own policy, and the sandbox that isolates it is
    * unchanged.
    */
-  const [source, setSource] = useState<string | null>(null);
   useEffect(() => {
+    if (!attached || loadedDoc.get(attached) === doc) return;
     let alive = true;
     void window.api.extensions.stagePanel(panelId, doc).then((staged) => {
       /*
@@ -215,16 +257,18 @@ function Frame({
        * before it. Only the host is read on the other side, so the query
        * changes nothing about what is served.
        */
-      if (alive) setSource(staged.url ? `${staged.url}?v=${Date.now()}` : null);
+      if (!alive || !staged.url) return;
+      loadedDoc.set(attached, doc);
+      attached.src = `${staged.url}?v=${Date.now()}`;
     });
     return () => {
       alive = false;
       // Deliberately not unstaged here: the next document stages over this one
       // under the same id, and clearing first left a gap in which a reload got
-      // "no such panel". The panel closing is what unstages it.
+      // "no such panel". The panel closing is what unstages it — in
+      // `forgetPanel`, not here: this unmounting is usually only a move.
     };
-  }, [panelId, doc]);
-  useEffect(() => () => { void window.api.extensions.stagePanel(panelId, null); }, [panelId]);
+  }, [panelId, doc, attached]);
   /*
    * The long-running things this panel started — a followed log, a held-open
    * port. Kept per frame rather than globally, which is what stops one panel
@@ -240,6 +284,8 @@ function Frame({
    * had just set up and stopped the log you were following.
    */
   const streams = useRef(streamsFor(panelId));
+  /** Batches somebody said yes to: how many more calls of that verb and kind the yes still covers. */
+  const approvedBatches = useRef(new Map<string, { verb: string; kind: string; left: number }>());
   /*
    * Questions wait their turn rather than overwrite one another: one promise
    * chain per frame, each link putting its question up and clearing the dialog
@@ -313,6 +359,11 @@ function Frame({
               if (done.ok) setNotice({ text: `Saved to ${done.path}`, bad: false });
               else if (done.error) setNotice({ text: done.error, bad: true });
             });
+        } else if (message.name === 'openBeside') {
+          // Where the copy starts is the panel's business and opaque here, as
+          // with `remember`; where it goes is the app's, and only these two.
+          const side = message.payload?.side === 'bottom' ? 'bottom' : 'right';
+          useStore.getState().openExtensionBeside(panelId, message.payload?.resume ?? null, side);
         } else if (message.name === 'remember') {
           // Opaque: whatever the panel says it needs to come back, handed back
           // to that same panel and read by nothing else.
@@ -350,7 +401,18 @@ function Frame({
 
       const args = (message.args ?? {}) as Record<string, unknown>;
       const question = needsConsent(name, args);
-      if (question) {
+      /*
+       * A batch is asked about once. The panel names the batch; the first call
+       * of it carries the question for all of them, and the rest of the same
+       * batch are let through for a minute — not for ever, and never for a
+       * batch nobody said yes to.
+       */
+      const batch = typeof args.batch === 'string' ? args.batch : '';
+      const covered = batch ? approvedBatches.current.get(batch) : undefined;
+      // Only the rest of what was asked about: the same verb, the same kind, and no more of them than were counted.
+      if (question && covered && covered.verb === name && covered.kind === String(args.kind ?? '') && covered.left > 0) {
+        covered.left -= 1;
+      } else if (question) {
         /*
          * Asked one at a time, because there is one dialog.
          *
@@ -363,6 +425,10 @@ function Frame({
         if (!yes) {
           reply(false, null, 'the person said no');
           return;
+        }
+        if (batch && Number(args.count) > 1) {
+          approvedBatches.current.set(batch, { verb: name, kind: String(args.kind ?? ''), left: Number(args.count) - 1 });
+          setTimeout(() => approvedBatches.current.delete(batch), 60_000);
         }
       }
 
@@ -427,6 +493,15 @@ function Frame({
         if (!streams.current.has(id)) return { ok: false, error: 'that is not a stream this panel started' };
         streams.current.delete(id);
         return window.api.kube.stopStream(id);
+      }
+      // A panel only ever reads or opens forwards it started itself.
+      if (verb === 'forwards') {
+        return window.api.kube.forwards([...streams.current]);
+      }
+      if (verb === 'openForward') {
+        const id = String(args.id ?? '');
+        if (!streams.current.has(id)) return { ok: false, error: 'that is not a forward this panel started' };
+        return window.api.kube.openForward(id);
       }
       const id = crypto.randomUUID();
       streams.current.add(id);
@@ -819,28 +894,12 @@ function Frame({
    * that was not told would keep polling a cluster nobody is looking at.
    */
   /*
-   * A cluster tab arrives with a Claude session already open under it.
-   *
-   * Not because a session is needed to look at a cluster — it is not — but
-   * because of when you find out you want one. You want it at the moment
-   * something is wrong, and at that moment the last thing worth doing is
-   * waiting for a CLI to start and an account to be checked. So it is there,
-   * pointed at nothing, costing a process and no tokens: this hands it no
-   * briefing and asks it nothing. It learns about an object when you ask about
-   * one, and not before.
-   *
-   * Once per panel per window. Closing it is an answer, and the next question
-   * is what opens another.
+   * A cluster tab used to arrive with a Claude session already open under it,
+   * so it would be there the moment something went wrong. It was mostly a
+   * session nobody asked for, taking half the tab and stopping on a trust
+   * prompt. It opens on Ask Claude now, and not before — `claudeFor` makes one
+   * the first time it is wanted.
    */
-  useEffect(() => {
-    if (view.needs !== 'kubernetes' || !showing) return;
-    if (alreadyOffered.has(panelId)) return;
-    alreadyOffered.add(panelId);
-    void claudeFor(panelId);
-    // `claudeFor` reads the store when it runs; it is not a dependency.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [panelId, view.needs, showing]);
-
   const showingRef = useRef(showing);
   useEffect(() => {
     showingRef.current = showing;
@@ -861,7 +920,7 @@ function Frame({
                 Cancel
               </button>
               <button className="danger-btn" onClick={() => asking.answer(true)}>
-                Do it
+                {consentAction(asking.question)}
               </button>
             </div>
           </div>
@@ -876,18 +935,7 @@ function Frame({
           </button>
         </div>
       )}
-      {source && (
-        <iframe
-          ref={frame}
-          className="extension-frame"
-          title={view.title}
-          // Scripts, and nothing else. Without `allow-same-origin` the document
-          // is in an origin of its own, which is what makes everything above the
-          // only way it can reach the app.
-          sandbox="allow-scripts"
-          src={source}
-        />
-      )}
+      <div className="extension-frame-slot" ref={slot} />
     </div>
   );
 }

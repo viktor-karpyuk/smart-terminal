@@ -478,4 +478,38 @@ test('anything may ask the app to deliver, and nothing may send as somebody else
     assert.equal(host.permitted({ trusted: true }, 'push'), true);
     assert.equal(host.permitted({}, 'status'), false, 'no word about trust is not trust');
   });
+
+  test('writing to people as you, past every rule, is for the Teams screen alone', () => {
+    const teams = { trusted: false, permissions: ['teams', 'deliver'] };
+    assert.equal(host.permitted(teams, 'teams.saveSettings'), true, 'the permission still changes settings');
+    assert.equal(host.permitted(teams, 'teams.compose'), false, 'but no permission sends in your name');
+    assert.equal(host.permitted(teams, 'deliver'), true, 'which is what deliver, with its rules, is for');
+    assert.equal(host.permitted({ trusted: true }, 'teams.compose'), true);
+  });
 }
+
+/*
+ * The confirming button says what it does, and a cluster is named the way
+ * people say it. "Do it" made every dialog look the same, and an ARN in the
+ * middle of a question is the part everybody reads past.
+ */
+test('a confirmation names its action and the cluster, and a batch where it really is', () => {
+  assert.equal(H.consentAction('Delete Pod api-1 in namespace prod?'), 'Delete');
+  assert.equal(H.consentAction('Force-push, overwriting what is on the remote?'), 'Force-push');
+  assert.equal(H.consentAction('scale api to zero?'), 'Scale');
+  assert.equal(H.consentAction(''), 'Continue');
+
+  assert.equal(H.clusterName('arn:aws:eks:sa-east-1:532465846520:cluster/kubrik-k8s'), 'kubrik-k8s (sa-east-1)');
+  assert.equal(H.clusterName('gke_proj_us-east1_main'), 'main');
+  assert.equal(H.clusterName('docker-desktop'), 'docker-desktop');
+  assert.match(
+    H.needsConsent('kube.remove', { kind: 'Pod', name: 'api-1', namespace: 'prod', context: 'arn:aws:eks:sa-east-1:1:cluster/live' }),
+    /Delete Pod api-1 in namespace prod on live \(sa-east-1\)\?/,
+  );
+
+  // Ticked across three namespaces: the first one's is not where they are.
+  assert.match(
+    H.needsConsent('kube.remove', { kind: 'Pod', name: 'a', count: 4, spread: 3, namespace: 'dev', context: 'live' }),
+    /Delete 4 Pods across 3 namespaces on live\?/,
+  );
+});

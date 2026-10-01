@@ -1,8 +1,9 @@
 'use strict';
 const fs = require('node:fs');
+const { fileURLToPath, pathToFileURL } = require('node:url');
 const os = require('node:os');
 const path = require('node:path');
-const { app, BrowserWindow, ipcMain, dialog, protocol, shell, net, Notification, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, shell, net, Notification, safeStorage, clipboard, ClipboardItem } = require('electron');
 const { DatabaseSync } = require('node:sqlite');
 const { createHash, randomUUID } = require('node:crypto');
 
@@ -48,6 +49,9 @@ const {
   moveInto,
   createEntry,
   duplicatePath,
+  copyInto,
+  filenamesPlist,
+  readFilenamesPlist,
 } = require('./files');
 const git = require('./git');
 const { layout: layoutGraph } = require('./git-graph');
@@ -231,6 +235,8 @@ const repos = new RepoWatcher({ emit: (root, kind) => send('tree:changed', { roo
  * screen accounts for, which is a worse bug than the panel not having one.
  */
 const kubeStreams = new kube.Streams();
+/** Forwarded ports: records that outlive a panel's frame, and reconnect when a connection drops. */
+const kubeForwards = new kube.Forwards();
 const kubeStreamOwners = new Map();
 
 /**
@@ -281,6 +287,8 @@ const TEAMS_VERBS = {
   saveChannel: (service, args) => ({ ok: true, channels: service.saveChannel(args.channel ?? {}) }),
   forgetChannel: (service, args) => ({ ok: true, channels: service.forgetChannel(String(args.name ?? '')) }),
   testChannel: (service, args) => service.testChannel(String(args.name ?? '')),
+  // Your own words, from the Teams screen: to a room, to a person, or both at once.
+  compose: (service, args) => service.compose(args.message ?? {}),
   // Signing in as yourself: a code to type at Microsoft, and the way back out.
   signIn: (service) => service.signIn(),
   signOut: (service) => ({ ok: true, connection: service.signOut() }),
@@ -574,7 +582,8 @@ function createWindow(windowId = randomUUID(), bounds = null) {
       const level = ['debug', 'info', 'warning', 'error'][event.level] ?? event.level;
       console.log(`[renderer:${level}] ${event.message} (${event.sourceId}:${event.lineNumber})`);
     });
-    win.loadURL('http://localhost:5173');
+    // Another port when another development copy already holds 5173 — several sessions test at once.
+    win.loadURL(`http://localhost:${Number(process.env.SMART_TERMINAL_DEV_PORT) || 5173}`);
   } else {
     win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
@@ -613,6 +622,7 @@ function createWindow(windowId = randomUUID(), bounds = null) {
     for (const [streamId, owner] of [...kubeStreamOwners]) {
       if (owner !== windowId) continue;
       kubeStreams.stop(streamId);
+      kubeForwards.stop(streamId);
       kubeStreamOwners.delete(streamId);
     }
     // A window the app took down on its way out is meant to come back next launch.
@@ -1450,6 +1460,58 @@ function registerIpc() {
   ipcMain.handle('files:move', changing(({ from, dir }) => moveInto(from, dir)));
   ipcMain.handle('files:create', changing(({ dir, name, kind }) => createEntry(dir, name, kind === 'folder' ? 'folder' : 'file')));
   ipcMain.handle('files:duplicate', changing(({ file }) => duplicatePath(file)));
+
+  /*
+   * Copying files, and pasting them into a folder.
+   *
+   * The list goes on the system clipboard in every shape that is read for
+   * files: Finder's own list on macOS, the standard list of file URLs that
+   * Linux desktops and most apps read, and the paths as plain text for
+   * anything else. So what is copied here pastes in Finder, and what is copied
+   * in Finder pastes here. One write, so the three can never disagree.
+   */
+  const FINDER_FILES = 'electron application/osclipboard;format="NSFilenamesPboardType"';
+  async function clipboardFiles() {
+    const items = await clipboard.read().catch(() => []);
+    for (const item of items) {
+      if (item.types.includes(FINDER_FILES)) {
+        const blob = await item.getType(FINDER_FILES);
+        const found = readFilenamesPlist(await blob.text());
+        if (found.length) return found;
+      }
+      if (item.types.includes('text/uri-list')) {
+        const blob = await item.getType('text/uri-list');
+        const found = (await blob.text()).split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => line.startsWith('file://'))
+          .map((line) => { try { return fileURLToPath(line); } catch { return null; } })
+          .filter(Boolean);
+        if (found.length) return found;
+      }
+    }
+    return [];
+  }
+  ipcMain.handle('files:copy', changing(async ({ paths }) => {
+    const list = (Array.isArray(paths) ? paths : []).map(String).filter((one) => path.isAbsolute(one));
+    if (!list.length) throw new Error('There is nothing to copy.');
+    const shapes = {
+      'text/plain': list.join('\n'),
+      'text/uri-list': list.map((one) => pathToFileURL(one).href).join('\r\n'),
+    };
+    if (process.platform === 'darwin') shapes[FINDER_FILES] = new Blob([filenamesPlist(list)]);
+    await clipboard.write([new ClipboardItem(shapes)]);
+    return { ok: true, count: list.length };
+  }));
+  ipcMain.handle('files:clipboard', async () => {
+    const there = [];
+    for (const one of await clipboardFiles()) if (fs.existsSync(one)) there.push(one);
+    return { ok: true, paths: there };
+  });
+  ipcMain.handle('files:paste', changing(async ({ dir }) => {
+    const list = await clipboardFiles();
+    if (!list.length) throw new Error('The clipboard has no files on it.');
+    return copyInto(list, dir);
+  }));
   ipcMain.handle(
     'files:trash',
     changing(async ({ file }) => {
@@ -1639,6 +1701,27 @@ function registerIpc() {
     const push = (channel, payload) => {
       if (!sender.isDestroyed()) sender.send(channel, payload);
     };
+
+    /*
+     * A forward is a record rather than a process: it says where it stands
+     * (starting, up on which port, reconnecting, failed and why), and it is
+     * started again on the same local port when its connection drops.
+     */
+    if (op === 'portForward') {
+      kubeStreamOwners.set(streamId, windowId);
+      try {
+        return await kubeForwards.start(streamId, args ?? {}, {
+          onChange: (forward) => push('kube:stream-data', { id: streamId, forward }),
+          onEnd: (payload) => {
+            kubeStreamOwners.delete(streamId);
+            push('kube:stream-end', payload);
+          },
+        });
+      } catch (error) {
+        kubeStreamOwners.delete(streamId);
+        return { ok: false, error: String(error?.message ?? error) };
+      }
+    }
 
     /*
      * A watch is turned into rows here rather than sent on raw.
@@ -1877,7 +1960,23 @@ function registerIpc() {
 
   ipcMain.handle('kube:stream-stop', (_e, id) => {
     kubeStreamOwners.delete(String(id ?? ''));
-    return { ok: kubeStreams.stop(String(id ?? '')) };
+    const forward = kubeForwards.stop(String(id ?? ''));
+    return { ok: kubeStreams.stop(String(id ?? '')) || forward };
+  });
+
+  /** The forwards these ids name, as they stand — for a panel whose frame was rebuilt. */
+  ipcMain.handle('kube:forwards', (_e, ids) => ({ ok: true, forwards: kubeForwards.list(Array.isArray(ids) ? ids.map(String) : []) }));
+
+  /*
+   * Open a forward in the browser. Only ever `http://localhost:<the port it
+   * got>` — the panel names a forward, never an address, so it cannot use this
+   * to open anything else.
+   */
+  ipcMain.handle('kube:forward-open', async (_e, id) => {
+    const forward = kubeForwards.get(String(id ?? ''));
+    if (!forward?.port || forward.state !== 'up') return { ok: false, error: 'That forward is not up.' };
+    await shell.openExternal(`http://localhost:${forward.port}/`);
+    return { ok: true };
   });
 
   ipcMain.handle('db:sessions', (_e, options) => db.listSessions(options || {}));
@@ -2971,6 +3070,7 @@ function retireLegacyWorkspace() {
 let springStopped = false;
 app.on('will-quit', () => {
   kubeStreams.stopAll();
+  kubeForwards.stopAll();
   // A `claude -p` nobody can see would go on spending on the person's account.
   reviewService?.stop();
   teamsBot?.stop();

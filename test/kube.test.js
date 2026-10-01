@@ -786,3 +786,169 @@ test('a ReplicaSet nothing owns is a thing you can operate', () => {
   assert.equal(alone.pausable, false);
   assert.equal(alone.restartable, false);
 });
+
+// ---------------------------------------------------------------- forwarding ports
+
+test('the ports offered for a forward are the TCP ones, named, once each', () => {
+  const ports = kube.portsOf([
+    { name: 'api', ports: [{ containerPort: 8080, name: 'http' }, { containerPort: 9090, name: 'metrics' }, { containerPort: 53, protocol: 'UDP' }] },
+    { name: 'sidecar', ports: [{ containerPort: 8080 }, { containerPort: 15090, name: 'envoy' }] },
+  ]);
+  assert.deepEqual(ports, [
+    { port: 8080, name: 'http', container: 'api' },
+    { port: 9090, name: 'metrics', container: 'api' },
+    { port: 15090, name: 'envoy', container: 'sidecar' },
+  ]);
+  assert.deepEqual(kube.portsOf(undefined), []);
+});
+
+test('a forward can be aimed at a workload or a service, and at nothing else', () => {
+  assert.deepEqual(kube.forwardArgs({ context: 'dev', namespace: 'web', kind: 'Deployment', name: 'api', local: 0, remote: 8080 }).slice(-2), ['deployment/api', '0:8080']);
+  assert.deepEqual(kube.forwardArgs({ kind: 'statefulset', name: 'db', local: 5432, remote: 5432 }).slice(-2), ['statefulset/db', '5432:5432']);
+  assert.throws(() => kube.forwardArgs({ kind: 'configmap', name: 'x', local: 1, remote: 2 }), /cannot be forwarded to/);
+  assert.throws(() => kube.forwardArgs({ name: 'api', local: 70000, remote: 80 }), /local port/);
+});
+
+test('what went wrong with a forward is told apart', () => {
+  assert.equal(kube.forwardTrouble('Unable to listen on port 8080: Listeners failed to create with the following errors: [unable to create listener: Error listen tcp4 127.0.0.1:8080: bind: address already in use]'), 'taken');
+  assert.equal(kube.forwardTrouble('error: error upgrading connection: pods "api-7d9" not found'), 'gone');
+  assert.equal(kube.forwardTrouble('E0929 portforward.go:413] an error occurred forwarding 8080 -> 8080: error forwarding port 8080 to pod abc, uid : exit status 1: 2026/09/29 connect: connection refused'), 'refused');
+  assert.equal(kube.forwardTrouble('error: lost connection to pod'), 'dropped');
+  assert.equal(kube.forwardTrouble('Forwarding from 127.0.0.1:8080 -> 8080'), null);
+});
+
+test('the rows that can be forwarded say so, with the ports they know', () => {
+  const NOW = Date.parse('2026-09-29T12:00:00Z');
+  const template = { spec: { containers: [{ name: 'api', ports: [{ containerPort: 8080, name: 'http' }] }] } };
+  const deployment = kube.shapeFor('Deployment').row({ metadata: { name: 'api', namespace: 'web' }, spec: { replicas: 1, template }, status: {} }, NOW);
+  assert.equal(deployment.forwardKind, 'deployment');
+  assert.deepEqual(deployment.forwardPorts, [{ port: 8080, name: 'http', container: 'api' }]);
+  const service = kube.shapeFor('Service').row({ metadata: { name: 'api', namespace: 'web' }, spec: { ports: [{ port: 80, name: 'web' }, { port: 53, protocol: 'UDP' }] } }, NOW);
+  assert.equal(service.forwardKind, 'service');
+  assert.deepEqual(service.forwardPorts, [{ port: 80, name: 'web' }]);
+  const pod = kube.shapeFor('Pod').row({ metadata: { name: 'api-1', namespace: 'web' }, spec: { containers: [{ name: 'api' }] }, status: { phase: 'Running' } }, NOW);
+  assert.equal(pod.forwardKind, 'pod', 'a pod that declares nothing can still be forwarded to a port somebody types');
+  assert.equal(pod.status, 'Running', 'what the panel checks before offering the button');
+  const daemons = kube.shapeFor('DaemonSet').row({ metadata: { name: 'agent', namespace: 'ops' }, spec: { template }, status: {} }, NOW);
+  assert.equal(daemons.forwardKind, 'daemonset', 'forwardable by kubectl, so offered too');
+  assert.deepEqual(pod.forwardPorts, []);
+});
+
+/** kubectl, played by hand: each spawn is a child the test speaks for. */
+function fakeKubectl() {
+  const { EventEmitter } = require('node:events');
+  const spawned = [];
+  const timers = [];
+  const spawnProcess = (command, args) => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.args = args;
+    child.killed = false;
+    child.kill = () => { child.killed = true; child.emit('close', null); };
+    child.say = (text) => child.stdout.emit('data', text);
+    child.complain = (text) => child.stderr.emit('data', text);
+    child.die = (text = '') => { if (text) child.complain(text); child.emit('close', 1); };
+    spawned.push(child);
+    return child;
+  };
+  const forwards = new kube.Forwards({
+    spawnProcess,
+    env: async () => ({}),
+    setTimer: (fn, ms) => { const timer = { fn, ms, cleared: false }; timers.push(timer); return timer; },
+    clearTimer: (timer) => { timer.cleared = true; },
+  });
+  const tick = async () => {
+    const timer = timers.shift();
+    assert.ok(timer, 'a retry was scheduled');
+    timer.fn();
+    await new Promise((resolve) => setImmediate(resolve));
+    return timer;
+  };
+  return { forwards, spawned, timers, tick };
+}
+
+test('a forward that drops comes back on the same local port', async () => {
+  const { forwards, spawned, tick } = fakeKubectl();
+  const changes = [];
+  const started = await forwards.start('f1', { context: 'dev', namespace: 'web', kind: 'deployment', name: 'api', remote: 8080, local: 0 }, { onChange: (one) => changes.push(one) });
+  assert.equal(started.forward.state, 'starting');
+  assert.deepEqual(spawned[0].args.slice(-2), ['deployment/api', '0:8080']);
+
+  spawned[0].say('Forwarding from 127.0.0.1:54321 -> 8080\n');
+  spawned[0].say('Forwarding from [::1]:54321 -> 8080\n');
+  assert.equal(forwards.get('f1').state, 'up');
+  assert.equal(forwards.get('f1').port, 54321);
+
+  spawned[0].die('error: lost connection to pod\n');
+  assert.equal(forwards.get('f1').state, 'reconnecting');
+  const timer = await tick();
+  assert.equal(timer.ms, 1000, 'the first retry is quick');
+  assert.deepEqual(spawned[1].args.slice(-1), ['54321:8080'], 'asked for the port it had, not a new one');
+  spawned[1].say('Forwarding from 127.0.0.1:54321 -> 8080\n');
+  assert.equal(forwards.get('f1').state, 'up');
+  assert.deepEqual(changes.map((one) => one.state), ['up', 'reconnecting', 'up']);
+});
+
+test('a pod that is gone cannot be followed, and says what can', async () => {
+  const { forwards, spawned, timers } = fakeKubectl();
+  const ends = [];
+  await forwards.start('f2', { kind: 'pod', name: 'api-7d9', remote: 8080, local: 8080 }, { onEnd: (one) => ends.push(one) });
+  spawned[0].say('Forwarding from 127.0.0.1:8080 -> 8080\n');
+  spawned[0].die('error: error upgrading connection: pods "api-7d9" not found\n');
+  assert.equal(timers.length, 0, 'no retry');
+  assert.equal(ends[0].forward.state, 'failed');
+  assert.match(ends[0].forward.error, /api-7d9 is gone.*deployment or service/);
+  assert.equal(forwards.get('f2'), null);
+});
+
+test('a local port somebody else has is said at once, not retried', async () => {
+  const { forwards, spawned, timers } = fakeKubectl();
+  const ends = [];
+  await forwards.start('f3', { kind: 'service', name: 'api', remote: 80, local: 8080 }, { onEnd: (one) => ends.push(one) });
+  spawned[0].die('Unable to listen on port 8080: bind: address already in use\n');
+  assert.equal(timers.length, 0);
+  assert.match(ends[0].forward.error, /8080 on this machine is already in use/);
+});
+
+test('nothing listening inside is a warning; the forward stays up', async () => {
+  const { forwards, spawned, tick } = fakeKubectl();
+  await forwards.start('f4', { kind: 'pod', name: 'api-1', remote: 8081, local: 0 });
+  spawned[0].say('Forwarding from 127.0.0.1:60000 -> 8081\n');
+  spawned[0].complain('E0929 an error occurred forwarding 60000 -> 8081: connect: connection refused\n');
+  assert.equal(forwards.get('f4').state, 'up');
+  assert.match(forwards.get('f4').warning, /Nothing answered on 8081/);
+  // The application came up after all, the connection dropped and came back: the old warning is history.
+  spawned[0].die('error: lost connection to pod\n');
+  await tick();
+  spawned[1].say('Forwarding from 127.0.0.1:60000 -> 8081\n');
+  assert.equal(forwards.get('f4').warning, null);
+});
+
+test('a forward that never comes up gives up, and a stopped one is not started again', async () => {
+  const { forwards, spawned, tick, timers } = fakeKubectl();
+  const ends = [];
+  await forwards.start('f5', { kind: 'deployment', name: 'api', remote: 8080, local: 0 }, { onEnd: (one) => ends.push(one) });
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    spawned[spawned.length - 1].die('error: unable to connect to the server\n');
+    await tick();
+  }
+  spawned[spawned.length - 1].die('error: unable to connect to the server\n');
+  assert.equal(ends.length, 1);
+  assert.match(ends[0].forward.error, /Gave up after 6 attempts/);
+  assert.deepEqual(timers, []);
+
+  await forwards.start('f6', { kind: 'deployment', name: 'api', remote: 8080, local: 0 });
+  spawned[spawned.length - 1].say('Forwarding from 127.0.0.1:61000 -> 8080\n');
+  spawned[spawned.length - 1].die('error: lost connection to pod\n');
+  assert.equal(timers.length, 1);
+  assert.equal(forwards.stop('f6'), true);
+  assert.equal(timers[0].cleared, true, 'the retry that was waiting is called off');
+  assert.deepEqual(forwards.list(['f6', 'f5']), []);
+});
+
+test('a request that could never work is refused before anything runs', async () => {
+  const { forwards, spawned } = fakeKubectl();
+  await assert.rejects(forwards.start('bad', { kind: 'secret', name: 'x', remote: 80, local: 0 }), /cannot be forwarded to/);
+  assert.equal(spawned.length, 0);
+});

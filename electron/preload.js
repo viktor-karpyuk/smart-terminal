@@ -180,6 +180,12 @@ contextBridge.exposeInMainWorld('api', {
     move: (from, dir) => ipcRenderer.invoke('files:move', { from, dir }),
     create: (dir, name, kind) => ipcRenderer.invoke('files:create', { dir, name, kind }),
     duplicate: (file) => ipcRenderer.invoke('files:duplicate', { file }),
+    /** Files and folders onto the clipboard, the way Finder puts them there. */
+    copy: (paths) => ipcRenderer.invoke('files:copy', { paths }),
+    /** What files the clipboard holds now — copied here or in Finder. */
+    clipboard: () => ipcRenderer.invoke('files:clipboard'),
+    /** Copies of what the clipboard holds, into a folder. Taken names become "name copy". */
+    paste: (dir) => ipcRenderer.invoke('files:paste', { dir }),
     /** To the Trash, never gone for good. */
     trash: (file) => ipcRenderer.invoke('files:trash', { file }),
   },
@@ -229,6 +235,8 @@ contextBridge.exposeInMainWorld('api', {
     call: (name, args) => ipcRenderer.invoke('kube:call', { name, args }),
     stream: (id, op, args) => ipcRenderer.invoke('kube:stream', { id, op, args }),
     stopStream: (id) => ipcRenderer.invoke('kube:stream-stop', id),
+    forwards: (ids) => ipcRenderer.invoke('kube:forwards', ids),
+    openForward: (id) => ipcRenderer.invoke('kube:forward-open', id),
     onStream: (fn) => {
       const data = (_e, payload) => fn({ ...payload, done: false });
       const end = (_e, payload) => fn({ ...payload, done: true, text: '' });

@@ -112,6 +112,27 @@ export interface KubeResult {
   [key: string]: unknown;
 }
 
+/** A forwarded port, as the main process keeps it. */
+export interface KubeForward {
+  id: string;
+  context: string;
+  namespace: string;
+  kind: string;
+  name: string;
+  remote: number;
+  /** The local port asked for; 0 is "any free one". */
+  asked: number;
+  /** The local port it got, once kubectl said so. Kept across reconnects. */
+  port: number | null;
+  state: 'starting' | 'up' | 'reconnecting' | 'failed';
+  error: string | null;
+  warning: string | null;
+  attempts: number;
+  failures: number;
+  startedAt: string;
+  upAt: string | null;
+}
+
 export interface KubeRow {
   uid: string;
   name: string;
@@ -970,6 +991,10 @@ declare global {
           args?: unknown,
         ): Promise<{ ok: boolean; id?: string; error?: string }>;
         stopStream(id: string): Promise<{ ok: boolean }>;
+        /** The forwards these ids name, as they stand now. */
+        forwards(ids: string[]): Promise<{ ok: boolean; forwards: KubeForward[] }>;
+        /** Open a forward that is up at http://localhost:<its port>. */
+        openForward(id: string): Promise<{ ok: boolean; error?: string }>;
         onStream(
           handler: (payload: {
             id: string;
@@ -978,6 +1003,8 @@ declare global {
             stream?: 'out' | 'err';
             /** What a watch saw, already shaped into rows. */
             events?: Array<{ type: string; row?: KubeRow; error?: string }>;
+            /** Where a forward stands, each time that changes. */
+            forward?: KubeForward;
             done: boolean;
             code?: number | null;
           }) => void,
@@ -1035,6 +1062,12 @@ declare global {
         move(from: string, dir: string): Promise<FileChange>;
         create(dir: string, name: string, kind: 'file' | 'folder'): Promise<FileChange>;
         duplicate(file: string): Promise<FileChange>;
+        copy(paths: string[]): Promise<{ ok: true; count: number } | { ok: false; error: string }>;
+        clipboard(): Promise<{ ok: boolean; paths: string[] }>;
+        paste(dir: string): Promise<
+          | { ok: boolean; copied: string[]; failed: Array<{ path: string; error: string }>; error: string | null }
+          | { ok: false; error: string }
+        >;
         trash(file: string): Promise<FileChange>;
       };
       system: {

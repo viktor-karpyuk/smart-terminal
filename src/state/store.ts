@@ -5,7 +5,7 @@ import { generateSessionName } from '../lib/names';
 import { shortContext, terminalSetup } from '../lib/extensionHost';
 import { whatItDid } from '../lib/gitUpdate';
 import { launchPlan } from '../lib/launcher';
-import { forgetPanel } from '../lib/panelHolds';
+import { forgetPanel, whereEachPanelWas } from '../lib/panelHolds';
 import { baseOf, movedPath, moveProblem, nameProblem, parentOf } from '../lib/fileOps';
 import { arrangeGroup, moveGroupTo } from './groups';
 import { closePane, movePane, panePlace, restorePaneAt, splitEmpty, splitOffTabs, swapPanes } from './layout';
@@ -647,6 +647,11 @@ interface State {
   openExtensions(): void;
   /** Open a view an extension contributes, on a folder. */
   openExtensionView(viewId: string, root: string | null): void;
+  /**
+   * A second copy of an extension's panel, split off beside the one that asked,
+   * starting where that one says. Two places in one cluster side by side.
+   */
+  openExtensionBeside(fromPanelId: string, resume: unknown, side: 'right' | 'bottom'): void;
   /** A view from its activity-bar button: in the section in front, bringing the one open copy over if there is one. */
   launchExtensionView(viewId: string): void;
   /** Show a file somewhere sensible — the app decides where, the asker does not. */
@@ -660,6 +665,13 @@ interface State {
   moveEntry(path: string, dir: string): Promise<string | null>;
   createEntry(panelId: string, dir: string, name: string, kind: 'file' | 'folder'): Promise<string | null>;
   duplicateEntry(path: string): Promise<string | null>;
+  /** What is ticked in a Files panel's tree, in the order it was ticked, and the row a Shift-click reaches from. */
+  filesPicked: Record<string, { paths: string[]; anchor: string | null }>;
+  setFilesPicked(panelId: string, paths: string[], anchor?: string | null): void;
+  /** Files and folders onto the clipboard, where Finder can paste them too. */
+  copyEntries(paths: string[]): Promise<string | null>;
+  /** Copies of whatever files the clipboard holds, into a folder. Says what happened, in words. */
+  pasteInto(dir: string): Promise<{ note: string; bad: boolean }>;
   trashEntry(path: string): Promise<string | null>;
   setMonitorSession(panelId: string, sessionId: string | null): void;
   refreshAnalysis(sessionId: string, force?: boolean): Promise<void>;
@@ -796,6 +808,8 @@ function schedulePersist(get: () => State) {
   }, 400);
 }
 
+const baseName = (path: string) => path.split('/').filter(Boolean).pop() ?? path;
+
 export const useStore = create<State>((set, get) => ({
   ready: false,
   profiles: [],
@@ -837,6 +851,7 @@ export const useStore = create<State>((set, get) => ({
   repos: {},
   buffers: {},
   dirs: {},
+  filesPicked: {},
 
   async init() {
     if (initStarted) return;
@@ -2540,6 +2555,36 @@ export const useStore = create<State>((set, get) => ({
     return null;
   },
 
+  setFilesPicked(panelId, paths, anchor) {
+    set((prev) => ({
+      filesPicked: {
+        ...prev.filesPicked,
+        [panelId]: { paths, anchor: anchor === undefined ? prev.filesPicked[panelId]?.anchor ?? null : anchor },
+      },
+    }));
+  },
+
+  async copyEntries(paths) {
+    const result = await window.api.files.copy(paths);
+    return result.ok ? null : result.error ?? 'Could not copy that.';
+  },
+
+  async pasteInto(dir) {
+    const result = await window.api.files.paste(dir);
+    await get().loadDir(dir);
+    if (!('copied' in result)) return { note: result.error ?? 'Nothing was pasted.', bad: true };
+    const done = result.copied.length;
+    const failed = result.failed.length;
+    if (!done) return { note: result.error ?? 'Nothing was pasted.', bad: true };
+    const what = done === 1 ? baseName(result.copied[0]) : `${done} items`;
+    return {
+      note: failed
+        ? `Pasted ${what}. ${failed} could not be: ${result.failed[0].error}.`
+        : `Pasted ${what}.`,
+      bad: failed > 0,
+    };
+  },
+
   async duplicateEntry(path) {
     const result = await window.api.files.duplicate(path);
     if (!result.ok) return result.error ?? 'Could not duplicate that.';
@@ -3338,6 +3383,27 @@ export const useStore = create<State>((set, get) => ({
      * is not a folder and follows nothing.
      */
     if (root && view?.needs !== 'kubernetes') followTree(panelId, root);
+    schedulePersist(get);
+  },
+
+  openExtensionBeside(fromPanelId, resume, side) {
+    const state = get();
+    const from = state.panels[fromPanelId];
+    const leaf = leafOfTab(state.layout, fromPanelId);
+    if (!from || from.kind !== 'extension' || !leaf) return;
+    const panelId = crypto.randomUUID();
+    // Handed to the new frame when it says it is ready, as a rebuilt one would be.
+    whereEachPanelWas.set(panelId, resume ?? null);
+    set((prev) => {
+      const layout = dropTab(prev.layout, panelId, leaf.id, side);
+      return {
+        panels: { ...prev.panels, [panelId]: { ...from, id: panelId } },
+        layout,
+        activeLeafId: leafOfTab(layout, panelId)?.id ?? prev.activeLeafId,
+        // Side by side is the point; a maximised section would hide the new one.
+        zoomedLeafId: null,
+      };
+    });
     schedulePersist(get);
   },
 
