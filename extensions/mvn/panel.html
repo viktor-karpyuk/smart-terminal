@@ -22,18 +22,22 @@
   }
   .top input {
     font: inherit; color: var(--text); background: var(--bg-input);
-    border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 7px;
+    border: 1px solid var(--border); border-radius: var(--radius); padding: 3px 7px; line-height: 18px;
   }
+  .top input::placeholder { color: var(--text-faint); }
   .top input:focus { outline: none; border-color: var(--accent); }
   #run { flex: 1; min-width: 140px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
   #filter { width: 130px; }
   .btn {
-    padding: 3px 9px; border: 1px solid var(--border); border-radius: var(--radius);
-    color: var(--text-dim); white-space: nowrap; font-size: 11.5px;
+    padding: 3px 9px; border: 1px solid var(--border-strong); border-radius: var(--radius);
+    color: var(--text); white-space: nowrap; font-size: 11.5px; line-height: 18px;
   }
-  .btn:hover { color: var(--text); border-color: var(--border-strong); background: var(--bg-elevated); }
-  .btn.on { color: var(--accent); border-color: var(--accent); }
-  .btn.go { color: var(--accent); border-color: var(--accent); }
+  .btn:hover { border-color: var(--text-faint); background: var(--bg-elevated); }
+  /* A toggle that is on reads as on at a glance, not only by its outline. */
+  .btn.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+  /* The one thing the bar is for: filled, like the app's own primary buttons. */
+  .btn.go { color: var(--on-accent, #fff); background: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .btn.go:hover { background: color-mix(in srgb, var(--accent) 88%, var(--text)); border-color: transparent; }
   .btn[disabled] { opacity: 0.4; pointer-events: none; }
   .sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; }
 
@@ -58,8 +62,9 @@
   .row.on { background: var(--accent-soft); }
   .twist {
     display: inline-flex; width: 16px; height: 16px; align-items: center; justify-content: center;
-    color: var(--text-faint); font-size: 10px; flex: 0 0 16px;
+    color: var(--text-faint); font-size: 11px; flex: 0 0 16px;
   }
+  .twist:not(.leaf):hover { color: var(--text); }
   .twist.leaf { visibility: hidden; }
   .icon { width: 14px; height: 14px; flex: 0 0 14px; color: var(--text-faint); }
   .row.head .icon { color: var(--accent); }
@@ -134,8 +139,9 @@
   .foot .bad { color: var(--danger); }
   .foot .stale { color: var(--warn, var(--git-new)); }
 
-  .empty { padding: 30px 20px; color: var(--text-dim); text-align: center; }
-  .empty strong { color: var(--text); }
+  .empty { padding: 40px 20px; color: var(--text-dim); text-align: center; line-height: 1.6; }
+  .empty strong { color: var(--text); display: block; margin-bottom: 4px; }
+  .empty p { margin: 0 auto; max-width: 520px; color: var(--danger); word-break: break-word; }
 </style>
 
 <div id="app">

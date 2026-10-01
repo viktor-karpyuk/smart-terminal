@@ -69,7 +69,14 @@ export function ExtensionsPanel() {
     : inScope;
 
   const updates = rows.filter((row) => row.status === 'update').length;
-  const open = chosen ? (rows.find((row) => row.id === chosen) ?? null) : null;
+  // Something is always open: the one picked, or else the first with an update
+  // waiting, or else the first in the list — a detail pane that only says
+  // "pick one" is a wall of empty space.
+  const open =
+    (chosen ? rows.find((row) => row.id === chosen) : null) ??
+    shown.find((row) => row.status === 'update') ??
+    shown[0] ??
+    null;
 
   return (
     <div className="extensions">
@@ -121,8 +128,8 @@ export function ExtensionsPanel() {
           {shown.map((row) => (
             <button
               key={row.id}
-              className={`extension${chosen === row.id ? ' is-on' : ''}`}
-              onClick={() => setChosen(chosen === row.id ? null : row.id)}
+              className={`extension${open?.id === row.id ? ' is-on' : ''}`}
+              onClick={() => setChosen(row.id)}
             >
               <span className="extension-top">
                 <span className="extension-name">{row.name}</span>

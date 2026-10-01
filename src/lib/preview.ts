@@ -168,14 +168,23 @@ function styles(dark: boolean): string {
 
   return `
     :root { color-scheme: ${dark ? 'dark' : 'light'}; }
+    html { background: ${paper}; }
     body {
-      margin: 0;
-      padding: 22px 26px 60px;
+      /* A readable measure: prose at the full width of a wide pane ran to two
+         hundred characters a line, which nobody reads comfortably. */
+      max-width: 78ch;
+      margin: 0 auto;
+      padding: 28px 32px 60px;
       background: ${paper};
       color: ${ink};
       font: 14px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
       overflow-wrap: break-word;
     }
+    /* The window's scrollbars, which a document of its own does not inherit. */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-thumb { background: ${rule}; border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
+    ::-webkit-scrollbar-thumb:hover { background: ${dim}; background-clip: content-box; }
+    ::-webkit-scrollbar-track { background: transparent; }
     h1, h2, h3, h4 { line-height: 1.3; margin: 1.6em 0 0.6em; font-weight: 600; }
     h1 { font-size: 1.7em; } h2 { font-size: 1.35em; } h3 { font-size: 1.15em; }
     h1, h2 { border-bottom: 1px solid ${rule}; padding-bottom: 0.3em; }

@@ -387,7 +387,11 @@ function ThemeCard({
   const t = theme.tokens;
   const term = paletteById(theme.palette)?.theme ?? {};
   return (
-    <button className={`theme-card${chosen ? ' is-selected' : ''}`} onClick={onPick} title={theme.name}>
+    <button
+      className={`theme-card${chosen ? ' is-selected' : ''}${inUse ? ' is-in-use' : ''}`}
+      onClick={onPick}
+      title={theme.name}
+    >
       <span className="theme-mock" style={{ background: t.bg, borderColor: t.border }}>
         <span className="theme-mock-side" style={{ background: t['bg-panel'], borderColor: t.border }}>
           <i style={{ background: t.accent }} />
@@ -404,7 +408,7 @@ function ThemeCard({
       </span>
       <span className="theme-card-name">
         <span>{theme.name}</span>
-        {inUse && <em>in use</em>}
+        {inUse ? <em>in use</em> : chosen && <em className="is-waiting">for {theme.mode}</em>}
       </span>
     </button>
   );

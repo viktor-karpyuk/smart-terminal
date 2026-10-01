@@ -357,7 +357,12 @@ function FolderItem({ panelId, homedir }: { panelId: string; homedir: string }) 
       </svg>
       <div className="sidebar-item-text">
         <span className="sidebar-item-title">{root.split('/').filter(Boolean).pop() ?? root}</span>
-        <PathLabel path={short} home={homedir} className="sidebar-item-path" />
+        {/* Where it is, not its name again: the title above already says that. */}
+        <PathLabel
+          path={short.slice(0, short.replace(/\/+$/, '').lastIndexOf('/')) || short}
+          home={homedir}
+          className="sidebar-item-path"
+        />
       </div>
       {changed > 0 && <span className="sidebar-changed" title={`${changed} changed`}>{changed}</span>}
       {unsaved && <span className="files-dirty" title="unsaved changes" />}

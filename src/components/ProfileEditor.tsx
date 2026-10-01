@@ -457,10 +457,12 @@ function AuthPanel({
       </div>
 
       <div className="auth-actions">
-        <button className="ghost-btn tiny" onClick={onCheck} disabled={probing}>
+        <button className="ghost-btn" onClick={onCheck} disabled={probing}>
           {probing ? 'Checking…' : 'Check'}
         </button>
-        <button className="primary-btn" onClick={onSignIn} disabled={!canSignIn}>
+        {/* The loud button only when signing in is what this account needs; signed in,
+            it is an alternative, and Save below is the thing to press. */}
+        <button className={state === 'in' ? 'ghost-btn' : 'primary-btn'} onClick={onSignIn} disabled={!canSignIn}>
           {state === 'in' ? 'Sign in as someone else' : 'Sign in…'}
         </button>
       </div>

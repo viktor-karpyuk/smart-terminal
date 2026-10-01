@@ -5,6 +5,7 @@ import { TranscriptViewer } from './TranscriptViewer';
 import { compactPath, formatBytes } from '../lib/labels';
 import { Popover } from './Popover';
 import { legible } from '../lib/looks';
+import { CaretIcon } from './icons';
 
 /**
  * Where the list was left, for as long as the app is running.
@@ -423,6 +424,8 @@ export function HistoryPanel() {
                       </small>
                     )}
                   </div>
+                  {/* One fixed column, so the buttons line up row under row. */}
+                  <div className="history-actions">
                   <RowAction
                     row={row}
                     isLive={Boolean(liveSessions[row.id])}
@@ -487,6 +490,7 @@ export function HistoryPanel() {
                       {pendingDelete === row.id ? 'Sure?' : '×'}
                     </button>
                   )}
+                  </div>
                 </article>
               ))}
                 </section>
@@ -600,8 +604,9 @@ function RowAction({
           className="ghost-btn tiny caret"
           title={`Bring it back on another account than ${row.profileName ?? 'this one'}`}
           onClick={() => setChoosing((open) => !open)}
+          aria-label="Bring it back on another account"
         >
-          ⌄
+          <CaretIcon />
         </button>
       )}
       {choosing && (

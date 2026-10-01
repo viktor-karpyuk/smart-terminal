@@ -566,18 +566,48 @@ input:focus, textarea:focus { border-color: var(--accent); }
   align-items: center;
   gap: 6px;
   padding: 0 8px;
-  max-width: 230px;
+  max-width: 200px;
   border-right: 1px solid var(--border);
   color: var(--text-dim);
   font-size: var(--fs-md);
   cursor: default;
-  /* Shrink to share the strip rather than pushing siblings out of sight. */
+  /*
+   * A tab keeps enough width to be read, and the strip scrolls when they no
+   * longer fit. Shrinking them all to share the space turned every title into
+   * a letter and a dot once there were a dozen.
+   */
+  position: relative;
   flex: 0 1 auto;
-  min-width: 42px;
+  min-width: 96px;
 }
 
 /* Below this the account label stops earning its space. */
 .tab.is-tight { padding: 0 6px; gap: 4px; }
+
+/*
+ * On a tab that is not in front, its two buttons do not hold room they are not
+ * showing: set-aside lives in the right-click menu, and close floats over the
+ * end of the title on hover, on the strip's own colour so the title fades
+ * under it instead of colliding.
+ */
+.tab:not(.tab-selected) .tab-min { display: none; }
+.tab:not(.tab-selected) .tab-close {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--bg-panel);
+  box-shadow: -10px 0 8px -2px var(--bg-panel);
+}
+.tab:not(.tab-selected) .tab-close:hover {
+  background: color-mix(in srgb, var(--danger) 16%, var(--bg-panel));
+}
+
+/* More to the right: the strip fades out instead of ending in a cut-off tab. */
+.tabs.is-overflowing { mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
+.tab-list-btn { gap: 3px; font-size: var(--fs-lg); line-height: 1; }
+.tab-list-btn small { font-size: var(--fs-xs); color: var(--text-faint); }
+.menu-item.is-current > span { color: var(--accent); font-weight: 600; }
 
 .tab:hover { color: var(--text); }
 /* The underline colour is set inline from the account's colour. */
@@ -1139,7 +1169,8 @@ input:focus, textarea:focus { border-color: var(--accent); }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 14px;
+  /* The title starts where the body's text starts, not 8px to the left of it. */
+  padding: 12px 14px 12px 22px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -1170,7 +1201,7 @@ input:focus, textarea:focus { border-color: var(--accent); }
 .profile-nav-item:hover { background: var(--bg-panel); }
 .profile-nav-item.is-selected { background: var(--accent-soft); color: var(--text); }
 
-.profile-form { flex: 1; min-width: 0; padding: 18px 22px 28px; display: grid; gap: 18px; align-content: start; overflow-y: auto; }
+.profile-form { flex: 1; min-width: 0; scrollbar-gutter: stable; padding: 18px 22px 28px; display: grid; gap: 18px; align-content: start; overflow-y: auto; }
 
 .swatches { display: flex; gap: 6px; }
 .swatch { width: 20px; height: 20px; border-radius: 50%; border: 2px solid transparent; }
@@ -1411,7 +1442,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   width: 24px;
   height: 14px;
   border-radius: 999px;
-  background: var(--bg-input);
+  background: var(--track);
   box-shadow: inset 0 0 0 1px var(--border-strong);
   transition: background 120ms ease;
 }
@@ -1423,7 +1454,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: var(--text-faint);
+  background: var(--text-dim);
   transition: transform 120ms ease, background 120ms ease;
 }
 .switch.is-on { background: var(--accent); box-shadow: none; }
@@ -1511,7 +1542,7 @@ select {
   padding: 0;
   border: none;
   border-radius: 999px;
-  background: var(--bg-input);
+  background: var(--track);
   box-shadow: inset 0 0 0 1px var(--border-strong);
   cursor: pointer;
   transition: background 120ms ease;
@@ -1524,7 +1555,7 @@ select {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: var(--text-faint);
+  background: var(--text-dim);
   transition: transform 120ms ease, background 120ms ease;
 }
 .checkbox input[type='checkbox']:checked { background: var(--accent); box-shadow: none; }
@@ -1538,27 +1569,27 @@ input[type='checkbox'] { accent-color: var(--accent); }
 .star-btn { color: var(--text-faint); font-size: var(--fs-base); padding: 0 4px; line-height: 1; }
 .star-btn:hover { color: var(--accent); }
 .star-btn.is-on { color: var(--warn); }
-.checkbox.standalone { padding: 0 2px; }
+.checkbox.standalone { padding: 0; }
 .profile-nav-text .badge { margin-left: 6px; vertical-align: 1px; }
 
 /* ---------- usage limits ---------- */
 
 .modal-narrow { width: min(560px, 92vw); }
 /* The scrolling body of a single-page dialog — Usage, Updates — with Settings' margins. */
-.modal-scroll { padding: 18px 22px 24px; display: grid; gap: 16px; align-content: start; overflow-y: auto; }
+.modal-scroll { scrollbar-gutter: stable; padding: 18px 22px 24px; display: grid; gap: 16px; align-content: start; overflow-y: auto; }
 .checkbox-hint { display: block; margin-top: 2px; font-size: var(--fs-sm); color: var(--text-faint); }
 
 .usage-account { display: grid; gap: 10px; }
 .usage-account-header { display: flex; align-items: center; gap: 8px; font-size: var(--fs-md); font-weight: 600; }
 .usage-account-header small { font-weight: 400; color: var(--text-faint); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.usage-bars { display: grid; gap: 10px; padding: 10px 12px; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--r-lg); }
+.usage-bars { display: grid; gap: 14px; padding: 12px 14px; background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--r-lg); }
 .usage-note { margin: 0; font-size: var(--fs-sm); color: var(--text-faint); }
 .usage-stamp { text-align: right; }
 .usage-footnote { margin: 0; font-size: var(--fs-sm); line-height: 1.5; color: var(--text-faint); border-top: 1px solid var(--border); padding-top: 10px; }
 .usage-footnote code { background: var(--bg-input); padding: 0 3px; border-radius: var(--r-sm); }
 
-.meter { display: grid; gap: 3px; }
+.meter { display: grid; gap: 5px; }
 .meter-top { display: flex; justify-content: space-between; align-items: baseline; font-size: var(--fs-md); }
 .meter-top strong { font-variant-numeric: tabular-nums; }
 .meter small { font-size: var(--fs-sm); color: var(--text-faint); }
@@ -1623,10 +1654,10 @@ input[type='checkbox'] { accent-color: var(--accent); }
 .tabbar button:hover { background: var(--bg-panel); }
 .tabbar button.is-on { background: var(--accent-soft); color: var(--accent); }
 
-.history-search { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.history-search { display: flex; align-items: center; gap: 8px; padding: 10px 22px; border-bottom: 1px solid var(--border); }
 .history-busy { font-size: var(--fs-sm); color: var(--text-faint); flex: 0 0 auto; }
 
-.history-list { flex: 1; overflow-y: auto; padding: 6px; display: grid; gap: 2px; align-content: start; }
+.history-list { flex: 1; overflow-y: auto; padding: 6px 12px; display: grid; gap: 2px; align-content: start; }
 
 .history-row {
   display: flex;
@@ -1770,12 +1801,12 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .settings-nav-text small { font-size: var(--fs-xs); color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .settings-nav .profile-nav-item.is-selected .settings-nav-text > span { color: var(--accent); }
 
-.settings-page { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 22px 28px; display: flex; flex-direction: column; gap: 22px; }
+.settings-page { flex: 1; min-width: 0; overflow-y: auto; scrollbar-gutter: stable; padding: 18px 22px 28px; display: flex; flex-direction: column; gap: 22px; }
 .settings-page > * { flex: none; }
 
-.settings-group { display: grid; gap: 10px; }
+.settings-group { display: grid; gap: 12px; }
 .settings-group + .settings-group { padding-top: 18px; border-top: 1px solid var(--border); }
-.settings-group > h3 { margin: 0; font-size: var(--fs-base); font-weight: 600; color: var(--text); }
+.settings-group > h3 { margin: 0; font-size: var(--fs-lg); font-weight: 600; color: var(--text); }
 .settings-group > .form-hint { margin-top: -4px; max-width: 62ch; }
 
 /* A setting: what it is on the left, the control on the right, lined up down the page. */
@@ -1831,8 +1862,8 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .cursor-glyph.is-underline { width: 0.6em; height: 2px; }
 .cursor-glyph.is-blinking { animation: cursor-blink 1.1s steps(1) infinite; }
 @keyframes cursor-blink { 50% { opacity: 0; } }
-.cursor-option .cursor-glyph { height: 0.95em; }
-.cursor-option .cursor-glyph.is-underline { height: 2px; }
+.cursor-option .cursor-glyph { height: 0.95em; vertical-align: middle; }
+.cursor-option .cursor-glyph.is-underline { height: 2px; align-self: flex-end; margin-bottom: 3px; }
 
 /* The terminal as it will look, pinned above its settings while they change. */
 .term-preview {
@@ -2160,10 +2191,10 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
   padding: 7px 9px 6px;
   border-bottom: 1px solid var(--border);
 }
-.files-root { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--text); padding: 0; }
+.files-root { display: flex; align-items: center; gap: 6px; font-size: var(--fs-md); font-weight: 600; color: var(--text); padding: 0; min-width: 0; }
 .files-root-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .files-caret { font-size: var(--fs-xs); color: var(--text-faint); }
-.files-root-path { font-size: var(--fs-sm); color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-root-path { display: block; min-width: 0; font-size: var(--fs-sm); color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .files-tree-scroll { flex: 1; overflow: auto; padding: 3px 0 8px; }
 .files-note { margin: 0; padding: 3px 6px; font-size: var(--fs-sm); color: var(--text-faint); }
@@ -2826,7 +2857,17 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .section-open .is-spinning { animation: section-spin 0.9s linear infinite; }
 @keyframes section-spin { to { transform: rotate(360deg); } }
 .sidebar-section-actions .link-btn { text-transform: none; letter-spacing: 0; font-size: var(--fs-sm); }
-.sidebar-section .tab-close { opacity: 0; font-size: var(--fs-base); }
+/* Hiding a section floats over the header's end on hover, so the header's own
+   actions — "+ Open", refresh — line up with the counts in the rows below. */
+.sidebar-section .tab-close {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  font-size: var(--fs-base);
+  background: var(--bg-panel);
+}
 .sidebar-section:hover .tab-close { opacity: 1; }
 /* A folded section still shows its count, which is most of why it is there. */
 .sidebar-section.is-collapsed { color: var(--text-dim); }
@@ -3066,16 +3107,16 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .monitor-stat {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 8px 10px;
+  gap: 2px;
+  padding: 9px 12px;
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   background: var(--bg-input);
 }
 
-.monitor-stat-label { font-size: var(--fs-sm); text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); }
+.monitor-stat-label { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); }
 .monitor-stat strong { font-size: var(--fs-xl); font-weight: 550; }
-.monitor-stat small { font-size: var(--fs-sm); color: var(--text-dim); }
+.monitor-stat small { font-size: var(--fs-sm); color: var(--text-faint); }
 
 /* The shape of the climb says more than any single number on it. */
 .monitor-curve-box {
@@ -3098,6 +3139,9 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 .monitor-tick { font-size: var(--fs-xs); fill: var(--text-dim); }
 .monitor-tick.is-warn { fill: var(--warn); }
 .monitor-tick.is-ceiling { fill: var(--danger); }
+/* Only the top of the drawing, not a limit: quiet. */
+.monitor-rule.is-scale { stroke: var(--border); }
+.monitor-tick.is-scale { fill: var(--text-faint); }
 .monitor-axis { font-size: var(--fs-xs); fill: var(--text-faint, var(--text-dim)); }
 
 /* Where it compacted. Without these the drops look like the session recovering. */
@@ -3624,7 +3668,7 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
   white-space: nowrap;
 }
 
-.extension-badge.is-on { border-color: var(--ok); color: var(--ok); }
+.extension-badge.is-on { border-color: transparent; color: var(--text-faint); padding-right: 0; }
 .extension-badge.is-update { border-color: var(--warn); color: var(--warn); }
 .extension-badge.is-gone { border-color: var(--danger); color: var(--danger); }
 .extension-badge.is-off { opacity: 0.7; }
@@ -3805,3 +3849,27 @@ button:focus-visible, [role='button']:focus-visible, .tab:focus-visible {
 /* Rows picked in a Files tree with ⌘-click or Shift-click: what Copy takes. */
 .files-row.is-picked { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
 .files-tree:focus { outline: none; }
+
+/* In a page of settings the switch is the control, so it is a size to aim at;
+   the 24×14 one stays for menus and toolbars. */
+.settings-row .checkbox input[type='checkbox'],
+.profile-form .checkbox input[type='checkbox'],
+.modal-scroll .checkbox input[type='checkbox'] { width: 30px; height: 18px; }
+.settings-row .checkbox input[type='checkbox']::after,
+.profile-form .checkbox input[type='checkbox']::after,
+.modal-scroll .checkbox input[type='checkbox']::after { width: 14px; height: 14px; }
+.settings-row .checkbox input[type='checkbox']:checked::after,
+.profile-form .checkbox input[type='checkbox']:checked::after,
+.modal-scroll .checkbox input[type='checkbox']:checked::after { transform: translateX(12px); }
+.monitor-foot .usage-footnote { border-top: 0; padding-top: 0; }
+.sidebar-item > svg { margin-top: calc(0.725em - 6px); flex: 0 0 auto; }
+.cluster-row { align-items: center; }
+.cluster-row .cluster-dot { margin-top: 0; }
+.files-root-line { min-width: 0; overflow: hidden; }
+.files-caret { display: inline-flex; align-items: center; }
+/* Chosen for the other mode but not on screen: marked, but not as loudly as the one in use. */
+.theme-card.is-selected:not(.is-in-use) { box-shadow: none; border-style: dashed; }
+.theme-card-name em.is-waiting { color: var(--text-faint); }
+.history-actions { flex: 0 0 160px; display: flex; justify-content: flex-end; align-items: center; gap: 6px; }
+/* An act that throws something away says so on hover, before it is armed. */
+.ghost-btn.is-risky:hover { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); }

@@ -241,7 +241,7 @@ function Actions({ sessionId, verdict }: { sessionId: string; verdict: SessionAn
         Interrupt
       </button>
       <button
-        className={`ghost-btn tiny${confirming === 'clear' ? ' is-danger' : ''}`}
+        className={`ghost-btn tiny is-risky${confirming === 'clear' ? ' is-danger' : ''}`}
         title="Type /clear. The conversation starts over in this same tab — everything said so far is gone from its context."
         onClick={() => {
           if (confirming !== 'clear') {
@@ -559,11 +559,14 @@ function Curve({
      * decision what gets forgotten", and until this was drawn the shape could
      * not answer it.
      */
-    const lines = [
+    const lines: Array<{ value: number; label: string; kind: 'warn' | 'auto' | 'ceiling' | 'scale' }> = [
       { value: ceiling * 0.6, label: '60%', kind: 'warn' as const },
       { value: ceiling * AUTO_COMPACT_AT, label: 'compacts itself', kind: 'auto' as const },
       { value: ceiling, label: tokens(ceiling), kind: 'ceiling' as const },
     ].filter((tick) => tick.value <= scaleTop * 1.001);
+    // A small conversation is drawn against its own peak, under every mark;
+    // the axis still says what its top is rather than leaving its gutter empty.
+    if (!lines.length) lines.push({ value: scaleTop, label: tokens(scaleTop), kind: 'scale' as const });
 
     return { top: scaleTop, xOf: x, yOf: y, path: line, area: filled, marks: compactions, ticks: lines };
   }, [points, verdict.compactions, verdict.context.window, verdict.context.peak, plot.w, plot.h]);

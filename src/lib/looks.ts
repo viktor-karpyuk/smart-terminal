@@ -1,6 +1,6 @@
 import type { Settings } from '../state/types';
 import { paletteById } from '../terminals/themes';
-import { setPreviewInk } from './preview';
+import { setPreviewInk, type PreviewInk } from './preview';
 
 /**
  * The whole look of the app, as one choice.
@@ -424,9 +424,7 @@ export function applyLook(settings: Settings) {
 
   root.style.setProperty('--ink-mix', dark ? '100%' : '62%');
 
-  const accent = settings.accent
-    ? readableOn(settings.accent, theme.tokens['bg-panel'], dark)
-    : theme.tokens.accent;
+  const accent = accentFor(settings, theme);
   root.style.setProperty('--accent', accent);
   root.style.setProperty('--accent-soft', withAlpha(accent, dark ? 0.16 : 0.12));
   root.style.setProperty(
@@ -439,6 +437,7 @@ export function applyLook(settings: Settings) {
   );
 
   const scale = settings.uiScale || 1;
+  root.style.setProperty('--ui-scale', String(scale));
   for (const [step, size] of Object.entries(TYPE_SCALE)) {
     root.style.setProperty(`--fs-${step}`, `${Math.round(size * scale * 2) / 2}px`);
   }
@@ -449,13 +448,39 @@ export function applyLook(settings: Settings) {
   root.style.setProperty('--r-lg', `${corners.lg}px`);
   root.style.setProperty('--r-modal', `${corners.modal}px`);
 
-  // Syntax colours for the editor and the previews, from the palette made for
-  // this theme — so code reads like the terminal beside it — and each one
-  // moved just far enough to read on the editor's background. Comments are
-  // meant to recede, so they are held to a lower bar.
+  for (const [name, colour] of Object.entries(syntaxFor(theme))) {
+    root.style.setProperty(`--syn-${name}`, colour);
+  }
+
+  // Previews are documents of their own, so they are handed the same colours.
+  setPreviewInk(previewInkFor(settings));
+
+  // One attribute that changes whenever any of this does, for the things that
+  // have to rebuild to follow it — an extension panel is its own document.
+  root.setAttribute(
+    'data-look',
+    [theme.id, accent, scale, settings.corners].join(' '),
+  );
+}
+
+/** The accent in force: the person's own, made readable on this theme, or the theme's. */
+function accentFor(settings: Settings, theme: InterfaceTheme) {
+  return settings.accent
+    ? readableOn(settings.accent, theme.tokens['bg-panel'], theme.mode === 'dark')
+    : theme.tokens.accent;
+}
+
+/**
+ * Syntax colours for the editor and the previews, from the palette made for
+ * this theme — so code reads like the terminal beside it — and each one moved
+ * just far enough to read on the editor's background. Comments are meant to
+ * recede, so they are held to a lower bar.
+ */
+function syntaxFor(theme: InterfaceTheme): Record<string, string> {
+  const dark = theme.mode === 'dark';
   const ink = paletteById(theme.palette)?.theme ?? {};
   const bg = theme.tokens.bg;
-  const syntax: Record<string, [string | undefined, number]> = {
+  const wanted: Record<string, [string | undefined, number]> = {
     keyword: [ink.magenta, 4],
     string: [ink.green, 4],
     number: [dark ? ink.brightYellow : ink.yellow, 4],
@@ -466,34 +491,37 @@ export function applyLook(settings: Settings) {
     invalid: [ink.red, 4],
     comment: [ink.brightBlack, 2.6],
   };
-  for (const [name, [colour, minimum]] of Object.entries(syntax)) {
-    if (colour) root.style.setProperty(`--syn-${name}`, readableOn(colour, bg, dark, minimum));
+  const out: Record<string, string> = { punct: theme.tokens['text-dim'] };
+  for (const [name, [colour, minimum]] of Object.entries(wanted)) {
+    if (colour) out[name] = readableOn(colour, bg, dark, minimum);
   }
-  root.style.setProperty('--syn-punct', theme.tokens['text-dim']);
+  return out;
+}
 
-  // Previews are documents of their own, so they are handed the same colours.
-  const syn = (name: string) => root.style.getPropertyValue(`--syn-${name}`);
-  setPreviewInk({
+/**
+ * The colours a preview is painted in, worked out from the settings alone.
+ *
+ * Not read back from the document: a preview rebuilt in the same render that
+ * changed the theme would otherwise be painted with the theme it is leaving,
+ * because the document is only restyled after that render.
+ */
+export function previewInkFor(settings: Settings): PreviewInk {
+  const theme = activeTheme(settings);
+  const syntax = syntaxFor(theme);
+  return {
     ink: theme.tokens.text,
     dim: theme.tokens['text-dim'],
     paper: theme.tokens.bg,
     rule: theme.tokens.border,
     inset: theme.tokens['bg-panel'],
-    link: accent,
-    key: syn('fn'),
-    str: syn('string'),
-    num: syn('number'),
-    cons: syn('keyword'),
-    quiet: syn('comment'),
-    tag: syn('tag'),
-  });
-
-  // One attribute that changes whenever any of this does, for the things that
-  // have to rebuild to follow it — an extension panel is its own document.
-  root.setAttribute(
-    'data-look',
-    [theme.id, accent, scale, settings.corners].join(' '),
-  );
+    link: accentFor(settings, theme),
+    key: syntax.fn,
+    str: syntax.string,
+    num: syntax.number,
+    cons: syntax.keyword,
+    quiet: syntax.comment,
+    tag: syntax.tag,
+  };
 }
 
 /* ---------- colour ---------- */

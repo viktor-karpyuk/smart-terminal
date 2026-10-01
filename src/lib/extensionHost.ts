@@ -1023,6 +1023,7 @@ export const THEME_TOKENS = [
   'violet',
   'on-accent',
   'radius',
+  'ui-scale',
 ];
 
 /** Read the app's own theme, to hand to a panel. */
@@ -1058,6 +1059,9 @@ export function panelDocument(body: string, theme: PanelTheme): string {
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
+  /* The interface text size, applied to the whole panel: its own pixel sizes
+     grow and shrink with the window's instead of staying where they were. */
+  html { zoom: var(--ui-scale, 1); }
   body {
     margin: 0;
     background: var(--bg);

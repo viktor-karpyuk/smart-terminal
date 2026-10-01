@@ -196,3 +196,12 @@ export const MaximizeIcon = ({ restore = false }: { restore?: boolean }) => (
 export const PlusIcon = () => <ToolIcon><path d="M7 2.6v8.8M2.6 7h8.8" /></ToolIcon>;
 export const ChevronDownIcon = () => <ToolIcon><path d="M4 5.6 7 8.6l3-3" /></ToolIcon>;
 export const MinimizeIcon = () => <ToolIcon><path d="M3 7h8" /></ToolIcon>;
+
+/** A small "more of these" caret, drawn so it sits on the text's centre line as ⌄ never did. */
+export function CaretIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M2.5 3.8 5 6.3l2.5-2.5" />
+    </svg>
+  );
+}

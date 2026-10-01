@@ -2,14 +2,14 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { startDrag } from '../lib/resize';
 import { useShallow } from 'zustand/react/shallow';
 import { asFilePanel, isDarkAppearance, useStore } from '../state/store';
-import { activeTheme } from '../lib/looks';
+import { activeTheme, previewInkFor } from '../lib/looks';
 import type { DirEntry } from '../global';
 import { GIT_TAB } from '../state/types';
 import { leafOfTab } from '../state/layout';
 import { Editor } from './Editor';
 import { Popover } from './Popover';
 import { FileIcon, colourFor } from '../lib/fileIcons';
-import { inkFor, previewDocument, previewKind } from '../lib/preview';
+import { previewDocument, previewKind, setPreviewInk } from '../lib/preview';
 import { renderWithExtension } from '../lib/extensionRender';
 import type { PreviewKind, PreviewRule } from '../lib/preview';
 import { GitPanel } from './GitPanel';
@@ -17,6 +17,7 @@ import { TerminalSlot } from './TerminalSlot';
 import { readAll } from '../terminals/registry';
 import { FILE_MIME } from '../lib/drag';
 import { isInside, nameProblem, parentOf } from '../lib/fileOps';
+import { CaretIcon } from './icons';
 
 /**
  * Entries whose row should open for renaming the moment it appears — a file
@@ -382,6 +383,7 @@ function Preview({ path, text, kind }: { path: string; text: string; kind: NonNu
   const dark = useStore((s) => isDarkAppearance(s.settings.theme));
   // The theme and the accent, so a preview is repainted when either changes.
   const look = useStore((s) => `${activeTheme(s.settings).id} ${s.settings.accent ?? ''}`);
+  const settings = useStore((s) => s.settings);
   const always = useStore((s) => s.settings.previewScripts);
   // Just this one, just this time: forgotten when the file changes or the tab closes.
   const [justThisOne, setJustThisOne] = useState(false);
@@ -405,7 +407,7 @@ function Preview({ path, text, kind }: { path: string; text: string; kind: NonNu
       return;
     }
     let alive = true;
-    renderWithExtension(kind, source, { path, text, dark, ink: inkFor(dark) })
+    renderWithExtension(kind, source, { path, text, dark, ink: previewInkFor(settings) })
       .then((html) => alive && setFromExtension({ html }))
       .catch((error: Error) => alive && setFromExtension({ error: error.message }));
     return () => {
@@ -414,7 +416,12 @@ function Preview({ path, text, kind }: { path: string; text: string; kind: NonNu
   }, [kind, source, path, text, dark, look]);
 
   const built = useMemo(
-    () => (source ? '' : previewDocument(path, text, dark, 3, kind)),
+    () => {
+      if (source) return '';
+      // Painted with this render's theme, not the one the document still shows.
+      setPreviewInk(previewInkFor(settings));
+      return previewDocument(path, text, dark, 3, kind);
+    },
     [source, path, text, dark, kind, look],
   );
 
@@ -561,7 +568,7 @@ function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string;
         </button>
         <button ref={buttonRef} className="files-root" title={root} onClick={() => setOpen((o) => !o)}>
           <span className="files-root-name">{root.split('/').filter(Boolean).pop() ?? root}</span>
-          <span className="files-caret">⌄</span>
+          <span className="files-caret"><CaretIcon /></span>
         </button>
       </div>
       <div className="files-root-line">
