@@ -1,5 +1,6 @@
 import { useStore } from '../state/store';
 import type { UsageReport } from '../global';
+import { legible } from '../lib/looks';
 
 /**
  * Plan limits per account: how much of the weekly allowance and of the current
@@ -18,12 +19,12 @@ export function UsagePanel() {
       <div className="modal modal-narrow" onMouseDown={(event) => event.stopPropagation()}>
         <header className="modal-header">
           <h2>Usage limits</h2>
-          <button className="ghost-btn tiny" onClick={close}>
+          <button className="ghost-btn tiny modal-close" onClick={close} aria-label="Close">
             &times;
           </button>
         </header>
 
-        <div className="usage-body">
+        <div className="modal-scroll">
           {profiles.map((profile) => {
             const report = usageByProfile[profile.id];
             const loading = usageLoading[profile.id];
@@ -33,7 +34,7 @@ export function UsagePanel() {
               <section className="usage-account" key={profile.id}>
                 <header className="usage-account-header">
                   <span className="tab-dot" style={{ background: profile.color }} />
-                  <span style={{ color: profile.color }}>{profile.name}</span>
+                  <span style={{ color: legible(profile.color) }}>{profile.name}</span>
                   <small>{authByProfile[profile.id]?.email ?? ''}</small>
                   <button
                     className="ghost-btn tiny"

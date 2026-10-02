@@ -4,13 +4,18 @@ import type { ReactNode } from 'react';
  * Small inline icons for the sidebar's tools. Drawn rather than borrowed from a
  * font so they line up at the same optical weight and follow `currentColor`.
  */
+/*
+ * One size and one weight for every icon in the activity bar. The Sessions and
+ * Folders glyphs are drawn on a 14-unit grid and these on a 16, so both are set
+ * to 17px with the stroke chosen to land at the same ~1.4px on screen.
+ */
 const base = {
-  width: 15,
-  height: 15,
+  width: 17,
+  height: 17,
   viewBox: '0 0 16 16',
   fill: 'none',
   stroke: 'currentColor',
-  strokeWidth: 1.4,
+  strokeWidth: 1.3,
   strokeLinecap: 'round' as const,
   strokeLinejoin: 'round' as const,
 };
@@ -52,7 +57,7 @@ export function MonitorIcon() {
  */
 export function ClustersIcon() {
   return (
-    <svg {...base} aria-hidden>
+    <svg {...base} viewBox="0 0 14 14" strokeWidth={1.15} aria-hidden>
       <circle cx="7" cy="7" r="5.1" />
       <circle cx="7" cy="7" r="1.7" />
       <path d="M7 1.9v3.4M7 8.7v3.4M1.9 7h3.4M8.7 7h3.4" />
@@ -105,7 +110,7 @@ export function SessionMark({ kind, color }: { kind: 'claude' | 'shell' | 'login
 /** Blocks that fit together — what an extension does to the app. */
 export function ExtensionsIcon() {
   return (
-    <svg {...base} aria-hidden>
+    <svg {...base} viewBox="0 0 14 14" strokeWidth={1.15} aria-hidden>
       <path d="M2 5.2h4.2v4.2H2zM7.8 2.6h4.2v4.2H7.8zM7.8 8.4h4.2v4.2H7.8z" />
     </svg>
   );
@@ -191,3 +196,12 @@ export const MaximizeIcon = ({ restore = false }: { restore?: boolean }) => (
 export const PlusIcon = () => <ToolIcon><path d="M7 2.6v8.8M2.6 7h8.8" /></ToolIcon>;
 export const ChevronDownIcon = () => <ToolIcon><path d="M4 5.6 7 8.6l3-3" /></ToolIcon>;
 export const MinimizeIcon = () => <ToolIcon><path d="M3 7h8" /></ToolIcon>;
+
+/** A small "more of these" caret, drawn so it sits on the text's centre line as ⌄ never did. */
+export function CaretIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M2.5 3.8 5 6.3l2.5-2.5" />
+    </svg>
+  );
+}

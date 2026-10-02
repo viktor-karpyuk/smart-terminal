@@ -10,6 +10,7 @@ import { compactPath } from '../lib/labels';
 import { PathLabel } from './PathLabel';
 import { Popover } from './Popover';
 import { AccountsIcon, AppearanceIcon, ClustersIcon, ExtensionsIcon, HistoryIcon, MonitorIcon, UsageIcon, OpenInSectionIcon, RefreshIcon } from './icons';
+import { legible } from '../lib/looks';
 
 /**
  * The narrowest the sidebar will sit at. With the switches down to icons what
@@ -298,7 +299,7 @@ function Folders() {
       {groups.map(([repo, ids]) => (
         <div className="sidebar-group" key={repo || 'loose'}>
           <div className="sidebar-group-header" title={repo || 'Not in a git repository'}>
-            <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke={repo ? '#e0af68' : '#565f79'} strokeWidth="1.3">
+            <svg width="11" height="11" viewBox="0 0 14 14" fill="none" strokeWidth="1.3" style={{ stroke: repo ? 'var(--git-new)' : 'var(--text-faint)' }}>
               {repo ? (
                 <>
                   <circle cx="3.6" cy="3.2" r="1.7" />
@@ -310,7 +311,7 @@ function Folders() {
                 <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
               )}
             </svg>
-            <span style={{ color: repo ? '#e0af68' : undefined }}>
+            <span className="sidebar-group-name" style={{ color: repo ? 'var(--git-new)' : undefined }}>
               {repo ? (repo.split('/').filter(Boolean).pop() ?? repo) : 'Not in a repository'}
             </span>
             <span className="sidebar-group-count">{ids.length}</span>
@@ -351,12 +352,17 @@ function FolderItem({ panelId, homedir }: { panelId: string; homedir: string }) 
         if (leaf) focusPanel(leaf.id, panelId);
       }}
     >
-      <svg width="12" height="12" viewBox="0 0 14 14" fill="#7aa2f7" stroke="none" style={{ flex: '0 0 auto' }}>
+      <svg width="12" height="12" viewBox="0 0 14 14" stroke="none" style={{ fill: 'var(--accent)', flex: '0 0 auto' }}>
         <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
       </svg>
       <div className="sidebar-item-text">
         <span className="sidebar-item-title">{root.split('/').filter(Boolean).pop() ?? root}</span>
-        <PathLabel path={short} home={homedir} className="sidebar-item-path" />
+        {/* Where it is, not its name again: the title above already says that. */}
+        <PathLabel
+          path={short.slice(0, short.replace(/\/+$/, '').lastIndexOf('/')) || short}
+          home={homedir}
+          className="sidebar-item-path"
+        />
       </div>
       {changed > 0 && <span className="sidebar-changed" title={`${changed} changed`}>{changed}</span>}
       {unsaved && <span className="files-dirty" title="unsaved changes" />}
@@ -481,7 +487,7 @@ export function Sidebar() {
                         title={auth?.loggedIn ? `Signed in as ${auth.email}` : 'Not signed in'}
                       >
                         <span className="tab-dot" style={{ background: profile.color }} />
-                        <span style={{ color: profile.color }}>{profile.name}</span>
+                        <span className="sidebar-group-name" style={{ color: legible(profile.color) }}>{profile.name}</span>
                         <span className="sidebar-group-account">{auth?.loggedIn ? auth.email : ''}</span>
                         <span className="sidebar-group-count">{ids.length}</span>
                       </div>
@@ -906,7 +912,7 @@ function LauncherButton({ viewId, title, icon }: { viewId: string; title: string
  */
 function TeamsIcon() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
       {/* The square and the T are one path, so the T is a hole rather than a stroke. */}
       <path fillRule="evenodd" d="M11.5 4h8a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5h-8a2.5 2.5 0 0 1-2.5-2.5v-11a2.5 2.5 0 0 1 2.5-2.5zM12.3 7.5h6.4v1.8h-2.3v7.2h-1.8v-7.2h-2.3z" />
       <circle cx="5.7" cy="5.9" r="3.1" />
@@ -918,7 +924,7 @@ function TeamsIcon() {
 /** A paper plane: something being sent somewhere, in the stroke the rest use. */
 function SendIcon() {
   return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.95" strokeLinecap="round" strokeLinejoin="round">
       <path d="M22 2 11 13" />
       <path d="M22 2 15 22l-4-9-9-4z" />
     </svg>
@@ -927,7 +933,7 @@ function SendIcon() {
 
 function ReviewIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
+    <svg width="17" height="17" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round">
       <circle cx="3.2" cy="3" r="1.3" />
       <circle cx="3.2" cy="11" r="1.3" />
       <path d="M3.2 4.3v5.4M3.2 7.6c0-1.6 1.2-2.4 2.8-2.4" />
@@ -977,7 +983,7 @@ function ActivityBar() {
         aria-pressed={settings.sidebarShowSessions}
         onClick={() => updateSettings({ sidebarShowSessions: !settings.sidebarShowSessions })}
       >
-        <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2">
+        <svg width="17" height="17" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.15">
           <rect x="1.4" y="2.4" width="11.2" height="9.2" rx="1.6" />
           <path d="M4 6.2l1.8 1.6L4 9.4M7.6 9.6h2.6" />
         </svg>
@@ -991,7 +997,7 @@ function ActivityBar() {
         aria-pressed={settings.sidebarShowFolders}
         onClick={() => updateSettings({ sidebarShowFolders: !settings.sidebarShowFolders })}
       >
-        <svg width="18" height="18" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2">
+        <svg width="17" height="17" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.15">
           <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
         </svg>
         {folderCount > 0 && <span className="activity-count">{folderCount}</span>}
@@ -1045,7 +1051,7 @@ function ActivityBar() {
       <button className="activity" onClick={() => setHistoryOpen(true)} data-tip="History (⌘Y)" aria-label="History">
         <HistoryIcon />
       </button>
-      <button className="activity" onClick={() => setAppearanceOpen(true)} data-tip="Appearance (⇧⌘,)" aria-label="Appearance">
+      <button className="activity" onClick={() => setAppearanceOpen(true)} data-tip="Settings (⇧⌘,)" aria-label="Settings">
         <AppearanceIcon />
       </button>
     </nav>

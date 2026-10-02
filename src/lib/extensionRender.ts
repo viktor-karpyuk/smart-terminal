@@ -1,3 +1,5 @@
+import type { PreviewInk } from './preview';
+
 /**
  * Running the code an extension brought with it.
  *
@@ -67,7 +69,11 @@ export function keepOnlyExtensions(kinds: string[]) {
   for (const kind of [...live.keys()]) if (!wanted.has(kind)) dropExtension(kind);
 }
 
-export type RenderInput = { path: string; text: string; dark: boolean };
+/**
+ * What a renderer is given. `ink` is the app's current colours, so a renderer
+ * that wants to can look like the window it is in; older ones ignore it.
+ */
+export type RenderInput = { path: string; text: string; dark: boolean; ink?: PreviewInk };
 
 /**
  * Ask an extension to render a document.

@@ -1,6 +1,7 @@
 import { useShallow } from 'zustand/react/shallow';
 import { useStore } from '../state/store';
 import { sessionLabel } from '../lib/labels';
+import { legible } from '../lib/looks';
 
 /**
  * Closing kills running processes, so it is always asked about first — for one
@@ -58,7 +59,7 @@ function SessionBody({ sessionId }: { sessionId: string }) {
   return (
     <>
       <h3>
-        Close <span style={{ color: profile?.color }}>{sessionLabel(session, homedir)}</span>?
+        Close <span style={{ color: legible(profile?.color ?? '') }}>{sessionLabel(session, homedir)}</span>?
       </h3>
       <p>
         {session.kind === 'claude'
@@ -85,7 +86,7 @@ function GroupBody({ groupId, sessionIds }: { groupId: string; sessionIds: strin
     <>
       <h3>
         Close everything in{' '}
-        <span style={{ color: group.color }}>
+        <span style={{ color: legible(group.color) }}>
           <i className="group-dot" style={{ background: group.color, marginRight: 6 }} />
           {group.name}
         </span>

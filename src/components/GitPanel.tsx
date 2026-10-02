@@ -97,7 +97,7 @@ function BranchBar({ panelId, root }: { panelId: string; root: string }) {
         <BranchMenu panelId={panelId} root={root} anchorEl={chipRef.current} onClose={() => setOpen(false)} />
       )}
       <button ref={chipRef} className="git-branch" onClick={() => setOpen((was) => !was)} title="Branches">
-        <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="#e0af68" strokeWidth="1.3">
+        <svg width="12" height="12" viewBox="0 0 14 14" fill="none" strokeWidth="1.3" style={{ stroke: 'var(--git-new)' }}>
           <circle cx="3.6" cy="3.2" r="1.7" />
           <circle cx="3.6" cy="10.8" r="1.7" />
           <circle cx="10.4" cy="6.4" r="1.7" />
@@ -601,8 +601,28 @@ function TreeRow({
   );
 }
 
+/**
+ * Lane colours, from the theme rather than from the layout.
+ *
+ * The layout still sends a colour per lane, picked for dark themes; thin lines
+ * in it vanish on a light one. The lane's index is all that is needed, and the
+ * theme's own semantic colours are already chosen to read on its background.
+ * Lane 0 is the accent, which is where HEAD usually runs.
+ */
+const LANE_INK = [
+  'var(--accent)',
+  'var(--ok)',
+  'var(--violet)',
+  'var(--warn)',
+  'var(--info)',
+  'var(--danger)',
+  'var(--syn-number)',
+  'var(--syn-type)',
+];
+const laneInk = (lane: number) => LANE_INK[lane % LANE_INK.length];
+
 const LETTER_COLOUR: Record<string, string> = {
-  A: '#9ece6a', M: '#7aa2f7', D: '#f7768e', R: '#bb9af7', C: '#bb9af7', '?': '#e0af68', '!': '#f7768e',
+  A: 'var(--ok)', M: 'var(--accent)', D: 'var(--danger)', R: 'var(--violet)', C: 'var(--violet)', '?': 'var(--git-new)', '!': 'var(--danger)',
 };
 
 /** What each letter means, for the people who have not memorised git's alphabet. */
@@ -1026,7 +1046,7 @@ function FileRow({
         // Untracked takes its colour from the row instead, so that the letter and
         // the name are one mark rather than two, and so the light theme can pick
         // a tone that can actually be read on white.
-        style={file.untracked ? undefined : { color: LETTER_COLOUR[file.letter] ?? '#7b849c' }}
+        style={file.untracked ? undefined : { color: LETTER_COLOUR[file.letter] ?? 'var(--text-dim)' }}
         title={LETTER_MEANS[file.letter] ?? undefined}
       >
         {file.letter}
@@ -1321,7 +1341,7 @@ function Lanes({ commit, index, commits }: { commit: GitCommit; index: number; c
           y1={y - ROW / 2}
           x2={x(lane.lane)}
           y2={y + ROW / 2}
-          stroke={lane.colour}
+          style={{ stroke: laneInk(lane.lane) }}
         />
       ))}
 
@@ -1331,17 +1351,22 @@ function Lanes({ commit, index, commits }: { commit: GitCommit; index: number; c
         // not simply stop in mid-air at the bottom of the list.
         const endY = target === -1 ? y + ROW : target * ROW + ROW / 2;
         return edge.from === edge.to ? (
-          <line key={edge.sha + edge.to} x1={x(edge.from)} y1={y} x2={x(edge.to)} y2={endY} stroke={edge.colour} />
+          <line key={edge.sha + edge.to} x1={x(edge.from)} y1={y} x2={x(edge.to)} y2={endY} style={{ stroke: laneInk(edge.to) }} />
         ) : (
           <path
             key={edge.sha + edge.to}
             d={`M${x(edge.from)} ${y} C ${x(edge.from)} ${y + ROW * 0.6}, ${x(edge.to)} ${endY - ROW * 0.6}, ${x(edge.to)} ${endY}`}
-            stroke={edge.colour}
+            style={{ stroke: laneInk(edge.to) }}
           />
         );
       })}
 
-      <circle cx={x(commit.lane)} cy={y} r={commit.merge ? 5 : 4} fill={commit.merge ? commit.colour : '#0b0d13'} stroke={commit.colour} />
+      <circle
+        cx={x(commit.lane)}
+        cy={y}
+        r={commit.merge ? 5 : 4}
+        style={{ stroke: laneInk(commit.lane), fill: commit.merge ? laneInk(commit.lane) : 'var(--bg)' }}
+      />
     </g>
   );
 }
@@ -1527,7 +1552,7 @@ function Branches({ panelId }: { panelId: string }) {
         {repo?.tags.slice(0, 20).map((tag) => (
           <div key={tag.name} className="git-row is-quiet">
             <span className="git-tick" />
-            <span className="git-file-name" style={{ color: '#e0af68' }}>{tag.name}</span>
+            <span className="git-file-name" style={{ color: 'var(--warn)' }}>{tag.name}</span>
           </div>
         ))}
 

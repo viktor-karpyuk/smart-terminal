@@ -419,6 +419,26 @@ export interface Settings {
   recordCommandOutput: boolean;
   /** Interface appearance. `system` follows the OS setting. */
   theme: 'system' | 'light' | 'dark';
+  /**
+   * The interface theme used when the app is dark, and the one used when it is
+   * light. Two, not one, so that following the system can still honour a
+   * choice: the app moves between them as the OS does.
+   */
+  darkTheme: string;
+  lightTheme: string;
+  /** An accent of the person's own over the theme's, or null for the theme's. */
+  accent: string | null;
+  /** How big the interface's own text is, as a factor of the type scale. */
+  uiScale: number;
+  /** How rounded panels, buttons and menus are. */
+  corners: 'square' | 'soft' | 'round';
+  /** Terminal line height, as a multiple of the font size. */
+  terminalLineHeight: number;
+  /** Extra space between characters, in pixels. */
+  terminalLetterSpacing: number;
+  /** The weight regular text is drawn at; bold is drawn one step heavier. */
+  terminalFontWeight: '300' | '400' | '500';
+  cursorStyle: 'bar' | 'block' | 'underline';
   /** Terminal palette id, or `follow-app` to track the interface. */
   terminalPalette: string;
   /** Hand-picked colours layered over the chosen palette. */

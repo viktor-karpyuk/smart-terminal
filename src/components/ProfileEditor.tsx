@@ -120,14 +120,16 @@ export function ProfileEditor() {
 
   return (
     <div className="modal-backdrop" onMouseDown={close}>
-      <div className="modal" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="modal settings" onMouseDown={(event) => event.stopPropagation()}>
         <header className="modal-header">
           <h2>Accounts</h2>
-          <button className="ghost-btn tiny" onClick={close}>×</button>
+          <button className="ghost-btn tiny modal-close" onClick={close} aria-label="Close">
+            &times;
+          </button>
         </header>
 
-        <div className="modal-body">
-          <nav className="profile-nav">
+        <div className="modal-body settings-body">
+          <nav className="profile-nav settings-nav">
             {profiles.map((profile) => {
               const auth = authByProfile[profile.id];
               return (
@@ -307,18 +309,15 @@ export function ProfileEditor() {
                       ))}
                   </select>
                 </label>
-                <label className="field checkbox-field">
-                  <span>Automatically</span>
-                  <label className="checkbox">
-                    <input
-                      type="checkbox"
-                      checked={settings.autoHandoff}
-                      onChange={(e) => updateSettings({ autoHandoff: e.target.checked })}
-                    />
-                    <span>Move without asking (applies to every account)</span>
-                  </label>
-                </label>
               </div>
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={settings.autoHandoff}
+                  onChange={(e) => updateSettings({ autoHandoff: e.target.checked })}
+                />
+                <span>Move without asking (applies to every account)</span>
+              </label>
             </section>
 
             <section className="form-section">
@@ -380,28 +379,29 @@ export function ProfileEditor() {
               </label>
             </section>
 
-            <div className="modal-actions">
-              {saved && profiles.length > 1 && (
-                <button
-                  className="danger-btn"
-                  onClick={async () => {
-                    await removeProfile(saved.id);
-                    setSelectedId(null);
-                    setDirTouched(false);
-                    setDraft(blank());
-                  }}
-                >
-                  Delete
-                </button>
-              )}
-              <span className="spacer" />
-              <button className="ghost-btn" onClick={close}>Cancel</button>
-              <button className="primary-btn" onClick={save} disabled={!draft.name?.trim()}>
-                Save
-              </button>
-            </div>
           </div>
         </div>
+        {/* Outside the scroll, so Save is always where the hand expects it. */}
+      <div className="modal-foot">
+        {saved && profiles.length > 1 && (
+          <button
+            className="danger-btn"
+            onClick={async () => {
+              await removeProfile(saved.id);
+              setSelectedId(null);
+              setDirTouched(false);
+              setDraft(blank());
+            }}
+          >
+            Delete
+          </button>
+        )}
+        <span className="spacer" />
+        <button className="ghost-btn" onClick={close}>Cancel</button>
+        <button className="primary-btn" onClick={save} disabled={!draft.name?.trim()}>
+          Save
+        </button>
+      </div>
       </div>
     </div>
   );
@@ -457,10 +457,12 @@ function AuthPanel({
       </div>
 
       <div className="auth-actions">
-        <button className="ghost-btn tiny" onClick={onCheck} disabled={probing}>
+        <button className="ghost-btn" onClick={onCheck} disabled={probing}>
           {probing ? 'Checking…' : 'Check'}
         </button>
-        <button className="primary-btn" onClick={onSignIn} disabled={!canSignIn}>
+        {/* The loud button only when signing in is what this account needs; signed in,
+            it is an alternative, and Save below is the thing to press. */}
+        <button className={state === 'in' ? 'ghost-btn' : 'primary-btn'} onClick={onSignIn} disabled={!canSignIn}>
           {state === 'in' ? 'Sign in as someone else' : 'Sign in…'}
         </button>
       </div>

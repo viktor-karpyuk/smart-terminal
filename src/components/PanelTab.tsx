@@ -73,7 +73,7 @@ export function PanelTab({
   return (
     <div
       className={`tab${selected ? ' tab-selected' : ''}`}
-      style={{ boxShadow: selected ? 'inset 0 -2px 0 #7aa2f7' : undefined }}
+      style={{ boxShadow: selected ? 'inset 0 -2px 0 var(--accent)' : undefined }}
       title={
         monitor
           ? 'How every session is behaving'
@@ -103,7 +103,7 @@ export function PanelTab({
         setMenuAt({ x: event.clientX, y: event.clientY });
       }}
     >
-      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="#7aa2f7" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" style={{ stroke: 'var(--accent)' }}>
         {view ? (
           // The helm, when it is a cluster; the extension's blocks otherwise.
           view.root && view.viewId === 'kubernetes' ? (

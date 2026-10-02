@@ -17,6 +17,10 @@ import { ExtensionsPanel } from './ExtensionsPanel';
 import { ExtensionView } from './ExtensionView';
 import { PlusIcon, ChevronDownIcon, MinimizeIcon, MaximizeIcon } from './icons';
 import { PanelTab } from './PanelTab';
+import { legible } from '../lib/looks';
+import { Popover } from './Popover';
+import { sessionLabel } from '../lib/labels';
+import { panelLabel } from '../state/store';
 
 export function Pane({ leaf }: { leaf: LeafNode }) {
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -108,15 +112,33 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
       : null;
   });
 
+  /*
+   * Whether the tabs no longer fit. Tabs keep a readable width and the strip
+   * scrolls instead of squeezing every title to a letter — so what is measured
+   * is overflow, which also brings out the list of every tab and the fade at
+   * the edge that says there is more.
+   */
   useEffect(() => {
     const strip = stripRef.current;
     if (!strip) return;
-    const measure = () => setTight(strip.clientWidth / Math.max(1, leaf.tabs.length) < 120);
+    const measure = () => setTight(strip.scrollWidth > strip.clientWidth + 1);
     measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(strip);
-    return () => observer.disconnect();
+    const resize = new ResizeObserver(measure);
+    resize.observe(strip);
+    const children = new MutationObserver(measure);
+    children.observe(strip, { childList: true, subtree: true, characterData: true });
+    return () => {
+      resize.disconnect();
+      children.disconnect();
+    };
   }, [leaf.tabs.length]);
+
+  // The tab in front is always in view, wherever the strip was scrolled to.
+  useEffect(() => {
+    stripRef.current
+      ?.querySelector('.tab-selected')
+      ?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  }, [leaf.active, tight]);
 
   const isActive = activeLeafId === leaf.id;
   const activeSession = useStore((s) => (leaf.active ? (s.sessions[leaf.active] ?? null) : null));
@@ -248,8 +270,12 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
     >
       <header className="tabstrip">
         <div
-          className="tabs"
+          className={`tabs${tight ? ' is-overflowing' : ''}`}
           ref={stripRef}
+          // A mouse wheel scrolls up and down; the strip only goes sideways.
+          onWheel={(event) => {
+            if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) event.currentTarget.scrollLeft += event.deltaY;
+          }}
           onDragOver={onTabStripOver}
           onDragLeave={(event) => {
             if (!event.currentTarget.contains(event.relatedTarget as Node)) setDropIndex(null);
@@ -287,7 +313,9 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
             className={`tab-tail${lifting ? ' is-lifting' : ''}`}
             onDoubleClick={quickNewTab}
             draggable={leaf.tabs.length > 0}
-            data-tip="Drag to trade places with another section"
+            // A title, not a tip: the strip scrolls sideways, and a tip drawn
+            // beside it is clipped and adds room to scroll into.
+            title="Drag to trade places with another section"
             onDragStart={(event) => {
               event.dataTransfer.setData(PANE_MIME, leaf.id);
               event.dataTransfer.effectAllowed = 'move';
@@ -307,6 +335,7 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
               &times;
             </button>
           )}
+          {tight && <TabList leafId={leaf.id} tabs={leaf.tabs} active={leaf.active} />}
           <GroupTheseTabs leafId={leaf.id} tabs={leaf.tabs} />
           <button
             className="icon-btn"
@@ -431,8 +460,9 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
 
       {activeSession && !panelIds.includes(leaf.active ?? '') && (
         <footer className="pane-status">
-          <span className="status-profile" style={{ color: activeProfile?.color }}>
-            ● {activeProfile?.name ?? 'account'}
+          <span className="status-profile" style={{ color: legible(activeProfile?.color ?? '') }}>
+            <span className="tab-dot" style={{ background: activeProfile?.color }} />
+            {activeProfile?.name ?? 'account'}
           </span>
           <PathLabel path={activeSession.cwd} home={homedir} className="status-cwd" />
           <span
@@ -526,5 +556,58 @@ function EmptyPane({ leafId }: { leafId: string }) {
         <NewSessionMenu leafId={leafId} anchorEl={buttonRef.current} onClose={() => setOpen(false)} />
       )}
     </div>
+  );
+}
+
+/**
+ * Every tab in this section, by name, once they no longer all fit.
+ *
+ * The strip scrolls, but a scrolled-away tab is out of mind as well as out of
+ * sight; this is one click to any of them, with the whole title.
+ */
+function TabList({ leafId, tabs, active }: { leafId: string; tabs: string[]; active: string | null }) {
+  const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const names = useStore(
+    useShallow((s) =>
+      tabs.map((id) =>
+        s.sessions[id] ? sessionLabel(s.sessions[id], s.homedir) : panelLabel(s.panels[id]),
+      ),
+    ),
+  );
+  const focusSession = useStore((s) => s.focusSession);
+  const focusPanel = useStore((s) => s.focusPanel);
+  const isPanel = useStore(useShallow((s) => tabs.map((id) => Boolean(s.panels[id]))));
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        className={`icon-btn tab-list-btn${open ? ' is-on' : ''}`}
+        title="Every tab in this section"
+        aria-label="Every tab in this section"
+        onClick={() => setOpen((was) => !was)}
+      >
+        ⋯ <small>{tabs.length}</small>
+      </button>
+      {open && (
+        <Popover anchorEl={buttonRef.current} menu onClose={() => setOpen(false)}>
+          {tabs.map((id, index) => (
+            <button
+              key={id}
+              className={`menu-item${id === active ? ' is-current' : ''}`}
+              onClick={() => {
+                setOpen(false);
+                if (isPanel[index]) focusPanel(leafId, id);
+                else focusSession(id);
+              }}
+            >
+              <span>{names[index]}</span>
+              {id === active && <kbd>in front</kbd>}
+            </button>
+          ))}
+        </Popover>
+      )}
+    </>
   );
 }

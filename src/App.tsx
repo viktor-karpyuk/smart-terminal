@@ -1,9 +1,10 @@
 import { useEffect } from 'react';
 import { startDrag } from './lib/resize';
-import { isDarkAppearance, useStore } from './state/store';
+import { terminalLook, useStore } from './state/store';
+import { applyLook } from './lib/looks';
 import { findLeaf } from './state/layout';
 import { GIT_TAB } from './state/types';
-import { copySelection, focusedTerminalId, getTerminal, selectAllIn } from './terminals/registry';
+import { applyAppearance, copySelection, focusedTerminalId, getTerminal, selectAllIn } from './terminals/registry';
 import { LayoutView } from './components/LayoutView';
 import { Pane } from './components/Pane';
 import { Sidebar, SIDEBAR_MIN } from './components/Sidebar';
@@ -36,20 +37,33 @@ export function App() {
 
   useEffect(() => window.api.onMenuAction(({ id }) => handleMenuAction(id)), []);
 
-  // Stamp the resolved appearance on the root so the token palette switches, and
-  // keep following the OS while the setting says `system`.
+  // The platform on the root, for the few rules that differ — the title bar
+  // only leaves room for traffic lights where there are traffic lights.
   useEffect(() => {
-    const apply = () =>
-      document.documentElement.setAttribute(
-        'data-theme',
-        isDarkAppearance(settings.theme) ? 'dark' : 'light',
-      );
-    apply();
+    document.documentElement.dataset.platform = window.api.platform;
+  }, []);
+
+  // Stamp the look on the root so every token follows it, and keep following
+  // the OS while the setting says `system`.
+  useEffect(() => {
+    const apply = () => {
+      applyLook(useStore.getState().settings);
+      // "Follow the interface" follows the theme, which the OS may just have changed.
+      applyAppearance(terminalLook(useStore.getState().settings));
+    };
+    applyLook(settings);
     if (settings.theme !== 'system') return;
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     media.addEventListener('change', apply);
     return () => media.removeEventListener('change', apply);
-  }, [settings.theme]);
+  }, [
+    settings.theme,
+    settings.darkTheme,
+    settings.lightTheme,
+    settings.accent,
+    settings.uiScale,
+    settings.corners,
+  ]);
 
   /*
    * The editors' size, on the root where every editor can see it.

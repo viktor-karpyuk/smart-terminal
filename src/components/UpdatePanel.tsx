@@ -28,11 +28,11 @@ export function UpdatePanel() {
       <div className="modal modal-narrow" onMouseDown={(event) => event.stopPropagation()}>
         <header className="modal-header">
           <h2>Updates</h2>
-          <button className="ghost-btn tiny" onClick={close}>
+          <button className="ghost-btn tiny modal-close" onClick={close} aria-label="Close">
             &times;
           </button>
         </header>
-        <div className="usage-body update-body">
+        <div className="modal-scroll">
           {update ? <UpdateBody update={update} /> : <p className="update-quiet">Starting up…</p>}
         </div>
       </div>
@@ -92,6 +92,7 @@ function UpdateBody({ update }: { update: UpdateState }) {
       <ExtensionUpdates />
 
       <section className="form-section update-settings">
+        <h3>Checking</h3>
         <label className="checkbox">
           <input
             type="checkbox"
@@ -106,7 +107,10 @@ function UpdateBody({ update }: { update: UpdateState }) {
             checked={update.prereleases}
             onChange={(event) => api.configure({ prereleases: event.target.checked })}
           />
-          <span>Include pre-releases — early builds, and not always the steadier one</span>
+          <span>
+            Include pre-releases
+            <small className="checkbox-hint">Early builds — not always the steadier one.</small>
+          </span>
         </label>
         <p className="update-quiet">
           {update.checkedAt ? `Last checked ${new Date(update.checkedAt).toLocaleString()}.` : 'Not checked yet.'}

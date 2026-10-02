@@ -8,7 +8,7 @@
 
   .top {
     display: flex; align-items: center; gap: 8px;
-    padding: 7px 10px; border-bottom: 1px solid var(--border);
+    padding: 7px 12px; border-bottom: 1px solid var(--border);
     background: var(--bg-panel); flex-wrap: wrap;
   }
   .top .name { font-weight: 600; }
@@ -16,28 +16,36 @@
   .spacer { flex: 1; }
 
   .btn {
-    padding: 4px 9px; border: 1px solid var(--border); border-radius: var(--radius);
-    color: var(--text-dim); white-space: nowrap; background: transparent; font: inherit; cursor: pointer;
+    padding: 4px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius);
+    color: var(--text); white-space: nowrap; background: transparent; font: inherit; cursor: pointer;
   }
-  .btn:hover { color: var(--text); border-color: var(--border-strong); background: var(--bg-elevated); }
-  .btn.on { color: var(--accent); border-color: var(--accent); }
-  .btn.go { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
+  .btn:hover { border-color: var(--text-faint); background: var(--bg-elevated); }
+  .btn.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+  .btn.go { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--border-strong)); }
   .btn.go:hover { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+  /* Run is what the head is for: filled, like the app's own primary buttons. */
+  .btn.go#run { color: var(--on-accent, #fff); background: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .btn.go#run:hover { background: color-mix(in srgb, var(--accent) 88%, var(--text)); }
+  /* The tab bar's tools sit quieter than the head's actions. */
+  .tabs .btn { border-color: var(--border); color: var(--text-dim); }
+  .tabs .btn:hover { color: var(--text); border-color: var(--border-strong); }
+  .tabs .btn.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); }
   .btn.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
   .btn.bad:hover { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
-  .btn[disabled] { opacity: 0.4; pointer-events: none; }
+  .btn[disabled] { opacity: 0.45; pointer-events: none; }
   .btn.small { padding: 2px 7px; font-size: 11px; }
 
   .body { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 0; overflow: hidden; }
 
   nav { border-right: 1px solid var(--border); overflow: auto; background: var(--bg-panel); }
-  nav .group { padding: 8px 10px 3px; color: var(--text-faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; }
+  nav .group { padding: 10px 12px 4px; color: var(--text-faint); font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   nav .item {
     display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: center;
-    padding: 6px 10px; cursor: pointer; border-left: 2px solid transparent;
+    padding: 6px 12px 6px 10px; cursor: pointer; border-left: 2px solid transparent;
   }
   nav .item:hover { background: var(--bg-elevated); }
   nav .item.is-selected { background: var(--accent-soft); border-left-color: var(--accent); }
+  nav .item.is-selected .label .n { font-weight: 600; }
   nav .item .label { min-width: 0; }
   nav .item .label .n { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   nav .item .label .s { display: block; color: var(--text-faint); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -46,7 +54,7 @@
 
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); opacity: 0.5; }
   .dot.up { background: var(--ok); opacity: 1; }
-  .dot.busy { background: #d9a441; opacity: 1; animation: pulse 1.2s ease-in-out infinite; }
+  .dot.busy { background: var(--warn, #d9a441); opacity: 1; animation: pulse 1.2s ease-in-out infinite; }
   .dot.bad { background: var(--danger); opacity: 1; }
   .dot.off { background: var(--text-faint); opacity: 0.7; }
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
@@ -56,7 +64,7 @@
     display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
     padding: 8px 12px; border-bottom: 1px solid var(--border);
   }
-  .head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+  .head h2 { margin: 0 4px 0 0; font-size: 14px; font-weight: 600; }
   .tagline { color: var(--text-faint); font-size: 11px; }
   .tag {
     padding: 1px 6px; border-radius: 999px; font-size: 10.5px;
@@ -64,7 +72,7 @@
   }
   .pill { padding: 2px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--border); color: var(--text-dim); }
   .pill.up { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
-  .pill.busy { color: #d9a441; border-color: color-mix(in srgb, #d9a441 45%, var(--border)); }
+  .pill.busy { color: var(--warn, #d9a441); border-color: color-mix(in srgb, var(--warn, #d9a441) 45%, var(--border)); }
   .pill.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); }
   .url { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--accent); cursor: pointer; }
   .url:hover { text-decoration: underline; }
@@ -104,14 +112,15 @@
   .a-u { text-decoration: underline; }
   .a-red { color: var(--danger); }
   .a-green { color: var(--ok); }
-  .a-yellow { color: #d9a441; }
+  .a-yellow { color: var(--warn, #d9a441); }
   .a-blue { color: var(--accent); }
-  .a-magenta { color: #b48ead; }
-  .a-cyan { color: #5fb3b3; }
+  .a-magenta { color: var(--violet, #b48ead); }
+  .a-cyan { color: var(--info, #5fb3b3); }
   .a-white { color: var(--text); }
   .a-black { color: var(--text-dim); }
-  .console-empty { padding: 30px 14px; color: var(--text-dim); line-height: 1.6; max-width: 560px; }
-  .console-empty code { font-family: ui-monospace, Menlo, monospace; background: var(--bg-elevated); padding: 1px 5px; border-radius: 3px; }
+  .console-empty { padding: 28px 16px; color: var(--text-dim); line-height: 1.7; max-width: 620px; }
+  .console-empty b { color: var(--text); font-weight: 600; }
+  .console-empty code { font-family: ui-monospace, Menlo, monospace; background: var(--bg-elevated); padding: 1px 5px; border-radius: calc(var(--radius, 8px) / 2); }
 
   /* The configuration. */
   form.config { padding: 12px 14px 24px; display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 10px 14px; align-items: start; max-width: 760px; }
@@ -164,6 +173,7 @@
   .method { display: inline-block; min-width: 46px; font-weight: 600; font-size: 10.5px; color: var(--accent); }
   .loading { color: var(--text-faint); padding: 14px 12px; }
   .faint { color: var(--text-faint); }
+  input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 </style>
 
 <div id="app">

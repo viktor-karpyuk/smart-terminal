@@ -4,6 +4,8 @@ import type { GroupRecord, HandoffRecord, HistorySession } from '../global';
 import { TranscriptViewer } from './TranscriptViewer';
 import { compactPath, formatBytes } from '../lib/labels';
 import { Popover } from './Popover';
+import { legible } from '../lib/looks';
+import { CaretIcon } from './icons';
 
 /**
  * Where the list was left, for as long as the app is running.
@@ -59,6 +61,8 @@ export function HistoryPanel() {
   const [handoffs, setHandoffs] = useState<HandoffRecord[]>([]);
   const [excerpts, setExcerpts] = useState<Record<string, string[]>>({});
   const [busy, setBusy] = useState(false);
+  /** Whether the first answer is in, so an empty list is not called a miss before it is asked. */
+  const [loaded, setLoaded] = useState(false);
   const [reading, setReading] = useState<HistorySession | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [pendingStop, setPendingStop] = useState<string | null>(null);
@@ -117,6 +121,7 @@ export function HistoryPanel() {
       const found = await window.api.history.sessions({ query, limit: 200 });
       if (!alive()) return;
       setRows(found);
+      setLoaded(true);
       if (query.trim()) {
         const withText = found.filter((row) => row.matchedTranscript).slice(0, 8);
         const pairs = await Promise.all(
@@ -186,23 +191,7 @@ export function HistoryPanel() {
               Account moves
             </button>
           </nav>
-          <button
-            className="ghost-btn tiny"
-            title="Remove every finished session from history. Running ones stay."
-            onClick={async () => {
-              if (!confirming) {
-                setConfirming(true);
-                return;
-              }
-              const removed = await window.api.history.clearHistory({});
-              setConfirming(false);
-              setCleared(removed);
-              void load(() => true);
-            }}
-          >
-            {confirming ? 'Sure? Clear' : 'Clear finished'}
-          </button>
-          <button className="ghost-btn tiny" onClick={close}>
+          <button className="ghost-btn tiny modal-close" onClick={close} aria-label="Close">
             &times;
           </button>
         </header>
@@ -227,6 +216,23 @@ export function HistoryPanel() {
                 onChange={(event) => setQuery(event.target.value)}
               />
               {busy && <span className="history-busy">searching…</span>}
+              {/* Here rather than in the header: it only means anything on this tab. */}
+              <button
+                className={`ghost-btn tiny${confirming ? ' is-danger' : ''}`}
+                title="Remove every finished session from history. Running ones stay."
+                onClick={async () => {
+                  if (!confirming) {
+                    setConfirming(true);
+                    return;
+                  }
+                  const removed = await window.api.history.clearHistory({});
+                  setConfirming(false);
+                  setCleared(removed);
+                  void load(() => true);
+                }}
+              >
+                {confirming ? 'Sure? Clear' : 'Clear finished'}
+              </button>
             </div>
 
             {picked.size > 0 && (
@@ -288,13 +294,21 @@ export function HistoryPanel() {
               {cleared !== null && (
                 <p className="usage-note">Removed {cleared} finished session{cleared === 1 ? '' : 's'}.</p>
               )}
-              {rows.length === 0 && <p className="usage-note">Nothing matches.</p>}
+              {rows.length === 0 && (
+                <p className="empty-state">
+                  {!loaded
+                    ? 'Reading history…'
+                    : query.trim()
+                      ? `Nothing matches “${query.trim()}”.`
+                      : 'No sessions yet — closed sessions show up here.'}
+                </p>
+              )}
               {sections.map((section) => (
                 <section className="history-section" key={section.key}>
                   {section.group && (
                     <header className="history-section-head">
                       <span className="tab-dot" style={{ background: section.group.color }} />
-                      <strong style={{ color: section.group.color }}>{section.group.name}</strong>
+                      <strong style={{ color: legible(section.group.color) }}>{section.group.name}</strong>
                       <span className="sidebar-group-count">{section.rows.length}</span>
                       {section.rows.some((row) => row.open) ? (
                         <button
@@ -356,7 +370,7 @@ export function HistoryPanel() {
                   ) : (
                     <span className="history-pick is-empty" aria-hidden="true" />
                   )}
-                  <span className="tab-dot" style={{ background: colours.get(row.profileId) ?? '#5c6370' }} />
+                  <span className="tab-dot" style={{ background: colours.get(row.profileId) ?? 'var(--text-faint)' }} />
                   <button
                     className="history-main history-open"
                     onClick={() => {
@@ -410,6 +424,8 @@ export function HistoryPanel() {
                       </small>
                     )}
                   </div>
+                  {/* One fixed column, so the buttons line up row under row. */}
+                  <div className="history-actions">
                   <RowAction
                     row={row}
                     isLive={Boolean(liveSessions[row.id])}
@@ -474,6 +490,7 @@ export function HistoryPanel() {
                       {pendingDelete === row.id ? 'Sure?' : '×'}
                     </button>
                   )}
+                  </div>
                 </article>
               ))}
                 </section>
@@ -587,8 +604,9 @@ function RowAction({
           className="ghost-btn tiny caret"
           title={`Bring it back on another account than ${row.profileName ?? 'this one'}`}
           onClick={() => setChoosing((open) => !open)}
+          aria-label="Bring it back on another account"
         >
-          ⌄
+          <CaretIcon />
         </button>
       )}
       {choosing && (

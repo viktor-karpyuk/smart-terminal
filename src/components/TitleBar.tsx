@@ -4,6 +4,7 @@ import { useStore } from '../state/store';
 import { allTabs } from '../state/layout';
 import { SplitRightIcon, SplitDownIcon, EvenSplitsIcon, MaximizeIcon } from './icons';
 import { UsageGauge } from './UsageGauge';
+import { legible } from '../lib/looks';
 
 export function TitleBar() {
   const settings = useStore((s) => s.settings);
@@ -57,7 +58,7 @@ export function TitleBar() {
         {activeProfile && (
           <span
             className="titlebar-chip"
-            style={{ borderColor: activeProfile.color, color: activeProfile.color }}
+            style={{ borderColor: legible(activeProfile.color), color: legible(activeProfile.color) }}
             title={
               authByProfile[activeProfile.id]?.loggedIn
                 ? `Signed in as ${authByProfile[activeProfile.id].email}`
@@ -132,14 +133,9 @@ function AppMark() {
           : 'Smart Terminal'
       }
     >
+      {/* The name alone. The build is at the foot of the sidebar and in this
+          tooltip; saying it twice in the chrome was saying it once too often. */}
       <span className="app-name">Smart Terminal</span>
-      <span className="app-blurb">many Claude sessions, and their files</span>
-      {info && (
-        <span className="app-version">
-          {info.version}
-          <em>·{info.build}</em>
-        </span>
-      )}
     </span>
   );
 }

@@ -1,4 +1,5 @@
 import type { Settings } from '../state/types';
+import { legible } from './looks';
 
 /**
  * What a file and a folder look like in the tree.
@@ -67,13 +68,13 @@ export function colourFor(
   // A folder keeps its colour even in the plain styles: it is the one thing in
   // the tree that is a different kind of thing, and telling it apart at a glance
   // is worth more than the restraint of an all-grey list.
-  if (isDirectory) return folderColour === 'match' ? 'currentColor' : folderColour;
+  if (isDirectory) return folderColour === 'match' ? 'currentColor' : legible(folderColour);
   if (style !== 'colour') return 'currentColor';
   const lower = name.toLowerCase();
-  if (BY_NAME[lower]) return BY_NAME[lower];
+  if (BY_NAME[lower]) return legible(BY_NAME[lower]);
   const dot = lower.lastIndexOf('.');
   const ext = dot > 0 ? lower.slice(dot + 1) : '';
-  return BY_EXTENSION[ext] ?? '#7b849c';
+  return legible(BY_EXTENSION[ext] ?? '#7b849c');
 }
 
 interface Props {
@@ -115,7 +116,7 @@ export function FileIcon({
 
   if (isDirectory) {
     return filled ? (
-      <svg {...common} fill={colour} stroke="none" opacity={style === 'solid' ? 0.75 : 1}>
+      <svg {...common} style={{ ...common.style, fill: colour }} stroke="none" opacity={style === 'solid' ? 0.75 : 1}>
         {ajar ? (
           <path d="M1.6 3.4h3.4l1.1 1.4h6.3v1.1H3.5L1.6 11.4z" />
         ) : (
@@ -123,14 +124,14 @@ export function FileIcon({
         )}
       </svg>
     ) : (
-      <svg {...common} fill="none" stroke={colour} strokeWidth="1.3">
+      <svg {...common} style={{ ...common.style, stroke: colour }} fill="none" strokeWidth="1.3">
         <path d={ajar ? 'M1.6 3.4h3.4l1.1 1.4h6.3v1.4M1.6 3.4v7.6h10.8l1.6-5.6H3.4z' : 'M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z'} />
       </svg>
     );
   }
 
   return filled ? (
-    <svg {...common} fill={colour} stroke="none" opacity={style === 'solid' ? 0.7 : 1}>
+    <svg {...common} style={{ ...common.style, fill: colour }} stroke="none" opacity={style === 'solid' ? 0.7 : 1}>
       <path d="M3.4 1.6h4.4l2.8 2.8v8H3.4z" />
       <path d="M7.8 1.6l2.8 2.8H7.8z" opacity="0.55" />
     </svg>

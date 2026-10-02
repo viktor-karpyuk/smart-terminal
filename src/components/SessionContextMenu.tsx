@@ -3,6 +3,7 @@ import { useStore } from '../state/store';
 import type { Session } from '../state/types';
 import { Popover } from './Popover';
 import { leafOfTab } from '../state/layout';
+import { legible } from '../lib/looks';
 
 /** Right-click menu for a session, wherever it is listed. */
 export function SessionContextMenu() {
@@ -97,7 +98,7 @@ function Menu({
     <Popover anchorPoint={{ x, y }} onClose={onClose}>
       <div className="menu-heading">
         <span className="tab-dot" style={{ background: profile?.color }} />
-        <span style={{ color: profile?.color }}>{profile?.name}</span>
+        <span style={{ color: legible(profile?.color ?? '') }}>{profile?.name}</span>
         <span className="menu-heading-pid">{state}</span>
       </div>
 
@@ -490,7 +491,7 @@ function GroupSection({
             <kbd title="leaves it open">leaves it open</kbd>
           </button>
           <button
-            className="menu-item"
+            className="menu-item is-danger"
             onClick={() => {
               onClose();
               requestCloseGroup(current.id);

@@ -72,7 +72,7 @@ export function TranscriptViewer({ session, onBack }: { session: HistorySession;
         {entries?.length === 0 && (
           <p className="usage-note">
             Nothing was kept for this session. Recording is per session — turn it on from a tab&rsquo;s
-            right-click menu, or for everything in Appearance.
+            right-click menu, or for everything in Settings.
           </p>
         )}
         {visible.map((entry) => (
