@@ -66,6 +66,8 @@ function rowClick(event: React.MouseEvent, panelId: string, path: string): boole
   return false;
 }
 
+const NOTHING_PICKED: string[] = [];
+
 /** What ⌘C copies: what is picked, or else the row last clicked. */
 function copyTargets(panelId: string, fallback: string | null): string[] {
   const now = useStore.getState().filesPicked[panelId];
@@ -697,7 +699,9 @@ function EntryMenu({
    * What Copy takes: everything picked when this row is one of them, which is
    * what right-clicking a selection means everywhere; otherwise this row alone.
    */
-  const pickedHere = useStore((s) => s.filesPicked[panelId]?.paths ?? []);
+  // A fixed empty list, never a new one: a selector that returns a fresh array on
+  // every read never settles, and React gives up on the whole window.
+  const pickedHere = useStore((s) => s.filesPicked[panelId]?.paths ?? NOTHING_PICKED);
   const copying = pickedHere.includes(entry.path) ? pickedHere : [entry.path];
   // Asked when the menu opens, so it can say how many — from here or from Finder.
   const [pasteCount, setPasteCount] = useState(0);
