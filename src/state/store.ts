@@ -1245,8 +1245,17 @@ export const useStore = create<State>((set, get) => ({
       if (panel.root) followTree(panel.id, panel.root);
       if (panel.root) void get().followFolderGit(panel.id).catch(() => {});
       for (const dir of panel.expanded) get().loadDir(dir);
-      if (panel.active) get().openFile(panel.id, panel.active);
-      for (const file of panel.open) if (file !== panel.active) get().openFile(panel.id, file);
+      /*
+       * The Git tab's id is not a file. It used to be reopened as one — a
+       * buffer read from a path called "::git", a tab with that name, saved
+       * again and back after every restart — so it is dropped from what was
+       * open, the files are reopened, and whatever was in front is put back in
+       * front last (opening a file brings it forward, so order matters).
+       */
+      const files = panel.open.filter((file) => file !== GIT_TAB);
+      if (files.length !== panel.open.length) get().patchPanel(panel.id, { open: files });
+      for (const file of files) get().openFile(panel.id, file);
+      if (panel.active) get().setActiveFile(panel.id, panel.active);
     }
 
     if (
@@ -2414,6 +2423,11 @@ export const useStore = create<State>((set, get) => ({
 
   async openFile(panelId, path) {
     if (!filesPanel(get(), panelId)) return;
+    // The Git tab is a view, not a file: bring it forward and read nothing.
+    if (path === GIT_TAB) {
+      get().setActiveFile(panelId, path);
+      return;
+    }
 
     set((prev) => {
       const current = filesPanel(prev, panelId);

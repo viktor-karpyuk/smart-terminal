@@ -19,6 +19,8 @@
   .top {
     display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
     padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--bg-panel);
+    /* The same 41px bar, 26px controls, as every other panel's top bar. */
+    min-height: 41px; box-sizing: border-box;
   }
   .top input {
     font: inherit; color: var(--text); background: var(--bg-input);
@@ -27,10 +29,10 @@
   .top input::placeholder { color: var(--text-faint); }
   .top input:focus { outline: none; border-color: var(--accent); }
   #run { flex: 1; min-width: 140px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
-  #filter { width: 130px; }
+  #filter { width: 130px; min-width: 80px; flex: 0 1 130px; }
   .btn {
     padding: 3px 9px; border: 1px solid var(--border-strong); border-radius: var(--radius);
-    color: var(--text); white-space: nowrap; font-size: 11.5px; line-height: 18px;
+    color: var(--text); white-space: nowrap; font-size: 12px; line-height: 18px;
   }
   .btn:hover { border-color: var(--text-faint); background: var(--bg-elevated); }
   /* A toggle that is on reads as on at a glance, not only by its outline. */
@@ -78,7 +80,7 @@
   .meta.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .count { color: var(--text-faint); font-size: 10.5px; margin-left: 2px; }
   .tag {
-    font-size: 9.5px; padding: 0 5px; border-radius: 8px; line-height: 15px;
+    font-size: 9.5px; padding: 0 5px; border-radius: 999px; line-height: 15px;
     border: 1px solid var(--border); color: var(--text-faint); flex: 0 0 auto;
   }
   .tag.profile { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); }

@@ -15,7 +15,7 @@ import { FilesPanel } from './FilesPanel';
 import { MonitorPanel } from './MonitorPanel';
 import { ExtensionsPanel } from './ExtensionsPanel';
 import { ExtensionView } from './ExtensionView';
-import { PlusIcon, ChevronDownIcon, MinimizeIcon, MaximizeIcon } from './icons';
+import { PlusIcon, ChevronDownIcon, MinimizeIcon, MaximizeIcon, CloseGlyph } from './icons';
 import { PanelTab } from './PanelTab';
 import { legible } from '../lib/looks';
 import { Popover } from './Popover';
@@ -32,6 +32,8 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
   const [dropIndex, setDropIndex] = useState<number | null>(null);
   /** True once tabs are squeezed enough that the account label stops fitting. */
   const [tight, setTight] = useState(false);
+  /** Whether tabs have scrolled off the left, so that edge fades too. */
+  const [scrolled, setScrolled] = useState(false);
   const stripRef = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -121,7 +123,12 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
   useEffect(() => {
     const strip = stripRef.current;
     if (!strip) return;
-    const measure = () => setTight(strip.scrollWidth > strip.clientWidth + 1);
+    // With a margin once it has tipped: becoming tight adds the list button and
+    // narrows every tab, which could make them fit again, and back, and back.
+    const measure = () =>
+      setTight((was) =>
+        was ? strip.scrollWidth > strip.clientWidth - 48 : strip.scrollWidth > strip.clientWidth + 1,
+      );
     measure();
     const resize = new ResizeObserver(measure);
     resize.observe(strip);
@@ -270,8 +277,9 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
     >
       <header className="tabstrip">
         <div
-          className={`tabs${tight ? ' is-overflowing' : ''}`}
+          className={`tabs${tight ? ' is-overflowing' : ''}${scrolled ? ' is-scrolled' : ''}`}
           ref={stripRef}
+          onScroll={(event) => setScrolled(event.currentTarget.scrollLeft > 0)}
           // A mouse wheel scrolls up and down; the strip only goes sideways.
           onWheel={(event) => {
             if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) event.currentTarget.scrollLeft += event.deltaY;
@@ -332,7 +340,7 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
               title="Close this empty pane"
               onClick={() => closeThisPane(leaf.id)}
             >
-              &times;
+              <CloseGlyph />
             </button>
           )}
           {tight && <TabList leafId={leaf.id} tabs={leaf.tabs} active={leaf.active} />}
@@ -515,7 +523,7 @@ function CommandOffer({ sessionId }: { sessionId: string }) {
         Always
       </button>
       <button className="tab-close" onClick={() => dismiss(sessionId)} aria-label="Dismiss">
-        ×
+        <CloseGlyph />
       </button>
     </div>
   );

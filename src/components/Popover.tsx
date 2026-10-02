@@ -85,7 +85,11 @@ export function Popover({ anchorEl, anchorPoint, menu, onClose, children }: Prop
       onClose();
     }
     function onKey(event: KeyboardEvent) {
-      if (event.key === 'Escape') onClose();
+      // A shortcut is the start of something else — a dialog, a find bar — and
+      // a menu left open would sit on top of it. Not one typed into a box in
+      // the menu itself: ⌘V there is pasting a path, not leaving.
+      const typingHere = ref.current?.contains(document.activeElement) ?? false;
+      if (event.key === 'Escape' || ((event.metaKey || event.ctrlKey) && !typingHere)) onClose();
     }
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);

@@ -180,6 +180,8 @@ function styles(dark: boolean): string {
       font: 14px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
       overflow-wrap: break-word;
     }
+    /* Narrow, the margins give way before the words do. */
+    @media (max-width: 460px) { body { padding: 16px 14px 40px; } }
     /* The window's scrollbars, which a document of its own does not inherit. */
     ::-webkit-scrollbar { width: 10px; height: 10px; }
     ::-webkit-scrollbar-thumb { background: ${rule}; border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }

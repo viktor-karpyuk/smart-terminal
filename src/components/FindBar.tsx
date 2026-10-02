@@ -3,6 +3,7 @@ import type { ISearchOptions } from '@xterm/addon-search';
 import { useStore } from '../state/store';
 import { getTerminal } from '../terminals/registry';
 import { mixHex } from '../lib/looks';
+import { CloseGlyph } from './icons';
 
 /**
  * How matches are marked, in the theme's own colours.
@@ -76,7 +77,7 @@ export function FindBar({ sessionId }: { sessionId: string }) {
         ↓
       </button>
       <button className="ghost-btn tiny" onClick={close} title="Close (esc)" aria-label="Close find">
-        ×
+        <CloseGlyph />
       </button>
     </div>
   );

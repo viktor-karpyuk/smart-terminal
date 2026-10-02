@@ -11,6 +11,12 @@
   /* In a narrow pane the breadcrumb keeps its room: the sweep's age goes first, then the name. */
   @container (max-width: 980px) { .top .auto-state { display: none; } }
   @container (max-width: 760px) { .top .brand { display: none; } }
+  @container (max-width: 600px) { .top .tab { padding-inline: 7px; } }
+  /* Narrower still, the bar scrolls sideways instead of hanging off the pane. */
+  .top { overflow-x: auto; scrollbar-width: none; }
+  .top::-webkit-scrollbar { display: none; }
+  /* Refresh all stays in reach while the tabs scroll under it: opaque, so they do not show through. */
+  .top > .btn.refresh:last-child { position: sticky; right: 0; background: color-mix(in srgb, var(--accent) 16%, var(--bg-panel)); box-shadow: -14px 0 10px -4px var(--bg-panel); }
   .top > .crumbs { flex: 1 1 auto; }
   .top .brand { font-weight: 600; margin-right: 6px; }
   .tab { padding: 4px 10px; border-radius: var(--radius); color: var(--text-dim); cursor: pointer; border: 1px solid transparent; background: none; font: inherit; }
@@ -133,7 +139,7 @@
   .card + .card { margin-top: 8px; }
   .card.hi { border-color: var(--accent); }
   .card.bad { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); }
-  .grid-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 10px; }
+  .grid-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(290px, 100%), 1fr)); gap: 10px; }
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-bottom: 12px; }
   .stat { position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; cursor: pointer; background: var(--bg-panel); transition: border-color 0.12s, background 0.12s; }
   .stat .n { font-variant-numeric: tabular-nums; }
@@ -239,7 +245,7 @@
   .verdict .md p:first-child, .verdict p:first-child { margin-top: 0; } .verdict p:last-child { margin-bottom: 0; }
 
   /* The viewport below the app bar and the sticky tabs: scroll the header away and the diff has the whole screen. */
-  .split { display: grid; grid-template-columns: min(var(--aside, 290px), 45%) 7px minmax(0, 1fr); min-height: 0; height: calc(100vh - 88px); }
+  .split { display: grid; grid-template-columns: min(var(--aside, 290px), 45%) 7px minmax(0, 1fr); min-height: 0; height: calc(100vh / var(--ui-scale, 1) - 88px); }
   .split aside { overflow: auto; background: var(--bg-panel); }
   /* The divider between the files and the code: drag it, double-click it to reset, or focus it and use the arrows. */
   .gutter { position: relative; cursor: col-resize; background: var(--bg-panel); border-left: 1px solid var(--border); outline: none; touch-action: none; }
@@ -332,8 +338,8 @@
   .stat-boxes i.d { background: var(--danger); }
   .seg { display: inline-flex; align-items: center; gap: 3px; }
   .seg.toggle .btn { border-radius: 0; }
-  .seg.toggle .btn:first-child { border-radius: var(--radius) 0 0 var(--radius); }
-  .seg.toggle .btn:last-child { border-radius: 0 var(--radius) var(--radius) 0; margin-left: -4px; }
+  .seg.toggle .btn:first-child { border-radius: var(--r-sm, 5px) 0 0 var(--r-sm, 5px); }
+  .seg.toggle .btn:last-child { border-radius: 0 var(--r-sm, 5px) var(--r-sm, 5px) 0; margin-left: -4px; }
   .btn.on { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
   aside .item .st { flex: none; width: 13px; font-size: 0.833rem; font-weight: 700; text-align: center; font-family: ui-monospace, Menlo, monospace; }
   aside .item .st.A { color: var(--ok); } aside .item .st.D { color: var(--danger); } aside .item .st.R { color: var(--accent); } aside .item .st.M { color: var(--warn); }
@@ -393,7 +399,7 @@
   .commit-meta { font-size: 0.875rem; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .commit-meta .mono { font-size: 0.875rem; }
   #keys { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(2px); }
-  .keys-card { width: min(420px, calc(100vw - 32px)); padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-panel); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35); }
+  .keys-card { width: min(420px, calc(100vw / var(--ui-scale, 1) - 32px)); padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-panel); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35); }
   .keys-group { margin-top: 10px; }
   .keys-row { display: grid; grid-template-columns: 70px 1fr; gap: 10px; align-items: center; padding: 3px 0; }
   .keys-row .kbd { justify-self: start; }
@@ -665,7 +671,8 @@
      The bar at the top and the tabs under it: quieter, and clearly a layer
      above the page rather than the first row of it. */
 
-  .top { padding: var(--s3) var(--s4); gap: var(--s3); box-shadow: var(--lift-1); position: relative; z-index: 3; }
+  /* The same 41px bar as every other panel's top bar. */
+  .top { padding: var(--s2) var(--s4); gap: var(--s3); box-shadow: var(--lift-1); position: relative; z-index: 3; min-height: 41px; box-sizing: border-box; }
   .top .brand { letter-spacing: -0.01em; }
   .tab { min-height: 25px; display: inline-flex; align-items: center; border-radius: var(--r-sm); font-weight: 500; transition: background 0.12s ease, color 0.12s ease; }
   .subtabs { padding: 0 var(--s5); gap: var(--s1); box-shadow: var(--lift-1); }
@@ -857,7 +864,7 @@
    * A `td` is never one of these, so a `div` is what they are.
    */
   div.empty, div.loading {
-    display: grid; place-items: center; gap: var(--s2);
+    display: grid; place-items: center; align-content: center; gap: var(--s2);
     min-height: 180px; padding: var(--s6);
     color: var(--text-faint); text-align: center;
   }
@@ -893,6 +900,17 @@
   .usage-table th.num, .usage-table td.num { text-align: right; }
   .usage-table th:first-child, .usage-table td:first-child { width: 40%; }
   .usage-table .dot { vertical-align: baseline; }
+
+  /* A half-width pane at a large text size: the page is measured, not the
+     window (a media query would read the frame in unscaled pixels). The title
+     column stops insisting on 260px, and a settings label sits over its field
+     instead of taking a third of the row beside it. */
+  main#main { container: page / inline-size; }
+  @container page (max-width: 640px) {
+    .title-cell { min-width: 160px; }
+    .field { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+    .field > label { padding-top: 0; }
+  }
 
   /* Nothing moves for anybody who has asked for that. */
   @media (prefers-reduced-motion: reduce) {

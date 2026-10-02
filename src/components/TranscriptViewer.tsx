@@ -68,9 +68,9 @@ export function TranscriptViewer({ session, onBack }: { session: HistorySession;
       </div>
 
       <div className="transcript">
-        {entries === null && <p className="usage-note">Reading…</p>}
+        {entries === null && <p className="empty-state">Reading…</p>}
         {entries?.length === 0 && (
-          <p className="usage-note">
+          <p className="empty-state">
             Nothing was kept for this session. Recording is per session — turn it on from a tab&rsquo;s
             right-click menu, or for everything in Settings.
           </p>

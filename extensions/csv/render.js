@@ -131,10 +131,10 @@ function render({ path, text, dark, ink: theme }) {
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     :root { color-scheme: ${dark ? 'dark' : 'light'}; }
     body { margin: 0; background: ${paper}; color: ${ink}; font: 12.5px/1.5 "JetBrains Mono", "SF Mono", Menlo, ui-monospace, monospace; }
-    .bar { padding: 6px 12px; border-bottom: 1px solid ${rule}; color: ${quiet}; font-size: 11px; position: sticky; top: 0; background: ${paper}; }
+    .bar { padding: 6px 12px; border-bottom: 1px solid ${rule}; color: ${quiet}; font-size: 11px; line-height: 16px; position: sticky; top: 0; left: 0; z-index: 2; background: ${paper}; }
     table { border-collapse: collapse; width: 100%; }
     th, td { border-bottom: 1px solid ${rule}; padding: 4px 10px; text-align: left; white-space: nowrap; }
-    thead th { position: sticky; top: 28px; background: ${inset}; color: ${ink}; font-weight: 600; }
+    thead th { position: sticky; top: 29px; background: ${inset}; color: ${ink}; font-weight: 600; }
     td.num { text-align: right; color: ${num}; }
     .n { color: ${quiet}; text-align: right; user-select: none; width: 1%; background: ${inset}; }
     tr:hover td { background: ${inset}; }

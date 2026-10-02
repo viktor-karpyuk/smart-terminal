@@ -22,6 +22,15 @@ export type IconStyle = Settings['fileIcons'];
  * that stylesheets look alike and scripts look alike, so a folder reads as
  * groups rather than as forty separate things.
  */
+/**
+ * Files that are meant to recede — lockfiles, logs, archives, databases. A
+ * token rather than a grey picked for Midnight: blended toward the text colour
+ * on a light theme, that grey became the darkest name in the tree.
+ */
+const QUIET = 'var(--text-faint)';
+/** Anything without a colour of its own. */
+const PLAIN = 'var(--text-dim)';
+
 const BY_EXTENSION: Record<string, string> = {
   // TypeScript and its neighbours
   ts: '#7aa2f7', tsx: '#7aa2f7', mts: '#7aa2f7', cts: '#7aa2f7',
@@ -30,7 +39,7 @@ const BY_EXTENSION: Record<string, string> = {
   css: '#bb9af7', scss: '#bb9af7', less: '#bb9af7', sass: '#bb9af7',
   // markup and documents
   html: '#ff9e64', htm: '#ff9e64', vue: '#9ece6a', svelte: '#ff9e64',
-  md: '#7dcfff', markdown: '#7dcfff', mdx: '#7dcfff', txt: '#7b849c',
+  md: '#7dcfff', markdown: '#7dcfff', mdx: '#7dcfff', txt: PLAIN,
   // data and configuration
   json: '#e0af68', jsonc: '#e0af68', yaml: '#7dcfff', yml: '#7dcfff',
   toml: '#7dcfff', ini: '#7dcfff', conf: '#7dcfff', env: '#e0af68',
@@ -39,17 +48,17 @@ const BY_EXTENSION: Record<string, string> = {
   java: '#f7768e', kt: '#bb9af7', swift: '#ff9e64', php: '#bb9af7',
   c: '#7dcfff', h: '#7dcfff', cpp: '#7dcfff', cs: '#9ece6a',
   sh: '#9ece6a', zsh: '#9ece6a', bash: '#9ece6a', fish: '#9ece6a',
-  sql: '#7dcfff', db: '#565f79', sqlite: '#565f79',
+  sql: '#7dcfff', db: QUIET, sqlite: QUIET,
   // pictures and the rest
   png: '#bb9af7', jpg: '#bb9af7', jpeg: '#bb9af7', gif: '#bb9af7',
   svg: '#9ece6a', webp: '#bb9af7', icns: '#bb9af7', ico: '#bb9af7',
-  lock: '#565f79', log: '#565f79', zip: '#565f79', pdf: '#f7768e',
+  lock: QUIET, log: QUIET, zip: QUIET, pdf: '#f7768e',
 };
 
 /** A few names carry more meaning than their extension does. */
 const BY_NAME: Record<string, string> = {
   'package.json': '#9ece6a',
-  'package-lock.json': '#565f79',
+  'package-lock.json': QUIET,
   'tsconfig.json': '#7aa2f7',
   'readme.md': '#7dcfff',
   'license': '#e0af68',
@@ -74,7 +83,7 @@ export function colourFor(
   if (BY_NAME[lower]) return legible(BY_NAME[lower]);
   const dot = lower.lastIndexOf('.');
   const ext = dot > 0 ? lower.slice(dot + 1) : '';
-  return legible(BY_EXTENSION[ext] ?? '#7b849c');
+  return legible(BY_EXTENSION[ext] ?? PLAIN);
 }
 
 interface Props {

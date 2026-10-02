@@ -20,34 +20,39 @@
     padding: 6px 10px; flex: 0 0 auto;
     border-bottom: 1px solid var(--border);
     background: var(--bg-panel);
+    /* The same 41px bar, 26px controls, as every other panel's top bar. */
+    min-height: 41px; box-sizing: border-box; min-width: 0;
   }
   .bar .grow { flex: 1; }
   .btn {
-    min-height: 24px; padding: 2px 10px; border-radius: calc(var(--radius, 8px) - 3px); font-size: 11.5px;
+    min-height: 26px; padding: 2px 10px; border-radius: calc(var(--radius, 8px) - 3px); font-size: 12px;
     border: 1px solid var(--border-strong); color: var(--text);
     white-space: nowrap;
   }
   .btn:hover { color: var(--text); border-color: var(--text-faint); background: var(--bg-elevated); }
   .btn[disabled] { opacity: 0.4; cursor: not-allowed; }
   .btn.is-on { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
-  .icon-btn { min-width: 24px; height: 24px; padding: 0 5px; border-radius: calc(var(--radius, 8px) - 3px); color: var(--text-dim); font-size: 14px; line-height: 1; }
+  .icon-btn { min-width: 26px; height: 26px; padding: 0 5px; border-radius: calc(var(--radius, 8px) - 3px); color: var(--text-dim); font-size: 14px; line-height: 1; }
   .icon-btn:hover { color: var(--text); background: var(--bg-elevated); }
 
-  .where { display: flex; align-items: center; gap: 6px; font-size: 11.5px; min-width: 0; }
+  .where { display: flex; align-items: center; gap: 6px; font-size: 11.5px; min-width: 0; flex: 0 1 auto; }
   .where .head {
     font-weight: 600; color: var(--text);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px;
   }
   .ahead, .behind { font-size: 10.5px; color: var(--text-dim); }
 
-  .find { display: flex; align-items: center; gap: 4px; }
+  /* In a narrow pane the search box gives way before anything spills off the bar. */
+  .find { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 auto; }
   .find input {
-    width: 210px; height: 24px; padding: 2px 8px; font: inherit; font-size: 11.5px;
+    width: 210px; min-width: 90px; flex: 1 1 auto; box-sizing: border-box;
+    height: 26px; padding: 2px 8px; font: inherit; font-size: 12px;
     background: var(--bg-input); color: var(--text);
     border: 1px solid var(--border-strong); border-radius: calc(var(--radius, 8px) - 3px);
   }
   .find input:focus { outline: none; border-color: var(--accent); }
   .find input::placeholder { color: var(--text-faint); }
+  .find .count:empty { display: none; }
   .find .count { font-size: 10.5px; color: var(--text-faint); min-width: 46px; text-align: right; font-variant-numeric: tabular-nums; }
 
   /* A merge that stopped is the one thing worth saying across the whole panel. */
@@ -117,7 +122,8 @@
   /* ---------- the detail on the right ---------- */
 
   .detail {
-    flex: 0 0 340px; border-left: 1px solid var(--border);
+    /* Never more than half the pane: the history is what the panel is for. */
+    flex: 0 0 min(340px, 45%); border-left: 1px solid var(--border);
     background: var(--bg-panel); overflow: auto; padding: 10px 12px;
   }
   .detail.is-hidden { display: none; }

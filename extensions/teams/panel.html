@@ -10,9 +10,14 @@
   html { font-size: 12px; }
   #app { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; min-height: 0; }
   .top { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
+  /* The same 41px bar as every other panel's. In a pane too narrow for every
+     tab the row scrolls sideways rather than squeezing a tab to two lines. */
+  .top { min-height: 41px; box-sizing: border-box; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .top::-webkit-scrollbar { display: none; }
+  .top > :not(.spacer) { flex: none; }
   .brand { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; margin-right: 4px; }
   .brand .mark { width: 18px; height: 18px; border-radius: calc(var(--radius, 8px) - 3px); background: var(--accent-soft); border: 1px solid var(--accent); display: inline-flex; align-items: center; justify-content: center; }
-  .tab { padding: 4px 10px; border-radius: var(--radius); color: var(--text-dim); cursor: pointer; border: 1px solid transparent; background: none; font: inherit; }
+  .tab { padding: 4px 10px; border-radius: var(--radius); color: var(--text-dim); cursor: pointer; border: 1px solid transparent; background: none; font: inherit; white-space: nowrap; }
   .tab:hover { color: var(--text); background: var(--bg-elevated); }
   .tab.on { color: var(--text); border-color: var(--border); background: var(--bg-elevated); }
   .spacer { flex: 1; }
@@ -49,7 +54,7 @@
   .chip.accent { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 
   label.field { display: flex; flex-direction: column; gap: 4px; }
-  label.field > span { color: var(--text-faint); font-size: 0.917rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
+  label.field > span { color: var(--text-faint); font-size: 0.875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; }
   input[type="text"], input[type="password"], input[type="number"] { min-height: 28px; padding: 5px 9px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg-input); color: var(--text); font: inherit; }
   input[type="number"] { width: 72px; font-family: ui-monospace, Menlo, monospace; }
   input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -64,11 +69,15 @@
   .route.ready .glyph { border-color: color-mix(in srgb, var(--ok) 55%, var(--border)); color: var(--ok); }
   .route .what { font-weight: 600; }
   .route .why { color: var(--text-dim); line-height: 1.55; }
-  .route .costs { display: flex; gap: 24px; color: var(--text-dim); }
-  .route .costs b { display: block; margin-bottom: 1px; color: var(--text-faint); font-size: 0.917rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 500; }
+  .route .costs { display: flex; flex-wrap: wrap; gap: 8px 24px; color: var(--text-dim); }
+  .route .costs b { display: block; margin-bottom: 1px; color: var(--text-faint); font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 600; }
   .route hr { border: 0; border-top: 1px solid var(--border); margin: 2px 0; width: 100%; }
   .route .foot { margin-top: auto; padding-top: 4px; }
-  @media (max-width: 860px) { .cols.two { flex-direction: column; } }
+  /* Measured on the page, not the window: a media query reads the frame in
+     unscaled pixels, so at a larger text size the two cards stayed side by side
+     long after they had stopped fitting. */
+  main#main { container-type: inline-size; }
+  @container (max-width: 740px) { .cols.two { flex-direction: column; } }
 
   .where { display: flex; gap: 10px; }
   .where > label { flex: 1 1 0; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: calc(var(--radius, 8px) + 2px); cursor: pointer; }
@@ -82,7 +91,7 @@
   .kind i { font-style: normal; color: var(--text-faint); }
 
   table.list { width: 100%; border-collapse: collapse; }
-  table.list th { text-align: left; padding: 6px 10px; color: var(--text-faint); font-size: 0.917rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.list th { text-align: left; padding: 6px 10px; color: var(--text-faint); font-size: 0.875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; border-bottom: 1px solid var(--border); white-space: nowrap; }
   table.list td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
   table.list tr:last-child td { border-bottom: 0; }
   table.list td.wrap { white-space: normal; overflow-wrap: anywhere; }
