@@ -1,4 +1,7 @@
+import { useState } from 'react';
 import { useStore } from '../state/store';
+import { leafOfTab } from '../state/layout';
+import { Popover } from './Popover';
 import { PANEL_MIME } from '../lib/drag';
 import { folderGit } from '../lib/folderGit';
 
@@ -49,6 +52,8 @@ export function PanelTab({
   const repo = useStore((s) => (gitRoot ? s.repos[gitRoot] : undefined));
   const git = folderGit(repo);
 
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+
   if (!panel) return null;
   const monitor = panel.kind === 'monitor';
   const shop = panel.kind === 'extensions';
@@ -90,6 +95,12 @@ export function PanelTab({
       onMouseDown={() => {
         setActiveLeaf(leafId);
         focusPanel(leafId, panelId);
+      }}
+      onContextMenu={(event) => {
+        // Only a view that was opened on a folder has a folder to offer.
+        if (!view?.root?.startsWith('/')) return;
+        event.preventDefault();
+        setMenuAt({ x: event.clientX, y: event.clientY });
       }}
     >
       <svg width="13" height="13" viewBox="0 0 14 14" fill="none" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" style={{ stroke: 'var(--accent)' }}>
@@ -159,6 +170,93 @@ export function PanelTab({
       >
         ×
       </button>
+      {menuAt && view?.root && (
+        <FolderMenu
+          panelId={panelId}
+          leafId={leafId}
+          title={view.title}
+          folder={view.root}
+          at={menuAt}
+          onClose={() => setMenuAt(null)}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * The folder an extension's view is working on, one click away.
+ *
+ * A Code Reviewer, a build or a Spring Boot tab is about one folder and says
+ * which in its tooltip — and getting to that folder meant opening Files and
+ * finding it again by hand. If it is already open somewhere, this goes there
+ * instead of opening a second copy of it.
+ */
+function FolderMenu({
+  panelId,
+  leafId,
+  title,
+  folder,
+  at,
+  onClose,
+}: {
+  panelId: string;
+  leafId: string;
+  title: string;
+  folder: string;
+  at: { x: number; y: number };
+  onClose(): void;
+}) {
+  const open = useStore((s) =>
+    Object.values(s.panels).find((one) => one.kind === 'files' && one.root === folder) ?? null,
+  );
+  const name = folder.split('/').filter(Boolean).pop() ?? folder;
+  const act = (fn: () => void) => () => {
+    onClose();
+    fn();
+  };
+  const store = useStore.getState();
+
+  return (
+    <Popover anchorPoint={at} onClose={onClose}>
+      <div className="menu-heading">
+        <span>{title}</span>
+        <span className="menu-heading-pid">{name}</span>
+      </div>
+      {open && (
+        <button
+          className="menu-item"
+          onClick={act(() => {
+            const there = leafOfTab(useStore.getState().layout, open.id);
+            if (!there) return;
+            store.setActiveLeaf(there.id);
+            store.focusPanel(there.id, open.id);
+          })}
+        >
+          <span>Go to its folder</span>
+          <kbd>already open</kbd>
+        </button>
+      )}
+      <button className="menu-item" onClick={act(() => store.openFilePanel({ leafId, side: 'right', root: folder }))}>
+        <span>{open ? 'Open its folder again' : 'Open its folder'}</span>
+        <kbd>beside this one</kbd>
+      </button>
+      <button className="menu-item" onClick={act(() => store.openFilePanel({ leafId, side: 'center', root: folder }))}>
+        <span>Open its folder here</span>
+        <kbd>same section</kbd>
+      </button>
+      <div className="menu-separator" />
+      <button className="menu-item" onClick={act(() => void navigator.clipboard?.writeText(folder))}>
+        <span>Copy path</span>
+        <kbd title={folder}>{name}</kbd>
+      </button>
+      <button className="menu-item" onClick={act(() => window.api.files.reveal(folder))}>
+        <span>Show in Finder</span>
+      </button>
+      <div className="menu-separator" />
+      <button className="menu-item is-danger" onClick={act(() => store.closePanel(panelId))}>
+        <span>Close</span>
+      </button>
+    </Popover>
   );
 }
