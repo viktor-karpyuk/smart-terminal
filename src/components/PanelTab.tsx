@@ -4,6 +4,7 @@ import { leafOfTab } from '../state/layout';
 import { Popover } from './Popover';
 import { PANEL_MIME } from '../lib/drag';
 import { folderGit } from '../lib/folderGit';
+import { CloseGlyph, MinusGlyph } from './icons';
 
 /**
  * The tab a file panel wears.
@@ -157,7 +158,7 @@ export function PanelTab({
         title="Set this folder aside — it keeps its tree, and you get its space back"
         aria-label="Minimize folder"
       >
-        –
+        <MinusGlyph />
       </button>
       <button
         className="tab-close"
@@ -168,7 +169,7 @@ export function PanelTab({
         }}
         aria-label="Close files"
       >
-        ×
+        <CloseGlyph />
       </button>
       {menuAt && view?.root && (
         <FolderMenu

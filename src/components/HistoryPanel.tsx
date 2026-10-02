@@ -505,7 +505,7 @@ export function HistoryPanel() {
 
         {!reading && tab === 'handoffs' && (
           <div className="history-list">
-            {handoffs.length === 0 && <p className="usage-note">No conversation has changed account yet.</p>}
+            {handoffs.length === 0 && <p className="empty-state">No conversation has changed account yet.</p>}
             {handoffs.map((entry) => (
               <article className="history-row" key={entry.id}>
                 <div className="history-main">
@@ -662,7 +662,7 @@ function GroupHistory({ groups, onChanged }: { groups: GroupRecord[]; onChanged(
   if (!groups.length) {
     return (
       <div className="history-list">
-        <p className="usage-note">
+        <p className="empty-state">
           No groups yet. Group the tabs sitting together in a pane with the &#9678; button on its tab
           strip, and the whole set becomes something you can bring back from here.
         </p>
