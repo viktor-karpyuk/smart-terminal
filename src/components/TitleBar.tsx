@@ -133,14 +133,9 @@ function AppMark() {
           : 'Smart Terminal'
       }
     >
+      {/* The name alone. The build is at the foot of the sidebar and in this
+          tooltip; saying it twice in the chrome was saying it once too often. */}
       <span className="app-name">Smart Terminal</span>
-      <span className="app-blurb">many Claude sessions, and their files</span>
-      {info && (
-        <span className="app-version">
-          {info.version}
-          <em>·{info.build}</em>
-        </span>
-      )}
     </span>
   );
 }

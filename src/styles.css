@@ -194,35 +194,9 @@ input:focus, textarea:focus { border-color: var(--accent); }
 :root[data-platform='darwin'] .titlebar-drag { padding-left: 78px; }
 .titlebar-actions { padding-right: 8px; }
 
-/* The app's name, what it is, and which build — in the order you need them. */
+/* The app's name. Which build it is lives at the foot of the sidebar. */
 .app-mark { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
 .app-name { font-size: var(--fs-md); color: var(--text-dim); letter-spacing: 0.02em; flex: 0 0 auto; }
-
-.app-blurb {
-  font-size: var(--fs-sm);
-  color: var(--text-faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.app-version {
-  flex: 0 0 auto;
-  font-size: var(--fs-xs);
-  color: var(--text-faint);
-  padding: 1px 6px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-variant-numeric: tabular-nums;
-}
-
-.app-version em { font-style: normal; opacity: 0.7; margin-left: 2px; }
-
-/* The description is the first thing to go: the name and the build are not. */
-@media (max-width: 1180px) {
-  .app-blurb { display: none; }
-}
 
 .titlebar-chip {
   font-size: var(--fs-sm);
