@@ -198,18 +198,18 @@
   .run + .run { margin-top: 6px; }
   .run .lines { margin-top: 6px; max-height: 150px; overflow: auto; font-family: ui-monospace, Menlo, monospace; font-size: 0.917rem; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
 
-  .prhead { padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
-  .prhead h2 { font-size: 1.333rem; margin: 4px 0; }
-  .prhead.compact { padding: 6px 14px 8px; }
-  .prhead.compact .pr-title { font-size: 1.125rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
-  .prhead.compact > .row:first-child { flex-wrap: nowrap; }
-  .prhead.compact > .row:first-child > .chip, .prhead.compact > .row:first-child > .btn { flex: none; }
-  .prhead.compact .pr-meta { font-size: 0.958rem; margin-top: 2px; }
-  .prhead.compact .next { margin-top: 6px; padding: 4px 8px; gap: 8px; }
-  .prhead.compact .next .icon { width: 18px; height: 18px; font-size: 0.917rem; }
-  .prhead.compact .next .words strong { display: inline; font-size: 1rem; }
-  .prhead.compact .next .words span { display: none; }
-  .prhead.compact > .row[style] { margin-top: 6px !important; }
+  /* A pull request is a column: the header and the tabs stay, the body under them scrolls. */
+  .prview { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .prview > .prhead, .prview > .subtabs { flex: none; position: static; }
+  .prbody { flex: 1; min-height: 0; overflow: auto; }
+  /* Code and Commits are a split of their own: it fills the body, and its two halves scroll inside it. */
+  .prbody.fills { overflow: hidden; display: flex; flex-direction: column; }
+  .prbody.fills > .split { height: auto; flex: 1; min-height: 0; }
+  .prhead { padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
+  .prhead > .row:first-child { flex-wrap: nowrap; }
+  .prhead > .row:first-child > .chip, .prhead > .row:first-child > .btn { flex: none; }
+  .prhead .pr-title { font-size: 1.125rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+  .prhead .pr-meta { font-size: 0.958rem; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .banner { padding: 7px 10px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-elevated); margin: 8px 0; white-space: pre-wrap; }
   .banner.bad { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); background: color-mix(in srgb, var(--danger) 8%, var(--bg-panel)); }
   .banner.warn { border-color: color-mix(in srgb, var(--warn) 50%, var(--border)); background: color-mix(in srgb, var(--warn) 8%, var(--bg-panel)); }
@@ -678,8 +678,7 @@
   .subtabs { padding: 0 var(--s5); gap: var(--s1); box-shadow: var(--lift-1); }
   .subtabs .tab { border-radius: 0; padding: 8px 11px; font-weight: 550; }
   .subtabs .tab.on { border-bottom-width: 2px; }
-  .prhead { padding: var(--s4) var(--s5); }
-  .prhead h2 { font-size: 1.5rem; margin: var(--s1) 0; }
+  .prhead { padding: var(--s3) var(--s5); }
   .crumbs { gap: var(--s2); font-size: 0.958rem; }
 
   .bar { height: 7px; border-radius: var(--r-pill); }
@@ -766,6 +765,12 @@
   }
 
   .conflict-banner { display: block; }
+  .renumber { margin-top: 8px; }
+  .renumber-keep td { padding: 3px 8px 3px 0; }
+  .renumber-steps { margin: 4px 0 0; padding-left: 18px; }
+  .renumber-steps li { margin: 3px 0; }
+  .renumber-steps li.ok { color: var(--ok); }
+  .renumber-steps li.bad { color: var(--danger); }
   .conflict-list { margin: var(--s2) 0 0; padding-left: 1.4em; max-height: 11em; overflow: auto; }
   .conflict-list li { color: var(--text-dim); line-height: 1.5; }
 
@@ -939,6 +944,8 @@
   'use strict';
 
   var state = {
+    /** Where each tab of a pull request was scrolled to, so moving between tabs does not lose the place. */
+    bodyScroll: {},
     started: false,
     showing: true,
     view: 'dashboard',
@@ -1138,6 +1145,13 @@
     return '';
   }
   function anchor(file, line) { return esc(file) + (line ? ':' + line : ''); }
+  /** Back to the top of what scrolls: the body of a pull request, or the whole view. */
+  function toTop() {
+    var body = $('prbody');
+    if (body) { body.scrollTop = 0; state.bodyScroll[state.prTab] = 0; }
+    $('main').scrollTop = 0;
+  }
+
   function sha7(sha) { return esc(String(sha || '').slice(0, 7)); }
 
   /**
@@ -1314,6 +1328,7 @@
       state.confirmRerun = null; state.decline = null; state.merge = null;
     }
     remember();
+    state.bodyScroll = {};
     draw();
     $('main').scrollTop = 0;
     load();
@@ -1379,6 +1394,9 @@
     drawTop();
     var main = $('main');
     var scroll = main.scrollTop;
+    // In a pull request it is the body under the tabs that scrolls, and each tab keeps its own place.
+    var body = $('prbody');
+    if (body) state.bodyScroll[body.getAttribute('data-tab') || ''] = body.scrollTop;
     // The file list is rebuilt with everything else and would come back at the top.
     var aside = main.querySelector('aside');
     var asideScroll = aside ? aside.scrollTop : 0;
@@ -1402,6 +1420,11 @@
     var selection = focus ? { start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection, scroll: active.scrollTop } : null;
     main.innerHTML = html;
     main.scrollTop = scroll;
+    var bodyNow = $('prbody');
+    if (bodyNow) {
+      bodyNow.setAttribute('data-tab', state.prTab);
+      bodyNow.scrollTop = state.bodyScroll[state.prTab] || 0;
+    }
     aside = main.querySelector('aside');
     if (aside) {
       aside.scrollTop = asideScroll;
@@ -2044,26 +2067,31 @@
     var open = pr.state === 'OPEN';
     var runs = v.running || [];
     var provider = repo.provider === 'GITHUB' ? 'GitHub' : 'Bitbucket';
-    // Reading code wants the height: there the header folds to two lines, and the Review tab keeps the whole of it.
-    var compact = state.prTab === 'code' || state.prTab === 'commits';
-    var html = '<div class="prhead' + (compact ? ' compact' : '') + '"><div class="row">' +
-      (compact ? '<strong class="pr-title" title="' + esc(pr.title) + '">#' + pr.id + ' ' + esc(pr.title) + '</strong>' : '') +
+    /*
+     * One header, the same on every tab.
+     *
+     * It used to be the whole review on the Review tab — title in large type,
+     * the next step, every button — and two lines everywhere else, so moving
+     * between tabs moved the tabs themselves and everything under them. Now it
+     * is only what the pull request *is*: its state, who stands where, the
+     * title on one line (the whole of it in the tooltip) and the commit. What
+     * there is to *do* about it lives at the top of the Review tab.
+     */
+    var html = '<div class="prview"><div class="prhead"><div class="row">' +
       '<span class="chip ' + (open ? 'okc' : pr.state === 'MERGED' ? 'accent' : 'badc') + '">' + esc(pr.state.toLowerCase()) + '</span>' +
       (pr.isDraft ? '<span class="chip">draft</span>' : '') +
       v.approvals.map(function (a) {
         return '<span class="chip ' + (a.state === 'APPROVED' ? 'okc' : 'badc') + '" title="' + esc(a.state === 'APPROVED' ? 'Approved' : 'Requested changes') + (a.byUs ? ' (you)' : '') + '">' + (a.state === 'APPROVED' ? '✓ ' : '✗ ') + esc(a.who) + '</span>';
       }).join('') +
+      '<strong class="pr-title" title="' + esc('#' + pr.id + ' ' + pr.title) + '">#' + pr.id + ' ' + esc(pr.title) + '</strong>' +
       '<span class="spacer"></span>' +
       (pr.url ? '<button class="btn small" data-act="open-url" data-url="' + esc(pr.url) + '" title="Open the pull request on ' + provider + '">' + provider + ' ↗</button>' : '') +
       '<button class="btn small" data-act="shell" data-where="clone" title="A terminal in the local clone">Terminal</button>' +
       '<button class="btn small" data-act="ask" title="A Claude session briefed on this pull request">Ask Claude</button>' +
       '<button class="btn small" data-act="pr-load"' + busyAttr(prKey('pr-load')) + ' title="Read the pull request, its stances and its thread again">Reload</button></div>' +
-      (compact ? '' : '<h2>#' + pr.id + ' ' + esc(pr.title) + '</h2>') +
       '<div class="faint pr-meta">' + esc(pr.author) + (pr.sourceBranch ? ' · <span class="mono">' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch) + '</span>' : '') + (pr.headSha ? ' · head <span class="mono">' + sha7(pr.headSha) + '</span>' : '') +
       (pr.createdOn ? ' · opened ' + esc(when(pr.createdOn)) : '') + (pr.updatedOn ? ' · updated ' + esc(when(pr.updatedOn)) : '') +
       mergeLine(v) + '</div>';
-    html += drawNextStep(v, compact);
-    if (open) html += drawActions(v);
     html += '</div>';
     var counts = {
       review: (v.findings || []).filter(function (f) { return !f.publishedId && !f.dismissedAt && !f.closedAt; }).length,
@@ -2074,12 +2102,14 @@
       return '<button class="tab' + (state.prTab === t[0] ? ' on' : '') + '" data-act="pr-tab" data-tab="' + t[0] + '" title="' + (i + 1) + '">' + t[1] + (counts[t[0]] ? '<span class="count">' + counts[t[0]] + '</span>' : '') + '</button>';
     }).join('') + '<span class="spacer"></span>' + (runs.length ? '<span class="chip accent" style="align-self:center"><span class="dot busy"></span>' + runs.length + ' running</span>' : '') +
       '<button class="link faint keys-hint" data-act="keys-open" title="Keyboard shortcuts"><span class="kbd">?</span> keys</button></div>';
+    // Only this scrolls: the header and the tabs above it stay where they are.
+    html += '<div class="prbody' + (state.prTab === 'code' || state.prTab === 'commits' ? ' fills' : '') + '" id="prbody">';
     if (state.prTab === 'review') html += drawReviewTab(v);
     else if (state.prTab === 'code') html += drawCodeTab(v);
     else if (state.prTab === 'commits') html += drawCommitsTab(v);
     else if (state.prTab === 'conversation') html += drawConversationTab(v);
     else html += drawHistoryTab(v);
-    return html;
+    return html + '</div></div>';
   }
 
   /**
@@ -2140,8 +2170,10 @@
         '<ul class="conflict-list">' + clash.with.map(function (one) {
           return '<li><span class="mono">' + esc(one.path) + '</span> <span class="faint">' + (one.prId == null ? 'on ' + esc(one.branch) : '#' + one.prId + ' · ' + esc(one.branch)) + '</span></li>';
         }).join('') + '</ul>' +
-        '<button class="link" data-act="recheck-migrations"' + busyAttr(prKey('recheck-migrations')) + '>check again</button></div>';
+        '<div class="row" style="margin-top:6px"><button class="btn small primary" data-act="renumber-open"' + busyAttr('renumber-plan') + ' title="See who keeps each number and what the others become, before anything changes">Resolve…</button>' +
+        '<button class="link" data-act="recheck-migrations"' + busyAttr(prKey('recheck-migrations')) + '>check again</button></div></div>';
     }
+    if (state.renumber && state.renumber.repoId === v.repo.id) html += drawRenumber(state.renumber);
     var conflict = conflictState(v);
     if (conflict) {
       /*
@@ -2174,6 +2206,66 @@
         '<div class="row" style="margin-top:6px"><button class="btn primary" data-act="merge"' + busyAttr(prKey('merge')) + '>Merge</button><button class="btn" data-act="merge-close">Cancel</button></div></div>';
     }
     return html;
+  }
+
+  /**
+   * Resolving clashing migration numbers: the plan, and the button that carries it out.
+   *
+   * Everything that will happen is on the card before anything does — who keeps
+   * each number, which file in which pull request becomes what — and who keeps
+   * a number can be changed there. The button says what it does: a commit on
+   * each of those branches, pushed.
+   */
+  function drawRenumber(r) {
+    if (r.loading) return '<div class="card renumber"><span class="faint">Reading every open branch for migrations…</span></div>';
+    if (r.error) return '<div class="card renumber"><div class="banner bad">' + esc(r.error) + '</div><button class="btn small" data-act="renumber-close">Close</button></div>';
+    var plan = r.plan;
+    var html = '<div class="card renumber"><strong>Resolve the migration numbers</strong>';
+    if (r.result) {
+      html += '<ul class="renumber-steps">' + r.result.done.map(function (one) {
+        return '<li class="' + (one.ok ? 'ok' : 'bad') + '">#' + one.prId + ' · ' + (one.ok
+          ? 'renumbered and pushed (' + esc(String(one.sha).slice(0, 7)) + ')' + (one.commented === true ? ', told in its thread' : one.commented ? ' — the note could not be posted: ' + esc(one.commented) : '')
+          : esc(one.error)) + '</li>';
+      }).join('') + '</ul>';
+      return html + '<div class="row"><button class="btn small" data-act="renumber-close">Close</button></div></div>';
+    }
+    if (!plan.decisions.length) return html + '<div class="faint">No migration number is taken twice any more.</div><button class="btn small" data-act="renumber-close">Close</button></div>';
+    html += '<div class="faint">Who keeps each number. What is already on a target branch keeps it; otherwise the pull request opened first does, unless you choose another.</div>';
+    html += '<table class="list renumber-keep">' + plan.decisions.map(function (d) {
+      var who = d.fixed
+        ? '<span>' + esc(d.keeper.branch) + ' <span class="faint">(already merged)</span></span>'
+        : d.choices.map(function (prId) {
+            return '<label class="check"><input type="radio" name="keep-' + esc(d.number) + '" data-act-change="renumber-keep" data-number="' + esc(d.number) + '" value="' + prId + '"' + (d.keeper.prId === prId ? ' checked' : '') + '> #' + prId + '</label>';
+          }).join(' ');
+      return '<tr><td class="mono">' + esc(d.number) + '</td><td>' + who + '</td></tr>';
+    }).join('') + '</table>';
+    if (plan.steps.length) {
+      html += '<div style="margin-top:8px"><strong>What changes</strong></div><ul class="renumber-steps">' + plan.steps.map(function (step) {
+        return '<li><strong>#' + step.prId + '</strong> <span class="faint">' + esc(step.title) + ' · <span class="mono">' + esc(step.branch) + '</span></span>' +
+          '<ul>' + step.renames.map(function (one) { return '<li class="mono">' + esc(baseName(one.from)) + ' → ' + esc(baseName(one.to)) + '</li>'; }).join('') + '</ul>' +
+          '<div class="faint">' + esc(step.why.join('; ')) + '</div></li>';
+      }).join('') + '</ul>';
+    }
+    if (plan.problems.length) html += '<div class="banner warn">' + plan.problems.map(esc).join('<br>') + '</div>';
+    html += '<label class="check" style="margin-top:6px"><input type="checkbox" data-act-change="renumber-comment"' + (r.comment ? ' checked' : '') + '> Tell each pull request in its thread</label>';
+    html += '<div class="faint" style="margin-top:4px">One commit on each branch above, pushed and never forced. Any references to the old file names in those branches are updated too. If an environment already ran an old number, it will see the renamed file as new.</div>';
+    html += '<div class="row" style="margin-top:8px">' + (plan.steps.length ? '<button class="btn small primary" data-act="renumber-apply"' + busyAttr('renumber-apply') + '>Renumber and push ' + plan.steps.length + ' branch' + (plan.steps.length === 1 ? '' : 'es') + '</button>' : '') +
+      '<button class="btn small" data-act="renumber-close">Cancel</button></div></div>';
+    return html;
+  }
+
+  function baseName(file) { return String(file || '').split('/').pop(); }
+
+  function loadRenumber() {
+    var r = state.renumber;
+    r.loading = true; r.error = null; draw();
+    call('migrationPlan', { repoId: r.repoId, keep: r.keep }).then(function (res) {
+      if (state.renumber !== r) return;
+      r.loading = false; r.plan = res.plan;
+      // What the plan settled on becomes the starting choice, so the radios show it.
+      res.plan.decisions.forEach(function (d) { if (!d.fixed && d.keeper.prId != null) r.keep[d.number] = d.keeper.prId; });
+      draw();
+    }, function (error) { if (state.renumber !== r) return; r.loading = false; r.error = String(error && error.message || error); draw(); });
   }
 
   /**
@@ -2440,6 +2532,9 @@
     var runs = (v.running || []).filter(function (run) { return run.kind !== 'fix' && run.kind !== 'reply'; });
     var reviewing = runs.some(function (run) { return run.kind === 'review'; });
     var html = '<div class="page">';
+    // --- what there is to do about it: the next step, the decisions, and what stands in the way of a merge
+    html += drawNextStep(v, false);
+    if (open) html += drawActions(v);
     if (runs.length) html += drawRuns(runs, false);
 
     // --- what the author says the PR is: open until there is a review to read instead
@@ -2682,7 +2777,7 @@
   function stepFile(direction) {
     var files = (state.code.files || []).map(function (f) { return f.path; });
     var next = files[files.indexOf(state.code.file) + direction];
-    if (next) { openFile(next); $('main').scrollTop = 0; }
+    if (next) { openFile(next); toTop(); }
   }
 
   /**
@@ -2708,7 +2803,7 @@
       var files = (code.files || []).map(function (f) { return f.path; });
       var from = files.indexOf(file);
       var next = files.slice(from + 1).concat(files.slice(0, from)).filter(function (path) { return r.files.indexOf(path) < 0; })[0];
-      if (next) { openFile(next); $('main').scrollTop = 0; } else draw();
+      if (next) { openFile(next); toTop(); } else draw();
     }, fail);
   }
 
@@ -3999,6 +4094,22 @@
       draw();
       call('saveSettings', { settings: { diffLayout: next } }).catch(function () {});
     },
+    'renumber-open': function () { state.renumber = { repoId: state.repoId, keep: {}, comment: true }; loadRenumber(); },
+    'renumber-close': function () { state.renumber = null; draw(); },
+    'renumber-apply': function () {
+      var r = state.renumber;
+      if (!r || !r.plan) return;
+      var summary = r.plan.steps.map(function (step) {
+        return '#' + step.prId + ' (' + step.branch + '): ' + step.renames.map(function (one) { return baseName(one.from) + ' → ' + baseName(one.to); }).join(', ');
+      });
+      act('renumber-apply', function () {
+        return call('renumberMigrations', { repoId: r.repoId, keep: r.keep, comment: r.comment, summary: summary });
+      }, function (res) {
+        r.result = res;
+        var bad = res.done.filter(function (one) { return !one.ok; }).length;
+        say(bad ? bad + ' branch(es) were not renumbered — see the card.' : 'Renumbered and pushed.', bad > 0);
+      });
+    },
     'recheck-migrations': function () {
       act(prKey('recheck-migrations'), function () { return call('checkMigrations', { repoId: state.repoId }); }, function (r) {
         say(r.clashes && r.clashes.length ? r.clashes.length + ' migration number(s) still taken twice.' : 'No migration number is taken twice any more.');
@@ -4149,12 +4260,13 @@
     verify: function () { act(prKey('verify'), function () { return call('verify', prArgs()); }, function (r) { say(r.mergeable ? 'Verified: every comment was addressed.' : 'Verified.'); }); },
     'final-pass': function () { act(prKey('final-pass'), function () { return call('finalPass', prArgs()); }, function (r) { say(r.blockers ? r.blockers + ' blocker(s) found.' : 'Nothing blocks the merge.', r.blockers > 0); }); },
     stance: function (el) { act(prKey('stance'), function () { return call(el.getAttribute('data-stance'), prArgs()); }, load); },
-    'decline-open': function () { state.decline = true; state.merge = null; draw(); },
+    // Their forms are on the Review tab, so asking for one from another tab goes there.
+    'decline-open': function () { state.decline = true; state.merge = null; state.prTab = 'review'; draw(); },
     'decline-close': function () { state.decline = null; draw(); },
     decline: function () {
       act(prKey('decline'), function () { return call('decline', prArgs({ reason: edit('decline-reason'), repoName: state.pr.repo.name })); }, function () { state.decline = null; delete state.edits['decline-reason']; say('Declined.'); load(); });
     },
-    'merge-open': function () { state.merge = true; state.decline = null; draw(); },
+    'merge-open': function () { state.merge = true; state.decline = null; state.prTab = 'review'; draw(); },
     'merge-close': function () { state.merge = null; draw(); },
     merge: function () {
       var v = state.pr;
@@ -4463,6 +4575,16 @@
      * you are about to do with a handful of rows is not something a restart
      * should remember for you.
      */
+    // Choosing who keeps a number asks for the plan again: everything after it can move.
+    if (el.getAttribute('data-act-change') === 'renumber-keep' && state.renumber) {
+      state.renumber.keep[el.getAttribute('data-number')] = Number(el.value);
+      loadRenumber();
+      return;
+    }
+    if (el.getAttribute('data-act-change') === 'renumber-comment' && state.renumber) {
+      state.renumber.comment = el.checked;
+      return;
+    }
     if (el.getAttribute('data-act-change') === 'say-where') {
       state.sayTo = state.sayTo || { thread: true, channel: false, person: false };
       state.sayTo[el.getAttribute('data-where')] = el.checked;

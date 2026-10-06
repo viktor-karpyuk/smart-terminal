@@ -2456,6 +2456,7 @@ async function history({ kind, name, ...rest }) {
         revision,
         name: item.metadata?.name ?? '',
         age: age(item.metadata?.creationTimestamp, Date.now()),
+        createdAt: item.metadata?.creationTimestamp ?? null,
         images: containers.map((container) => container.image).filter(Boolean),
         replicas: item.spec?.replicas ?? null,
         cause: annotations['kubernetes.io/change-cause'] ?? '',

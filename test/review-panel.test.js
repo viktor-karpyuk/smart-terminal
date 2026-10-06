@@ -348,6 +348,8 @@ function codeTab({ files, viewed, file }) {
   V.openFile = (path) => log.push(['open', path]);
   V.draw = () => log.push(['draw']);
   V.$ = () => ({});
+  // Back to the top of the body under the tabs; nothing to scroll here.
+  V.toTop = () => {};
   V.fail = (error) => { throw error; };
   return { V, log };
 }

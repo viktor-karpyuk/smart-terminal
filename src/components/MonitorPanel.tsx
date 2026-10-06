@@ -4,6 +4,8 @@ import { useStore } from '../state/store';
 import { STORAGE } from '../state/types';
 import type { CompactionRecord, DbCell, DbHealth, DbPage, DbTable, HistorySample, Norms } from '../global';
 import type { Finding, SessionAnalysis } from '../state/types';
+import { cutName } from '../lib/labels';
+import { useNameMax } from '../lib/useNameMax';
 
 /*
  * Where Claude compacts itself if nobody compacts it first.
@@ -137,6 +139,7 @@ function FleetRow({
 }) {
   // Each row reads its own two strings. Primitives, so a row only redraws when
   // the thing it draws has actually changed.
+  const nameMax = useNameMax();
   const title = useStore((s) => s.sessions[sessionId]?.customTitle || s.sessions[sessionId]?.title || 'session');
   const colour = useStore((s) => {
     const owner = s.sessions[sessionId]?.profileId;
@@ -148,7 +151,7 @@ function FleetRow({
   return (
     <button className={`monitor-row${selected ? ' is-on' : ''}`} onClick={onPick}>
       <span className="tab-dot" style={{ background: colour }} />
-      <span className="monitor-row-name">{title}</span>
+      <span className="monitor-row-name" title={title}>{cutName(title, nameMax)}</span>
       {verdict?.ok ? (
         <>
           <ContextBar share={share} />

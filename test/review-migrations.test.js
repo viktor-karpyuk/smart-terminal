@@ -16,7 +16,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const { migrationNumber, findClashes, clashFor, clashSentence, clashMessage } = require('../electron/review-migrations');
+const { migrationNumber, findClashes, clashFor, clashSentence, clashMessage, renamedTo, renumberPlan } = require('../electron/review-migrations');
 
 let sqlite = null;
 try {
@@ -305,4 +305,111 @@ test('a repository set to publish by hand publishes nothing by itself', { skip }
   await call('review', { repoId: repo.id, prId: 21 });
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(forgeState.posted.length, 0);
+});
+
+
+// ---------------------------------------------------------------- resolving a clash
+
+test('a renamed migration keeps its prefix, its padding and the rest of its name', () => {
+  assert.equal(renamedTo('db/migration/V003__invoices.sql', 5), 'db/migration/V005__invoices.sql');
+  assert.equal(renamedTo('db/migration/V12__orders.sql', 15), 'db/migration/V15__orders.sql');
+  assert.equal(renamedTo('db/migration/V9__x.sql', 10), 'db/migration/V10__x.sql', 'more digits when the number needs them');
+  assert.equal(renamedTo('changes/0012_add.sql', 14), 'changes/0014_add.sql');
+  assert.equal(renamedTo('changes/12-add.xml', 13), 'changes/13-add.xml');
+  assert.equal(renamedTo('db/V1_2__point.sql', 3), null, 'a dotted version is not a place in a count');
+  assert.equal(renamedTo('db/R__views.sql', 3), null);
+});
+
+test('the plan: who keeps a number, and the losing pull request moves from there on, in order', () => {
+  const prs = [
+    pr(21, ['db/V3__orders.sql'], { opened: '2026-09-01' }),
+    pr(22, ['db/V003__invoices.sql', 'db/V004__index.sql'], { opened: '2026-09-02' }),
+  ];
+  const targets = new Map([['develop', ['db/V1__init.sql', 'db/V2__more.sql']]]);
+  const clashes = findClashes({ prs, targets });
+  const plan = renumberPlan({ clashes, prs, targets });
+  assert.deepEqual(plan.decisions.map((d) => [d.number, d.keeper.prId, d.fixed]), [['3', 21, false]], 'the one opened first');
+  assert.equal(plan.steps.length, 1);
+  assert.equal(plan.steps[0].prId, 22);
+  assert.deepEqual(plan.steps[0].renames.map((one) => [one.from, one.to]), [
+    ['db/V003__invoices.sql', 'db/V005__invoices.sql'],
+    ['db/V004__index.sql', 'db/V006__index.sql'],
+  ], 'its later migration moves too, so the two keep their order');
+  assert.deepEqual(plan.steps[0].why, ['#21 keeps 3']);
+
+  // Chosen the other way round, the other one moves.
+  const other = renumberPlan({ clashes, prs, targets, keep: { 3: 22 } });
+  assert.deepEqual(other.steps.map((step) => [step.prId, step.renames.map((one) => one.to)]), [[21, ['db/V5__orders.sql']]]);
+
+  // Numbers the bus has reserved are not handed out.
+  assert.equal(renumberPlan({ clashes, prs, targets, reserved: 9 }).steps[0].renames[0].to, 'db/V010__invoices.sql');
+});
+
+test('a number already on the target is kept by the target, whatever is chosen', () => {
+  const prs = [pr(31, ['db/V3__late.sql'])];
+  const targets = new Map([['develop', ['db/V1__a.sql', 'db/V3__merged.sql']]]);
+  const plan = renumberPlan({ clashes: findClashes({ prs, targets }), prs, targets, keep: { 3: 31 } });
+  assert.equal(plan.decisions[0].fixed, true);
+  assert.equal(plan.decisions[0].keeper.branch, 'develop');
+  assert.deepEqual(plan.steps.map((step) => step.renames[0].to), ['db/V4__late.sql']);
+});
+
+test('resolving: the losing branch gets one commit, pushed, with its references updated and its thread told', { skip }, async () => {
+  const { service, repo, call, w, forgeState } = setup({ repo: { migrationsPath: 'db/migration' } });
+  // invoices also adds a later migration and a changelog that names the clashing file.
+  git(w.seed, 'checkout', '-q', 'invoices');
+  fs.writeFileSync(path.join(w.seed, 'db', 'migration', 'V004__invoices_index.sql'), '-- index\n');
+  fs.writeFileSync(path.join(w.seed, 'db', 'changelog.txt'), 'include db/migration/V003__invoices.sql\ninclude db/migration/XV003__invoices.sql.bak\n');
+  git(w.seed, 'add', '.');
+  git(w.seed, 'commit', '-q', '-m', 'more invoices');
+  git(w.seed, 'push', '-q', 'origin', 'invoices');
+  forgeState.prs.find((one) => one.id === 22).headSha = git(w.seed, 'rev-parse', 'HEAD');
+  await call('refreshPrs', { repoId: repo.id });
+
+  const planned = await call('migrationPlan', { repoId: repo.id });
+  assert.equal(planned.ok, true, planned.error);
+  assert.deepEqual(planned.plan.steps.map((step) => [step.prId, step.renames.map((one) => path.basename(one.to))]),
+    [[22, ['V005__invoices.sql', 'V006__invoices_index.sql']]]);
+
+  const result = await call('renumberMigrations', { repoId: repo.id });
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.done.length, 1);
+  assert.equal(result.done[0].ok, true, result.done[0].error);
+
+  // On the remote branch, as the author will see it when they pull.
+  git(w.seed, 'fetch', '-q', 'origin');
+  const files = git(w.seed, 'ls-tree', '-r', '--name-only', 'origin/invoices', '--', 'db').split('\n');
+  assert.ok(files.includes('db/migration/V005__invoices.sql') && files.includes('db/migration/V006__invoices_index.sql'));
+  assert.ok(!files.includes('db/migration/V003__invoices.sql'));
+  assert.equal(git(w.seed, 'show', 'origin/invoices:db/changelog.txt'),
+    'include db/migration/V005__invoices.sql\ninclude db/migration/XV003__invoices.sql.bak', 'whole names only');
+  assert.equal(git(w.seed, 'rev-list', '--count', `${forgeState.prs.find((one) => one.id === 22).headSha}..origin/invoices`), '1', 'one commit');
+  assert.match(git(w.seed, 'log', '-1', '--format=%B', 'origin/invoices'), /#21 keeps 3/);
+  // orders was not touched.
+  assert.equal(git(w.seed, 'rev-parse', 'origin/orders'), w.heads.orders);
+
+  assert.match(forgeState.posted.find((one) => one.prId === 22).body, /`V003__invoices\.sql` → `V005__invoices\.sql`/);
+  assert.deepEqual(service.store.migrationClashes(repo.id), [], 'and the board stops saying it');
+  // The numbers it took are reserved, so the bus never hands them out.
+  assert.deepEqual(service.store.all('SELECT number FROM cr_migration_slot ORDER BY number').map((row) => row.number), [5, 6]);
+});
+
+test('resolving refuses to force: a branch that moved since it was read is left alone', { skip }, async () => {
+  const { service, repo, call, w } = setup({ repo: { migrationsPath: 'db/migration' } });
+  await call('refreshPrs', { repoId: repo.id });
+  // Somebody pushes to invoices between the plan being read and the push.
+  const real = service.migrations.git.commitAll.bind(service.migrations.git);
+  service.migrations.git.commitAll = async (dir, message) => {
+    const sha = await real(dir, message);
+    git(w.seed, 'checkout', '-q', 'invoices');
+    fs.writeFileSync(path.join(w.seed, 'app.js'), 'module.exports = 2;\n');
+    git(w.seed, 'commit', '-q', '-am', 'meanwhile');
+    git(w.seed, 'push', '-q', 'origin', 'invoices');
+    return sha;
+  };
+  const result = await call('renumberMigrations', { repoId: repo.id, comment: false });
+  assert.equal(result.done[0].ok, false);
+  assert.match(result.done[0].error, /moved since it was read; nothing was pushed/);
+  git(w.seed, 'fetch', '-q', 'origin');
+  assert.match(git(w.seed, 'ls-tree', '-r', '--name-only', 'origin/invoices', '--', 'db'), /V003__invoices\.sql/);
 });

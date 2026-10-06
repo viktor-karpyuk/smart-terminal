@@ -280,6 +280,18 @@ function Menu({
       />
       <MenuItem label="Rename…" hint="⌘E" onClick={run(() => store.setRenamingSessionId(sessionId))} />
       <MenuItem label="Duplicate" hint="⇧⌘K" onClick={run(() => store.duplicateSession(sessionId))} />
+      {/*
+        The conversation, not only the folder: a new session that already knows
+        everything this one was told, to take somewhere else. Claude's own
+        --fork-session, so the original carries on exactly as it was.
+      */}
+      {session.kind === 'claude' && session.claudeSessionId && (
+        <MenuItem
+          label="Clone the conversation"
+          hint="new session, same context"
+          onClick={run(() => void store.cloneSession(sessionId))}
+        />
+      )}
       {!exited && (
         <MenuItem
           label="Restart"

@@ -13,6 +13,27 @@ export function sessionLabel(session: Session, homedir = ''): string {
   return basename(session.cwd) || session.title;
 }
 
+/** How long a name may be on a tab or in a list before it is cut, unless the person chose otherwise. */
+export const NAME_MAX_DEFAULT = 24;
+
+/**
+ * A name cut to `max` characters, the last one an ellipsis. Cut by characters
+ * the person sees, not by bytes, so an accent or an emoji is never split.
+ * Whatever is cut is always in the tooltip; see `nameTip`.
+ */
+export function cutName(name: string, max: number = NAME_MAX_DEFAULT): string {
+  const chars = Array.from(String(name ?? ''));
+  if (!Number.isFinite(max) || max < 4 || chars.length <= max) return chars.join('');
+  return `${chars.slice(0, max - 1).join('').trimEnd()}…`;
+}
+
+/** The tooltip for something with a name: the whole name first, then whatever else is worth saying. */
+export function nameTip(name: string, ...more: Array<string | null | undefined | false>): string {
+  const lines = [String(name ?? '')];
+  for (const line of more) if (line && line !== name) lines.push(line);
+  return lines.join('\n');
+}
+
 export function basename(p: string): string {
   const parts = p.split('/').filter(Boolean);
   return parts[parts.length - 1] ?? '';
