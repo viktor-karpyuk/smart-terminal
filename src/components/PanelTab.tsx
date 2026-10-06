@@ -4,6 +4,8 @@ import { leafOfTab } from '../state/layout';
 import { Popover } from './Popover';
 import { PANEL_MIME } from '../lib/drag';
 import { folderGit } from '../lib/folderGit';
+import { cutName, nameTip } from '../lib/labels';
+import { useNameMax } from '../lib/useNameMax';
 
 /**
  * The tab a file panel wears.
@@ -53,6 +55,7 @@ export function PanelTab({
   const git = folderGit(repo);
 
   const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const nameMax = useNameMax();
 
   if (!panel) return null;
   const monitor = panel.kind === 'monitor';
@@ -80,8 +83,10 @@ export function PanelTab({
           : shop
             ? 'What the app can be taught to open'
             : view
-              ? (view.root ?? view.title)
-              : root || 'No folder chosen yet'
+              ? nameTip(view.title, view.root)
+              : root
+                ? nameTip(name, root)
+                : 'No folder chosen yet'
       }
       // A folder tab moves like a session tab: the panes already know how to
       // take a tab, and a folder is one.
@@ -129,7 +134,7 @@ export function PanelTab({
           <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
         )}
       </svg>
-      <span className="tab-title">{name}</span>
+      <span className="tab-title">{cutName(name, nameMax)}</span>
       {!monitor && !view && unsaved && <span className="file-tab-dirty" title="unsaved changes" />}
       {/*
         The same two colours the Git tab uses for the same two things, so a

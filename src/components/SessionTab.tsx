@@ -1,7 +1,8 @@
 import { useStore } from '../state/store';
-import { formatBytes, sessionLabel } from '../lib/labels';
+import { formatBytes, sessionLabel, cutName } from '../lib/labels';
 import { SESSION_MIME } from '../lib/drag';
 import { SessionMark } from './icons';
+import { useNameMax } from '../lib/useNameMax';
 
 interface Props {
   sessionId: string;
@@ -18,6 +19,7 @@ interface Props {
  * window, several times a second.
  */
 export function SessionTab({ sessionId, selected, tight, grouped }: Props) {
+  const nameMax = useNameMax();
   const session = useStore((s) => s.sessions[sessionId]);
   const profile = useStore((s) => {
     const owner = s.sessions[sessionId]?.profileId;
@@ -73,6 +75,8 @@ export function SessionTab({ sessionId, selected, tight, grouped }: Props) {
       }}
       draggable={!renaming}
       title={[
+        // The whole name first: the tab may be showing only the start of it.
+        sessionLabel(session, homedir),
         `${profile?.name ?? 'account'}${profile?.configDir ? '' : ' (default config)'}`,
         session.cwd,
         session.title,
@@ -149,7 +153,7 @@ export function SessionTab({ sessionId, selected, tight, grouped }: Props) {
           }}
         />
       ) : (
-        <span className="tab-title">{sessionLabel(session, homedir)}</span>
+        <span className="tab-title">{cutName(sessionLabel(session, homedir), nameMax)}</span>
       )}
       {/* Running by itself, or stopped because it needs you — the second is the one
           worth spotting from across the screen. */}

@@ -380,6 +380,8 @@ export interface Settings {
    * was for anybody who does not care.
    */
   askSessionName: boolean;
+  /** At most this many characters of a name on a tab or in a list; the whole name is in its tooltip. */
+  nameMaxChars: number;
   /**
    * Let a previewed HTML page run its own scripts.
    *

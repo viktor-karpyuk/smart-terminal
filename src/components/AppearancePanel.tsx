@@ -861,6 +861,22 @@ function SessionsSection() {
         />
       </Group>
 
+      <Group title="Names">
+        <Row
+          label="Longest name shown"
+          hint="Sessions, folders, extensions and clusters, on tabs and in the sidebar. A longer name is cut with …, and hovering it shows the whole of it."
+        >
+          <Slider
+            value={settings.nameMaxChars}
+            min={8}
+            max={60}
+            step={1}
+            format={(v) => `${v} characters`}
+            onChange={(nameMaxChars) => updateSettings({ nameMaxChars })}
+          />
+        </Row>
+      </Group>
+
       <Group
         title="Sessions talking to each other"
         hint={

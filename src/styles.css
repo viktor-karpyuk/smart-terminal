@@ -540,7 +540,9 @@ input:focus, textarea:focus { border-color: var(--accent); }
   align-items: center;
   gap: 6px;
   padding: 0 8px;
-  max-width: 200px;
+  /* The name is cut to the person's limit in characters (Settings → Sessions →
+     Names); this is only a ceiling for a limit set very high. */
+  max-width: 420px;
   border-right: 1px solid var(--border);
   color: var(--text-dim);
   font-size: var(--fs-md);
