@@ -17,6 +17,8 @@ export interface PtyCreateOptions {
   sessionId?: string;
   /** Pin a new conversation's id. */
   claudeSessionId?: string;
+  /** Start as a copy of this conversation (Claude's --fork-session), written under claudeSessionId. */
+  forkFrom?: string;
   /** Continue an existing conversation instead of starting one. */
   resumeSessionId?: string;
   /** Where the session first opened, as a second place to look for its conversation. */
