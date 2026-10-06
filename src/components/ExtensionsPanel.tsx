@@ -124,7 +124,7 @@ export function ExtensionsPanel() {
 
       <div className="extensions-body">
         <div className="extensions-list">
-          {!shown.length && <p className="usage-note">Nothing matches.</p>}
+          {!shown.length && !catalog.loading && <p className="empty-state">Nothing matches.</p>}
           {shown.map((row) => (
             <button
               key={row.id}
@@ -234,7 +234,7 @@ function Consent({
       <div className="modal modal-narrow extension-consent" onMouseDown={(event) => event.stopPropagation()}>
         <header className="modal-header">
           <h2>{'offer' in state ? `Install ${state.offer.name}?` : 'Installing an extension'}</h2>
-          <button className="icon-btn" aria-label="Close" onClick={onCancel}>
+          <button className="ghost-btn tiny modal-close" aria-label="Close" onClick={onCancel}>
             &times;
           </button>
         </header>

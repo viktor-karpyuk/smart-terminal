@@ -1,6 +1,7 @@
 import { asFilePanel, panelLabel, useStore } from '../state/store';
 import { sessionLabel } from '../lib/labels';
 import type { MinimizedTab } from '../state/types';
+import { CloseGlyph } from './icons';
 
 /**
  * The strip along the bottom holding what has been set aside.
@@ -117,7 +118,7 @@ function DockedPanel({ panelId }: { panelId: string }) {
           closePanel(panelId);
         }}
       >
-        ×
+        <CloseGlyph />
       </span>
     </button>
   );
@@ -175,7 +176,7 @@ function DockedTab({ sessionId }: { sessionId: string }) {
           requestClose(sessionId);
         }}
       >
-        ×
+        <CloseGlyph />
       </span>
     </button>
   );
@@ -234,7 +235,7 @@ function DockedGroup({ groupId }: { groupId: string }) {
           requestCloseGroup(groupId);
         }}
       >
-        ×
+        <CloseGlyph />
       </span>
     </button>
   );

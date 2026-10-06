@@ -439,7 +439,9 @@ export function applyLook(settings: Settings) {
   const scale = settings.uiScale || 1;
   root.style.setProperty('--ui-scale', String(scale));
   for (const [step, size] of Object.entries(TYPE_SCALE)) {
-    root.style.setProperty(`--fs-${step}`, `${Math.round(size * scale * 2) / 2}px`);
+    const px = Math.round(size * scale * 2) / 2;
+    // The smallest step carries section labels and counts; below 9.5px they stop being read.
+    root.style.setProperty(`--fs-${step}`, `${step === 'xs' ? Math.max(px, 9.5) : px}px`);
   }
 
   const corners = CORNERS[settings.corners] ?? CORNERS.soft;
@@ -447,6 +449,8 @@ export function applyLook(settings: Settings) {
   root.style.setProperty('--r-md', `${corners.md}px`);
   root.style.setProperty('--r-lg', `${corners.lg}px`);
   root.style.setProperty('--r-modal', `${corners.modal}px`);
+  // Pills follow the corners too: square buttons beside round chips looked like two apps.
+  root.style.setProperty('--r-pill', settings.corners === 'square' ? `${corners.md}px` : '999px');
 
   for (const [name, colour] of Object.entries(syntaxFor(theme))) {
     root.style.setProperty(`--syn-${name}`, colour);

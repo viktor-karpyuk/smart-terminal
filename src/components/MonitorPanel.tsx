@@ -949,7 +949,7 @@ function Storage() {
     }
   };
 
-  if (!health) return <p className="usage-note">Reading the database…</p>;
+  if (!health) return <p className="empty-state">Reading the database…</p>;
 
   const orphans =
     health.orphans.chunks + health.orphans.stats + health.orphans.briefs + health.orphans.messages + health.orphans.history;
@@ -1178,7 +1178,7 @@ function TableRows({ name, onClose }: { name: string; onClose(): void }) {
           onChange={(event) => setSearch(event.target.value)}
         />
         <span className="db-table-count">
-          {total ? `${offset + 1}–${Math.min(offset + limit, total)} of ${total.toLocaleString()}` : 'nothing here'}
+          {page === null ? 'reading…' : total ? `${offset + 1}–${Math.min(offset + limit, total)} of ${total.toLocaleString()}` : 'nothing here'}
         </span>
         <button className="ghost-btn tiny" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - limit))}>
           ‹

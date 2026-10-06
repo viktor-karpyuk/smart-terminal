@@ -74,7 +74,19 @@ export function GitPanel({ panelId }: { panelId: string }) {
       {repo?.error && !repo.busy && (
         <div className="git-notice is-bad">
           <span className="file-bar-dot" />
+          {/* Whole, and selectable: a rejected push or a conflict is several lines
+              that say what to do, and one cut-off line said nothing. */}
           <span className="file-bar-text">{repo.error}</span>
+          <button
+            className="link-btn"
+            onClick={() =>
+              useStore.setState((state) => ({
+                repos: { ...state.repos, [root]: { ...state.repos[root], error: null } },
+              }))
+            }
+          >
+            Dismiss
+          </button>
         </div>
       )}
 
@@ -313,8 +325,12 @@ function BranchMenu({
               <button
                 className="menu-item"
                 onClick={() => {
-                  const next = window.prompt(`Rename ${branch.name} to`, branch.name);
-                  if (next && next !== branch.name) run('renameBranch', { from: branch.name, to: next }, `Renaming ${branch.name}`);
+                  // Electron has no window.prompt — it answered null, so this
+                  // never renamed anything. The branch's own page has a box.
+                  onClose();
+                  renameNext = branch.name;
+                  useStore.getState().patchPanel(panelId, { selectedBranch: branch.name });
+                  setGitView(panelId, 'branches');
                 }}
               >
                 <span>Rename…</span>
@@ -845,7 +861,7 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
 
       <div className="git-changes-body">
       <div className="git-list" style={compact ? undefined : { flexBasis: `${panel.gitListWidth ?? 40}%` }}>
-        {files.length === 0 && <p className="files-note">Nothing changed.</p>}
+        {files.length === 0 && <p className="empty-state">Nothing changed.</p>}
         {parts.map((section) => (
           <SectionRows
             key={section.id}
@@ -1184,9 +1200,14 @@ function Patch({ text }: { text: string }) {
     return out;
   }, [text]);
 
+  // A lockfile's diff is tens of thousands of lines; mounting all of them at
+  // once froze the panel. The first stretch, and more on request.
+  const [shown, setShown] = useState(2000);
+  useEffect(() => setShown(2000), [text]);
+
   return (
     <div className="patch mono">
-      {rows.map((row, index) => (
+      {rows.slice(0, shown).map((row, index) => (
         <div key={index} className={`patch-line is-${row.kind}`}>
           <span className="patch-num">{row.before ?? ''}</span>
           <span className="patch-num">{row.after ?? ''}</span>
@@ -1194,6 +1215,11 @@ function Patch({ text }: { text: string }) {
           <span className="patch-text">{row.text || ' '}</span>
         </div>
       ))}
+      {rows.length > shown && (
+        <button className="ghost-btn tiny patch-more" onClick={() => setShown((n) => n + 5000)}>
+          Show {(rows.length - shown).toLocaleString()} more lines
+        </button>
+      )}
     </div>
   );
 }
@@ -1242,9 +1268,8 @@ function NewBranch({ root, from }: { root: string; from: string | null }) {
 
 // --- History ---------------------------------------------------------------
 
-/** One row of the graph is one commit, so both use the same height. */
-const ROW = 26;
-const LANE_W = 16;
+/** One row of the graph is one commit, so both use the same height — 26px at the default text size. */
+const BASE_ROW = 26;
 
 function History({ panelId }: { panelId: string }) {
   const panel = useStore((s) => asFilePanel(s.panels[panelId]) ?? null);
@@ -1270,29 +1295,47 @@ function History({ panelId }: { panelId: string }) {
     refreshRepo(root, 'graph');
   }, [root, repo, refreshRepo]);
 
+  // The row grows with the interface text, so chips never touch the next row.
+  const scale = useStore((s) => s.settings.uiScale) || 1;
+
   if (!panel || !root) return null;
   const commits = repo?.commits ?? [];
-  const width = Math.max(1, repo?.graphWidth ?? 1) * LANE_W + 16;
+  const ROW = Math.round(BASE_ROW * scale);
+  /*
+   * Lanes are drawn narrower when there are many: the gutter is as wide as the
+   * widest point anywhere in the loaded history, and at 16px a lane a busy
+   * history spent a third of a narrow pane on empty columns.
+   */
+  const lanes = Math.max(1, repo?.graphWidth ?? 1);
+  const laneW = Math.max(8, Math.min(16, 112 / lanes));
+  const width = lanes * laneW + 16;
 
   return (
     <div className="git-history">
       <div className="git-graph" style={{ minHeight: commits.length * ROW }}>
-        <svg
-          className="git-lanes"
-          width={width}
-          height={commits.length * ROW}
-          fill="none"
-          strokeWidth="1.8"
-        >
-          {commits.map((commit, index) => (
-            <Lanes key={commit.sha} commit={commit} index={index} commits={commits} />
-          ))}
-        </svg>
+        {/* Never more than a third of the pane: in a narrow one the lanes beyond
+            that are cut off rather than pushing every subject out of sight. */}
+        <div className="git-lanes-clip" style={{ width: `min(${width}px, 35%)`, height: commits.length * ROW }}>
+          <svg
+            className="git-lanes"
+            width={width}
+            height={commits.length * ROW}
+            fill="none"
+            strokeWidth="1.8"
+          >
+            {commits.map((commit, index) => (
+              <Lanes key={commit.sha} commit={commit} index={index} commits={commits} row={ROW} laneW={laneW} />
+            ))}
+          </svg>
+        </div>
 
-        <div className="git-commits" style={{ marginLeft: width }}>
+        {/* Full width, the graph drawn over the start of each row, so hover and
+            selection reach the commit's own dot. */}
+        <div className="git-commits">
           {commits.map((commit) => (
             <div
               key={commit.sha}
+              style={{ height: ROW, paddingLeft: `calc(min(${width}px, 35%) + 10px)` }}
               className={`git-commit-row${panel.selectedSha === commit.sha ? ' is-selected' : ''}`}
               onClick={() => patch(panelId, { selectedSha: commit.sha })}
             >
@@ -1300,7 +1343,7 @@ function History({ panelId }: { panelId: string }) {
                 <span
                   key={ref.kind + ref.name}
                   className={`git-ref is-${ref.kind}${ref.head ? ' is-head' : ''}`}
-                  title={ref.kind}
+                  title={`${ref.name} · ${ref.kind}`}
                 >
                   {ref.name}
                 </span>
@@ -1310,7 +1353,11 @@ function History({ panelId }: { panelId: string }) {
               <span className="git-sha">{commit.sha.slice(0, 7)}</span>
             </div>
           ))}
-          {!commits.length && <p className="files-note">No commits yet.</p>}
+          {!commits.length && (
+            <p className="empty-state">
+              {repo?.loading || askedGraph.current !== root ? 'Reading history…' : 'No commits yet.'}
+            </p>
+          )}
         </div>
       </div>
 
@@ -1326,9 +1373,21 @@ function History({ panelId }: { panelId: string }) {
 }
 
 /** The lines and the dot for one commit, on the shared row rhythm. */
-function Lanes({ commit, index, commits }: { commit: GitCommit; index: number; commits: GitCommit[] }) {
+function Lanes({
+  commit,
+  index,
+  commits,
+  row: ROW,
+  laneW,
+}: {
+  commit: GitCommit;
+  index: number;
+  commits: GitCommit[];
+  row: number;
+  laneW: number;
+}) {
   const y = index * ROW + ROW / 2;
-  const x = (lane: number) => 10 + lane * LANE_W;
+  const x = (lane: number) => 10 + lane * laneW;
   const rowOf = (sha: string) => commits.findIndex((other) => other.sha === sha);
 
   return (
@@ -1380,7 +1439,9 @@ function CommitDetail({
   sha: string;
   commit: import('../global').GitCommit | null;
 }) {
-  const [files, setFiles] = useState<Array<{ path: string; name: string; added: number | null; removed: number | null }>>([]);
+  // null while it is being read, so a commit with no file changes — a merge,
+  // an empty commit — or a failed read does not say "Reading…" for ever.
+  const [files, setFiles] = useState<Array<{ path: string; name: string; added: number | null; removed: number | null }> | null>(null);
   const [copied, setCopied] = useState(false);
   const gitDo = useStore((s) => s.gitDo);
   const refreshRepo = useStore((s) => s.refreshRepo);
@@ -1397,7 +1458,7 @@ function CommitDetail({
    */
   useEffect(() => {
     let alive = true;
-    setFiles([]);
+    setFiles(null);
     window.api.git.call('commitFiles', root, { sha }).then((result) => {
       if (!alive) return;
       setFiles(result.ok ? ((result.value as never) ?? (result as { files?: never }).files ?? []) : []);
@@ -1463,7 +1524,7 @@ function CommitDetail({
         </div>
       )}
       <div className="git-detail-files">
-        {files.map((file) => (
+        {(files ?? []).map((file) => (
           <div key={file.path} className="git-row">
             <span className="git-file-name" title={file.path}>{file.path}</span>
             <span className="git-numstat">
@@ -1472,13 +1533,19 @@ function CommitDetail({
             </span>
           </div>
         ))}
-        {!files.length && <p className="files-note">Reading…</p>}
+        {files === null && <p className="files-note">Reading…</p>}
+        {files !== null && !files.length && (
+          <p className="files-note">No file changes{commit?.parents && commit.parents.length > 1 ? ' — a merge' : ''}.</p>
+        )}
       </div>
     </div>
   );
 }
 
 // --- Branches --------------------------------------------------------------
+
+/** A branch the menu asked to rename, picked up by the Branches view when it opens. */
+let renameNext: string | null = null;
 
 function Branches({ panelId }: { panelId: string }) {
   const panel = useStore((s) => asFilePanel(s.panels[panelId]) ?? null);
@@ -1487,6 +1554,11 @@ function Branches({ panelId }: { panelId: string }) {
   const patch = useStore((s) => s.patchPanel);
   const gitDo = useStore((s) => s.gitDo);
   const refreshRepo = useStore((s) => s.refreshRepo);
+  const [renaming, setRenaming] = useState<string | null>(() => {
+    const name = renameNext;
+    renameNext = null;
+    return name;
+  });
 
   // Same shape as the history tab above: no local branches exist until the first
   // commit, so an empty answer is an answer and must not ask again for ever.
@@ -1570,10 +1642,31 @@ function Branches({ panelId }: { panelId: string }) {
 
       <div className="git-branch-detail">
         {!picked ? (
-          <p className="files-note">Pick a branch.</p>
+          <p className="empty-state">Pick a branch.</p>
         ) : (
           <>
-            <div className="git-branch-title">{picked.name}</div>
+            {renaming === picked.name ? (
+              <input
+                className="git-branch-rename"
+                autoFocus
+                defaultValue={picked.name}
+                aria-label={`New name for ${picked.name}`}
+                onFocus={(event) => event.currentTarget.select()}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') setRenaming(null);
+                  if (event.key !== 'Enter') return;
+                  const next = event.currentTarget.value.trim();
+                  setRenaming(null);
+                  if (next && next !== picked.name) {
+                    gitDo(root, 'renameBranch', { from: picked.name, to: next }, `Renaming ${picked.name}`);
+                    patch(panelId, { selectedBranch: next });
+                  }
+                }}
+                onBlur={() => setRenaming(null)}
+              />
+            ) : (
+              <div className="git-branch-title">{picked.name}</div>
+            )}
             <div className="form-hint">
               {picked.upstream ? `tracks ${picked.upstream}` : 'no upstream'}
             </div>
@@ -1612,12 +1705,7 @@ function Branches({ panelId }: { panelId: string }) {
               </button>
               <button
                 className="ghost-btn"
-                onClick={() => {
-                  const next = window.prompt(`Rename ${picked.name} to`, picked.name);
-                  if (next && next !== picked.name) {
-                    gitDo(root, 'renameBranch', { from: picked.name, to: next }, `Renaming ${picked.name}`);
-                  }
-                }}
+                onClick={() => setRenaming(picked.name)}
               >
                 Rename
               </button>

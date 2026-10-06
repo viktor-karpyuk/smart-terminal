@@ -2,14 +2,14 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { startDrag } from '../lib/resize';
 import { useShallow } from 'zustand/react/shallow';
 import { asFilePanel, useStore } from '../state/store';
-import { allLeaves, allTabs, leafOfTab } from '../state/layout';
+import { allLeaves, allTabs, findLeaf, leafOfTab } from '../state/layout';
 import { SESSION_MIME } from '../lib/drag';
 import { sessionLabel, cutName, nameTip } from '../lib/labels';
 import { shortContext } from '../lib/extensionHost';
 import { compactPath } from '../lib/labels';
 import { PathLabel } from './PathLabel';
 import { Popover } from './Popover';
-import { AccountsIcon, AppearanceIcon, ClustersIcon, ExtensionsIcon, HistoryIcon, MonitorIcon, UsageIcon, OpenInSectionIcon, RefreshIcon } from './icons';
+import { AccountsIcon, AppearanceIcon, ClustersIcon, ExtensionsIcon, HistoryIcon, MonitorIcon, UsageIcon, OpenInSectionIcon, RefreshIcon, CloseGlyph } from './icons';
 import { legible } from '../lib/looks';
 import { useNameMax } from '../lib/useNameMax';
 
@@ -232,11 +232,21 @@ function SectionHeader({
       </svg>
       <span className="sidebar-section-label">{label}</span>
       <span className="sidebar-section-count">{count}</span>
+      {/* Beside the count, in the flow: at the far end it sat over the header's
+          own actions — "+ Open", refresh — whenever the pointer was there. */}
+      <button
+        className="tab-close"
+        onClick={(event) => {
+          event.stopPropagation();
+          onClose();
+        }}
+        aria-label={`Close ${label}`}
+        title={`Close ${label}`}
+      >
+        <CloseGlyph />
+      </button>
       <span className="sidebar-section-actions" onClick={(event) => event.stopPropagation()}>
         {extra}
-        <button className="tab-close" onClick={onClose} aria-label={`Close ${label}`} title={`Close ${label}`}>
-          ×
-        </button>
       </span>
     </div>
   );
@@ -329,6 +339,7 @@ function Folders() {
 function FolderItem({ panelId, homedir }: { panelId: string; homedir: string }) {
   const nameMax = useNameMax();
   const root = useStore((s) => asFilePanel(s.panels[panelId])?.root ?? '');
+  const current = useStore((s) => isInFront(s, panelId));
   const gitRoot = useStore((s) => asFilePanel(s.panels[panelId])?.gitRoot ?? null);
   const changed = useStore((s) => (gitRoot ? (s.repos[gitRoot]?.files.length ?? 0) : 0));
   const unsaved = useStore((s) => {
@@ -347,7 +358,7 @@ function FolderItem({ panelId, homedir }: { panelId: string; homedir: string }) 
 
   return (
     <div
-      className="sidebar-item"
+      className={`sidebar-item${current ? ' is-current' : ''}`}
       title={nameTip(root.split('/').filter(Boolean).pop() ?? root, root)}
       onMouseDown={() => {
         const leaf = leafOfTab(layout, panelId);
@@ -377,7 +388,7 @@ function FolderItem({ panelId, homedir }: { panelId: string; homedir: string }) 
         }}
         aria-label="Close folder"
       >
-        ×
+        <CloseGlyph />
       </button>
     </div>
   );
@@ -1160,6 +1171,7 @@ function SidebarItem({ sessionId }: { sessionId: string }) {
   const setRenamingId = useStore((s) => s.setRenamingSessionId);
   const setDraggingId = useStore((s) => s.setDraggingSessionId);
   const openContextMenu = useStore((s) => s.openContextMenu);
+  const current = useStore((s) => isInFront(s, sessionId));
 
   if (!session) return null;
 
@@ -1168,7 +1180,7 @@ function SidebarItem({ sessionId }: { sessionId: string }) {
 
   return (
     <div
-      className={`sidebar-item${session.status === 'exited' ? ' is-exited' : ''}`}
+      className={`sidebar-item${session.status === 'exited' ? ' is-exited' : ''}${current ? ' is-current' : ''}`}
       draggable
       onDragStart={(event) => {
         setDraggingId(sessionId);
@@ -1203,8 +1215,13 @@ function SidebarItem({ sessionId }: { sessionId: string }) {
           requestClose(sessionId);
         }}
       >
-        &times;
+        <CloseGlyph />
       </button>
     </div>
   );
+}
+
+/** Whether this tab is the one in front of the section you are working in. */
+function isInFront(state: ReturnType<typeof useStore.getState>, id: string) {
+  return findLeaf(state.layout, state.activeLeafId)?.active === id;
 }

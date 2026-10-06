@@ -1417,12 +1417,12 @@ function Dir({ panelId, path, depth }: { panelId: string; path: string; depth: n
     if (!listing) loadDir(path);
   }, [path, listing, loadDir]);
 
-  if (listing?.error) return <p className="files-note" style={{ paddingLeft: 10 + depth * 12 }}>{listing.error}</p>;
+  if (listing?.error) return <p className="files-note" style={{ paddingLeft: 24 + depth * 12 }}>{listing.error}</p>;
   if (!listing || (listing.loading && !listing.entries.length)) {
-    return <p className="files-note" style={{ paddingLeft: 10 + depth * 12 }}>reading…</p>;
+    return <p className="files-note" style={{ paddingLeft: 24 + depth * 12 }}>reading…</p>;
   }
   if (!listing.entries.length) {
-    return <p className="files-note" style={{ paddingLeft: 10 + depth * 12 }}>empty</p>;
+    return <p className="files-note" style={{ paddingLeft: 24 + depth * 12 }}>empty</p>;
   }
 
   // What survives the search, if one is on. A folder is kept because something
@@ -1689,7 +1689,7 @@ function RenameBox({ name, isDirectory, onDone }: { name: string; isDirectory: b
   return (
     <input
       ref={box}
-      className="files-rename"
+      className={`files-rename${problem ? ' is-bad' : ''}`}
       defaultValue={name}
       spellCheck={false}
       title={problem ?? undefined}

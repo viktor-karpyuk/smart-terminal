@@ -205,3 +205,24 @@ export function CaretIcon() {
     </svg>
   );
 }
+
+/**
+ * The close and set-aside marks, drawn rather than typed. A "×" and a "–" are
+ * two different fonts' ideas of centre; these sit in the middle of their box
+ * and grow with the text around them.
+ */
+export function CloseGlyph() {
+  return (
+    <svg width="0.72em" height="0.72em" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden>
+      <path d="M2 2l6 6M8 2l-6 6" />
+    </svg>
+  );
+}
+
+export function MinusGlyph() {
+  return (
+    <svg width="0.72em" height="0.72em" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden>
+      <path d="M2 5h6" />
+    </svg>
+  );
+}

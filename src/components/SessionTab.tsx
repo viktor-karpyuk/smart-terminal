@@ -1,7 +1,7 @@
 import { useStore } from '../state/store';
 import { formatBytes, sessionLabel, cutName } from '../lib/labels';
 import { SESSION_MIME } from '../lib/drag';
-import { SessionMark } from './icons';
+import { SessionMark, CloseGlyph, MinusGlyph } from './icons';
 import { useNameMax } from '../lib/useNameMax';
 
 interface Props {
@@ -184,7 +184,7 @@ export function SessionTab({ sessionId, selected, tight, grouped }: Props) {
         title="Set this tab aside — it keeps running, and you get its space back"
         aria-label="Minimize session"
       >
-        &#8211;
+        <MinusGlyph />
       </button>
       <button
         className="tab-close"
@@ -195,7 +195,7 @@ export function SessionTab({ sessionId, selected, tight, grouped }: Props) {
         }}
         aria-label="Close session"
       >
-        ×
+        <CloseGlyph />
       </button>
     </div>
   );
