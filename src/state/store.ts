@@ -61,7 +61,7 @@ import {
   writeToTerminal,
   type TerminalLook,
 } from '../terminals/registry';
-import { sessionLabel } from '../lib/labels';
+import { NAME_MAX_DEFAULT, sessionLabel } from '../lib/labels';
 
 /** Panels whose terminal is being started, so a second press cannot start another. */
 const openingTerminal = new Set<string>();
@@ -72,6 +72,7 @@ const DEFAULT_SETTINGS: Settings = {
   // editors change size the first time they run a build that has this in it.
   editorFontSize: 12.5,
   askSessionName: true,
+  nameMaxChars: NAME_MAX_DEFAULT,
   previewScripts: false,
   fontFamily: '"JetBrains Mono", "SF Mono", Menlo, "Fira Code", ui-monospace, monospace',
   sidebarVisible: true,

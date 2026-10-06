@@ -4,13 +4,14 @@ import { useShallow } from 'zustand/react/shallow';
 import { asFilePanel, useStore } from '../state/store';
 import { allLeaves, allTabs, leafOfTab } from '../state/layout';
 import { SESSION_MIME } from '../lib/drag';
-import { sessionLabel } from '../lib/labels';
+import { sessionLabel, cutName, nameTip } from '../lib/labels';
 import { shortContext } from '../lib/extensionHost';
 import { compactPath } from '../lib/labels';
 import { PathLabel } from './PathLabel';
 import { Popover } from './Popover';
 import { AccountsIcon, AppearanceIcon, ClustersIcon, ExtensionsIcon, HistoryIcon, MonitorIcon, UsageIcon, OpenInSectionIcon, RefreshIcon } from './icons';
 import { legible } from '../lib/looks';
+import { useNameMax } from '../lib/useNameMax';
 
 /**
  * The narrowest the sidebar will sit at. With the switches down to icons what
@@ -326,6 +327,7 @@ function Folders() {
 }
 
 function FolderItem({ panelId, homedir }: { panelId: string; homedir: string }) {
+  const nameMax = useNameMax();
   const root = useStore((s) => asFilePanel(s.panels[panelId])?.root ?? '');
   const gitRoot = useStore((s) => asFilePanel(s.panels[panelId])?.gitRoot ?? null);
   const changed = useStore((s) => (gitRoot ? (s.repos[gitRoot]?.files.length ?? 0) : 0));
@@ -346,7 +348,7 @@ function FolderItem({ panelId, homedir }: { panelId: string; homedir: string }) 
   return (
     <div
       className="sidebar-item"
-      title={root}
+      title={nameTip(root.split('/').filter(Boolean).pop() ?? root, root)}
       onMouseDown={() => {
         const leaf = leafOfTab(layout, panelId);
         if (leaf) focusPanel(leaf.id, panelId);
@@ -356,7 +358,7 @@ function FolderItem({ panelId, homedir }: { panelId: string; homedir: string }) 
         <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
       </svg>
       <div className="sidebar-item-text">
-        <span className="sidebar-item-title">{root.split('/').filter(Boolean).pop() ?? root}</span>
+        <span className="sidebar-item-title">{cutName(root.split('/').filter(Boolean).pop() ?? root, nameMax)}</span>
         {/* Where it is, not its name again: the title above already says that. */}
         <PathLabel
           path={short.slice(0, short.replace(/\/+$/, '').lastIndexOf('/')) || short}
@@ -626,6 +628,7 @@ function ClusterRow({
   note: string | null;
   onMenu(at: { name: string; x: number; y: number }): void;
 }) {
+  const nameMax = useNameMax();
   const reach = useStore((s) => s.clusters.reach[name]);
   const openCluster = useStore((s) => s.openCluster);
   const isDefault = useStore((s) => s.clusters.current === name);
@@ -637,7 +640,7 @@ function ClusterRow({
   return (
     <button
       className={`sidebar-item cluster-row${open ? ' is-open' : ''}`}
-      title={reach?.error ? `${name}\n\n${reach.error}` : name}
+      title={nameTip(shortContext(name), name !== shortContext(name) && name, reach?.error && `\n${reach.error}`)}
       onClick={() => openCluster(name)}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -645,7 +648,7 @@ function ClusterRow({
       }}
     >
       <span className={`cluster-dot is-${state}`} />
-      <span className="sidebar-item-title">{shortContext(name)}</span>
+      <span className="sidebar-item-title">{cutName(shortContext(name), nameMax)}</span>
       {note && <span className="cluster-note">{note}</span>}
       {/* Which one a plain `kubectl` uses. Worth marking, precisely because
           nothing this app does depends on it. */}
@@ -832,6 +835,7 @@ function MonitorList() {
 
 /** One session's health: how full it is, and whether anything is wrong. */
 function MonitorRow({ sessionId }: { sessionId: string }) {
+  const nameMax = useNameMax();
   const openMonitor = useStore((s) => s.openMonitor);
   const title = useStore((s) => s.sessions[sessionId]?.customTitle || s.sessions[sessionId]?.title || 'session');
   // Primitives only. The verdict object is replaced on every sweep, and selecting
@@ -852,7 +856,7 @@ function MonitorRow({ sessionId }: { sessionId: string }) {
       title={pct === null ? `${title} — nothing measured yet` : `${title} — ${pct}% of its context window`}
     >
       <span className={`monitor-pip is-${worst ?? 'clear'}`} />
-      <span className="sidebar-item-name">{title}</span>
+      <span className="sidebar-item-name">{cutName(title, nameMax)}</span>
       {pct === null ? (
         <span className="monitor-row-quiet">—</span>
       ) : (
@@ -1148,6 +1152,7 @@ function BuildLine() {
 }
 
 function SidebarItem({ sessionId }: { sessionId: string }) {
+  const nameMax = useNameMax();
   const session = useStore((s) => s.sessions[sessionId]);
   const homedir = useStore((s) => s.homedir);
   const focusSession = useStore((s) => s.focusSession);
@@ -1181,11 +1186,11 @@ function SidebarItem({ sessionId }: { sessionId: string }) {
         focusSession(sessionId);
         openContextMenu(sessionId, event.clientX, event.clientY);
       }}
-      title={[session.cwd, session.title].join(String.fromCharCode(10))}
+      title={nameTip(label, session.cwd, session.title)}
     >
       <span className={`state-dot state-${session.status}${session.busy ? ' is-busy' : ''}`} />
       <span className="sidebar-item-text">
-        <span className="sidebar-item-title">{label}</span>
+        <span className="sidebar-item-title">{cutName(label, nameMax)}</span>
         {/* The folder line is only worth a row of its own when it says something
             the title does not already say. */}
         {where !== label && <PathLabel path={session.cwd} home={homedir} className="sidebar-item-cwd" />}
