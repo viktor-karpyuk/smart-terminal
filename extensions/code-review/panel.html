@@ -758,6 +758,12 @@
   }
 
   .conflict-banner { display: block; }
+  .renumber { margin-top: 8px; }
+  .renumber-keep td { padding: 3px 8px 3px 0; }
+  .renumber-steps { margin: 4px 0 0; padding-left: 18px; }
+  .renumber-steps li { margin: 3px 0; }
+  .renumber-steps li.ok { color: var(--ok); }
+  .renumber-steps li.bad { color: var(--danger); }
   .conflict-list { margin: var(--s2) 0 0; padding-left: 1.4em; max-height: 11em; overflow: auto; }
   .conflict-list li { color: var(--text-dim); line-height: 1.5; }
 
@@ -2146,8 +2152,10 @@
         '<ul class="conflict-list">' + clash.with.map(function (one) {
           return '<li><span class="mono">' + esc(one.path) + '</span> <span class="faint">' + (one.prId == null ? 'on ' + esc(one.branch) : '#' + one.prId + ' · ' + esc(one.branch)) + '</span></li>';
         }).join('') + '</ul>' +
-        '<button class="link" data-act="recheck-migrations"' + busyAttr(prKey('recheck-migrations')) + '>check again</button></div>';
+        '<div class="row" style="margin-top:6px"><button class="btn small primary" data-act="renumber-open"' + busyAttr('renumber-plan') + ' title="See who keeps each number and what the others become, before anything changes">Resolve…</button>' +
+        '<button class="link" data-act="recheck-migrations"' + busyAttr(prKey('recheck-migrations')) + '>check again</button></div></div>';
     }
+    if (state.renumber && state.renumber.repoId === v.repo.id) html += drawRenumber(state.renumber);
     var conflict = conflictState(v);
     if (conflict) {
       /*
@@ -2180,6 +2188,66 @@
         '<div class="row" style="margin-top:6px"><button class="btn primary" data-act="merge"' + busyAttr(prKey('merge')) + '>Merge</button><button class="btn" data-act="merge-close">Cancel</button></div></div>';
     }
     return html;
+  }
+
+  /**
+   * Resolving clashing migration numbers: the plan, and the button that carries it out.
+   *
+   * Everything that will happen is on the card before anything does — who keeps
+   * each number, which file in which pull request becomes what — and who keeps
+   * a number can be changed there. The button says what it does: a commit on
+   * each of those branches, pushed.
+   */
+  function drawRenumber(r) {
+    if (r.loading) return '<div class="card renumber"><span class="faint">Reading every open branch for migrations…</span></div>';
+    if (r.error) return '<div class="card renumber"><div class="banner bad">' + esc(r.error) + '</div><button class="btn small" data-act="renumber-close">Close</button></div>';
+    var plan = r.plan;
+    var html = '<div class="card renumber"><strong>Resolve the migration numbers</strong>';
+    if (r.result) {
+      html += '<ul class="renumber-steps">' + r.result.done.map(function (one) {
+        return '<li class="' + (one.ok ? 'ok' : 'bad') + '">#' + one.prId + ' · ' + (one.ok
+          ? 'renumbered and pushed (' + esc(String(one.sha).slice(0, 7)) + ')' + (one.commented === true ? ', told in its thread' : one.commented ? ' — the note could not be posted: ' + esc(one.commented) : '')
+          : esc(one.error)) + '</li>';
+      }).join('') + '</ul>';
+      return html + '<div class="row"><button class="btn small" data-act="renumber-close">Close</button></div></div>';
+    }
+    if (!plan.decisions.length) return html + '<div class="faint">No migration number is taken twice any more.</div><button class="btn small" data-act="renumber-close">Close</button></div>';
+    html += '<div class="faint">Who keeps each number. What is already on a target branch keeps it; otherwise the pull request opened first does, unless you choose another.</div>';
+    html += '<table class="list renumber-keep">' + plan.decisions.map(function (d) {
+      var who = d.fixed
+        ? '<span>' + esc(d.keeper.branch) + ' <span class="faint">(already merged)</span></span>'
+        : d.choices.map(function (prId) {
+            return '<label class="check"><input type="radio" name="keep-' + esc(d.number) + '" data-act-change="renumber-keep" data-number="' + esc(d.number) + '" value="' + prId + '"' + (d.keeper.prId === prId ? ' checked' : '') + '> #' + prId + '</label>';
+          }).join(' ');
+      return '<tr><td class="mono">' + esc(d.number) + '</td><td>' + who + '</td></tr>';
+    }).join('') + '</table>';
+    if (plan.steps.length) {
+      html += '<div style="margin-top:8px"><strong>What changes</strong></div><ul class="renumber-steps">' + plan.steps.map(function (step) {
+        return '<li><strong>#' + step.prId + '</strong> <span class="faint">' + esc(step.title) + ' · <span class="mono">' + esc(step.branch) + '</span></span>' +
+          '<ul>' + step.renames.map(function (one) { return '<li class="mono">' + esc(baseName(one.from)) + ' → ' + esc(baseName(one.to)) + '</li>'; }).join('') + '</ul>' +
+          '<div class="faint">' + esc(step.why.join('; ')) + '</div></li>';
+      }).join('') + '</ul>';
+    }
+    if (plan.problems.length) html += '<div class="banner warn">' + plan.problems.map(esc).join('<br>') + '</div>';
+    html += '<label class="check" style="margin-top:6px"><input type="checkbox" data-act-change="renumber-comment"' + (r.comment ? ' checked' : '') + '> Tell each pull request in its thread</label>';
+    html += '<div class="faint" style="margin-top:4px">One commit on each branch above, pushed and never forced. Any references to the old file names in those branches are updated too. If an environment already ran an old number, it will see the renamed file as new.</div>';
+    html += '<div class="row" style="margin-top:8px">' + (plan.steps.length ? '<button class="btn small primary" data-act="renumber-apply"' + busyAttr('renumber-apply') + '>Renumber and push ' + plan.steps.length + ' branch' + (plan.steps.length === 1 ? '' : 'es') + '</button>' : '') +
+      '<button class="btn small" data-act="renumber-close">Cancel</button></div></div>';
+    return html;
+  }
+
+  function baseName(file) { return String(file || '').split('/').pop(); }
+
+  function loadRenumber() {
+    var r = state.renumber;
+    r.loading = true; r.error = null; draw();
+    call('migrationPlan', { repoId: r.repoId, keep: r.keep }).then(function (res) {
+      if (state.renumber !== r) return;
+      r.loading = false; r.plan = res.plan;
+      // What the plan settled on becomes the starting choice, so the radios show it.
+      res.plan.decisions.forEach(function (d) { if (!d.fixed && d.keeper.prId != null) r.keep[d.number] = d.keeper.prId; });
+      draw();
+    }, function (error) { if (state.renumber !== r) return; r.loading = false; r.error = String(error && error.message || error); draw(); });
   }
 
   /**
@@ -4008,6 +4076,22 @@
       draw();
       call('saveSettings', { settings: { diffLayout: next } }).catch(function () {});
     },
+    'renumber-open': function () { state.renumber = { repoId: state.repoId, keep: {}, comment: true }; loadRenumber(); },
+    'renumber-close': function () { state.renumber = null; draw(); },
+    'renumber-apply': function () {
+      var r = state.renumber;
+      if (!r || !r.plan) return;
+      var summary = r.plan.steps.map(function (step) {
+        return '#' + step.prId + ' (' + step.branch + '): ' + step.renames.map(function (one) { return baseName(one.from) + ' → ' + baseName(one.to); }).join(', ');
+      });
+      act('renumber-apply', function () {
+        return call('renumberMigrations', { repoId: r.repoId, keep: r.keep, comment: r.comment, summary: summary });
+      }, function (res) {
+        r.result = res;
+        var bad = res.done.filter(function (one) { return !one.ok; }).length;
+        say(bad ? bad + ' branch(es) were not renumbered — see the card.' : 'Renumbered and pushed.', bad > 0);
+      });
+    },
     'recheck-migrations': function () {
       act(prKey('recheck-migrations'), function () { return call('checkMigrations', { repoId: state.repoId }); }, function (r) {
         say(r.clashes && r.clashes.length ? r.clashes.length + ' migration number(s) still taken twice.' : 'No migration number is taken twice any more.');
@@ -4473,6 +4557,16 @@
      * you are about to do with a handful of rows is not something a restart
      * should remember for you.
      */
+    // Choosing who keeps a number asks for the plan again: everything after it can move.
+    if (el.getAttribute('data-act-change') === 'renumber-keep' && state.renumber) {
+      state.renumber.keep[el.getAttribute('data-number')] = Number(el.value);
+      loadRenumber();
+      return;
+    }
+    if (el.getAttribute('data-act-change') === 'renumber-comment' && state.renumber) {
+      state.renumber.comment = el.checked;
+      return;
+    }
     if (el.getAttribute('data-act-change') === 'say-where') {
       state.sayTo = state.sayTo || { thread: true, channel: false, person: false };
       state.sayTo[el.getAttribute('data-where')] = el.checked;
