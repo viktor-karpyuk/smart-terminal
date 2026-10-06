@@ -192,18 +192,18 @@
   .run + .run { margin-top: 6px; }
   .run .lines { margin-top: 6px; max-height: 150px; overflow: auto; font-family: ui-monospace, Menlo, monospace; font-size: 0.917rem; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
 
-  .prhead { padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
-  .prhead h2 { font-size: 1.333rem; margin: 4px 0; }
-  .prhead.compact { padding: 6px 14px 8px; }
-  .prhead.compact .pr-title { font-size: 1.125rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
-  .prhead.compact > .row:first-child { flex-wrap: nowrap; }
-  .prhead.compact > .row:first-child > .chip, .prhead.compact > .row:first-child > .btn { flex: none; }
-  .prhead.compact .pr-meta { font-size: 0.958rem; margin-top: 2px; }
-  .prhead.compact .next { margin-top: 6px; padding: 4px 8px; gap: 8px; }
-  .prhead.compact .next .icon { width: 18px; height: 18px; font-size: 0.917rem; }
-  .prhead.compact .next .words strong { display: inline; font-size: 1rem; }
-  .prhead.compact .next .words span { display: none; }
-  .prhead.compact > .row[style] { margin-top: 6px !important; }
+  /* A pull request is a column: the header and the tabs stay, the body under them scrolls. */
+  .prview { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .prview > .prhead, .prview > .subtabs { flex: none; position: static; }
+  .prbody { flex: 1; min-height: 0; overflow: auto; }
+  /* Code and Commits are a split of their own: it fills the body, and its two halves scroll inside it. */
+  .prbody.fills { overflow: hidden; display: flex; flex-direction: column; }
+  .prbody.fills > .split { height: auto; flex: 1; min-height: 0; }
+  .prhead { padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
+  .prhead > .row:first-child { flex-wrap: nowrap; }
+  .prhead > .row:first-child > .chip, .prhead > .row:first-child > .btn { flex: none; }
+  .prhead .pr-title { font-size: 1.125rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto; }
+  .prhead .pr-meta { font-size: 0.958rem; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .banner { padding: 7px 10px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-elevated); margin: 8px 0; white-space: pre-wrap; }
   .banner.bad { border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); background: color-mix(in srgb, var(--danger) 8%, var(--bg-panel)); }
   .banner.warn { border-color: color-mix(in srgb, var(--warn) 50%, var(--border)); background: color-mix(in srgb, var(--warn) 8%, var(--bg-panel)); }
@@ -671,8 +671,7 @@
   .subtabs { padding: 0 var(--s5); gap: var(--s1); box-shadow: var(--lift-1); }
   .subtabs .tab { border-radius: 0; padding: 8px 11px; font-weight: 550; }
   .subtabs .tab.on { border-bottom-width: 2px; }
-  .prhead { padding: var(--s4) var(--s5); }
-  .prhead h2 { font-size: 1.5rem; margin: var(--s1) 0; }
+  .prhead { padding: var(--s3) var(--s5); }
   .crumbs { gap: var(--s2); font-size: 0.958rem; }
 
   .bar { height: 7px; border-radius: var(--r-pill); }
@@ -921,6 +920,8 @@
   'use strict';
 
   var state = {
+    /** Where each tab of a pull request was scrolled to, so moving between tabs does not lose the place. */
+    bodyScroll: {},
     started: false,
     showing: true,
     view: 'dashboard',
@@ -1120,6 +1121,13 @@
     return '';
   }
   function anchor(file, line) { return esc(file) + (line ? ':' + line : ''); }
+  /** Back to the top of what scrolls: the body of a pull request, or the whole view. */
+  function toTop() {
+    var body = $('prbody');
+    if (body) { body.scrollTop = 0; state.bodyScroll[state.prTab] = 0; }
+    $('main').scrollTop = 0;
+  }
+
   function sha7(sha) { return esc(String(sha || '').slice(0, 7)); }
 
   /**
@@ -1296,6 +1304,7 @@
       state.confirmRerun = null; state.decline = null; state.merge = null;
     }
     remember();
+    state.bodyScroll = {};
     draw();
     $('main').scrollTop = 0;
     load();
@@ -1361,6 +1370,9 @@
     drawTop();
     var main = $('main');
     var scroll = main.scrollTop;
+    // In a pull request it is the body under the tabs that scrolls, and each tab keeps its own place.
+    var body = $('prbody');
+    if (body) state.bodyScroll[body.getAttribute('data-tab') || ''] = body.scrollTop;
     // The file list is rebuilt with everything else and would come back at the top.
     var aside = main.querySelector('aside');
     var asideScroll = aside ? aside.scrollTop : 0;
@@ -1384,6 +1396,11 @@
     var selection = focus ? { start: active.selectionStart, end: active.selectionEnd, direction: active.selectionDirection, scroll: active.scrollTop } : null;
     main.innerHTML = html;
     main.scrollTop = scroll;
+    var bodyNow = $('prbody');
+    if (bodyNow) {
+      bodyNow.setAttribute('data-tab', state.prTab);
+      bodyNow.scrollTop = state.bodyScroll[state.prTab] || 0;
+    }
     aside = main.querySelector('aside');
     if (aside) {
       aside.scrollTop = asideScroll;
@@ -2026,26 +2043,31 @@
     var open = pr.state === 'OPEN';
     var runs = v.running || [];
     var provider = repo.provider === 'GITHUB' ? 'GitHub' : 'Bitbucket';
-    // Reading code wants the height: there the header folds to two lines, and the Review tab keeps the whole of it.
-    var compact = state.prTab === 'code' || state.prTab === 'commits';
-    var html = '<div class="prhead' + (compact ? ' compact' : '') + '"><div class="row">' +
-      (compact ? '<strong class="pr-title" title="' + esc(pr.title) + '">#' + pr.id + ' ' + esc(pr.title) + '</strong>' : '') +
+    /*
+     * One header, the same on every tab.
+     *
+     * It used to be the whole review on the Review tab — title in large type,
+     * the next step, every button — and two lines everywhere else, so moving
+     * between tabs moved the tabs themselves and everything under them. Now it
+     * is only what the pull request *is*: its state, who stands where, the
+     * title on one line (the whole of it in the tooltip) and the commit. What
+     * there is to *do* about it lives at the top of the Review tab.
+     */
+    var html = '<div class="prview"><div class="prhead"><div class="row">' +
       '<span class="chip ' + (open ? 'okc' : pr.state === 'MERGED' ? 'accent' : 'badc') + '">' + esc(pr.state.toLowerCase()) + '</span>' +
       (pr.isDraft ? '<span class="chip">draft</span>' : '') +
       v.approvals.map(function (a) {
         return '<span class="chip ' + (a.state === 'APPROVED' ? 'okc' : 'badc') + '" title="' + esc(a.state === 'APPROVED' ? 'Approved' : 'Requested changes') + (a.byUs ? ' (you)' : '') + '">' + (a.state === 'APPROVED' ? '✓ ' : '✗ ') + esc(a.who) + '</span>';
       }).join('') +
+      '<strong class="pr-title" title="' + esc('#' + pr.id + ' ' + pr.title) + '">#' + pr.id + ' ' + esc(pr.title) + '</strong>' +
       '<span class="spacer"></span>' +
       (pr.url ? '<button class="btn small" data-act="open-url" data-url="' + esc(pr.url) + '" title="Open the pull request on ' + provider + '">' + provider + ' ↗</button>' : '') +
       '<button class="btn small" data-act="shell" data-where="clone" title="A terminal in the local clone">Terminal</button>' +
       '<button class="btn small" data-act="ask" title="A Claude session briefed on this pull request">Ask Claude</button>' +
       '<button class="btn small" data-act="pr-load"' + busyAttr(prKey('pr-load')) + ' title="Read the pull request, its stances and its thread again">Reload</button></div>' +
-      (compact ? '' : '<h2>#' + pr.id + ' ' + esc(pr.title) + '</h2>') +
       '<div class="faint pr-meta">' + esc(pr.author) + (pr.sourceBranch ? ' · <span class="mono">' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch) + '</span>' : '') + (pr.headSha ? ' · head <span class="mono">' + sha7(pr.headSha) + '</span>' : '') +
       (pr.createdOn ? ' · opened ' + esc(when(pr.createdOn)) : '') + (pr.updatedOn ? ' · updated ' + esc(when(pr.updatedOn)) : '') +
       mergeLine(v) + '</div>';
-    html += drawNextStep(v, compact);
-    if (open) html += drawActions(v);
     html += '</div>';
     var counts = {
       review: (v.findings || []).filter(function (f) { return !f.publishedId && !f.dismissedAt && !f.closedAt; }).length,
@@ -2056,12 +2078,14 @@
       return '<button class="tab' + (state.prTab === t[0] ? ' on' : '') + '" data-act="pr-tab" data-tab="' + t[0] + '" title="' + (i + 1) + '">' + t[1] + (counts[t[0]] ? '<span class="count">' + counts[t[0]] + '</span>' : '') + '</button>';
     }).join('') + '<span class="spacer"></span>' + (runs.length ? '<span class="chip accent" style="align-self:center"><span class="dot busy"></span>' + runs.length + ' running</span>' : '') +
       '<button class="link faint keys-hint" data-act="keys-open" title="Keyboard shortcuts"><span class="kbd">?</span> keys</button></div>';
+    // Only this scrolls: the header and the tabs above it stay where they are.
+    html += '<div class="prbody' + (state.prTab === 'code' || state.prTab === 'commits' ? ' fills' : '') + '" id="prbody">';
     if (state.prTab === 'review') html += drawReviewTab(v);
     else if (state.prTab === 'code') html += drawCodeTab(v);
     else if (state.prTab === 'commits') html += drawCommitsTab(v);
     else if (state.prTab === 'conversation') html += drawConversationTab(v);
     else html += drawHistoryTab(v);
-    return html;
+    return html + '</div></div>';
   }
 
   /**
@@ -2422,6 +2446,9 @@
     var runs = (v.running || []).filter(function (run) { return run.kind !== 'fix' && run.kind !== 'reply'; });
     var reviewing = runs.some(function (run) { return run.kind === 'review'; });
     var html = '<div class="page">';
+    // --- what there is to do about it: the next step, the decisions, and what stands in the way of a merge
+    html += drawNextStep(v, false);
+    if (open) html += drawActions(v);
     if (runs.length) html += drawRuns(runs, false);
 
     // --- what the author says the PR is: open until there is a review to read instead
@@ -2664,7 +2691,7 @@
   function stepFile(direction) {
     var files = (state.code.files || []).map(function (f) { return f.path; });
     var next = files[files.indexOf(state.code.file) + direction];
-    if (next) { openFile(next); $('main').scrollTop = 0; }
+    if (next) { openFile(next); toTop(); }
   }
 
   /**
@@ -2690,7 +2717,7 @@
       var files = (code.files || []).map(function (f) { return f.path; });
       var from = files.indexOf(file);
       var next = files.slice(from + 1).concat(files.slice(0, from)).filter(function (path) { return r.files.indexOf(path) < 0; })[0];
-      if (next) { openFile(next); $('main').scrollTop = 0; } else draw();
+      if (next) { openFile(next); toTop(); } else draw();
     }, fail);
   }
 
@@ -4131,12 +4158,13 @@
     verify: function () { act(prKey('verify'), function () { return call('verify', prArgs()); }, function (r) { say(r.mergeable ? 'Verified: every comment was addressed.' : 'Verified.'); }); },
     'final-pass': function () { act(prKey('final-pass'), function () { return call('finalPass', prArgs()); }, function (r) { say(r.blockers ? r.blockers + ' blocker(s) found.' : 'Nothing blocks the merge.', r.blockers > 0); }); },
     stance: function (el) { act(prKey('stance'), function () { return call(el.getAttribute('data-stance'), prArgs()); }, load); },
-    'decline-open': function () { state.decline = true; state.merge = null; draw(); },
+    // Their forms are on the Review tab, so asking for one from another tab goes there.
+    'decline-open': function () { state.decline = true; state.merge = null; state.prTab = 'review'; draw(); },
     'decline-close': function () { state.decline = null; draw(); },
     decline: function () {
       act(prKey('decline'), function () { return call('decline', prArgs({ reason: edit('decline-reason'), repoName: state.pr.repo.name })); }, function () { state.decline = null; delete state.edits['decline-reason']; say('Declined.'); load(); });
     },
-    'merge-open': function () { state.merge = true; state.decline = null; draw(); },
+    'merge-open': function () { state.merge = true; state.decline = null; state.prTab = 'review'; draw(); },
     'merge-close': function () { state.merge = null; draw(); },
     merge: function () {
       var v = state.pr;
