@@ -174,6 +174,8 @@
   td.name .label { display: inline-block; max-width: 46ch; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
   .with-detail td.name .label { max-width: 30ch; }
   .dim { color: var(--text-dim); }
+  /* Ages count every second; figures of one width keep the column from twitching. */
+  .since, .fresh { font-variant-numeric: tabular-nums; }
   .mono { font-family: "JetBrains Mono", "SF Mono", Menlo, ui-monospace, monospace; font-size: 10.5px; }
 
   .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: baseline; }
@@ -1164,11 +1166,62 @@
   var loadToken = 0;
   /** Seconds, minutes or hours since `then`, as short as it can be said. */
   function sinceText(then) {
-    var s = Math.max(0, Math.round((Date.now() - then) / 1000));
-    if (s < 5) return 'just now';
+    var s = Math.max(0, Math.floor((Date.now() - then) / 1000));
+    if (s < 1) return 'just now';
     if (s < 60) return s + 's ago';
-    if (s < 3600) return Math.floor(s / 60) + 'm ago';
-    return Math.floor(s / 3600) + 'h ago';
+    if (s < 3600) return Math.floor(s / 60) + 'm ' + pad2(s % 60) + 's ago';
+    return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm ago';
+  }
+  function pad2(n) { return n < 10 ? '0' + n : String(n); }
+
+  /*
+   * Ages that keep counting.
+   *
+   * The cluster says when a thing was made; how old that makes it is a fact
+   * about now, and "41s" read once and left on screen is wrong a second later.
+   * So an age is drawn from its timestamp, marked with it, and one timer moves
+   * every age on screen along — seconds while a thing is under an hour old,
+   * which is when the seconds are what you are watching, kubectl's units after.
+   */
+  function ageText(then, now) {
+    var seconds = Math.max(0, Math.floor(((now || Date.now()) - then) / 1000));
+    if (seconds < 60) return seconds + 's';
+    var minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return minutes + 'm' + pad2(seconds % 60) + 's';
+    var hours = Math.floor(minutes / 60);
+    if (hours < 24) return hours < 10 ? hours + 'h' + minutes % 60 + 'm' : hours + 'h';
+    var days = Math.floor(hours / 24);
+    if (days < 10) return days + 'd' + hours % 24 + 'h';
+    if (days < 365) return days + 'd';
+    return Math.floor(days / 365) + 'y' + days % 365 + 'd';
+  }
+
+  /** When this row's age counts from: an event's last time, otherwise when it was made (or a release last changed). */
+  function bornAt(row) {
+    var stamp = row && (row.at || row.createdAt || row.updated);
+    var then = stamp ? Date.parse(stamp) : NaN;
+    return isNaN(then) ? null : then;
+  }
+
+  /** An age that keeps itself current. `fallback` is what the cluster said, for a row with no timestamp. */
+  function ageHtml(row, fallback) {
+    var then = bornAt(row);
+    if (then == null) return esc(fallback == null ? (row && row.age) || '' : fallback);
+    return '<span class="since" data-since="' + then + '">' + esc(ageText(then)) + '</span>';
+  }
+
+  function tickAges() {
+    if (state.showing === false || document.hidden) return;
+    // Text that changes under a selection moves the selection; somebody copying waits for nobody.
+    var picked = window.getSelection && window.getSelection();
+    if (picked && !picked.isCollapsed) return;
+    var now = Date.now();
+    var ages = document.querySelectorAll('.since[data-since]');
+    for (var i = 0; i < ages.length; i += 1) {
+      var text = ageText(Number(ages[i].dataset.since), now);
+      if (ages[i].textContent !== text) ages[i].textContent = text;
+    }
+    drawFresh();
   }
 
   /**
@@ -1195,7 +1248,7 @@
       fresh.title = '';
     }
   }
-  setInterval(function () { if (state.showing !== false && !document.hidden) drawFresh(); }, 5000);
+  setInterval(tickAges, 1000);
 
   function load(quiet) {
     var mine = (loadToken += 1);
@@ -1913,6 +1966,11 @@
       var column = state.sort.column;
       var dir = state.sort.dir;
       rows = rows.slice().sort(function (a, b) {
+        // By time, not by text: "41s" against "1d18h" as strings is no order at all.
+        if (column === 'age') {
+          var young = bornAt(a), old = bornAt(b);
+          if (young != null && old != null) return (old - young) * dir;
+        }
         var left = a[column];
         var right = b[column];
         if (typeof left === 'number' && typeof right === 'number') return (left - right) * dir;
@@ -2038,6 +2096,7 @@
       return '<td class="' + (value > 0 ? 'warn-text' : 'dim') + '">' + text + '</td>';
     }
     if (column === 'message') return '<td class="grow dim">' + esc(value) + '</td>';
+    if (column === 'age') return '<td class="dim age">' + ageHtml(row, value) + '</td>';
     if (column === 'ports' || column === 'clusterIP' || column === 'address') {
       return '<td class="dim mono">' + esc(value) + '</td>';
     }
@@ -2349,7 +2408,7 @@
     if ((data.recent || []).length) {
       recent = '<div class="crumb"><strong>Recent warnings</strong></div><table><tbody>' +
         data.recent.slice(0, 20).map(function (row) {
-          return '<tr><td class="dim">' + esc(row.age) + '</td>' +
+          return '<tr><td class="dim age">' + ageHtml(row) + '</td>' +
             '<td class="warn-text">' + esc(row.status) + '</td>' +
             '<td class="dim">' + esc(row.object) + '</td>' +
             '<td class="grow dim">' + esc(row.message) + '</td></tr>';
@@ -2906,7 +2965,7 @@
           (release
             ? esc(chosen.chart + ' ' + chosen.chartVersion) + ' · revision ' + esc(chosen.revision)
             : esc(chosen.kind)) +
-          (chosen.namespace ? ' · ' + esc(chosen.namespace) : '') + ' · ' + esc(chosen.age) + ' old</small>' +
+          (chosen.namespace ? ' · ' + esc(chosen.namespace) : '') + ' · ' + ageHtml(chosen) + ' old</small>' +
         '<div class="detail-actions">' + actionsFor(chosen) + '</div>' +
         detailForwards(chosen) +
         '<div class="ask">' +
@@ -3011,7 +3070,7 @@
           '<td class="' + (Number(pod.restarts) ? 'warn-text' : 'dim') + '">' +
             (Number(pod.restarts) ? esc(pod.restarts) + '×' : '') + '</td>' +
           '<td class="dim">' + esc(pod.node || '') + '</td>' +
-          '<td class="dim">' + esc(pod.age) + '</td></tr>';
+          '<td class="dim age">' + ageHtml(pod) + '</td></tr>';
       }).join('') + '</tbody></table>';
   }
 
@@ -3037,7 +3096,7 @@
           '<td class="grow">' + esc(job.name) + '</td>' +
           '<td class="dim">' + esc(job.status) + '</td>' +
           '<td class="dim">' + esc(job.duration || '') + '</td>' +
-          '<td class="dim">' + esc(job.age) + '</td></tr>';
+          '<td class="dim age">' + ageHtml(job) + '</td></tr>';
       }).join('') + '</tbody></table>';
   }
 
@@ -3061,7 +3120,7 @@
           '<td class="dim">' + (rev.current ? '<b>' + rev.revision + '</b>' : rev.revision) + '</td>' +
           '<td class="grow"><div>' + esc(rev.images.join(', ') || rev.name) + '</div>' +
             (rev.cause ? '<div class="dim">' + esc(rev.cause) + '</div>' : '') + '</td>' +
-          '<td class="dim">' + esc(rev.age) + '</td>' +
+          '<td class="dim age">' + ageHtml(rev) + '</td>' +
           '<td>' + (rev.current
             ? '<span class="dim">running</span>'
             : '<button class="btn" data-undo="' + rev.revision + '">Roll back</button>') + '</td>' +
@@ -3683,7 +3742,7 @@
     return block('Summary', '<dl class="facts">' + facts.map(function (key) {
       var value = plainValue(row[key]);
       var tone = key === 'status' ? ' class="' + esc(row.health || '') + '-text"' : '';
-      return '<dt>' + esc(HEADINGS[key] || key) + '</dt><dd' + tone + '>' + esc(value) + '</dd>';
+      return '<dt>' + esc(HEADINGS[key] || key) + '</dt><dd' + tone + '>' + (key === 'age' ? ageHtml(row, value) : esc(value)) + '</dd>';
     }).join('') + '</dl>');
   }
 
@@ -3811,7 +3870,7 @@
       if (!events) return '<pre>reading…</pre>';
       if (!events.length) return '<div class="dim">Nothing has been said about this one.</div>';
       return '<table><tbody>' + events.map(function (event) {
-        return '<tr><td class="dim">' + esc(event.age) + '</td>' +
+        return '<tr><td class="dim age">' + ageHtml(event) + '</td>' +
           '<td class="' + (event.type === 'Warning' ? 'warn-text' : 'dim') + '">' + esc(event.status) + '</td>' +
           '<td class="grow dim">' + esc(event.message) + '</td></tr>';
       }).join('') + '</tbody></table>';
@@ -3835,7 +3894,7 @@
       return '<table><tbody>' + rows.map(function (entry) {
         return '<tr>' +
           '<td class="name"><span class="dot ' + esc(entry.health) + '"></span>' + entry.revision + '</td>' +
-          '<td class="dim">' + esc(entry.age) + '</td>' +
+          '<td class="dim age">' + ageHtml(entry) + '</td>' +
           '<td class="dim">' + esc(entry.chart) + '</td>' +
           '<td class="grow dim">' + esc(entry.description) + '</td>' +
           '<td>' + (entry.current

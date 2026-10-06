@@ -113,6 +113,9 @@ class ReviewService {
       channelFor: (repo) => String(repo.alertChannel ?? '').trim() || this.store.pref('announce.channel', '').trim(),
       notify: notifier,
       emit: emitter,
+      // Read at the moment it is used, so a forge swapped in later (tests, a token changed) is the one that answers.
+      forge: { of: (repo) => this.forge.of(repo) },
+      scratch: path.join(dataDir, 'code-review', 'renumber'),
     });
     this.engine.onBranches = (repoId) => this.migrations.check(repoId);
     this.engine.beforeMerge = (repo, pr) => this.migrations.blockMerge(repo, pr);
@@ -1483,6 +1486,17 @@ class ReviewService {
       /** Read the branches for migration numbers now, rather than at the next look. */
       checkMigrations: async (args) => ({ ok: true, clashes: await s.migrations.check(str(args.repoId, 'A repository')) }),
       migrationClashes: (args) => ({ ok: true, clashes: s.store.migrationClashes(str(args.repoId, 'A repository')) }),
+      /** Who keeps each clashing number, and what everything else is renamed to. Nothing changes. */
+      migrationPlan: async (args) => ({ ok: true, plan: await s.migrations.plan(str(args.repoId, 'A repository'), { keep: args.keep && typeof args.keep === 'object' ? args.keep : {} }) }),
+      /** Carry the plan out: a commit on each pull request that gives up a number, pushed to its branch. */
+      renumberMigrations: async (args) => ({
+        ok: true,
+        ...(await s.migrations.renumber(str(args.repoId, 'A repository'), {
+          keep: args.keep && typeof args.keep === 'object' ? args.keep : {},
+          comment: args.comment !== false,
+          only: Array.isArray(args.only) ? args.only.map(Number).filter(Number.isFinite) : null,
+        })),
+      }),
       checkConflicts: (args) => e.checkConflicts(str(args.repoId, 'A repository'), num(args.prId), { fetch: args.fetch !== false }),
       merge: (args) => e.merge(str(args.repoId, 'A repository'), num(args.prId), { message: args.message, closeSourceBranch: args.closeSourceBranch !== false, strategy: ['MERGE_COMMIT', 'SQUASH', 'FAST_FORWARD'].includes(args.strategy) ? args.strategy : 'MERGE_COMMIT' }),
 

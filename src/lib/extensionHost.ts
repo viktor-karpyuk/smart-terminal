@@ -204,7 +204,7 @@ const REVIEW_WRITE = [
   'importClaudeMd', 'importRun', 'setViewed', 'replyToComment', 'autoRunNow', 'openUrl', 'refreshPrs', 'refreshAll', 'searchHistory', 'loadPr',
   'review', 'reviewMany', 'cancel', 'cancelRun', 'verify', 'finalPass', 'saveReviewBody', 'publishReview', 'publishFinding',
   'publishAll', 'dismissFinding', 'closeFinding', 'settleFinding', 'editFinding', 'addNote', 'updateNote', 'deleteNote', 'publishNote',
-  'checkConflicts', 'checkMigrations',
+  'checkConflicts', 'checkMigrations', 'migrationPlan', 'renumberMigrations',
   'draftReply', 'draftAll', 'saveReplyDraft', 'publishReply', 'dismissReply', 'dismissAllReplies', 'followUp',
   'adopt', 'fix', 'fixAll', 'retryFixReply', 'giveBack', 'discardWorkshop', 'push', 'dropFix',
   'remind', 'sweepReminders', 'escalateNow', 'speak',
@@ -506,6 +506,16 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
     }
     if (name === 'review.decline') {
       return `Decline pull request${pr}${repo}?\n\nThe reason is posted as a comment first, and the PR is closed.`;
+    }
+    /*
+     * Commits on other people's branches, pushed. The question lists every
+     * rename and every branch, because those are exactly what the authors will
+     * find when they next pull.
+     */
+    if (name === 'review.renumberMigrations') {
+      const lines = Array.isArray(args?.summary) ? args.summary.map(String).slice(0, 20) : [];
+      const comment = args?.comment === false ? '' : ' Each pull request is told in its thread.';
+      return `Renumber the clashing migrations and push to ${lines.length ? 'these branches' : 'the branches that lose a number'}?\n\n${lines.join('\n')}\n\nOne commit on each branch, never forced: if a branch moved, it is left alone.${comment} Any environment that already ran an old number will see the renamed file as a new migration.`;
     }
     if (name === 'review.push') {
       return `Push ${String(args?.count ?? 'the')} commit(s) to origin/${String(args?.branch ?? '?')}?\n\nEverybody who pulls the branch gets them. It is never forced: if the remote moved, git refuses.`;
