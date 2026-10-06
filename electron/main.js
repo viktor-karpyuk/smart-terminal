@@ -674,6 +674,9 @@ function registerIpc() {
     // which is what lets the app snapshot it and later move it to another account.
     const extraArgs = [...(options.extraArgs || [])];
     let resumeId = options.resumeSessionId || null;
+    // A clone reads the old conversation and writes a new one: located the same way as a resume.
+    const forking = !resumeId && kind === 'claude' && Boolean(options.forkFrom) && Boolean(options.claudeSessionId);
+    if (forking) resumeId = String(options.forkFrom);
     let workdir = cwd;
     if (resumeId) {
       // Resume has to run from the folder the conversation is filed under, and
@@ -690,7 +693,10 @@ function registerIpc() {
       // Falling back from --resume must still claim the id, or the conversation
       // would get an id we do not know and become impossible to track.
       const pinned = options.resumeSessionId || options.claudeSessionId;
-      if (resumeId) extraArgs.unshift('--resume', resumeId);
+      if (forking && resumeId) {
+        // Claude's own copy of a conversation: everything said so far, under an id we chose.
+        extraArgs.unshift('--resume', resumeId, '--fork-session', '--session-id', options.claudeSessionId);
+      } else if (resumeId) extraArgs.unshift('--resume', resumeId);
       else if (pinned) extraArgs.unshift('--session-id', pinned);
     }
 

@@ -61,7 +61,7 @@ import {
   writeToTerminal,
   type TerminalLook,
 } from '../terminals/registry';
-import { NAME_MAX_DEFAULT } from '../lib/labels';
+import { NAME_MAX_DEFAULT, sessionLabel } from '../lib/labels';
 
 /** Panels whose terminal is being started, so a second press cannot start another. */
 const openingTerminal = new Set<string>();
@@ -540,6 +540,12 @@ interface State {
     focus?: boolean;
     title?: string;
     resumeSessionId?: string;
+    /**
+     * A conversation to start from as a copy: Claude's own --fork-session, so
+     * this session gets everything that was said and its own id, and the
+     * original goes on untouched.
+     */
+    forkFrom?: string;
     resumedFrom?: string;
     groupId?: string | null;
     handoffFrom?: { profileId: string; at: number } | null;
@@ -574,6 +580,8 @@ interface State {
   /** Pick a paused session up again, on the same conversation. */
   resumeSession(sessionId: string): Promise<void>;
   duplicateSession(sessionId: string): Promise<void>;
+  /** A new session with everything the conversation in this one said, to carry on elsewhere. */
+  cloneSession(sessionId: string): Promise<string | null>;
   renameSession(sessionId: string, title: string | null): void;
   focusSession(sessionId: string, options?: { startClaude?: boolean }): void;
   setActiveLeaf(leafId: string): void;
@@ -1360,6 +1368,7 @@ export const useStore = create<State>((set, get) => ({
       cwd,
       customTitle: title,
       resumeSessionId: options.resumeSessionId,
+      forkFrom: options.forkFrom,
       resumedFrom: options.resumedFrom,
       groupId: options.groupId ?? null,
       handoffFrom: options.handoffFrom ?? null,
@@ -1562,6 +1571,25 @@ export const useStore = create<State>((set, get) => ({
     });
     get().focusSession(sessionId);
     schedulePersist(get);
+  },
+
+  async cloneSession(sessionId) {
+    const session = get().sessions[sessionId];
+    if (!session?.claudeSessionId || session.kind !== 'claude') return null;
+    const leaf = leafOfTab(get().layout, sessionId);
+    const name = sessionLabel(session, get().homedir);
+    return get().newSession({
+      profileId: session.profileId,
+      kind: 'claude',
+      cwd: session.cwd,
+      leafId: leaf?.id,
+      // Beside the original, so the two can be read side by side.
+      side: 'right',
+      title: `${name} · clone`,
+      forkFrom: session.claudeSessionId,
+      resumedFrom: sessionId,
+      groupId: session.groupId ?? null,
+    });
   },
 
   async duplicateSession(sessionId) {
@@ -4255,6 +4283,7 @@ async function spawnInto(
     cwd: string;
     customTitle: string | null;
     resumeSessionId?: string;
+    forkFrom?: string;
     claudeSessionId?: string;
     resumedFrom?: string;
     handoffFrom?: { profileId: string; at: number } | null;
@@ -4353,6 +4382,8 @@ async function spawnInto(
         : claudeSessionId
           ? { claudeSessionId }
           : {}),
+      // A copy: the old conversation is read, and this one is written under the new id above.
+      ...(args.forkFrom && claudeSessionId && !args.resumeSessionId ? { forkFrom: args.forkFrom } : {}),
     });
     /*
      * The tab may be gone: starting takes a moment, and closing one that says
