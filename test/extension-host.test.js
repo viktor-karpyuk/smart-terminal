@@ -513,3 +513,16 @@ test('a confirmation names its action and the cluster, and a batch where it real
     /Delete 4 Pods across 3 namespaces on live\?/,
   );
 });
+
+test('renumbering migrations asks first, listing every branch and rename', () => {
+  assert.equal(H.route('review.renumberMigrations'), 'review');
+  assert.equal(H.route('review.migrationPlan'), 'review');
+  assert.equal(H.needsConsent('review.migrationPlan', {}), null, 'reading the plan changes nothing');
+  const question = H.needsConsent('review.renumberMigrations', { summary: ['#22 (invoices): V003__invoices.sql → V005__invoices.sql'] });
+  assert.match(question, /Renumber the clashing migrations and push to these branches\?/);
+  assert.match(question, /#22 \(invoices\): V003__invoices\.sql → V005__invoices\.sql/);
+  assert.match(question, /never forced/);
+  assert.match(question, /told in its thread/);
+  assert.doesNotMatch(H.needsConsent('review.renumberMigrations', { summary: [], comment: false }), /told in its thread/);
+  assert.equal(H.consentAction(question), 'Renumber');
+});
