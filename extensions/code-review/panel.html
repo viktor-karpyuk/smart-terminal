@@ -4,7 +4,21 @@
    * Everything it knows arrives through `host.call('review.*')`; everything it
    * looks like comes from the app's tokens.
    */
-  #app { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; min-height: 0; }
+  #app { display: grid; grid-template-rows: auto auto minmax(0, 1fr); height: 100%; min-height: 0; }
+  /* The pull requests that are open, one tab each, under the bar and above whatever is in front. */
+  .prtabs { display: flex; align-items: stretch; gap: 1px; padding: 0 8px; border-bottom: 1px solid var(--border); background: var(--bg-panel); overflow-x: auto; scrollbar-width: none; min-width: 0; }
+  .prtabs:empty { display: none; }
+  .prtabs::-webkit-scrollbar { display: none; }
+  .prtab { display: flex; align-items: center; gap: 6px; flex: 0 1 230px; min-width: 90px; padding: 6px 6px 6px 10px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--text-dim); font: inherit; font-size: 0.958rem; cursor: pointer; border-radius: 0; }
+  .prtab:hover { color: var(--text); background: var(--bg-elevated); }
+  .prtab.on { color: var(--text); border-bottom-color: var(--accent); }
+  .prtab.home { flex: none; min-width: 0; font-weight: 550; }
+  .prtab .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+  .prtab .num { color: var(--text-faint); flex: none; }
+  .prtab.on .num { color: var(--accent); }
+  .prtab .x { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; line-height: 1; font-size: 1.083rem; border-radius: 3px; color: var(--text-faint); visibility: hidden; }
+  .prtab:hover .x, .prtab.on .x { visibility: visible; }
+  .prtab .x:hover { background: var(--border); color: var(--text); }
   .top { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--bg-panel); flex-wrap: nowrap; min-width: 0; }
   .top > * { flex: none; }
   #top { container-type: inline-size; }
@@ -936,6 +950,7 @@
 
 <div id="app">
   <div class="top" id="top"></div>
+  <div class="prtabs" id="prtabs" role="tablist" aria-label="Open pull requests"></div>
   <main id="main"><div class="loading">Loading…</div></main>
 </div>
 
@@ -944,6 +959,10 @@
   'use strict';
 
   var state = {
+    /** The pull requests open as tabs, in the order they were opened: where each one was left. */
+    prTabs: [],
+    /** The view the first tab goes back to — wherever the pull requests were opened from. */
+    home: { view: 'dashboard', repoId: null },
     /** Where each tab of a pull request was scrolled to, so moving between tabs does not lose the place. */
     bodyScroll: {},
     started: false,
@@ -1099,7 +1118,13 @@
   }
 
   function remember() {
-    host.emit('remember', { view: state.view, repoId: state.repoId, prId: state.prId, prTab: state.prTab, prSort: state.prSort, dashFilter: state.dashFilter, sayTo: state.sayTo, codeFile: state.view === 'pr' ? state.code.file : null });
+    keepTab();
+    host.emit('remember', {
+      view: state.view, repoId: state.repoId, prId: state.prId, prTab: state.prTab, prSort: state.prSort, dashFilter: state.dashFilter, sayTo: state.sayTo,
+      codeFile: state.view === 'pr' ? state.code.file : null,
+      prTabs: state.prTabs.map(function (tab) { return { repoId: tab.repoId, prId: tab.prId, title: tab.title, repoName: tab.repoName, prTab: tab.prTab, file: tab.file }; }),
+      home: state.home,
+    });
   }
 
   /* ------------------------------------------------------------------ *
@@ -1286,6 +1311,8 @@
       }
       state.pr = r;
       state.prError = null;
+      var shown = tabOf(state.repoId, state.prId);
+      if (shown && r && r.pr) { shown.title = r.pr.title; shown.repoName = r.repo ? r.repo.name : shown.repoName; drawPrTabs(); }
       if (state.prTab === 'code' && !state.code.files) loadFiles();
       if (state.prTab === 'commits' && !state.commits.data) loadCommits();
     });
@@ -1314,9 +1341,12 @@
   });
 
   function go(view, fields) {
+    keepTab();
     state.view = view;
-    Object.keys(fields || {}).forEach(function (key) { state[key] = fields[key]; });
+    Object.keys(fields || {}).forEach(function (key) { if (key !== 'codeFile') state[key] = fields[key]; });
     if (view !== 'pr') { state.pr = null; state.prError = null; }
+    // Wherever somebody goes that is not a pull request is what the first tab takes them back to.
+    if (view !== 'pr' && view !== 'repoForm' && view !== 'import') state.home = { view: view, repoId: view === 'prs' ? state.repoId : null };
     if (view === 'pr') {
       // Drafts that belong to the PR that was open — a merge message, a decline reason, a new note — do not follow into another.
       if (state.edits.__pr !== state.repoId + '#' + state.prId) {
@@ -1326,6 +1356,7 @@
       state.code = { files: null, file: null, lines: null, error: null, focusLine: null, noteAt: null };
       state.commits = { data: null, sha: null, files: null, file: null, lines: null, error: null };
       state.confirmRerun = null; state.decline = null; state.merge = null;
+      if (fields && fields.codeFile) state.code.file = fields.codeFile;
     }
     remember();
     state.bodyScroll = {};
@@ -1374,9 +1405,9 @@
     if (state.view === 'repoForm') parts.push('<span class="here">' + (state.form && state.form.id ? 'Edit ' + esc(state.form.name) : 'New repository') + '</span>');
     if (state.view === 'import') parts.push('<span class="here">Import</span>');
     if (state.view === 'pr') {
+      // The pull request itself is named by its tab, right below; here only the repository it belongs to.
       var name = state.pr && state.pr.repo ? state.pr.repo.name : '';
       if (name) parts.push('<button class="link" data-act="open-prs" data-repo="' + esc(state.repoId) + '">' + esc(name) + '</button>');
-      parts.push('<span class="here">#' + esc(state.prId) + (state.pr && state.pr.pr ? ' ' + esc(state.pr.pr.title) : '') + '</span>');
     }
     return parts.length ? '<span class="crumbs">› ' + parts.join(' › ') + '</span>' : '';
   }
@@ -1392,6 +1423,7 @@
      */
     document.documentElement.style.setProperty('--ui-font', uiFont() + 'px');
     drawTop();
+    drawPrTabs();
     var main = $('main');
     var scroll = main.scrollTop;
     // In a pull request it is the body under the tabs that scrolls, and each tab keeps its own place.
@@ -3684,11 +3716,105 @@
    * Actions
    * ------------------------------------------------------------------ */
 
-  function openPr(repoId, prId) {
+  /*
+   * Pull requests in tabs.
+   *
+   * Reviewing is rarely one pull request: it is the one in front, the one it
+   * depends on, and the one somebody just asked about. Each opened pull request
+   * keeps a tab, and each tab remembers where it was left — which of Review,
+   * Code or Commits, and which file — so going back to it is going back to it,
+   * not to its first screen. The first tab is wherever they were opened from.
+   */
+  function tabOf(repoId, prId) {
+    for (var i = 0; i < state.prTabs.length; i += 1) {
+      if (state.prTabs[i].repoId === repoId && state.prTabs[i].prId === Number(prId)) return state.prTabs[i];
+    }
+    return null;
+  }
+
+  /** What the pull request in front was showing, written onto its tab before anything moves. */
+  function keepTab() {
+    if (state.view !== 'pr') return;
+    var tab = tabOf(state.repoId, state.prId);
+    if (!tab) return;
+    tab.prTab = state.prTab;
+    tab.file = state.code && state.code.file || null;
+  }
+
+  function homeLabel() {
+    var view = state.home && state.home.view;
+    if (view === 'prs') {
+      var repo = state.overview && state.overview.repos.filter(function (one) { return one.id === state.home.repoId; })[0];
+      return repo ? repo.name : 'Pull requests';
+    }
+    return { repos: 'Repositories', bus: 'Coordination', usage: 'Usage', settings: 'Settings' }[view] || 'Dashboard';
+  }
+
+  function drawPrTabs() {
+    var strip = $('prtabs');
+    if (!strip) return;
+    if (!state.prTabs.length) { strip.innerHTML = ''; return; }
+    var html = '<button class="prtab home' + (state.view !== 'pr' ? ' on' : '') + '" data-act="prtab-home" role="tab" title="Back to ' + esc(homeLabel()) + '"><span class="label">' + esc(homeLabel()) + '</span></button>';
+    state.prTabs.forEach(function (tab, at) {
+      var on = state.view === 'pr' && state.repoId === tab.repoId && state.prId === tab.prId;
+      html += '<button class="prtab' + (on ? ' on' : '') + '" data-act="prtab" data-at="' + at + '" role="tab" aria-selected="' + on + '" title="' + esc((tab.repoName ? tab.repoName + ' ' : '') + '#' + tab.prId + (tab.title ? ' ' + tab.title : '')) + '">' +
+        '<span class="num">#' + tab.prId + '</span><span class="label">' + esc(tab.title || '') + '</span>' +
+        '<span class="x" data-act="prtab-close" data-at="' + at + '" title="Close (middle-click)">×</span></button>';
+    });
+    strip.innerHTML = html;
+    var on = strip.querySelector('.prtab.on');
+    if (on) on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  /** Into the tab at `at`, putting back what it was showing. */
+  function showTab(at) {
+    var tab = state.prTabs[at];
+    if (!tab) return;
+    var same = state.view === 'pr' && state.repoId === tab.repoId && state.prId === tab.prId;
+    if (same) return;
+    leavePr();
+    go('pr', { repoId: tab.repoId, prId: tab.prId, prTab: tab.prTab || 'review', codeFile: tab.file || null, backTo: state.home.view === 'prs' ? 'prs' : 'dashboard' });
+  }
+
+  /** What belongs to one pull request's screen does not follow into another. */
+  function leavePr() {
+    state.wsDiff = null; state.fixDiff = null; state.fixOutput = null; state.findingFilter = null; state.threadFilter = null;
+    Object.keys(state.folds).forEach(function (key) { if (key !== 'readiness' && key.indexOf('dash-') !== 0 && key !== 'read-errors') delete state.folds[key]; });
+  }
+
+  function closeTab(at) {
+    var tab = state.prTabs[at];
+    if (!tab) return;
+    var showing = state.view === 'pr' && state.repoId === tab.repoId && state.prId === tab.prId;
+    state.prTabs.splice(at, 1);
+    if (!showing) { remember(); drawPrTabs(); return; }
+    // The one to its right takes its place, as in any row of tabs; with none left, back to where they came from.
+    var next = state.prTabs[at] ? at : at - 1;
+    if (next >= 0) showTab(next);
+    else goHome();
+  }
+
+  function goHome() {
+    var home = state.home || { view: 'dashboard' };
+    go(home.view, home.view === 'prs' ? { repoId: home.repoId } : null);
+  }
+
+  /** `background`: the tab is opened and nothing in front changes — ⌘-click, or the middle button. */
+  function openPr(repoId, prId, background) {
+    var tab = tabOf(repoId, prId);
+    if (!tab) {
+      var row = (state.dashboard && state.dashboard.rows || []).concat(state.prList && state.prList.rows || [])
+        .filter(function (one) { return one.repoId === repoId && one.pr && one.pr.id === Number(prId); })[0];
+      tab = { repoId: repoId, prId: Number(prId), title: row ? row.pr.title : '', repoName: row ? row.repoName : '', prTab: 'review', file: null };
+      // Next to the one in front, where the eye already is; otherwise at the end.
+      var current = state.view === 'pr' ? state.prTabs.indexOf(tabOf(state.repoId, state.prId)) : -1;
+      if (current >= 0) state.prTabs.splice(current + 1, 0, tab); else state.prTabs.push(tab);
+    }
+    if (background) { remember(); drawPrTabs(); say('Opened #' + tab.prId + ' in a tab.'); return; }
     var same = state.view === 'pr' && state.repoId === repoId && state.prId === Number(prId);
     // A diff belongs to the workshop of the PR it was read from; it does not follow into another.
-    if (!same) { state.wsDiff = null; state.fixDiff = null; state.fixOutput = null; state.findingFilter = null; state.threadFilter = null; Object.keys(state.folds).forEach(function (key) { if (key !== 'readiness' && key.indexOf('dash-') !== 0 && key !== 'read-errors') delete state.folds[key]; }); }
-    go('pr', { repoId: repoId, prId: Number(prId), prTab: same ? state.prTab : 'review', backTo: state.view === 'pr' ? state.backTo : state.view === 'prs' ? 'prs' : 'dashboard' });
+    if (!same) leavePr();
+    go('pr', { repoId: repoId, prId: Number(prId), prTab: same ? state.prTab : (tab.prTab || 'review'), codeFile: same ? null : tab.file, backTo: state.view === 'pr' ? state.backTo : state.view === 'prs' ? 'prs' : 'dashboard' });
   }
 
   /*
@@ -4149,7 +4275,10 @@
     'step-finding': function (el) { stepFinding(Number(el.getAttribute('data-dir'))); },
     // Grouping is how the board is laid out, not a filter: clearing the filters leaves it as it was.
     'dash-clear': function () { state.dashFilter = { flags: [], mode: 'ALL', mine: false, authors: [], text: '', byRepo: byRepo() }; remember(); draw(); },
-    'open-pr': function (el) { openPr(el.getAttribute('data-repo'), el.getAttribute('data-pr')); },
+    'open-pr': function (el) { openPr(el.getAttribute('data-repo'), el.getAttribute('data-pr'), Boolean(lastClick && (lastClick.metaKey || lastClick.ctrlKey))); },
+    'prtab': function (el) { showTab(Number(el.getAttribute('data-at'))); },
+    'prtab-close': function (el) { closeTab(Number(el.getAttribute('data-at'))); },
+    'prtab-home': function () { if (state.view === 'pr') goHome(); },
     'open-prs': function (el) { go('prs', { repoId: el.getAttribute('data-repo'), prStates: ['OPEN'] }); },
     'open-url': function (el) { call('openUrl', { url: el.getAttribute('data-url') }).catch(fail); },
     'cancel-run': function (el) { call('cancelRun', { key: el.getAttribute('data-key') }).catch(fail); },
@@ -4520,6 +4649,7 @@
      * does carry an action.
      */
     if (event.target.hasAttribute && event.target.hasAttribute('data-act-change')) return;
+    lastClick = event;
     var el = event.target.closest('[data-act]');
     if (!el || el.hasAttribute('disabled')) return;
     var name = el.getAttribute('data-act');
@@ -4529,6 +4659,23 @@
     if (el.tagName !== 'INPUT') event.preventDefault();
     handler(el);
   });
+
+  /** The click being handled, so an action can tell ⌘-click from a click. */
+  var lastClick = null;
+
+  /*
+   * The middle button: on a pull request it opens it in a tab behind the one in
+   * front, on a tab it closes it — what it does in every browser.
+   */
+  document.addEventListener('auxclick', function (event) {
+    if (event.button !== 1) return;
+    var close = event.target.closest('[data-act="prtab"]');
+    if (close) { event.preventDefault(); closeTab(Number(close.getAttribute('data-at'))); return; }
+    var open = event.target.closest('[data-act="open-pr"]');
+    if (open) { event.preventDefault(); openPr(open.getAttribute('data-repo'), open.getAttribute('data-pr'), true); }
+  });
+  // Without this the middle button would also start the browser's autoscroll on a tab.
+  document.addEventListener('mousedown', function (event) { if (event.button === 1 && event.target.closest('.prtab, [data-act="open-pr"]')) event.preventDefault(); });
 
   document.addEventListener('input', function (event) {
     var el = event.target;
@@ -4648,6 +4795,16 @@
       // Whoever wants the room today usually wants it tomorrow.
       if (saved.sayTo) state.sayTo = saved.sayTo;
       if (saved.codeFile && state.view === 'pr') state.code.file = saved.codeFile;
+      if (Array.isArray(saved.prTabs)) {
+        state.prTabs = saved.prTabs.filter(function (tab) { return tab && tab.repoId && Number(tab.prId); }).map(function (tab) {
+          return { repoId: tab.repoId, prId: Number(tab.prId), title: tab.title || '', repoName: tab.repoName || '', prTab: tab.prTab || 'review', file: tab.file || null };
+        });
+      }
+      if (saved.home && saved.home.view) state.home = { view: saved.home.view, repoId: saved.home.repoId || null };
+      // A pull request in front that has no tab (remembered before tabs existed) gets one.
+      if (state.view === 'pr' && state.repoId && state.prId && !tabOf(state.repoId, state.prId)) {
+        state.prTabs.push({ repoId: state.repoId, prId: Number(state.prId), title: '', repoName: '', prTab: state.prTab || 'review', file: saved.codeFile || null });
+      }
     }
     if (payload && payload.showing === false) state.showing = false;
     if (state.showing) start();

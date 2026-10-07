@@ -284,6 +284,13 @@ export interface ExtensionViewPanel {
   title: string;
   /** The repository it was opened on, for a panel that needs one. */
   root: string | null;
+  /**
+   * What the panel asked to be given back when it comes back — its open tabs,
+   * where it was looking. Opaque here and read by nothing but that panel.
+   * Saved with the workspace, so it survives the app restarting and not only
+   * the frame being rebuilt.
+   */
+  resume?: unknown;
 }
 
 /** What a section can hold besides a terminal. */
