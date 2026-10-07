@@ -662,6 +662,8 @@ interface State {
    * starting where that one says. Two places in one cluster side by side.
    */
   openExtensionBeside(fromPanelId: string, resume: unknown, side: 'right' | 'bottom'): void;
+  /** What an extension panel asked to be given back, kept on the panel so it is saved with the workspace. */
+  rememberPanel(panelId: string, resume: unknown): void;
   /** A view from its activity-bar button: in the section in front, bringing the one open copy over if there is one. */
   launchExtensionView(viewId: string): void;
   /** Show a file somewhere sensible — the app decides where, the asker does not. */
@@ -892,6 +894,10 @@ export const useStore = create<State>((set, get) => ({
         // one nobody remembers making is a folder that looks empty.
         .map((panel) => [panel.id, panel.kind === 'files' ? { ...panel, terminalId: null, find: '' } : panel]),
     );
+    // What each extension panel asked to be given back, handed to its frame when the frame says it is ready.
+    for (const panel of Object.values(basePanels)) {
+      if (panel.kind === 'extension' && panel.resume != null) whereEachPanelWas.set(panel.id, panel.resume);
+    }
     set({
       profiles,
       settings,
@@ -3430,6 +3436,15 @@ export const useStore = create<State>((set, get) => ({
     schedulePersist(get);
   },
 
+  rememberPanel(panelId, resume) {
+    const panel = get().panels[panelId];
+    if (!panel || panel.kind !== 'extension') return;
+    // The same thing said again is not a change: no new object, no save.
+    if (JSON.stringify(panel.resume ?? null) === JSON.stringify(resume ?? null)) return;
+    set((prev) => ({ panels: { ...prev.panels, [panelId]: { ...panel, resume } } }));
+    schedulePersist(get);
+  },
+
   openExtensionBeside(fromPanelId, resume, side) {
     const state = get();
     const from = state.panels[fromPanelId];
@@ -3441,7 +3456,7 @@ export const useStore = create<State>((set, get) => ({
     set((prev) => {
       const layout = dropTab(prev.layout, panelId, leaf.id, side);
       return {
-        panels: { ...prev.panels, [panelId]: { ...from, id: panelId } },
+        panels: { ...prev.panels, [panelId]: { ...from, id: panelId, resume: resume ?? undefined } },
         layout,
         activeLeafId: leafOfTab(layout, panelId)?.id ?? prev.activeLeafId,
         // Side by side is the point; a maximised section would hide the new one.

@@ -368,6 +368,8 @@ function Frame({
           // Opaque: whatever the panel says it needs to come back, handed back
           // to that same panel and read by nothing else.
           whereEachPanelWas.set(panelId, message.payload ?? null);
+          // And on the panel itself, which is saved with the workspace: a restart is not the end of it.
+          useStore.getState().rememberPanel(panelId, message.payload ?? null);
         } else if (message.name === 'copy' && typeof message.payload?.text === 'string') {
           // A frame in an origin of its own has no clipboard to write to, so it
           // asks. Text only: what goes on the clipboard is a string the person
