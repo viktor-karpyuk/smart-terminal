@@ -873,10 +873,21 @@ class ReviewService {
     const current = new Set(doneFindings.map((finding) => finding.id));
     const earlier = allFindings.filter((finding) => finding.publishedId && !finding.askedBy && !current.has(finding.id));
     const threads = rules.buildConversation({ findings: [...doneFindings, ...earlier], comments, replies });
+    /*
+     * What the readiness and the merge are judged on: every comment of ours on
+     * the pull request, not only the latest review's. A review that found
+     * nothing new left the comments it inherited — published, answered,
+     * verified fixed — out of the sum, and the percentage was decided by
+     * whatever happened to be left.
+     */
+    const judged = [...doneFindings, ...earlier];
+    // An answer from the author in a thread already verified as fixed holds nothing up.
+    const settledThreads = new Set(threads.filter((thread) => !rules.wantsAnswer(thread)).flatMap((thread) => thread.entries.map((entry) => String(entry.id))));
+    const repliesHolding = replies.filter((reply) => !settledThreads.has(String(reply.theirCommentId)));
     const fixes = this.store.fixesForPr(repoId, prId);
     const finalPassDone = Boolean(done?.finalPassHead && pr && done.finalPassHead === pr.headSha);
     const migrationClash = pr?.state === 'OPEN' ? clashFor(prId, this.store.migrationClashes(repoId)) : null;
-    const counts = { ...rules.mergeCounts({ pr, review: done, findings: doneFindings.filter((finding) => !finding.askedBy), notes, replies }), migrationClash: clashSentence(migrationClash) };
+    const counts = { ...rules.mergeCounts({ pr, review: done, findings: judged.filter((finding) => !finding.askedBy), notes, replies: repliesHolding }), migrationClash: clashSentence(migrationClash) };
     const running = this.engine.activity.list().filter((run) => run.repoId === repoId && run.prId === prId);
     return {
       repo: this.publicRepo(repo),
@@ -895,11 +906,11 @@ class ReviewService {
       fixes,
       workshop: this.fixer.workshopState(repo, prId),
       approvals: this.store.approvals(repoId, prId),
-      readiness: rules.readiness({ pr, review: done, threads, findings: doneFindings, finalPassDone, finalPassBlockers: finalPassDone ? done.finalPassBlockers ?? 0 : 0 }),
+      readiness: rules.readiness({ pr, review: done, threads, findings: judged, finalPassDone, finalPassBlockers: finalPassDone ? done.finalPassBlockers ?? 0 : 0 }),
       finalPassDone,
       mergeBlocker: rules.mergeBlocker(counts),
       migrationClash,
-      nextStep: rules.nextStep({ pr, review: done, findings: doneFindings, notes, threads, running, finalPassDone, finalPassBlockers: done?.finalPassBlockers ?? 0, mergeBlocker: rules.mergeBlocker(counts) }),
+      nextStep: rules.nextStep({ pr, review: done, findings: judged, notes, threads, running, finalPassDone, finalPassBlockers: done?.finalPassBlockers ?? 0, mergeBlocker: rules.mergeBlocker(counts) }),
       running,
       settings,
       followUpDays: settings.followUpDays,
