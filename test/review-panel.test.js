@@ -823,3 +823,17 @@ test('the merge button cannot be pressed on a branch that does not merge', () =>
   R.conflictState = () => null;
   assert.match(R.mergeButton({ mergeBlocker: null }), /data-act="merge-open"/);
 });
+
+test('the commits list is read again when a review or a verdict changes what it marks', () => {
+  const C = fromPanel(['commitsStamp']);
+  const before = { reviews: [{ id: 'r1', status: 'DONE' }], findings: [{ id: 'f', resolution: null }], earlierFindings: [] };
+  const reviewed = { ...before, reviews: [{ id: 'r2', status: 'DONE' }, { id: 'r1', status: 'DONE' }] };
+  const running = { ...before, reviews: [{ id: 'r2', status: 'RUNNING' }, { id: 'r1', status: 'DONE' }] };
+  const fixed = { ...before, findings: [{ id: 'f', resolution: 'RESOLVED', resolutionCommit: 'abc1234' }] };
+  assert.equal(C.commitsStamp(before), C.commitsStamp({ ...before }));
+  assert.equal(C.commitsStamp(before), C.commitsStamp(running), 'a review still running changes nothing yet');
+  assert.notEqual(C.commitsStamp(before), C.commitsStamp(reviewed));
+  assert.notEqual(C.commitsStamp(before), C.commitsStamp(fixed));
+  const handler = source.slice(source.indexOf('function loadPrView'), source.indexOf('function loadPrView') + 1800);
+  assert.match(handler, /commitsStamp\(state\.pr\) !== commitsStamp\(r\)/);
+});
