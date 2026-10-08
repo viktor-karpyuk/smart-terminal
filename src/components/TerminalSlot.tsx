@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
-import { terminalLook, useStore } from '../state/store';
+import { terminalFontSizeFor, terminalLook, useStore } from '../state/store';
 import { attachTerminal, ensureTerminal, fitTerminal, parkTerminal } from '../terminals/registry';
 
 /**
@@ -17,6 +17,8 @@ export function TerminalSlot({ sessionId }: { sessionId: string }) {
 
     ensureTerminal(sessionId, {
       ...terminalLook(settings),
+      // Its group's size, or its own, from the first frame — not the global size until something changes.
+      fontSize: terminalFontSizeFor(useStore.getState(), sessionId),
       scrollback: settings.scrollback,
       onData: (data) => useStore.getState().sendInput(sessionId, data),
       onResize: (cols, rows) => useStore.getState().notifyResize(sessionId, cols, rows),

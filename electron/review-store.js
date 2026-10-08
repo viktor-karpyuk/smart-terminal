@@ -619,6 +619,20 @@ class ReviewStore {
       paths == null ? null : JSON.stringify(paths), now(), repoId, Number(prId));
   }
 
+  /**
+   * Every open pull request into `target` asks again whether it lands.
+   *
+   * An answer is trusted for a while when nothing about its own pull request
+   * changed — but the target moving is a change too, and the commonest one is
+   * another pull request merging into it. The one built on top of a branch
+   * just squashed into develop went on reading "merges cleanly" for ten
+   * minutes while it had seven conflicts.
+   */
+  staleConflictsInto(repoId, target, exceptPrId = null) {
+    this.run("UPDATE cr_pr SET conflicts_at = NULL WHERE repo_id = ? AND target = ? AND state = 'OPEN' AND pr_id IS NOT ?",
+      repoId, String(target), exceptPrId == null ? null : Number(exceptPrId));
+  }
+
   // --- migration numbers taken twice ---------------------------------------------
 
   /** The clashes a repository has now, each with who is in it and what the room was told. */
@@ -708,7 +722,12 @@ class ReviewStore {
   reconcileOpen(repoId, openIds) {
     const known = this.all("SELECT pr_id FROM cr_pr WHERE repo_id = ? AND state = 'OPEN'", repoId).map((row) => Number(row.pr_id));
     const gone = known.filter((prId) => !openIds.includes(prId));
-    for (const prId of gone) this.run("UPDATE cr_pr SET state = 'DECLINED', closed_at = COALESCE(closed_at, ?) WHERE repo_id = ? AND pr_id = ?", now(), repoId, prId);
+    for (const prId of gone) {
+      this.run("UPDATE cr_pr SET state = 'DECLINED', closed_at = COALESCE(closed_at, ?) WHERE repo_id = ? AND pr_id = ?", now(), repoId, prId);
+      // Gone from the open list, most likely merged: what it targeted has moved.
+      const target = this.get('SELECT target FROM cr_pr WHERE repo_id = ? AND pr_id = ?', repoId, prId)?.target;
+      if (target) this.staleConflictsInto(repoId, target, prId);
+    }
     return gone.length;
   }
 

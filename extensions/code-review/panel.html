@@ -69,6 +69,15 @@
   .btn.go:hover { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
   .btn.go.solid { background: var(--ok); border-color: var(--ok); color: var(--bg); font-weight: 600; }
   .btn.go.solid:hover { background: color-mix(in srgb, var(--ok) 85%, white); }
+  .conflicts-card { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); margin-bottom: 12px; }
+  .conflicts-card .cc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .conflicts-card .cc-sub { margin: 12px 0 4px; font-size: 0.833rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); }
+  .conflicts-card .cc-files { display: grid; gap: 8px; margin-top: 10px; }
+  .conflicts-card .cc-file { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-panel); }
+  .conflicts-card .cc-file .row { gap: 8px; margin-bottom: 4px; flex-wrap: wrap; }
+  .plain-diff { margin: 6px 0; padding: 8px 10px; max-height: 420px; overflow: auto; border-radius: var(--r-sm); background: var(--bg-elevated); font-family: ui-monospace, Menlo, monospace; font-size: 0.917rem; white-space: pre; }
+  .plain-diff.stat { max-height: 180px; }
+  .plain-diff .da { color: var(--ok); } .plain-diff .dd { color: var(--danger); } .plain-diff .dh { color: var(--accent); } .plain-diff .df { color: var(--text-faint); }
   .merge-confirm { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; max-width: 360px; }
   .merge-confirm .btn { justify-content: center; }
   .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
@@ -1585,7 +1594,7 @@
   function drawRuns(runs, withTitle) {
     if (!runs.length) return '';
     return runs.map(function (run) {
-      var label = { review: 'Review', verify: 'Verification', final: 'Final pass', reply: 'Reply', fix: 'Fix' }[run.kind] || run.kind;
+      var label = { review: 'Review', verify: 'Verification', final: 'Final pass', reply: 'Reply', fix: 'Fix', conflicts: 'Conflicts' }[run.kind] || run.kind;
       return '<div class="run"><div class="row"><span class="dot busy"></span><strong>' + esc(label) + '</strong>' +
         (withTitle ? ' <span class="dim">' + esc(run.repoName) + ' #' + esc(run.prId) + ' · ' + esc(run.title) + '</span>' : ' <span class="dim">' + esc(run.title) + '</span>') +
         (run.auto ? ' <span class="chip">automatic</span>' : '') +
@@ -2284,7 +2293,7 @@
    * the screen is still there; this is so nobody has to read the readiness list
    * and the merge gate to work out what that is.
    */
-  var NEXT_ACTIONS = { 'run-review': 'Review', 'publish-all': 'Publish', 'tab-conversation': 'Open the conversation', verify: 'Verify', 'final-pass': 'Run the final pass', 'merge-open': 'Merge…', load: 'Load' };
+  var NEXT_ACTIONS = { 'conflicts-open': 'Resolve the conflicts', 'run-review': 'Review', 'publish-all': 'Publish', 'tab-conversation': 'Open the conversation', verify: 'Verify', 'final-pass': 'Run the final pass', 'merge-open': 'Merge…', load: 'Load' };
   function drawNextStep(v, compact) {
     var step = v.nextStep;
     if (!step) return '';
@@ -2334,8 +2343,92 @@
         (left.length || isOpen('readiness') ? '<button class="link" data-act="fold" data-key="readiness">' + (isOpen('readiness') ? 'hide' : left.length + ' left') + '</button>' : '') + '</div>';
     }
     html += '<div class="side-pair">' +
-      '<button class="btn small merge' + (v.mergeBlocker ? ' blocked' : '') + '" data-act="merge-open" title="' + esc(v.mergeBlocker || 'Nothing is pending') + '">' + (v.mergeBlocker ? 'Merge anyway…' : 'Merge…') + '</button>' +
+      mergeButton(v) +
       '<button class="btn small danger" data-act="decline-open">Decline…</button></div></section>';
+    return html;
+  }
+
+  /*
+   * Merge, unless it cannot be: a branch that does not merge is not one to
+   * "merge anyway" — the forge refuses it — so the button says why instead.
+   */
+  function mergeButton(v) {
+    if (conflictState(v)) return '<button class="btn small merge blocked" disabled title="' + esc(v.mergeBlocker || 'It does not merge') + '">Can\'t merge</button>';
+    return '<button class="btn small merge' + (v.mergeBlocker ? ' blocked' : '') + '" data-act="merge-open" title="' + esc(v.mergeBlocker || 'Nothing is pending') + '">' + (v.mergeBlocker ? 'Merge anyway…' : 'Merge…') + '</button>';
+  }
+
+  var APPROACHES = { OURS: ['Keep the branch', 'accent'], THEIRS: ['Keep the target', 'accent'], COMBINE: ['Combine both', 'okc'], MANUAL: ['Needs a decision', 'badc'] };
+
+  /** A unified diff as lines, coloured by what each one is. Text only: it is code somebody else wrote. */
+  function plainDiffHtml(text) {
+    return '<pre class="plain-diff">' + String(text || '').split('\n').map(function (line) {
+      var cls = /^@@/.test(line) ? 'dh' : /^(\+\+\+|---|diff |index )/.test(line) ? 'df' : line.charAt(0) === '+' ? 'da' : line.charAt(0) === '-' ? 'dd' : '';
+      return '<span class="' + cls + '">' + esc(line) + '</span>';
+    }).join('\n') + '</pre>';
+  }
+
+  /*
+   * The conflicts, and what to do about them: analyze, read the proposal,
+   * resolve, look at the result, push. One card that changes with the step,
+   * at the top of the Review tab, so it is where the next step points.
+   */
+  function drawConflictCard(v) {
+    var conflict = conflictState(v);
+    var job = v.conflictJob;
+    var busy = (v.running || []).some(function (run) { return run.kind === 'conflicts'; });
+    var target = esc(v.pr.targetBranch);
+    var branch = esc(v.pr.sourceBranch);
+    if (!conflict && !busy && !(job && (job.state === 'RESOLVED' || job.state === 'PUSHED'))) return '';
+    var html = '<div class="card conflicts-card" id="conflicts-card">';
+    if (job && job.state === 'PUSHED' && !conflict) {
+      return html + '<div class="cc-head"><span class="chip okc">✓ Merges</span><strong>The resolution is on ' + esc(job.branch || v.pr.sourceBranch) + '</strong><span class="spacer"></span>' +
+        '<button class="link" data-act="conflicts-discard">dismiss</button></div><div class="faint">Merge commit ' + sha7(job.sha) + ' was pushed; the branch merges into ' + target + ' now.</div></div>';
+    }
+    var count = conflict ? conflict.paths.length : (job && job.paths ? job.paths.length : 0);
+    html += '<div class="cc-head"><span class="chip badc">✗ Does not merge</span><strong>' + count + ' file' + (count === 1 ? '' : 's') + ' conflict with ' + target + '</strong><span class="spacer"></span>' +
+      (busy ? '' : '<button class="link" data-act="recheck-conflicts"' + busyAttr(prKey('recheck-conflicts')) + '>check again</button>') + '</div>';
+    if (busy) {
+      return html + '<div class="faint">' + (job && job.state === 'RESOLVING' ? 'Resolving as proposed, in a separate copy…' : 'Reading both sides and their history…') + ' The progress is in the run above.</div>' +
+        '<div class="row" style="margin-top:8px"><button class="btn small" data-act="conflicts-cancel">Cancel</button></div></div>';
+    }
+    if (job && job.error) html += '<div class="banner bad" style="margin-top:8px">' + esc(job.error) + '</div>';
+    if (!job || job.state === 'CLEAN' || job.state === 'FAILED' || job.state === 'ANALYZING' || job.state === 'PUSHED') {
+      html += (conflict ? '<ul class="conflict-list">' + conflict.paths.map(function (one) { return '<li class="mono">' + esc(one) + '</li>'; }).join('') + '</ul>' : '') +
+        '<p class="faint">First, what happened: Claude merges ' + target + ' into ' + branch + ' in a separate copy, reads both sides and their history, and proposes how to resolve each file. Nothing is changed until you approve it.</p>' +
+        '<div class="row"><button class="btn primary" data-act="conflicts-analyze"' + busyAttr(prKey('conflicts-analyze')) + '>Analyze the conflicts</button></div></div>';
+      return html;
+    }
+    var plan = job.plan || { files: [] };
+    if (job.state === 'PROPOSED') {
+      var manual = plan.files.filter(function (f) { return f.approach === 'MANUAL'; }).length;
+      html += '<h4 class="cc-sub">What happened</h4><div class="md">' + md(plan.cause || '') + '</div>';
+      if (plan.summary) html += '<h4 class="cc-sub">The proposal</h4><div class="md">' + md(plan.summary) + '</div>';
+      html += '<div class="cc-files">' + plan.files.map(function (f) {
+        var a = APPROACHES[f.approach] || APPROACHES.MANUAL;
+        return '<div class="cc-file"><div class="row"><span class="mono">' + esc(f.path) + '</span><span class="chip ' + a[1] + '">' + a[0] + '</span></div>' +
+          (f.what ? '<div class="faint md">' + md(f.what) + '</div>' : '') + '<div class="md">' + md(f.proposal || '') + '</div></div>';
+      }).join('') + '</div>';
+      if (plan.risks) html += '<div class="banner warn" style="margin-top:8px"><strong>Worth checking afterwards.</strong> ' + md(plan.risks) + '</div>';
+      if (manual) html += '<div class="banner bad" style="margin-top:8px">' + manual + ' file' + (manual === 1 ? ' needs' : 's need') + ' a decision. Say it below before resolving, or resolve those by hand.</div>';
+      html += '<textarea rows="2" data-edit="conflicts-note" placeholder="Anything Claude should know before it resolves (optional)" style="margin-top:8px">' + esc(edit('conflicts-note')) + '</textarea>' +
+        '<div class="row" style="margin-top:8px"><button class="btn primary" data-act="conflicts-resolve"' + busyAttr(prKey('conflicts-resolve')) + '>Resolve as proposed</button>' +
+        '<button class="btn" data-act="conflicts-analyze"' + busyAttr(prKey('conflicts-analyze')) + '>Analyze again</button><span class="spacer"></span>' +
+        '<button class="link" data-act="conflicts-discard">discard</button></div>' +
+        '<div class="faint" style="margin-top:4px">Resolving happens in the separate copy and ends in a merge commit you look at before anything is pushed.</div></div>';
+      return html;
+    }
+    // RESOLVED
+    var check = job.check;
+    html += '<div class="row" style="margin-top:4px"><span class="chip okc">Resolved</span><span>Merge commit <span class="mono">' + sha7(job.sha) + '</span> in a separate copy.</span>' +
+      (check ? '<span class="chip ' + (check.state === 'PASSED' ? 'okc' : 'badc') + '" title="' + esc(check.output || '') + '">check ' + esc(String(check.state).toLowerCase()) + '</span>' : '<span class="faint">no check command for this repository</span>') + '</div>';
+    if (job.summary) html += '<div class="md" style="margin-top:6px">' + md(job.summary) + '</div>';
+    if (job.stat) html += '<pre class="plain-diff stat">' + esc(job.stat) + '</pre>';
+    html += '<button class="link" data-act="fold" data-key="conflicts-diff">' + (isOpen('conflicts-diff') ? 'Hide the change' : 'Show what the merge changes on ' + branch) + '</button>';
+    if (isOpen('conflicts-diff')) html += plainDiffHtml(job.diff);
+    if (check && check.state !== 'PASSED') html += '<div class="banner bad" style="margin-top:8px">The check did not pass. Look at it before pushing: <button class="link" data-act="fold" data-key="conflicts-check">' + (isOpen('conflicts-check') ? 'hide' : 'its output') + '</button>' + (isOpen('conflicts-check') ? '<pre class="plain-diff">' + esc(check.output || '') + '</pre>' : '') + '</div>';
+    html += '<div class="merge-confirm" style="max-width:420px"><button class="btn go solid" data-act="conflicts-push"' + busyAttr(prKey('conflicts-push')) + '>Push to ' + branch + '</button>' +
+      '<button class="btn danger" data-act="conflicts-discard">Discard</button></div>' +
+      '<div class="faint" style="margin-top:4px">One merge commit on ' + branch + ', never forced: if somebody pushed in the meantime, nothing is pushed.</div></div>';
     return html;
   }
 
@@ -2358,7 +2451,7 @@
     }
     // The outcome, next to the bar that says whether it is time for it — not at the far end of a row that can be two thousand pixels wide.
     html += '<span class="group-btns" style="margin-left:6px;padding-left:8px;border-left:1px solid var(--border);border-right:0">';
-    html += '<button class="btn small merge' + (v.mergeBlocker ? ' blocked' : '') + '" data-act="merge-open" title="' + esc(v.mergeBlocker || 'Nothing is pending') + '">' + (v.mergeBlocker ? 'Merge anyway…' : 'Merge…') + '</button>';
+    html += mergeButton(v);
     html += '<button class="btn small danger" data-act="decline-open">Decline…</button></span></div>';
     return html;
   }
@@ -2399,6 +2492,7 @@
         (conflict.stale ? '<span class="faint">Checked before the newest commits arrived — it may have been resolved since.</span> ' : '') +
         '<button class="link" data-act="fold" data-key="conflict-files">' + (isOpen('conflict-files') ? 'hide' : 'which') + '</button>' +
         ' <button class="link" data-act="recheck-conflicts"' + busyAttr(prKey('recheck-conflicts')) + '>check again</button>' +
+        '<div style="margin-top:6px"><button class="btn small primary" data-act="conflicts-open">Resolve the conflicts…</button></div>' +
         (isOpen('conflict-files') ? '<ul class="conflict-list">' + conflict.paths.map(function (path) { return '<li class="mono">' + esc(path) + '</li>'; }).join('') + '</ul>' : '') +
         '</div>';
     }
@@ -2751,6 +2845,7 @@
       if (open) html += drawActions(v);
     }
     if (runs.length) html += drawRuns(runs, false);
+    html += drawConflictCard(v);
 
     // --- what the author says the PR is: open until there is a review to read instead
     var description = String(v.pr.description || '').trim();
@@ -4466,6 +4561,32 @@
         say(r.clashes && r.clashes.length ? r.clashes.length + ' migration number(s) still taken twice.' : 'No migration number is taken twice any more.');
       });
     },
+    'conflicts-open': function () {
+      var job = state.pr && state.pr.conflictJob;
+      if (!job || job.state === 'CLEAN' || job.state === 'FAILED' || job.state === 'PUSHED') return actions['conflicts-analyze']();
+      state.prTab = 'review'; remember(); draw();
+      var card = document.getElementById('conflicts-card');
+      if (card) card.scrollIntoView({ block: 'start', inline: 'nearest' });
+    },
+    'conflicts-analyze': function () {
+      state.prTab = 'review'; remember();
+      act(prKey('conflicts-analyze'), function () { return call('conflictsAnalyze', prArgs()); }, function (r) {
+        say(r.job && r.job.state === 'CLEAN' ? 'It merges cleanly now.' : 'The proposal is ready.');
+        load();
+      });
+    },
+    'conflicts-resolve': function () {
+      act(prKey('conflicts-resolve'), function () { return call('conflictsResolve', prArgs({ note: state.edits['conflicts-note'] || '' })); }, function () {
+        delete state.edits['conflicts-note'];
+        say('Resolved in the separate copy. Look at it, then push.');
+        load();
+      });
+    },
+    'conflicts-push': function () {
+      act(prKey('conflicts-push'), function () { return call('conflictsPush', prArgs()); }, function (r) { say('Pushed ' + String(r.sha || '').slice(0, 7) + '.'); load(); });
+    },
+    'conflicts-discard': function () { call('conflictsDiscard', prArgs()).then(load, fail); },
+    'conflicts-cancel': function () { call('conflictsCancel', prArgs()).then(load, fail); },
     'recheck-conflicts': function () {
       act(prKey('recheck-conflicts'), function () { return call('checkConflicts', prArgs()); }, function (paths) {
         if (paths === null) say('Could not tell: the clone could not be read.', true);

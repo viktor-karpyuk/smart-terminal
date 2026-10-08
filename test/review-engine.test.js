@@ -1116,3 +1116,70 @@ test('the sidebar gets a count per repository, and nothing about a hidden one', 
   assert.deepEqual((await service.call('sidebar')).repos.map((one) => one.name), ['Demo App']);
   assert.equal(JSON.stringify(after).includes('secret'), false);
 });
+
+test('conflicts: analyzed without changing anything, resolved in a copy, pushed only when asked, and the merge refused meanwhile', { skip }, async () => {
+  const analysis = { cause: 'main multiplied where the branch subtracted.', summary: 'Keep the branch.', files: [{ path: 'app.js', approach: 'OURS', what: 'both edited the return', proposal: 'keep a - b' }], risks: '' };
+  const { service, repo, w, forgeState } = setup([
+    async () => ({ structured: analysis }),
+    async ({ cwd }) => {
+      // The resolver writes the file the way the proposal says, markers gone.
+      fs.writeFileSync(path.join(cwd, 'app.js'), 'function add(a, b) {\n  return a - b;\n}\n// main wanted a * b\n');
+      return { structured: { resolved: true, summary: 'Kept the branch, noted main.', files: ['app.js'] } };
+    },
+  ]);
+  service.conflicts.claude = service.engine.claude;
+  // The target moves under the branch, on the same line.
+  git(w.seed, 'checkout', '-q', 'main');
+  fs.writeFileSync(path.join(w.seed, 'app.js'), 'function add(a, b) {\n  return a * b;\n}\n');
+  git(w.seed, 'commit', '-qam', 'multiply');
+  git(w.seed, 'push', '-q', 'origin', 'main');
+  await service.call('refreshPrs', { repoId: repo.id });
+  assert.deepEqual(await service.call('checkConflicts', { repoId: repo.id, prId: 7 }), ['app.js']);
+
+  let view = await service.call('pr', { repoId: repo.id, prId: 7 });
+  assert.equal(view.nextStep.action, 'conflicts-open');
+  assert.match(view.mergeBlocker, /conflict/);
+  assert.ok(view.readiness.percent < 100);
+  await assert.rejects(service.engine.merge(repo.id, 7, {}), /conflict/);
+  assert.ok(!forgeState.calls.some((call) => call.startsWith('merge')), 'the forge was never asked');
+
+  const before = git(w.clone, 'rev-parse', 'origin/feature');
+  const analyzed = await service.call('conflictsAnalyze', { repoId: repo.id, prId: 7 });
+  assert.equal(analyzed.job.state, 'PROPOSED');
+  assert.deepEqual(analyzed.job.paths, ['app.js']);
+  assert.match(analyzed.job.plan.cause, /multiplied/);
+  assert.equal(git(w.origin, 'rev-parse', 'feature'), before, 'analyzing pushed nothing');
+
+  const resolved = await service.call('conflictsResolve', { repoId: repo.id, prId: 7 });
+  assert.equal(resolved.job.state, 'RESOLVED');
+  assert.match(resolved.job.diff, /\+\/\/ main wanted a \* b/, 'the change the merge makes on the branch, to read before pushing');
+  assert.equal(git(w.origin, 'rev-parse', 'feature'), before, 'resolving pushed nothing either');
+
+  const pushed = await service.call('conflictsPush', { repoId: repo.id, prId: 7 });
+  assert.equal(pushed.ok, true, pushed.error);
+  assert.equal(git(w.origin, 'rev-parse', 'feature'), resolved.job.sha);
+  // A merge commit with both parents: the branch now contains main.
+  assert.equal(git(w.origin, 'rev-list', '--parents', '-n', '1', 'feature').split(' ').length, 3);
+  view = await service.call('pr', { repoId: repo.id, prId: 7 });
+  assert.deepEqual(view.pr.conflicts, []);
+  assert.equal(view.conflictJob.state, 'PUSHED');
+});
+
+test('conflicts: a resolution that leaves a marker is not committed', { skip }, async () => {
+  const { service, repo, w } = setup([
+    async () => ({ structured: { cause: 'c', summary: 's', files: [{ path: 'app.js', approach: 'COMBINE', what: '', proposal: 'p' }] } }),
+    async () => ({ structured: { resolved: true, summary: 'done, it says' } }),
+  ]);
+  service.conflicts.claude = service.engine.claude;
+  git(w.seed, 'checkout', '-q', 'main');
+  fs.writeFileSync(path.join(w.seed, 'app.js'), 'function add(a, b) {\n  return a * b;\n}\n');
+  git(w.seed, 'commit', '-qam', 'multiply');
+  git(w.seed, 'push', '-q', 'origin', 'main');
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('conflictsAnalyze', { repoId: repo.id, prId: 7 });
+  const result = await service.call('conflictsResolve', { repoId: repo.id, prId: 7 });
+  assert.match(result.error, /markers are still in app\.js/);
+  const job = (await service.call('pr', { repoId: repo.id, prId: 7 })).conflictJob;
+  assert.equal(job.state, 'PROPOSED', 'back to the proposal, to try again');
+  assert.match(job.error, /markers/);
+});

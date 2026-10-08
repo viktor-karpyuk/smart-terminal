@@ -205,6 +205,7 @@ const REVIEW_WRITE = [
   'review', 'reviewMany', 'cancel', 'cancelRun', 'verify', 'finalPass', 'saveReviewBody', 'publishReview', 'publishFinding',
   'publishAll', 'dismissFinding', 'closeFinding', 'settleFinding', 'editFinding', 'addNote', 'updateNote', 'deleteNote', 'publishNote',
   'checkConflicts', 'checkMigrations', 'migrationPlan', 'renumberMigrations',
+  'conflictsAnalyze', 'conflictsResolve', 'conflictsPush', 'conflictsDiscard', 'conflictsCancel',
   'draftReply', 'draftAll', 'saveReplyDraft', 'publishReply', 'dismissReply', 'dismissAllReplies', 'followUp',
   'adopt', 'fix', 'fixAll', 'retryFixReply', 'giveBack', 'discardWorkshop', 'push', 'dropFix',
   'remind', 'sweepReminders', 'escalateNow', 'speak',
