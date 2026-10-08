@@ -719,3 +719,44 @@ test('nothing is sent with nowhere chosen, and a failure keeps the text', () => 
   const handler = source.slice(at, at + 1200);
   assert.match(handler, /if \(!failed\.length\) \{[\s\S]{0,120}delete state\.edits\['say-text'\]/, 'cleared only when everything landed');
 });
+
+// ---------------------------------------------------------------- the findings list in the Review tab
+
+/*
+ * The case the list exists for: the latest review found nothing new, and the
+ * findings that matter are earlier ones, fixed by the author. A note about
+ * exactly that was once drawn *instead of* the list — "Done 2" over nothing.
+ */
+function reviewTab(v, filter = null) {
+  const R = fromPanel(['esc', 'findingDone', 'drawReviewTab']);
+  Object.assign(R, {
+    state: { wide: false, findingFilter: filter, folds: {}, busy: {}, reviewProfile: { depth: 'AUTO', kind: 'AUTO' }, depths: null, edits: {} },
+    drawNextStep: () => '', drawActions: () => '', drawRuns: () => '',
+    fold: (key, head, summary, body) => `<fold ${key}>`, md: (text) => String(text), clamped: (key, text) => text,
+    busyAttr: () => '', prKey: (key) => key, reviewKey: () => 'review', isOpen: () => false, when: () => 'now',
+    findingCard: (f) => `<card ${f.id}>`,
+    sha7: () => '',
+    statusChip: () => '',
+  });
+  return R.drawReviewTab(v);
+}
+
+test('when the latest review found nothing new, the earlier findings are still drawn', () => {
+  const resolved = { id: 'a', title: 'fixed', publishedId: '1', resolution: 'RESOLVED' };
+  const open = { id: 'b', title: 'still open', publishedId: '2', resolution: 'UNRESOLVED' };
+  const v = {
+    pr: { state: 'OPEN', description: '' }, repo: { fixMode: 'MANUAL' }, done: { id: 'r2' }, review: { id: 'r2' },
+    findings: [], earlierFindings: [resolved, open], notes: [], running: [], foreign: [],
+  };
+  const first = reviewTab(v);
+  assert.match(first, /The last review found nothing new/);
+  assert.ok(first.includes('<card b>'), 'the open one is drawn, not only the note about it');
+  assert.ok(!first.includes('<card a>'), 'Open, by default, while something is open');
+
+  const all = reviewTab(v, 'all');
+  assert.ok(all.includes('<card a>') && all.includes('<card b>'));
+  assert.ok(all.indexOf('<card b>') < all.indexOf('<card a>'), 'open first, then done');
+
+  const onlyDone = reviewTab({ ...v, earlierFindings: [resolved] });
+  assert.ok(onlyDone.includes('<card a>'), 'with nothing open, everything — the case that showed "Done 2" over nothing');
+});
