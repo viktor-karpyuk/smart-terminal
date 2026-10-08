@@ -45,6 +45,7 @@ function UpdateBody({ update }: { update: UpdateState }) {
   const release = update.release;
   const running = `${update.current.version}${update.current.build ? ` · build ${update.current.build}` : ''}`;
   const releases = release ? (update.releases?.length ? update.releases : [release]) : [];
+  const busy = update.phase === 'checking' || update.phase === 'downloading' || update.phase === 'installing';
   // Which releases' notes are unfolded. The newest starts open; the rest start folded.
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const isOpen = (version: string) => open[version] ?? version === releases[0]?.version;
@@ -112,6 +113,23 @@ function UpdateBody({ update }: { update: UpdateState }) {
             <small className="checkbox-hint">Early builds — not always the steadier one.</small>
           </span>
         </label>
+        {/*
+          Always here, whatever is being offered above. Opening the panel only
+          asks GitHub again after a few hours, so a release published since
+          then stayed out of sight with no way to go and look for it.
+        */}
+        {/* Up to date or failed, the button is already up top; twice would be noise. */}
+        {update.phase !== 'idle' && update.phase !== 'error' && (
+        <div className="update-check-row">
+          <button
+            className="ghost-btn"
+            disabled={busy}
+            onClick={() => void useStore.getState().checkForUpdates(true)}
+          >
+            {update.phase === 'checking' ? 'Checking…' : 'Check for updates'}
+          </button>
+        </div>
+        )}
         <p className="update-quiet">
           {update.checkedAt ? `Last checked ${new Date(update.checkedAt).toLocaleString()}.` : 'Not checked yet.'}
           {/* Not while that same version is being offered two inches above it. */}
@@ -418,6 +436,32 @@ function Block({ block }: { block: NotesBlock }) {
       <Tag>
         <Spans spans={block.spans} />
       </Tag>
+    );
+  }
+  if (block.kind === 'table') {
+    return (
+      <table className="update-table">
+        <thead>
+          <tr>
+            {block.head.map((spans, index) => (
+              <th key={index}>
+                <Spans spans={spans} />
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {block.rows.map((row, at) => (
+            <tr key={at}>
+              {row.map((spans, index) => (
+                <td key={index}>
+                  <Spans spans={spans} />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     );
   }
   if (block.kind === 'list') {

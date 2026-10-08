@@ -551,7 +551,13 @@ class Updates extends EventEmitter {
     if (this.state.phase === 'checking' || this.state.phase === 'downloading' || this.state.phase === 'installing') {
       return this.snapshot();
     }
-    if (!force && this.state.checkedAt && Date.now() - this.state.checkedAt < CHECK_EVERY / 2) {
+    /*
+     * Not again so soon — but only once this run has an answer of its own. The
+     * time of the last check is kept on disk and the answer is not, so after a
+     * restart it read as "checked an hour ago" with nothing to show for it, and
+     * a published version stayed out of sight for hours.
+     */
+    if (!force && this.answered && this.state.checkedAt && Date.now() - this.state.checkedAt < CHECK_EVERY / 2) {
       return this.snapshot();
     }
     if (!this.slug) {
@@ -569,6 +575,7 @@ class Updates extends EventEmitter {
       });
       const release = newer[0] ?? null;
       const checkedAt = Date.now();
+      this.answered = true;
       this.#remember({ checkedAt });
       /*
        * Asking on purpose clears a skip.
