@@ -206,6 +206,16 @@ const MIGRATIONS = [
      repo_id TEXT NOT NULL, number TEXT NOT NULL, members TEXT NOT NULL, signature TEXT NOT NULL,
      seen_at TEXT NOT NULL, notified_signature TEXT, notified_at TEXT, notify_result TEXT,
      PRIMARY KEY (repo_id, number))`,
+
+  /*
+   * 7 — which commit fixed a finding.
+   *
+   * The verdict said "resolved" and the evidence said why, in prose. Which of
+   * the commits that arrived did it is the question somebody asks when reading
+   * the commit list — "what did this one fix?" — and prose cannot be joined to
+   * a commit. Null when the verdict did not name one, or it is not resolved.
+   */
+  `ALTER TABLE cr_finding ADD COLUMN resolution_commit TEXT`,
 ];
 
 const now = () => new Date().toISOString();
@@ -320,6 +330,7 @@ const findingRow = (row) =>
     publishError: row.publish_error,
     resolution: row.resolution,
     resolutionBy: row.resolution_by ?? null,
+    resolutionCommit: row.resolution_commit ?? null,
     resolutionNote: row.resolution_note,
     followedUpAt: row.followed_up_at,
     closedAt: row.closed_at,
@@ -1067,8 +1078,10 @@ class ReviewStore {
     return moved;
   }
 
-  setResolution(findingId, resolution, note, by = 'VERIFY') {
-    this.run('UPDATE cr_finding SET resolution = ?, resolution_note = ?, resolution_by = ? WHERE id = ?', resolution, note ?? null, by, findingId);
+  setResolution(findingId, resolution, note, by = 'VERIFY', commit = null) {
+    // A commit is only kept for a fix: "still open, as of abc" names no fixing commit.
+    const fixedIn = resolution === 'RESOLVED' && commit && /^[0-9a-f]{7,40}$/i.test(String(commit)) ? String(commit).toLowerCase() : null;
+    this.run('UPDATE cr_finding SET resolution = ?, resolution_note = ?, resolution_by = ?, resolution_commit = ? WHERE id = ?', resolution, note ?? null, by, fixedIn, findingId);
   }
 
   /**

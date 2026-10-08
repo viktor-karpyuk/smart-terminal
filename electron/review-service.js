@@ -732,6 +732,35 @@ class ReviewService {
     return out;
   }
 
+  /**
+   * Tell the author their branch does not merge, with what is in the way.
+   *
+   * The files, the two branches, and — when the conflicts have been analyzed —
+   * what happened and what each file needs, which is the part that saves them
+   * the hour. Sent as you, by direct message, like anything said from here.
+   */
+  async tellConflicts(repoId, prId, { note = '' } = {}) {
+    const pr = this.store.pr(repoId, prId);
+    if (!pr) throw new Error('That pull request is gone.');
+    const paths = Array.isArray(pr.conflicts) ? pr.conflicts : [];
+    if (!paths.length) throw new Error('This pull request merges: there is nothing to tell.');
+    const job = this.conflicts.state(repoId, prId);
+    const plan = job?.plan && (job.state === 'PROPOSED' || job.state === 'RESOLVED') ? job.plan : null;
+    const lines = [
+      `Hola ${String(pr.author ?? '').split(' ')[0] || ''}, la rama \`${pr.sourceBranch}\` (#${pr.id}) ya no se puede mergear en \`${pr.targetBranch}\`: ${paths.length} archivo${paths.length === 1 ? '' : 's'} en conflicto.`,
+      '',
+      ...paths.map((file) => {
+        const proposal = plan?.files?.find((one) => one.path === file);
+        return `• \`${file}\`${proposal ? ` — ${String(proposal.proposal).replace(/\s+/g, ' ').slice(0, 300)}` : ''}`;
+      }),
+    ];
+    if (plan?.cause) lines.push('', `Qué pasó: ${String(plan.cause).replace(/\s+/g, ' ').slice(0, 800)}`);
+    if (plan?.risks) lines.push('', `Para probar después: ${String(plan.risks).replace(/\s+/g, ' ').slice(0, 500)}`);
+    lines.push('', `Para resolverlo: traé \`${pr.targetBranch}\` a tu rama (merge o rebase), resolvé esos archivos y subí la rama.`);
+    if (String(note ?? '').trim()) lines.push('', String(note).trim().slice(0, 1000));
+    return this.speak(repoId, prId, { text: lines.join('\n'), to: { person: true } });
+  }
+
   async sweepReminders() {
     const sent = [];
     for (const found of this.due()) {
@@ -1025,12 +1054,54 @@ class ReviewService {
     } else {
       [commits, local] = await Promise.all([this.git.commits(repo.localPath, pr.targetBranch, pr.sourceBranch), this.git.localAhead(repo.localPath, pr.sourceBranch)]);
     }
+    const reviewed = absent.length ? new Map() : await this.reviewedCommits(repo, pr);
+    commits = commits.map((commit) => ({ ...commit, reviewed: reviewed.get(commit.sha) ?? null }));
+    // Bitbucket names a head with twelve characters and git with forty: compared as written, they never matched.
     let sinceReview = null;
     if (done?.headSha) {
-      const index = commits.findIndex((commit) => commit.sha === done.headSha);
+      const index = commits.findIndex((commit) => commit.sha.startsWith(done.headSha) || done.headSha.startsWith(commit.sha));
       sinceReview = index >= 0 ? index : null;
     }
-    return { commits, local, sinceReview, branch: pr.sourceBranch, note };
+    const unreviewed = commits.filter((commit) => !commit.reviewed).length;
+    // Which commit fixed which finding, as the verdicts named them, so the list can say "this one fixed that".
+    const fixes = this.store.findingsForPr(repoId, prId)
+      .filter((finding) => finding.resolutionCommit)
+      .map((finding) => ({ commit: finding.resolutionCommit, findingId: finding.id, title: finding.title, severity: finding.severity }));
+    return { commits, local, sinceReview, unreviewed, fixes, branch: pr.sourceBranch, note };
+  }
+
+  /**
+   * Which of the branch's commits a finished review has read, and which one.
+   *
+   * By ancestry: a review read its head and everything under it back to the
+   * target. And by content, for a branch rebased since: the same change under
+   * a new hash was still read, and calling it new would send a review back over
+   * what it has already seen. `git cherry` is what tells one from the other.
+   */
+  async reviewedCommits(repo, pr) {
+    const out = new Map();
+    const done = this.store.reviewsFor(repo.id, pr.id).filter((review) => review.status === 'DONE' && review.headSha).reverse();
+    let latest = null;
+    for (const review of done) {
+      const head = await this.git.revParse(repo.localPath, review.headSha);
+      if (!head) continue;
+      latest = { head, review };
+      const listed = await this.git.run(repo.localPath, ['rev-list', `origin/${pr.targetBranch}..${head}`]);
+      if (!listed.ok) continue;
+      for (const sha of listed.stdout.split('\n').map((line) => line.trim()).filter(Boolean)) {
+        if (!out.has(sha)) out.set(sha, { reviewId: review.id, head: review.headSha, at: review.finishedAt || review.createdAt, how: 'read' });
+      }
+    }
+    if (latest) {
+      const cherry = await this.git.run(repo.localPath, ['cherry', latest.head, `origin/${pr.sourceBranch}`]);
+      if (cherry.ok) {
+        for (const line of cherry.stdout.split('\n')) {
+          const [mark, sha] = line.trim().split(/\s+/);
+          if (mark === '-' && sha && !out.has(sha)) out.set(sha, { reviewId: latest.review.id, head: latest.review.headSha, at: latest.review.finishedAt || latest.review.createdAt, how: 'rebased' });
+        }
+      }
+    }
+    return out;
   }
 
   // --- repositories -------------------------------------------------------------------
@@ -1381,6 +1452,8 @@ class ReviewService {
       publishReview: (args) => e.publishReview(str(args.reviewId, 'A review'), args.body),
       publishFinding: (args) => e.publishFinding(findingOf(args).id),
       publishAll: (args) => e.publishAll(str(args.repoId, 'A repository'), num(args.prId)),
+      /** One finding against the branch as it is now: still true, fixed, or no longer applying. */
+      recheckFinding: async (args) => e.recheckFinding(findingOf(args).id),
       dismissFinding: (args) => {
         const finding = findingOf(args);
         s.store.dismissFinding(finding.id, args.dismissed !== false);
@@ -1481,6 +1554,8 @@ class ReviewService {
       followUpText: (args) => ({ ok: true, text: rules.followUpText(findingOf(args), e.language()) }),
       followUp: (args) => e.followUp(findingOf(args).id, args.body),
       /** Your own words, to the thread, the room, the author, or any of the three. */
+      /** The author, by direct message: their branch does not merge, and what is in the way. */
+      tellConflicts: (args) => s.tellConflicts(str(args.repoId, 'A repository'), num(args.prId), { note: args.note }),
       speak: (args) => s.speak(str(args.repoId, 'A repository'), num(args.prId), {
         text: args.text,
         to: {

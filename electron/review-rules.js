@@ -412,6 +412,12 @@ function parseFindings(raw) {
  * is not understood is STILL_OPEN: open too long is fixed by looking, closed while
  * broken is found in production.
  */
+/** A commit as the model names it: hex, seven to forty characters, or nothing. */
+function shaOrNull(value) {
+  const text = String(value ?? '').trim();
+  return /^[0-9a-f]{7,40}$/i.test(text) ? text.toLowerCase() : null;
+}
+
 function parseCarried(raw, validIds) {
   const object = parseJsonLoose(raw);
   if (!object) return [];
@@ -423,7 +429,7 @@ function parseCarried(raw, validIds) {
     if (!validIds.has(id) || seen.has(id)) continue;
     seen.add(id);
     const verdict = ['STILL_OPEN', 'FIXED', 'OBSOLETE'].includes(item.verdict) ? item.verdict : 'STILL_OPEN';
-    out.push({ id, verdict, line: intOrNull(item.line), evidence: String(item.evidence ?? '') });
+    out.push({ id, verdict, line: intOrNull(item.line), evidence: String(item.evidence ?? ''), commit: shaOrNull(item.commit) });
   }
   return out;
 }
@@ -437,7 +443,7 @@ function carryPlan(previous, rulings) {
   const byId = new Map(rulings.map((ruling) => [ruling.id, ruling]));
   return previous.map((finding) => {
     const ruling = byId.get(finding.id);
-    return { finding, verdict: ruling?.verdict ?? 'STILL_OPEN', line: ruling?.line ?? null, evidence: ruling?.evidence ?? null };
+    return { finding, verdict: ruling?.verdict ?? 'STILL_OPEN', line: ruling?.line ?? null, evidence: ruling?.evidence ?? null, commit: ruling?.commit ?? null };
   });
 }
 
@@ -456,7 +462,7 @@ function parseResolution(raw, pendingIds) {
     const id = String(item?.id ?? '');
     if (!pendingIds.has(id) || seen.has(id)) continue;
     seen.add(id);
-    items.push({ id, resolution: resolutionFrom(item.resolution), evidence: String(item.evidence ?? '') });
+    items.push({ id, resolution: resolutionFrom(item.resolution), evidence: String(item.evidence ?? ''), commit: shaOrNull(item.commit) });
   }
   return { summary: String(object.summary ?? ''), mergeable: object.mergeable === true, items };
 }
@@ -752,6 +758,7 @@ function buildConversation({ findings, comments, replies, today = new Date() }) 
       resolution: finding.resolution,
       resolutionNote: finding.resolutionNote,
       resolutionBy: finding.resolutionBy ?? null,
+      resolutionCommit: finding.resolutionCommit ?? null,
       publishedUrl: finding.publishedUrl,
       state,
       waitingDays: waitingSince ? daysBetween(waitingSince, today) : null,
@@ -1069,6 +1076,36 @@ function readableError(message) {
  * published, answers owed, verdicts owed, the author's turn, the final pass, and
  * then the merge.
  */
+/**
+ * Why a run's answer cannot be about the code: every shell command it tried
+ * was refused, so it never read the diff — git is the only way to read a
+ * branch that is not checked out. Null when it did get to read.
+ *
+ * Not hypothetical: chained commands (`git fetch …; git diff …`, `git -C …`)
+ * do not match the read-only allowlist, and a final pass whose every command
+ * was refused still came back saying "nothing blocks".
+ */
+function gitRefused(result) {
+  const bash = Number(result?.bashUses ?? 0);
+  const refused = (result?.denials ?? []).filter((denial) => String(denial).startsWith('Bash(')).length;
+  if (!bash || refused < bash) return null;
+  return `Every git command it tried was refused (${refused}), so it never read the code and its answer was not kept. Run it again.`;
+}
+
+/** A recheck's answer, shaped; anything unreadable is "still", because dismissing on a misread is the worse mistake. */
+function parseRecheck(raw) {
+  let value = raw;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value.replace(/^```(?:json)?\s*|\s*```$/g, ''));
+    } catch {
+      value = { verdict: 'STILL', evidence: String(raw).slice(0, 600) };
+    }
+  }
+  const verdict = ['STILL', 'FIXED', 'NOT_APPLICABLE'].includes(value?.verdict) ? value.verdict : 'STILL';
+  return { verdict, evidence: String(value?.evidence ?? '').trim().slice(0, 2000) || 'No reason given.', commit: shaOrNull(value?.commit) };
+}
+
 /** How many files stand in the way of this branch merging, as last checked; 0 when clean or not known. */
 function conflictCount(pr) {
   return Array.isArray(pr?.conflicts) ? pr.conflicts.length : 0;
@@ -1139,6 +1176,8 @@ function ageMark(days) {
 }
 
 module.exports = {
+  gitRefused,
+  parseRecheck,
   wantsAnswer,
   conflictCount,
   DEPTHS,

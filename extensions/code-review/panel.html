@@ -78,6 +78,12 @@
   .plain-diff { margin: 6px 0; padding: 8px 10px; max-height: 420px; overflow: auto; border-radius: var(--r-sm); background: var(--bg-elevated); font-family: ui-monospace, Menlo, monospace; font-size: 0.917rem; white-space: pre; }
   .plain-diff.stat { max-height: 180px; }
   .plain-diff .da { color: var(--ok); } .plain-diff .dd { color: var(--danger); } .plain-diff .dh { color: var(--accent); } .plain-diff .df { color: var(--text-faint); }
+  .commits-delta { display: grid; gap: 6px; margin: 8px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); border-radius: var(--r-sm); background: color-mix(in srgb, var(--accent) 7%, var(--bg-panel)); }
+  .commits-delta.is-calm { border-color: var(--border); background: none; padding: 4px 8px; }
+  .commit-item { display: flex; align-items: flex-start; gap: 6px; }
+  .commit-item .commit-text { flex: 1; min-width: 0; }
+  .commit-item .commit-mark { flex: none; margin-top: 2px; }
+  .commit-fixes { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
   .merge-confirm { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; max-width: 360px; }
   .merge-confirm .btn { justify-content: center; }
   .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
@@ -313,6 +319,7 @@
   .verdict { margin-top: 8px; padding: 6px 10px; border-radius: var(--r-sm); background: var(--bg-elevated); color: var(--text-dim); font-size: 1rem; }
   .verdict-label { font-size: 0.833rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 2px; }
   .verdict-says { text-transform: none; letter-spacing: 0; font-size: 1rem; }
+  .verdict-commit { text-transform: none; letter-spacing: 0; font-family: ui-monospace, Menlo, monospace; color: var(--text-dim); }
   .verdict.is-ok { border-left-color: var(--ok) !important; } .verdict.is-ok .verdict-says { color: var(--ok); }
   .verdict.is-part { border-left-color: var(--warn) !important; } .verdict.is-part .verdict-says { color: var(--warn); }
   .verdict.is-bad { border-left-color: var(--danger) !important; } .verdict.is-bad .verdict-says { color: var(--danger); }
@@ -1594,7 +1601,7 @@
   function drawRuns(runs, withTitle) {
     if (!runs.length) return '';
     return runs.map(function (run) {
-      var label = { review: 'Review', verify: 'Verification', final: 'Final pass', reply: 'Reply', fix: 'Fix', conflicts: 'Conflicts' }[run.kind] || run.kind;
+      var label = { review: 'Review', verify: 'Verification', final: 'Final pass', reply: 'Reply', fix: 'Fix', conflicts: 'Conflicts', recheck: 'Re-check' }[run.kind] || run.kind;
       return '<div class="run"><div class="row"><span class="dot busy"></span><strong>' + esc(label) + '</strong>' +
         (withTitle ? ' <span class="dim">' + esc(run.repoName) + ' #' + esc(run.prId) + ' · ' + esc(run.title) + '</span>' : ' <span class="dim">' + esc(run.title) + '</span>') +
         (run.auto ? ' <span class="chip">automatic</span>' : '') +
@@ -2385,8 +2392,13 @@
         '<button class="link" data-act="conflicts-discard">dismiss</button></div><div class="faint">Merge commit ' + sha7(job.sha) + ' was pushed; the branch merges into ' + target + ' now.</div></div>';
     }
     var count = conflict ? conflict.paths.length : (job && job.paths ? job.paths.length : 0);
+    // The author is the one who usually resolves it: tell them, with the files and — once analyzed — what happened.
+    var delivery = (v.settings && v.settings.delivery) || {};
+    var tell = conflict && delivery.person
+      ? '<button class="btn small" data-act="conflicts-tell"' + busyAttr(prKey('conflicts-tell')) + ' title="A direct message on Teams, from you, with the files' + (job && job.plan ? ' and what the analysis found' : '') + '">Tell ' + esc(shortName(v.pr.author)) + ' on Teams</button>'
+      : '';
     html += '<div class="cc-head"><span class="chip badc">✗ Does not merge</span><strong>' + count + ' file' + (count === 1 ? '' : 's') + ' conflict with ' + target + '</strong><span class="spacer"></span>' +
-      (busy ? '' : '<button class="link" data-act="recheck-conflicts"' + busyAttr(prKey('recheck-conflicts')) + '>check again</button>') + '</div>';
+      tell + (busy ? '' : '<button class="link" data-act="recheck-conflicts"' + busyAttr(prKey('recheck-conflicts')) + '>check again</button>') + '</div>';
     if (busy) {
       return html + '<div class="faint">' + (job && job.state === 'RESOLVING' ? 'Resolving as proposed, in a separate copy…' : 'Reading both sides and their history…') + ' The progress is in the run above.</div>' +
         '<div class="row" style="margin-top:8px"><button class="btn small" data-act="conflicts-cancel">Cancel</button></div></div>';
@@ -2663,7 +2675,7 @@
       var text = md(f.body) + (f.suggestion ? '<div class="suggestion"><div class="faint">How it could be fixed</div>' + md(f.suggestion) + '</div>' : '');
       html += clamped('body-' + f.id, text, String(f.body).length + String(f.suggestion || '').length > 520);
     }
-    html += verdictHtml(f.resolutionNote, f.resolution);
+    html += verdictHtml(f.resolutionNote, f.resolution, f.resolutionCommit);
     if (f.publishError) html += '<div class="banner bad">Publishing failed: ' + esc(f.publishError) + '</div>';
     html += '<div class="row" style="margin-top:6px">';
     if (v.pr.state === 'OPEN' && !settled) {
@@ -2689,6 +2701,8 @@
         html += '<button class="btn small go" data-act="fix" data-id="' + esc(f.id) + '" title="Write the fix in a separate copy of the repository and commit it there">Fix</button>' + fixAgain(f.id, 'Fix with a note…', true);
       }
     }
+    // Still open: ask it again of the code as it is now, without a whole new review.
+    if (v.pr.state === 'OPEN' && !f.dismissedAt && !findingDone(f)) html += recheckButton(f);
     html += '<span class="spacer"></span><button class="btn small" data-act="ask" data-finding="' + esc(f.id) + '" title="A Claude session briefed on this finding">Ask Claude</button></div>';
     if (fix && fix.state === 'NOTHING' && fix.summary) html += '<div class="faint" style="margin-top:4px">Fix: ' + esc(fix.summary) + '</div>';
     if (fix && fix.state === 'FAILED' && fix.error) html += '<div class="faint bad" style="margin-top:4px">Fix: ' + esc(fix.error.slice(0, 300)) + '</div>';
@@ -2957,8 +2971,15 @@
     return message(entry.author, entry.at, entry.body, entry.ours);
   }
 
+  function recheckButton(f) {
+    var busy = state.busy['recheck-' + f.id];
+    return '<button class="btn small" data-act="recheck" data-id="' + esc(f.id) + '"' + busyAttr('recheck-' + f.id) +
+      ' title="Check this one finding again against the branch as it is now. Fixed or no longer applying: a draft is dismissed, a published one resolved.">' +
+      (busy ? 'Checking…' : 'Re-check') + '</button>';
+  }
+
   /** What verification concluded about a finding, set apart from the finding itself. */
-  function verdictHtml(note, resolution) {
+  function verdictHtml(note, resolution, commit) {
     if (!note) return '';
     /*
      * The answer first, in words and colour, then the reasoning. A paragraph
@@ -2967,7 +2988,8 @@
      */
     var res = resolution ? VERDICT_WORDS[resolution] : null;
     return '<div class="verdict' + (res ? ' is-' + res[1] : '') + '"><div class="verdict-label">Verification' +
-      (res ? ' · <span class="verdict-says">' + res[0] + '</span>' : '') + '</div>' + md(note) + '</div>';
+      (res ? ' · <span class="verdict-says">' + res[0] + '</span>' : '') +
+      (commit && resolution === 'RESOLVED' ? ' <span class="verdict-commit" title="The commit that fixed it">in ' + sha7(commit) + '</span>' : '') + '</div>' + md(note) + '</div>';
   }
   var VERDICT_WORDS = {
     RESOLVED: ['✓ Fixed in the code', 'ok'],
@@ -3561,12 +3583,12 @@
       '<strong class="cmt-title">' + titleHtml(f.title) + '</strong>' + status + (chain.length ? '<span class="chip">' + chain.length + ' repl' + (chain.length === 1 ? 'y' : 'ies') + '</span>' : '');
     var body = '<div class="cmt-body">' + clamped('code-' + f.id, md(f.body), String(f.body).length > 700) +
       (f.suggestion ? '<div class="suggestion"><div class="faint">How it could be fixed</div>' + md(f.suggestion) + '</div>' : '') +
-      verdictHtml(f.resolutionNote, f.resolution) + '</div>';
+      verdictHtml(f.resolutionNote, f.resolution, f.resolutionCommit) + '</div>';
     if (root) body = '<div class="cmt-body faint" style="padding-bottom:0">Posted by ' + esc(root.author) + ' ' + esc(when(root.createdOn)) + (f.publishedUrl ? ' · <button class="link" data-act="open-url" data-url="' + esc(f.publishedUrl) + '">view on the PR ↗</button>' : '') + '</div>' + body;
     body += chain.map(function (c) { return message(c.author, c.createdOn, c.body, c.ours); }).join('');
     if (!f.publishedId && !f.dismissedAt && v.pr.state === 'OPEN') {
       body += '<div class="cmt-actions"><button class="btn small primary" data-act="publish-finding" data-id="' + esc(f.id) + '"' + busyAttr('publish-' + f.id) + '>Publish</button><button class="btn small" data-act="dismiss" data-id="' + esc(f.id) + '" data-on="1">Dismiss</button>' +
-        (v.repo.fixMode !== 'OFF' ? '<button class="btn small go" data-act="fix" data-id="' + esc(f.id) + '">Fix</button>' : '') + '<span class="spacer"></span><button class="btn small" data-act="ask" data-finding="' + esc(f.id) + '">Ask Claude</button></div>';
+        (v.repo.fixMode !== 'OFF' ? '<button class="btn small go" data-act="fix" data-id="' + esc(f.id) + '">Fix</button>' : '') + recheckButton(f) + '<span class="spacer"></span><button class="btn small" data-act="ask" data-finding="' + esc(f.id) + '">Ask Claude</button></div>';
     } else if (f.publishedId) {
       body += replyBox(f.publishedId, v);
     }
@@ -3696,10 +3718,11 @@
       html += '<div class="group">In your clone, not on origin</div><div style="padding:4px 10px"><button class="btn small primary" data-act="push"' + busyAttr(prKey('push')) + '>Push to origin/' + esc(d.branch) + '</button></div>' +
         d.local.map(function (commit) { return commitItem(commit, true); }).join('');
     }
+    html += commitsDelta(v, d);
     html += '<div class="group">The pull request · ' + d.commits.length + '</div>';
     d.commits.forEach(function (commit, index) {
-      if (d.sinceReview !== null && index === d.sinceReview) html += '<div class="group" style="color:var(--accent)">↑ ' + index + ' since the review</div>';
-      html += commitItem(commit, false);
+      if (d.sinceReview !== null && index === d.sinceReview && index > 0) html += '<div class="group" style="color:var(--accent)">↑ ' + index + ' since the last review</div>';
+      html += commitItem(commit, false, d.fixes);
     });
     html += '</aside>' + gutter() + '<section>';
     if (!c.sha) html += '<div class="empty">Choose a commit.</div>';
@@ -3718,11 +3741,35 @@
     return html + '</section></div>';
   }
 
-  function commitItem(commit, local) {
+  /*
+   * What the reviews have read and what they have not, counted in commits —
+   * the unit the author works in — with the two things to do about the new
+   * ones: read them, and see whether they fix what was published.
+   */
+  function commitsDelta(v, d) {
+    if (!d.commits.length || v.pr.state !== 'OPEN') return '';
+    var fresh = d.unreviewed || 0;
+    var waiting = (v.findings || []).concat(v.earlierFindings || []).filter(function (f) { return f.publishedId && !f.dismissedAt && !f.closedAt && !f.resolution; }).length;
+    var reviewing = (v.running || []).some(function (run) { return run.kind === 'review'; });
+    if (!fresh) return '<div class="commits-delta is-calm"><span class="chip okc">✓ all ' + d.commits.length + ' reviewed</span></div>';
+    return '<div class="commits-delta"><div><strong>' + fresh + ' new commit' + (fresh === 1 ? '' : 's') + '</strong> <span class="faint">not reviewed yet</span></div>' +
+      '<div class="row"><button class="btn small primary" data-act="run-review"' + (reviewing || state.busy[reviewKey()] ? ' disabled aria-busy="true"' : '') + ' title="Review only these commits, and rule on what was found before">' + (reviewing ? 'Reviewing…' : 'Review the ' + (fresh === 1 ? 'new commit' : fresh + ' new commits')) + '</button>' +
+      (waiting ? '<button class="btn small" data-act="verify"' + busyAttr(prKey('verify')) + ' title="Do these commits fix the ' + waiting + ' published comment(s) still waiting for a verdict?">Check ' + waiting + ' comment' + (waiting === 1 ? '' : 's') + ' against ' + (fresh === 1 ? 'it' : 'them') + '</button>' : '') +
+      '</div></div>';
+  }
+
+  function commitItem(commit, local, fixes) {
+    // Which findings this commit fixed, as the verdicts named it.
+    var fixed = (fixes || []).filter(function (fix) { return commit.sha.indexOf(fix.commit) === 0 || fix.commit.indexOf(commit.sha) === 0; });
+    var mark = local ? '' : commit.reviewed
+      ? '<span class="chip okc commit-mark" title="' + esc('Read by the review of ' + String(commit.reviewed.head || '').slice(0, 7) + (commit.reviewed.how === 'rebased' ? ' — the same change, before a rebase' : '')) + '">' + (commit.reviewed.how === 'rebased' ? 'reviewed · rebased' : 'reviewed') + '</span>'
+      : '<span class="chip accent commit-mark" title="No review has read this commit yet">new</span>';
     // Two lines: what the commit says, then who and when — the second is what tells a fixup from the work.
     return '<div class="item commit-item' + (state.commits.sha === commit.sha ? ' on' : '') + '" data-act="commit" data-sha="' + esc(commit.sha) + '">' +
       '<div class="commit-text"><span class="p" title="' + esc(commit.subject) + '">' + titleHtml(commit.subject) + '</span>' +
-      '<span class="commit-meta"><span class="mono ' + (local ? 'warn' : '') + '">' + sha7(commit.sha) + '</span>' + (commit.author ? ' · ' + esc(commit.author) : '') + (commit.date ? ' · ' + esc(commit.date) : '') + '</span></div></div>';
+      '<span class="commit-meta"><span class="mono ' + (local ? 'warn' : '') + '">' + sha7(commit.sha) + '</span>' + (commit.author ? ' · ' + esc(commit.author) : '') + (commit.date ? ' · ' + esc(commit.date) : '') + '</span>' +
+      (fixed.length ? '<span class="commit-fixes">' + fixed.map(function (fix) { return '<span class="chip okc" title="' + esc(fix.title) + '">fixes: ' + esc(String(fix.title).replace(/`/g, '').slice(0, 48)) + (String(fix.title).replace(/`/g, '').length > 48 ? '…' : '') + '</span>'; }).join('') + '</span>' : '') +
+      '</div>' + mark + '</div>';
   }
 
   // ---- conversation ------------------------------------------------------------------
@@ -3813,7 +3860,7 @@
         (t.askedBy ? '<span class="chip accent">asked by ' + esc(t.askedBy) + '</span>' : '') + '<span class="spacer"></span>' +
         (t.waitingDays != null ? '<span class="faint">waiting ' + t.waitingDays + 'd</span>' : '') + '</div>' +
         '<div class="ftitle">' + titleHtml(t.title) + '</div>' + clamped('q-' + t.findingId, md(withoutTitle(t.question, t.title)), String(t.question).length > 520) +
-        verdictHtml(t.resolutionNote, t.resolution) +
+        verdictHtml(t.resolutionNote, t.resolution, t.resolutionCommit) +
         (t.entries.length ? '<div class="entries">' + t.entries.map(entryHtml).join('') + '</div>' : '');
       if (draft && draft.status !== 'PUBLISHED' && !draft.dismissedAt && open) {
         var key = 'reply-' + draft.id;
@@ -4561,6 +4608,13 @@
         say(r.clashes && r.clashes.length ? r.clashes.length + ' migration number(s) still taken twice.' : 'No migration number is taken twice any more.');
       });
     },
+    recheck: function (el) {
+      var id = el.getAttribute('data-id');
+      act('recheck-' + id, function () { return call('recheckFinding', { findingId: id }); }, function (r) {
+        say(r.verdict === 'STILL' ? 'Still there on ' + r.head + '. The reason is on the finding.' : (r.verdict === 'FIXED' ? 'Fixed on ' + r.head : 'No longer applies on ' + r.head) + ': moved to Done.');
+        load();
+      });
+    },
     'conflicts-open': function () {
       var job = state.pr && state.pr.conflictJob;
       if (!job || job.state === 'CLEAN' || job.state === 'FAILED' || job.state === 'PUSHED') return actions['conflicts-analyze']();
@@ -4584,6 +4638,12 @@
     },
     'conflicts-push': function () {
       act(prKey('conflicts-push'), function () { return call('conflictsPush', prArgs()); }, function (r) { say('Pushed ' + String(r.sha || '').slice(0, 7) + '.'); load(); });
+    },
+    'conflicts-tell': function () {
+      act(prKey('conflicts-tell'), function () { return call('tellConflicts', prArgs()); }, function (r) {
+        if (r.person && r.person.ok) say('Told ' + shortName(state.pr.pr.author) + ' on Teams.');
+        else say('Could not reach them: ' + ((r.person && (r.person.detail || r.person.why)) || 'nothing answered'), true);
+      });
     },
     'conflicts-discard': function () { call('conflictsDiscard', prArgs()).then(load, fail); },
     'conflicts-cancel': function () { call('conflictsCancel', prArgs()).then(load, fail); },
