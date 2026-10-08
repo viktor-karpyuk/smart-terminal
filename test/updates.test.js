@@ -374,3 +374,25 @@ test('a log naming the version now running is what a success looks like', () => 
   // The class compares that against its own version and says nothing when they
   // match — the log is simply what the successful install left behind.
 });
+
+test('a restart asks again, even when the last check was minutes ago, and only then waits', async () => {
+  const { Updates } = require('../electron/updates');
+  let asked = 0;
+  const release = { tag_name: 'v9.9.9', name: '9.9.9', draft: false, prerelease: false, body: '', html_url: 'https://example.test', published_at: '2026-10-08T00:00:00Z', assets: [] };
+  const electron = {
+    app: { isPackaged: false },
+    shell: {},
+    net: { fetch: async () => { asked += 1; return { ok: true, status: 200, json: async () => [release] }; } },
+  };
+  let stored = { auto: true, skipped: null, prereleases: false, checkedAt: Date.now() - 60 * 1000 };
+  const settings = { get: () => stored, set: (next) => { stored = next; } };
+  const updates = new Updates({ current: { version: '1.0.0', build: 1 }, slug: 'me/app', dir: '/nonexistent', electron, settings });
+  const first = await updates.check();
+  assert.equal(asked, 1, 'the answer is not kept on disk, so a new run has to ask');
+  assert.equal(first.phase, 'available');
+  assert.equal(first.release.version, '9.9.9');
+  await updates.check();
+  assert.equal(asked, 1, 'with an answer in hand, it waits');
+  await updates.check({ force: true });
+  assert.equal(asked, 2, 'the button always asks');
+});

@@ -84,6 +84,7 @@ export function TitleBar() {
       </div>
 
       <div className="titlebar-actions">
+        <UpdateNotice />
         <button className="icon-btn" title="Split right (⌘D)" aria-label="Split right" onClick={() => splitActive('row')}>
           <SplitRightIcon />
         </button>
@@ -103,6 +104,38 @@ export function TitleBar() {
         </button>
       </div>
     </header>
+  );
+}
+
+/**
+ * A newer version, said where it is always seen.
+ *
+ * The build line at the foot of the sidebar said it too, and still does — but
+ * it is out of sight with the sidebar closed, and easy to miss with it open.
+ * Only when looking for updates on its own is switched on: that switch is
+ * somebody asking to be told.
+ */
+function UpdateNotice() {
+  const update = useStore((s) => s.update);
+  const openUpdates = useStore((s) => s.setUpdatePanelOpen);
+  if (!update?.auto || !update.release) return null;
+  if (update.phase !== 'available' && update.phase !== 'downloading' && update.phase !== 'ready') return null;
+  const version = update.release.version;
+  const label =
+    update.phase === 'downloading'
+      ? `Downloading ${version}…`
+      : update.phase === 'ready'
+        ? `${version} ready to install`
+        : `${version} available`;
+  return (
+    <button
+      className="titlebar-update"
+      title={`Smart Terminal ${version} is out — you are running ${update.current.version}.${String.fromCharCode(10)}Click to see what is in it.`}
+      onClick={() => openUpdates(true)}
+    >
+      <span className="build-update-dot" />
+      {label}
+    </button>
   );
 }
 

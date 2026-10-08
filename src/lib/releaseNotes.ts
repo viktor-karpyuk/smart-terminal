@@ -12,7 +12,7 @@
  * nowhere to become one — it is text, and it is drawn as text.
  *
  * The subset is the one the notes are actually written in: headings, bullets,
- * paragraphs, fenced code, and the four inline marks. Anything else survives as
+ * paragraphs, fenced code, tables, and the four inline marks. Anything else survives as
  * the characters it was written with, which for prose is a better failure than
  * disappearing.
  */
@@ -28,7 +28,17 @@ export type NotesBlock =
   | { kind: 'heading'; level: number; spans: Span[] }
   | { kind: 'paragraph'; spans: Span[] }
   | { kind: 'list'; ordered: boolean; items: Span[][] }
-  | { kind: 'code'; text: string };
+  | { kind: 'code'; text: string }
+  | { kind: 'table'; head: Span[][]; rows: Span[][][] };
+
+/** The cells of one `| a | b |` line, outer pipes optional. */
+function cells(line: string): string[] {
+  let body = line.trim();
+  if (body.startsWith('|')) body = body.slice(1);
+  if (body.endsWith('|')) body = body.slice(0, -1);
+  return body.split('|').map((cell) => cell.trim());
+}
+const TABLE_RULE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
 
 /** Only what a link is allowed to be. A release note has no business elsewhere. */
 const SAFE_LINK = /^https?:\/\//i;
@@ -107,6 +117,22 @@ export function parseNotes(markdown: string): NotesBlock[] {
         i += 1;
       }
       blocks.push({ kind: 'code', text: body.join('\n') });
+      continue;
+    }
+
+    // A table: a line of cells, a rule under it, and rows until a line without a pipe.
+    if (line.includes('|') && i + 1 < lines.length && TABLE_RULE.test(lines[i + 1])) {
+      flush();
+      const head = cells(line);
+      const rows: Span[][][] = [];
+      i += 2;
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim()) {
+        const row = cells(lines[i]);
+        rows.push(head.map((_, at) => inlineSpans(row[at] ?? '')));
+        i += 1;
+      }
+      i -= 1;
+      blocks.push({ kind: 'table', head: head.map((cell) => inlineSpans(cell)), rows });
       continue;
     }
 

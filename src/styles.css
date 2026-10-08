@@ -3944,3 +3944,15 @@ button:focus-visible, [role='button']:focus-visible, .tab:focus-visible {
 .reviewer-page { font: inherit; font-size: var(--fs-sm, 12px); color: var(--text-dim, var(--text-faint)); background: none; border: 0; padding: 2px 0; cursor: pointer; }
 .reviewer-page:hover { color: var(--text); }
 .reviewer-page.is-open { color: var(--accent); }
+.update-check-row { display: flex; margin: 8px 0 4px; }
+.update-table { border-collapse: collapse; margin: 6px 0; width: 100%; }
+.update-table th, .update-table td { text-align: left; vertical-align: top; padding: 3px 10px 3px 0; border-bottom: 1px solid var(--border); }
+.update-table th { color: var(--text-faint); font-weight: 500; }
+/* A newer version, in the title bar: small, the accent colour, never in the way of the window controls. */
+.titlebar-update {
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; margin-right: 4px;
+  padding: 2px 9px; border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: var(--r-pill); background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent); font: inherit; font-size: var(--fs-sm); cursor: pointer;
+}
+.titlebar-update:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }

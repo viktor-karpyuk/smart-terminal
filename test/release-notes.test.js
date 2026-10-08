@@ -134,3 +134,19 @@ test('nothing in, nothing out', () => {
   assert.deepStrictEqual(parseNotes(undefined), []);
   assert.deepStrictEqual(inlineSpans(''), []);
 });
+
+test('a table is a head and its rows, with the marks in each cell', () => {
+  const blocks = parseNotes('Before.\n\n| | Branch | |\n|---|---|---|\n| In | #65 `feature/x` | the **menu** |\n| Out | `y` |\n\nAfter.');
+  assert.deepEqual(blocks.map((block) => block.kind), ['paragraph', 'table', 'paragraph']);
+  const table = blocks[1];
+  assert.deepEqual(table.head, [[], [text('Branch')], []]);
+  assert.equal(table.rows.length, 2);
+  assert.deepEqual(table.rows[0][1], [text('#65 '), { kind: 'code', text: 'feature/x' }]);
+  assert.deepEqual(table.rows[0][2], [text('the '), { kind: 'strong', text: 'menu' }]);
+  // A short row is padded to the head, never ragged.
+  assert.deepEqual(table.rows[1][2], []);
+});
+
+test('a line with a pipe and no rule under it stays a paragraph', () => {
+  assert.deepEqual(parseNotes('a | b\nc').map((block) => block.kind), ['paragraph']);
+});
