@@ -1405,6 +1405,8 @@
       : auto && auto.running ? 'sweeping…' : auto && auto.lastRunAt ? 'last sweep ' + when(auto.lastRunAt) : 'automatic on';
     var tabs = [['dashboard', 'Dashboard'], ['repos', 'Repositories'], ['bus', 'Coordination'], ['usage', 'Usage'], ['settings', 'Settings']];
     var html = '<span class="brand">Code Reviewer</span>';
+    // With its menu in the app's sidebar, the row of tabs here would only say the same thing twice.
+    if (state.navInSidebar) tabs = [];
     tabs.forEach(function (tab) {
       var on = state.view === tab[0] || (tab[0] === 'repos' && (state.view === 'prs' || state.view === 'repoForm' || state.view === 'import')) ||
         (tab[0] === 'dashboard' && state.view === 'pr' && state.backTo === 'dashboard') || (tab[0] === 'repos' && state.view === 'pr' && state.backTo !== 'dashboard');
@@ -4886,6 +4888,28 @@
     if (state.showing && !state.started) start();
   });
 
+  /* Where the menu is: in the app's sidebar, or here across the top. */
+  host.on('chrome', function (payload) {
+    var inSidebar = Boolean(payload && payload.navInSidebar);
+    if (inSidebar === Boolean(state.navInSidebar)) return;
+    state.navInSidebar = inSidebar;
+    if (state.started) drawTop();
+  });
+
+  /* The sidebar asked for a place: the dashboard, a repository's list, one of the pages. */
+  host.on('navigate', function (place) {
+    if (!place || !place.view) return;
+    var fields = place.view === 'prs' ? { repoId: place.repoId || null, prStates: ['OPEN'] } : null;
+    if (place.view === 'prs' && !(fields && fields.repoId)) return;
+    if (!state.started) {
+      // Not drawn yet: where it starts is enough.
+      state.view = place.view;
+      if (fields) state.repoId = fields.repoId;
+      return;
+    }
+    go(place.view, fields);
+  });
+
   host.on('context', function (payload) {
     var saved = payload && payload.resume;
     if (saved) {
@@ -4909,6 +4933,7 @@
         state.prTabs.push({ repoId: state.repoId, prId: Number(state.prId), title: '', repoName: '', prTab: state.prTab || 'review', file: saved.codeFile || null });
       }
     }
+    if (payload && 'navInSidebar' in payload) state.navInSidebar = Boolean(payload.navInSidebar);
     if (payload && payload.showing === false) state.showing = false;
     if (state.showing) start();
   });

@@ -3930,3 +3930,17 @@ button:focus-visible, [role='button']:focus-visible, .tab:focus-visible {
 /* Narrow, a row keeps its subject: only the ref that HEAD is on stays beside it. */
 @container (max-width: 560px) { .git-ref:not(.is-head) { display: none; } }
 @container (max-width: 420px) { .git-sha { display: none; } }
+
+/* The Code Reviewer's menu in the sidebar: the dashboard, each repository, and its other pages. */
+.reviewer-row { width: 100%; text-align: left; font: inherit; color: var(--text); background: none; border: 0; align-items: center; }
+.reviewer-row.is-open { color: var(--accent); }
+.reviewer-row .cluster-dot { margin-top: 0; }
+.reviewer-note { margin-left: 6px; font-size: var(--fs-xs, 10.5px); color: var(--text-faint); white-space: nowrap; }
+.reviewer-count {
+  margin-left: 6px; flex: 0 0 auto; font-size: var(--fs-xs, 10.5px); color: var(--accent);
+  border: 1px solid var(--accent); border-radius: var(--r-pill); padding: 0 5px; line-height: 1.4;
+}
+.reviewer-pages { display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 6px 8px 4px; border-top: 1px solid var(--border); margin-top: 4px; }
+.reviewer-page { font: inherit; font-size: var(--fs-sm, 12px); color: var(--text-dim, var(--text-faint)); background: none; border: 0; padding: 2px 0; cursor: pointer; }
+.reviewer-page:hover { color: var(--text); }
+.reviewer-page.is-open { color: var(--accent); }

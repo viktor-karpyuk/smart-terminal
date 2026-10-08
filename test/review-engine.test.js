@@ -1096,3 +1096,19 @@ test('findings of earlier reviews that were published, ruled on or closed stay l
     'the fixed one is still there, as done; the draft it replaced is not');
   assert.ok(!view.earlierFindings.some((one) => one.id === draft.id));
 });
+
+test('the sidebar gets a count per repository, and nothing about a hidden one', { skip }, async () => {
+  const { service, repo, w } = setup([]);
+  const before = await service.call('sidebar');
+  assert.equal(before.ok, true, before.error);
+  assert.deepEqual(before.repos.map((one) => [one.name, one.open]), [['Demo App', 0]]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  const after = await service.call('sidebar');
+  assert.deepEqual(after.repos.map((one) => [one.id, one.open, one.readError]), [[repo.id, 1, false]]);
+  assert.equal(typeof after.waiting, 'number');
+  assert.equal(after.running, 0);
+  const other = service.store.saveRepo({ name: 'Hidden One', provider: 'GITHUB', owner: 'me', slug: 'hid', localPath: w.clone, token: 'secret' });
+  service.store.setHidden(other.id, true);
+  assert.deepEqual((await service.call('sidebar')).repos.map((one) => one.name), ['Demo App']);
+  assert.equal(JSON.stringify(after).includes('secret'), false);
+});

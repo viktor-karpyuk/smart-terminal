@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { startDrag } from '../lib/resize';
 import { useShallow } from 'zustand/react/shallow';
-import { asFilePanel, useStore } from '../state/store';
+import { asFilePanel, REVIEWER_VIEW, useStore, type ReviewerPlace } from '../state/store';
 import { allLeaves, allTabs, findLeaf, leafOfTab } from '../state/layout';
 import { SESSION_MIME } from '../lib/drag';
 import { sessionLabel, cutName, nameTip } from '../lib/labels';
@@ -20,8 +20,8 @@ import { useNameMax } from '../lib/useNameMax';
 export const SIDEBAR_MIN = 150;
 
 /** The lists the sidebar can show, in the order they arrive with. */
-type SidebarList = 'sessions' | 'folders' | 'monitor' | 'clusters';
-const DEFAULT_ORDER: SidebarList[] = ['sessions', 'folders', 'monitor', 'clusters'];
+type SidebarList = 'sessions' | 'folders' | 'monitor' | 'clusters' | 'reviewer';
+const DEFAULT_ORDER: SidebarList[] = ['sessions', 'folders', 'monitor', 'clusters', 'reviewer'];
 
 /**
  * One list: a heading that stays, and a body that scrolls on its own.
@@ -402,6 +402,7 @@ export function Sidebar() {
   // list: this component re-renders on every session change, and it has no
   // business re-rendering because a pod somewhere restarted.
   const hasClusters = useStore((s) => s.extensions.panels.some((panel) => panel.needs === 'kubernetes'));
+  const hasReviewer = useStore((s) => s.extensions.panels.some((panel) => panel.id === REVIEWER_VIEW && !panel.error));
   const authByProfile = useStore((s) => s.authByProfile);
   const updateSettings = useStore((s) => s.updateSettings);
 
@@ -420,7 +421,8 @@ export function Sidebar() {
     settings.sidebarShowSessions ||
     settings.sidebarShowFolders ||
     settings.sidebarShowMonitor ||
-    (settings.sidebarShowClusters && hasClusters);
+    (settings.sidebarShowClusters && hasClusters) ||
+    (settings.sidebarShowReviewer && hasReviewer);
   // Any list the order does not mention yet — the monitor, for a workspace saved
   // before it existed — goes on the end rather than disappearing.
   const ordered = [
@@ -434,6 +436,7 @@ export function Sidebar() {
     // Only when something contributes it. A list of clusters on the sidebar of
     // somebody who does not run Kubernetes is a permanent empty box.
     clusters: settings.sidebarShowClusters && hasClusters,
+    reviewer: settings.sidebarShowReviewer && hasReviewer,
   };
   const open = ordered.filter((which) => shown[which]);
   /*
@@ -446,6 +449,7 @@ export function Sidebar() {
     folders: settings.sidebarFoldersCollapsed,
     monitor: settings.sidebarMonitorCollapsed,
     clusters: settings.sidebarClustersCollapsed,
+    reviewer: settings.sidebarReviewerCollapsed,
   };
 
   const grouped = useMemo(() => {
@@ -515,6 +519,8 @@ export function Sidebar() {
               <Folders />
             ) : which === 'clusters' ? (
               <ClustersList />
+            ) : which === 'reviewer' ? (
+              <ReviewerList />
             ) : (
               <MonitorList />
             )}
@@ -528,6 +534,157 @@ export function Sidebar() {
       </div>
       )}
     </aside>
+  );
+}
+
+/** What the sidebar knows about the Code Reviewer: a count per repository, nothing heavier. */
+interface ReviewerSummary {
+  repos: { id: string; name: string; open: number; waiting: number; readError: boolean }[];
+  waiting: number;
+  running: number;
+}
+
+/** Where the reviewer's panel is now, from what it last remembered — so the row for it can be lit. */
+function reviewerHere(resume: unknown): ReviewerPlace | null {
+  if (!resume || typeof resume !== 'object') return null;
+  const saved = resume as { view?: string; repoId?: string | null };
+  if (saved.view === 'prs' || saved.view === 'pr') return { view: 'prs', repoId: saved.repoId ?? null };
+  if (saved.view === 'repoForm' || saved.view === 'import') return { view: 'repos' };
+  if (saved.view === 'dashboard' || saved.view === 'repos' || saved.view === 'bus' || saved.view === 'usage' || saved.view === 'settings') {
+    return { view: saved.view };
+  }
+  return null;
+}
+
+/**
+ * The Code Reviewer's menu, as a list beside the others.
+ *
+ * Its Dashboard, every repository with what is waiting on you, and the pages
+ * that are not about a pull request — the tabs that used to sit across the top
+ * of its panel, where they took a row of a pane that wants every row for code.
+ * Clicking one shows the reviewer at that place, opening it if it is not open.
+ */
+function ReviewerList() {
+  const collapsed = useStore((s) => s.settings.sidebarReviewerCollapsed);
+  const updateSettings = useStore((s) => s.updateSettings);
+  const openReviewerAt = useStore((s) => s.openReviewerAt);
+  const [summary, setSummary] = useState<ReviewerSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const here = useStore(
+    useShallow((s) => {
+      const panel = Object.values(s.panels).find(
+        (one) => one.kind === 'extension' && one.viewId === REVIEWER_VIEW && one.root === null,
+      );
+      const place = panel && panel.kind === 'extension' ? reviewerHere(panel.resume) : null;
+      return { view: place?.view ?? null, repoId: place?.repoId ?? null };
+    }),
+  );
+
+  /*
+   * Asked for once, and again whenever the reviewer says something changed —
+   * gathered over half a second, because a sweep says it many times a second.
+   */
+  useEffect(() => {
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const read = () => {
+      void window.api.review.call('sidebar').then(
+        (reply) => {
+          if (!alive) return;
+          if (reply.ok) {
+            setSummary(reply as unknown as ReviewerSummary);
+            setError(null);
+          } else setError(reply.error ?? 'The Code Reviewer did not answer.');
+        },
+        (failure: unknown) => alive && setError(String((failure as Error)?.message ?? failure)),
+      );
+    };
+    read();
+    const stop = window.api.review.onEvent(() => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(read, 500);
+    });
+    return () => {
+      alive = false;
+      if (timer) clearTimeout(timer);
+      stop();
+    };
+  }, []);
+
+  const pages: { view: ReviewerPlace['view']; label: string }[] = [
+    { view: 'repos', label: 'Repositories' },
+    { view: 'bus', label: 'Coordination' },
+    { view: 'usage', label: 'Usage' },
+    { view: 'settings', label: 'Settings' },
+  ];
+
+  return (
+    <List
+      id="reviewer"
+      collapsed={collapsed}
+      header={
+        <SectionHeader
+          id="reviewer"
+          label="Code Reviewer"
+          count={summary?.waiting ?? 0}
+          collapsed={collapsed}
+          onToggle={() => updateSettings({ sidebarReviewerCollapsed: !collapsed })}
+          onClose={() => updateSettings({ sidebarShowReviewer: false })}
+          extra={
+            <button
+              className="section-open"
+              title={refreshing ? 'Reading every repository…' : 'Read the open pull requests of every repository'}
+              aria-label="Refresh every repository"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (refreshing) return;
+                setRefreshing(true);
+                void window.api.review.call('refreshAll').finally(() => setRefreshing(false));
+              }}
+            >
+              <RefreshIcon spinning={refreshing} />
+            </button>
+          }
+        />
+      }
+    >
+      <button
+        className={`sidebar-item reviewer-row${here.view === 'dashboard' ? ' is-open' : ''}`}
+        title="Everything waiting, across every repository"
+        onClick={() => openReviewerAt({ view: 'dashboard' })}
+      >
+        <span className="sidebar-item-title">Dashboard</span>
+        {summary && summary.running > 0 && <span className="reviewer-note">{summary.running} running</span>}
+        {summary && summary.waiting > 0 && <span className="reviewer-count" title="Waiting on you">{summary.waiting}</span>}
+      </button>
+      {error && <p className="sidebar-empty">{error}</p>}
+      {!error && summary && !summary.repos.length && <p className="sidebar-empty">No repositories yet.</p>}
+      {summary?.repos.map((repo) => (
+        <button
+          key={repo.id}
+          className={`sidebar-item reviewer-row is-repo${here.view === 'prs' && here.repoId === repo.id ? ' is-open' : ''}`}
+          title={`${repo.name} — ${repo.open} open, ${repo.waiting} waiting on you${repo.readError ? '\nThe last read failed' : ''}`}
+          onClick={() => openReviewerAt({ view: 'prs', repoId: repo.id })}
+        >
+          <span className={`cluster-dot is-${repo.readError ? 'bad' : repo.waiting ? 'warn' : repo.open ? 'ok' : 'unknown'}`} />
+          <span className="sidebar-item-title">{repo.name}</span>
+          {repo.open > repo.waiting && <span className="reviewer-note" title="Open">{repo.open}</span>}
+          {repo.waiting > 0 && <span className="reviewer-count" title="Waiting on you">{repo.waiting}</span>}
+        </button>
+      ))}
+      <div className="reviewer-pages">
+        {pages.map((page) => (
+          <button
+            key={page.view}
+            className={`reviewer-page${here.view === page.view ? ' is-open' : ''}`}
+            onClick={() => openReviewerAt({ view: page.view })}
+          >
+            {page.label}
+          </button>
+        ))}
+      </div>
+    </List>
   );
 }
 
@@ -982,8 +1139,10 @@ function ActivityBar() {
    * Compared by id, so a new array with the same views is not a new render.
    */
   const launchers = useStore(
-    useShallow((s) => s.extensions.panels.filter((view) => view.launcher && !view.error)),
+    useShallow((s) => s.extensions.panels.filter((view) => view.launcher && !view.error && view.id !== REVIEWER_VIEW)),
   );
+  // The reviewer has a list of its own now, so its button shows the list rather than opening the panel.
+  const hasReviewer = useStore((s) => s.extensions.panels.some((panel) => panel.id === REVIEWER_VIEW && !panel.error));
   const setProfileEditorOpen = useStore((s) => s.setProfileEditorOpen);
   const setUsagePanelOpen = useStore((s) => s.setUsagePanelOpen);
   const setHistoryOpen = useStore((s) => s.setHistoryOpen);
@@ -1039,6 +1198,18 @@ function ActivityBar() {
         >
           <ClustersIcon />
           {down > 0 && <span className="activity-count">{down}</span>}
+        </button>
+      )}
+
+      {hasReviewer && (
+        <button
+          className={`activity${settings.sidebarShowReviewer ? ' is-on' : ''}`}
+          data-tip="Code Reviewer"
+          aria-label="Code Reviewer"
+          aria-pressed={settings.sidebarShowReviewer}
+          onClick={() => updateSettings({ sidebarShowReviewer: !settings.sidebarShowReviewer })}
+        >
+          <ReviewIcon />
         </button>
       )}
 
