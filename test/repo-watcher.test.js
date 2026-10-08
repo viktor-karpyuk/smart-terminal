@@ -128,31 +128,42 @@ function heard(seen, count, ms = 2500) {
 test('a file appearing is reported once, after the writing stops', async () => {
   const root = fs.mkdtempSync(path.join(dir, 'a-'));
   const seen = [];
-  const watcher = new RepoWatcher({ emit: (r, kind) => seen.push(kind), settleMs: 80 });
+  // A quiet long enough that a loaded machine delivering the burst in two halves is still one burst.
+  const watcher = new RepoWatcher({ emit: (r, kind) => seen.push(kind), settleMs: 700 });
   assert.equal(watcher.watch(root), true);
+  try {
+    fs.writeFileSync(path.join(root, 'one.txt'), 'x');
+    fs.writeFileSync(path.join(root, 'two.txt'), 'y');
+    fs.writeFileSync(path.join(root, 'three.txt'), 'z');
 
-  fs.writeFileSync(path.join(root, 'one.txt'), 'x');
-  fs.writeFileSync(path.join(root, 'two.txt'), 'y');
-  fs.writeFileSync(path.join(root, 'three.txt'), 'z');
-
-  await heard(seen, 1);
-  assert.deepEqual(seen, ['tree'], 'a burst of writes is one refresh, not three');
-  watcher.stop();
+    await heard(seen, 1);
+    assert.deepEqual(seen, ['tree'], 'a burst of writes is one refresh, not three');
+  } finally {
+    watcher.stop();
+  }
 });
 
 test('a commit outranks the file changes it comes with', async () => {
   const root = fs.mkdtempSync(path.join(dir, 'b-'));
   fs.mkdirSync(path.join(root, '.git'));
   const seen = [];
-  const watcher = new RepoWatcher({ emit: (_r, kind) => seen.push(kind), settleMs: 80 });
+  /*
+   * The file and HEAD are one commit, so they must land in one burst. At 80ms
+   * of quiet a loaded machine (the whole suite running) delivered them as two —
+   * `tree`, then `git` — and the test failed for timing, not for ranking.
+   */
+  const watcher = new RepoWatcher({ emit: (_r, kind) => seen.push(kind), settleMs: 700 });
   watcher.watch(root);
+  try {
+    fs.writeFileSync(path.join(root, 'file.txt'), 'x');
+    fs.writeFileSync(path.join(root, '.git', 'HEAD'), 'ref: refs/heads/main');
 
-  fs.writeFileSync(path.join(root, 'file.txt'), 'x');
-  fs.writeFileSync(path.join(root, '.git', 'HEAD'), 'ref: refs/heads/main');
-
-  await heard(seen, 1);
-  assert.deepEqual(seen, ['git'], 'the history is stale too, not only the status');
-  watcher.stop();
+    await heard(seen, 1);
+    assert.deepEqual(seen, ['git'], 'the history is stale too, not only the status');
+  } finally {
+    // A watcher left running after a failed assertion held the event loop open and hung the whole suite.
+    watcher.stop();
+  }
 });
 
 test('the noisy directories never ask git anything', async () => {
