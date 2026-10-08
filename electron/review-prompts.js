@@ -663,6 +663,52 @@ function conflictAnalysisPrompt({ pr, target, base, files, targetLog, branchLog,
   ].join('\n');
 }
 
+/**
+ * A merge somebody started in their own working copy, stopped on conflicts.
+ * Read only: the markers are in the files, the three sides are in git.
+ */
+function localConflictAnalysisPrompt({ branch, incoming, message, base, files, incomingLog, branchLog, language }) {
+  const lines = [
+    `Hay un merge en curso en este repositorio, sobre la rama ${branch || '(HEAD suelto)'}, que paró por conflictos.`,
+    `- Lo que se está mergeando: ${incoming}${message ? ` (${message})` : ''}`,
+    `- Base común: ${base || '(desconocida)'}`,
+    'Antes de tocar nada hay que entender qué pasó y proponer cómo resolverlo.',
+    '',
+    `LO QUE TRAE ${incoming} QUE LA RAMA NO TENÍA (más nuevo primero)`,
+    ...(incomingLog.length ? incomingLog.slice(0, 40).map((line) => `- ${line}`) : ['- (nada)']),
+    '',
+    'LO QUE TIENE LA RAMA QUE LO MERGEADO NO (más nuevo primero)',
+    ...(branchLog.length ? branchLog.slice(0, 40).map((line) => `- ${line}`) : ['- (nada)']),
+    '',
+    'ARCHIVOS CON CONFLICTO',
+  ];
+  for (const file of files) {
+    lines.push(`- ${file.path}${file.kind ? ` (${file.kind}: no hay marcadores, hay que decidir si queda y cómo)` : ''}`);
+    if (file.incomingLog.length) lines.push(`    en lo mergeado: ${file.incomingLog.slice(0, 6).join(' · ')}`);
+    if (file.branchLog.length) lines.push(`    en la rama: ${file.branchLog.slice(0, 6).join(' · ')}`);
+  }
+  lines.push(
+    '',
+    'CÓMO LEERLO (sólo lectura: no edites nada)',
+    '- Los marcadores <<<<<<< ======= >>>>>>> están en los archivos: leelos.',
+    `- Los tres lados: git show ${base || '<base>'}:<archivo> · git show HEAD:<archivo> · git show MERGE_HEAD:<archivo>`,
+    '- git log --merge -- <archivo> muestra los commits de cada lado que tocaron ese archivo.',
+    '- Un caso común: lo mergeado y la rama traen el mismo cambio en commits distintos (un squash, un',
+    '  cherry-pick). Ahí casi siempre alcanza con quedarse con una versión y conservar lo que el otro lado agrega.',
+    '',
+    'QUÉ TENÉS QUE DEVOLVER',
+    `- cause: qué pasó, en ${language}, en dos a cinco líneas que entienda alguien que no vio la historia.`,
+    '- files: uno por archivo con conflicto, con',
+    '    approach: OURS (queda lo de la rama, HEAD), THEIRS (queda lo mergeado), COMBINE (las dos cosas),',
+    '              o MANUAL (hace falta una decisión de una persona),',
+    '    what: qué cambió cada lado en ese archivo,',
+    '    proposal: cómo quedaría resuelto, concreto (qué se conserva de cada lado y por qué).',
+    '- risks: lo que podría romperse o lo que conviene probar después; vacío si no hay nada.',
+    `- summary: una línea con la propuesta entera. Todo en ${language}.`,
+  );
+  return lines.join('\n');
+}
+
 /** Carry out an approved proposal on a merge left with its markers in. */
 function conflictResolvePrompt({ pr, target, files, plan, note = '', language }) {
   const lines = [
@@ -691,7 +737,8 @@ function conflictResolvePrompt({ pr, target, files, plan, note = '', language })
     '',
     'LÍMITES',
     '- No toques nada fuera de los conflictos y de lo que ellos obligan.',
-    '- No hagas commit, ni merge --abort, ni reset, ni push: de eso se encarga la herramienta.',
+    '- No hagas commit, ni merge --abort, ni reset, ni push, ni git add ni git rm: de eso se encarga',
+    '  la herramienta, que deja listo lo resuelto. Si la propuesta es borrar un archivo, borralo del disco.',
     '- Si un archivo no se puede resolver sin una decisión que no te corresponde, dejá todo como',
     '  está y contestá resolved=false con el motivo. Un merge resuelto a medias es peor que ninguno.',
     '',
@@ -705,6 +752,7 @@ module.exports = {
   CONFLICT_PLAN_SCHEMA,
   CONFLICT_RESOLVE_SCHEMA,
   conflictAnalysisPrompt,
+  localConflictAnalysisPrompt,
   conflictResolvePrompt,
   SCHEMA,
   INCREMENTAL_SCHEMA,

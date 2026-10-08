@@ -15,6 +15,7 @@
  */
 
 const { execFile } = require('node:child_process');
+const fs = require('node:fs');
 const path = require('node:path');
 
 /** Long enough for a push over a slow link, short enough to not hang a panel. */
@@ -115,7 +116,8 @@ async function status(root) {
     }
     if (line.startsWith('u ')) {
       const parts = line.split(' ');
-      out.files.push({ ...entry(root, parts.slice(10).join(' '), 'UU'), conflicted: true });
+      // Which kind of conflict it is: both changed it (UU, AA), or one side deleted it (DU, UD...).
+      out.files.push({ ...entry(root, parts.slice(10).join(' '), 'UU'), conflicted: true, unmerged: parts[1] });
       continue;
     }
     if (line.startsWith('? ')) {
@@ -123,7 +125,66 @@ async function status(root) {
       continue;
     }
   }
+  out.merge = await mergeState(root, out.files);
   return out;
+}
+
+/** A conflict block: a line that opens one and a line that closes it. A lone `=======` is a Markdown heading. */
+const OPEN_MARKER = /^<{7}( |$)/m;
+const CLOSE_MARKER = /^>{7}( |$)/m;
+const MARKER_SCAN_LIMIT = 4 * 1024 * 1024;
+
+function hasConflictMarkers(file) {
+  try {
+    if (fs.statSync(file).size > MARKER_SCAN_LIMIT) return false;
+    const text = fs.readFileSync(file, 'utf8');
+    return OPEN_MARKER.test(text) && CLOSE_MARKER.test(text);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A merge in progress, and which files are still in conflict.
+ *
+ * Not only the files git calls unmerged. A file added with its markers still
+ * in it is "resolved" as far as the index knows — git shows it as an ordinary
+ * modification — and committing it puts `<<<<<<< HEAD` in the history. So the
+ * changed files are read for markers too, while a merge is going on.
+ */
+async function mergeState(root, files) {
+  const head = await run(root, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']);
+  const sha = head.ok ? head.stdout.trim() : '';
+  if (!sha) return null;
+  const gitDir = (await run(root, ['rev-parse', '--git-dir'])).stdout.trim() || '.git';
+  let message = '';
+  try {
+    message = fs.readFileSync(path.resolve(root, gitDir, 'MERGE_MSG'), 'utf8').split('\n')[0].trim();
+  } catch {
+    // No message file: the merge is still in progress, it just says less about itself.
+  }
+  /*
+   * In conflict: a file with markers in it, or one where a side deleted it and
+   * the other changed it — there are no markers for that, only a decision.
+   * Not a file git still calls unmerged whose markers are gone: somebody fixed
+   * it by hand and has not added it yet, and calling it a conflict would stop
+   * the merge from being concluded and offer to fix it again.
+   */
+  const conflicted = [];
+  /** Fixed by hand, not added yet: concluding adds these. */
+  const settled = [];
+  for (const file of files) {
+    if (file.untracked) continue;
+    const markers = hasConflictMarkers(path.join(root, file.path));
+    const deletion = Boolean(file.unmerged && file.unmerged.includes('D'));
+    if (markers || deletion) {
+      file.markers = markers;
+      conflicted.push(file.path);
+    } else if (file.unmerged) {
+      settled.push(file.path);
+    }
+  }
+  return { head: sha, message, conflicted, settled };
 }
 
 /**
@@ -543,6 +604,8 @@ const stashPop = (root, ref) => run(root, ['stash', 'pop', ...(ref ? [ref] : [])
 
 module.exports = {
   run,
+  mergeState,
+  hasConflictMarkers,
   repoRoot,
   status,
   stat,

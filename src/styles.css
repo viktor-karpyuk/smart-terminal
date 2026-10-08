@@ -3963,3 +3963,39 @@ button:focus-visible, [role='button']:focus-visible, .tab:focus-visible {
   color: var(--accent); font: inherit; font-size: var(--fs-sm); cursor: pointer;
 }
 .titlebar-update:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+
+/* A merge stopped on conflicts, in the Git panel: what is in conflict, and the way out. */
+.git-merge {
+  display: grid; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--danger) 7%, var(--bg-panel)); font-size: var(--fs-sm);
+}
+.git-merge-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.git-merge-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+.git-merge-chip {
+  flex: 0 0 auto; padding: 1px 8px; border-radius: var(--r-pill); border: 1px solid var(--border);
+  font-size: var(--fs-xs); white-space: nowrap;
+}
+.git-merge-chip.is-bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, transparent); }
+.git-merge-chip.is-ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
+.git-merge-chip.is-accent { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.git-merge-files { margin: 0; padding-left: 1.3em; font-family: var(--font-mono, ui-monospace, Menlo, monospace); color: var(--text-dim); }
+.git-merge-error { padding: 6px 8px; border-radius: var(--r-md); background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--text); }
+.git-merge-risks { padding: 6px 8px; border-radius: var(--r-md); background: color-mix(in srgb, var(--git-new) 14%, transparent); }
+.git-merge-busy { display: flex; align-items: center; gap: 10px; color: var(--text-dim); min-width: 0; }
+.git-merge-line { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-faint); font-size: var(--fs-xs); }
+.git-merge-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.git-merge-spacer { flex: 1; }
+.git-merge-hint { margin: 0; color: var(--text-faint); }
+.git-merge-plan { display: grid; gap: 6px; max-height: 55vh; overflow: auto; }
+.git-merge-plan h4 { margin: 4px 0 0; font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); }
+.git-merge-plan p { margin: 0; line-height: 1.5; }
+.git-merge-file { padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-panel); display: grid; gap: 4px; }
+.git-merge-file-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.git-merge-path { font-family: var(--font-mono, ui-monospace, Menlo, monospace); }
+.git-merge-what { color: var(--text-dim); }
+.git-merge-note { width: 100%; resize: vertical; font: inherit; }
+.go-btn {
+  padding: 4px 12px; border-radius: var(--r-md); border: 1px solid var(--ok); background: var(--ok);
+  color: var(--bg); font: inherit; font-weight: 600; cursor: pointer;
+}
+.go-btn:hover { background: color-mix(in srgb, var(--ok) 85%, white); }

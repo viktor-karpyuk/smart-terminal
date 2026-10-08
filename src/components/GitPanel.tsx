@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { startDrag } from '../lib/resize';
 import { asFilePanel, useStore } from '../state/store';
-import type { GitBranch, GitCommit, GitFile } from '../global';
+import type { GitBranch, GitCommit, GitConflictJob, GitFile } from '../global';
 import { Popover } from './Popover';
 import { sections } from '../lib/gitTree';
 import type { Node, Section } from '../lib/gitTree';
@@ -750,6 +750,8 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
     [files, panel?.gitGrouping, inCommit],
   );
   const staged = files.filter((file) => file.staged || file.partial);
+  // A commit now would record the conflict markers, or be refused: the merge banner is the way on.
+  const inConflict = Boolean(repo?.merge?.conflicted.length);
   const allStaged = files.length > 0 && staged.length === files.length;
   const someStaged = staged.length > 0 && !allStaged;
 
@@ -784,6 +786,7 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
 
   return (
     <>
+      {repo?.merge && <MergeConflicts root={root} compact={compact} />}
       <div className={`git-toolbar${compact ? ' is-compact' : ''}`}>
         {!compact && <span className="git-toolbar-label">Group by</span>}
         <div className="segmented git-grouping" title="Group the changes by">
@@ -917,7 +920,8 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
           <span style={{ flex: 1 }} />
           <button
             className="ghost-btn"
-            disabled={!panel.message.trim() || (!staged.length && !panel.amend)}
+            disabled={inConflict || !panel.message.trim() || (!staged.length && !panel.amend)}
+            title={inConflict ? 'Files are still in conflict: fix them first' : undefined}
             onClick={async () => {
               const result = await gitDo(root, 'commit', { message: panel.message, amend: panel.amend }, 'Committing');
               if (result.ok) patch(panelId, { message: '', amend: false });
@@ -927,7 +931,8 @@ export function Changes({ panelId, compact = false }: { panelId: string; compact
           </button>
           <button
             className="primary-btn"
-            disabled={!panel.message.trim() || (!staged.length && !panel.amend)}
+            disabled={inConflict || !panel.message.trim() || (!staged.length && !panel.amend)}
+            title={inConflict ? 'Files are still in conflict: fix them first' : undefined}
             onClick={async () => {
               const result = await gitDo(root, 'commit', { message: panel.message, amend: panel.amend }, 'Committing');
               if (!result.ok) return;
@@ -951,6 +956,183 @@ type HeadCommit = {
   date: string;
   files: Array<{ path: string; name: string; added: number | null; removed: number | null }>;
 };
+
+const APPROACH: Record<string, [string, string]> = {
+  OURS: ['Keep this branch', 'is-accent'],
+  THEIRS: ['Keep what is merged in', 'is-accent'],
+  COMBINE: ['Combine both', 'is-ok'],
+  MANUAL: ['Needs a decision', 'is-bad'],
+};
+
+/**
+ * A merge that stopped on conflicts, and the way out of it.
+ *
+ * Three steps, each one a button somebody presses: what happened and what
+ * Claude proposes (nothing is touched), the proposal carried out on the files
+ * in conflict and staged (nothing is committed), and the merge commit once no
+ * file is left in conflict. Abort is there the whole time.
+ */
+function MergeConflicts({ root, compact }: { root: string; compact: boolean }) {
+  const merge = useStore((s) => s.repos[root]?.merge ?? null);
+  const gitDo = useStore((s) => s.gitDo);
+  const [job, setJob] = useState<GitConflictJob | null>(null);
+  const [note, setNote] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  /*
+   * What this panel itself is waiting for. The first progress read can land
+   * before the main process has registered the run, and it would have put the
+   * buttons back up under a run that had just started.
+   */
+  const [pending, setPending] = useState<'analyze' | 'resolve' | null>(null);
+  const working = Boolean(pending || job?.busy);
+
+  // What is already known about this merge, and its progress while Claude works.
+  useEffect(() => {
+    let alive = true;
+    const read = () =>
+      window.api.git.call('conflictsJob', root).then((result) => {
+        if (alive && result.ok) setJob(result.job ?? null);
+      });
+    void read();
+    const timer = window.setInterval(() => {
+      if (working) void read();
+    }, 1000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [root, working]);
+
+  if (!merge) return null;
+  const conflicted = merge.conflicted;
+  const run = async (name: string, args?: unknown) => {
+    setError(null);
+    setPending(name === 'conflictsResolve' ? 'resolve' : 'analyze');
+    try {
+      const result = await window.api.git.call(name, root, args);
+      if (!result.ok) setError(result.error ?? 'It did not work.');
+      const now = await window.api.git.call('conflictsJob', root);
+      setJob(now.ok ? (now.job ?? null) : null);
+    } finally {
+      setPending(null);
+    }
+    await useStore.getState().refreshRepo(root, 'status');
+  };
+
+  const plan = job?.plan;
+  const manual = plan?.files.filter((file) => file.approach === 'MANUAL').length ?? 0;
+
+  return (
+    <div className={`git-merge${compact ? ' is-compact' : ''}`}>
+      <div className="git-merge-head">
+        <span className={`git-merge-chip ${conflicted.length ? 'is-bad' : 'is-ok'}`}>{conflicted.length ? 'Merge in conflict' : 'Merge ready to conclude'}</span>
+        <span className="git-merge-title" title={merge.message}>
+          {merge.message || `Merging ${merge.head.slice(0, 7)}`}
+        </span>
+      </div>
+
+      {conflicted.length > 0 && (
+        <ul className="git-merge-files">
+          {conflicted.map((file) => (
+            <li key={file}>{file}</li>
+          ))}
+        </ul>
+      )}
+
+      {(error || job?.error) && <div className="git-merge-error">{error || job?.error}</div>}
+
+      {working ? (
+        <div className="git-merge-busy">
+          <span>{(pending ?? (job?.step === 'RESOLVING' ? 'resolve' : 'analyze')) === 'resolve' ? 'Resolving as proposed…' : 'Reading both sides and their history…'}</span>
+          {job?.busy && job.lines.length > 0 && <span className="git-merge-line">{job.lines[job.lines.length - 1]}</span>}
+          <button className="ghost-btn" onClick={() => void window.api.git.call('conflictsCancel', root)}>
+            Cancel
+          </button>
+        </div>
+      ) : job?.step === 'PROPOSED' && plan && conflicted.length > 0 ? (
+        <div className="git-merge-plan">
+          <h4>What happened</h4>
+          <p>{plan.cause}</p>
+          {plan.summary && (
+            <>
+              <h4>The proposal</h4>
+              <p>{plan.summary}</p>
+            </>
+          )}
+          {plan.files.map((file) => {
+            const [label, tone] = APPROACH[file.approach] ?? APPROACH.MANUAL;
+            return (
+              <div className="git-merge-file" key={file.path}>
+                <div className="git-merge-file-head">
+                  <span className="git-merge-path">{file.path}</span>
+                  <span className={`git-merge-chip ${tone}`}>{label}</span>
+                </div>
+                {file.what && <p className="git-merge-what">{file.what}</p>}
+                <p>{file.proposal}</p>
+              </div>
+            );
+          })}
+          {plan.risks && <div className="git-merge-risks">Worth checking afterwards: {plan.risks}</div>}
+          {manual > 0 && (
+            <div className="git-merge-error">
+              {manual} file{manual === 1 ? ' needs' : 's need'} a decision. Say it below before resolving, or resolve {manual === 1 ? 'it' : 'them'} by hand.
+            </div>
+          )}
+          <textarea
+            className="git-merge-note"
+            rows={2}
+            placeholder="Anything Claude should know before it resolves (optional)"
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+          />
+          <div className="git-merge-actions">
+            <button className="primary-btn" onClick={() => void run('conflictsResolve', { note }).then(() => setNote(''))}>
+              Resolve as proposed
+            </button>
+            <button className="ghost-btn" onClick={() => void run('conflictsAnalyze')}>
+              Analyze again
+            </button>
+            <span className="git-merge-spacer" />
+            <button className="ghost-btn is-danger" onClick={() => void gitDo(root, 'abortMerge', {}, 'Aborting the merge')}>
+              Abort merge
+            </button>
+          </div>
+          <p className="git-merge-hint">Only the files in conflict are edited, and they are left staged for you to look at. Nothing is committed.</p>
+        </div>
+      ) : conflicted.length > 0 ? (
+        <div className="git-merge-actions">
+          <button className="primary-btn" onClick={() => void run('conflictsAnalyze')}>
+            Fix conflicts
+          </button>
+          <span className="git-merge-hint">Claude reads both sides first and proposes a fix per file; nothing changes until you approve it.</span>
+          <span className="git-merge-spacer" />
+          <button className="ghost-btn is-danger" onClick={() => void gitDo(root, 'abortMerge', {}, 'Aborting the merge')}>
+            Abort merge
+          </button>
+        </div>
+      ) : (
+        <>
+          {job?.step === 'RESOLVED' && (
+            <p className="git-merge-hint">
+              Resolved and staged: {(job.resolved ?? []).join(', ')}
+              {job.touched?.length ? `, and to make it work: ${job.touched.join(', ')}` : ''}. {job.summary} Look at the changes below, then conclude.
+            </p>
+          )}
+          <div className="git-merge-actions">
+            <button className="go-btn" onClick={() => void gitDo(root, 'concludeMerge', {}, 'Concluding the merge')}>
+              Conclude merge
+            </button>
+            <span className="git-merge-hint">Commits the merge with git's own message.</span>
+            <span className="git-merge-spacer" />
+            <button className="ghost-btn is-danger" onClick={() => void gitDo(root, 'abortMerge', {}, 'Aborting the merge')}>
+              Abort merge
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 function useHeadCommit(root: string, wanted: boolean) {
   const [head, setHead] = useState<HeadCommit | null>(null);

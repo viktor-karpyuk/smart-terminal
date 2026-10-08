@@ -54,6 +54,7 @@ const {
   readFilenamesPlist,
 } = require('./files');
 const git = require('./git');
+const { LocalConflicts } = require('./git-conflicts');
 const { layout: layoutGraph } = require('./git-graph');
 const kube = require('./kube');
 const helm = require('./helm');
@@ -1539,6 +1540,11 @@ function registerIpc() {
   /** How many changed files are still worth counting the lines of. See `status`. */
   const COUNTED_LIMIT = 2000;
 
+  /** Conflicts in a working copy, fixed with the Claude the reviewer already runs. */
+  const localConflicts = new LocalConflicts({
+    claude: () => reviewService?.claude ?? null,
+    language: () => reviewService?.engine?.language?.() ?? 'español',
+  });
   const GIT = {
     root: (root) => git.repoRoot(root),
     status: async (root) => {
@@ -1604,7 +1610,22 @@ function registerIpc() {
     deleteBranch: (root, { name, force }) => git.deleteBranch(root, name, { force }),
     merge: (root, { ref }) => git.merge(root, ref),
     rebase: (root, { ref }) => git.rebase(root, ref),
-    abortMerge: (root) => git.abortMerge(root),
+    abortMerge: async (root) => {
+      const result = await git.abortMerge(root);
+      if (result.ok) localConflicts.discard(root);
+      return result;
+    },
+    /*
+     * A merge stopped on conflicts in this working copy: what happened and a
+     * proposal (reads only), the proposal carried out and staged, and the merge
+     * commit once nothing is left in conflict.
+     */
+    conflictsJob: (root) => ({ ok: true, job: localConflicts.job(root) }),
+    conflictsAnalyze: async (root) => ({ ok: true, job: await localConflicts.analyze(root) }),
+    conflictsResolve: async (root, { note }) => ({ ok: true, job: await localConflicts.resolve(root, { note: String(note ?? '').slice(0, 2000) }) }),
+    conflictsCancel: (root) => ({ ok: localConflicts.cancel(root) }),
+    conflictsDiscard: (root) => ({ ok: localConflicts.discard(root) }),
+    concludeMerge: (root) => localConflicts.conclude(root),
     revert: (root, { sha }) => git.revertCommit(root, sha),
     stash: (root, { message }) => git.stashPush(root, message),
     stashPop: (root, { ref }) => git.stashPop(root, ref),

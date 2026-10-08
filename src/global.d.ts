@@ -159,6 +159,10 @@ export interface GitResult {
   files?: GitFile[];
   /** Whether the line counts beside each file were read; see `status` in main. */
   counted?: boolean;
+  /** A merge in progress, and the files still in conflict (unmerged, or with markers left in). */
+  merge?: GitMerge | null;
+  /** A conflict fix's progress, from `conflictsJob` and the steps after it. */
+  job?: GitConflictJob | null;
   commits?: GitCommit[];
   width?: number;
   current?: string | null;
@@ -187,6 +191,34 @@ export interface GitPullSummary {
   files?: Array<{ status: string; path: string }>;
 }
 
+export interface GitMerge {
+  head: string;
+  message: string;
+  conflicted: string[];
+  /** Fixed by hand and not added yet: concluding adds them. */
+  settled: string[];
+}
+
+export interface GitConflictPlan {
+  cause: string;
+  summary: string;
+  risks: string;
+  files: Array<{ path: string; approach: 'OURS' | 'THEIRS' | 'COMBINE' | 'MANUAL'; what: string; proposal: string }>;
+}
+
+export interface GitConflictJob {
+  step: 'ANALYZING' | 'PROPOSED' | 'RESOLVING' | 'RESOLVED' | 'FAILED';
+  busy: boolean;
+  lines: string[];
+  plan?: GitConflictPlan;
+  error?: string | null;
+  summary?: string;
+  resolved?: string[];
+  /** Other files Claude changed to make the resolution work, staged with it. */
+  touched?: string[];
+  incoming?: string;
+}
+
 export interface GitFile {
   path: string;
   absolute: string;
@@ -202,6 +234,8 @@ export interface GitFile {
   from?: string;
   added?: number | null;
   removed?: number | null;
+  /** Still has conflict markers in it, while a merge is going on. */
+  markers?: boolean;
 }
 
 export interface GitRef {
