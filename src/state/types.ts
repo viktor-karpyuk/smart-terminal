@@ -509,6 +509,8 @@ export interface Settings {
   sidebarMonitorCollapsed: boolean;
   sidebarClustersCollapsed: boolean;
   sidebarReviewerCollapsed: boolean;
+  /** Which lines of the reviewer's menu are unfolded: `dash`, `repos`, `repo:<id>`. Missing means the default. */
+  sidebarReviewerOpen?: Record<string, boolean>;
   /** Which of the sidebar's lists comes first. Dragging a heading changes it. */
   sidebarOrder: Array<'sessions' | 'folders' | 'monitor' | 'clusters' | 'reviewer'>;
   /**

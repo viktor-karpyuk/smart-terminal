@@ -773,7 +773,15 @@ class ReviewService {
     const rows = this.rows(this.store.openPrs(), reposById, this.store.boardFacts());
     const list = repos.map((repo) => {
       const mine = rows.filter((row) => row.repoId === repo.id);
-      return { id: repo.id, name: repo.name, open: mine.length, waiting: mine.filter((row) => row.mine).length, readError: Boolean(this.readError(repo.id)) };
+      return {
+        id: repo.id,
+        name: repo.name,
+        open: mine.length,
+        waiting: mine.filter((row) => row.mine).length,
+        readError: Boolean(this.readError(repo.id)),
+        // Enough to list them and open one; nothing a sidebar line has no room for.
+        prs: mine.map((row) => ({ id: row.pr.id, title: row.pr.title, author: row.pr.author, mine: Boolean(row.mine) })),
+      };
     });
     return {
       repos: list,

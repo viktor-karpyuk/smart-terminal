@@ -539,7 +539,14 @@ export function Sidebar() {
 
 /** What the sidebar knows about the Code Reviewer: a count per repository, nothing heavier. */
 interface ReviewerSummary {
-  repos: { id: string; name: string; open: number; waiting: number; readError: boolean }[];
+  repos: {
+    id: string;
+    name: string;
+    open: number;
+    waiting: number;
+    readError: boolean;
+    prs?: { id: number; title: string; author: string; mine: boolean }[];
+  }[];
   waiting: number;
   running: number;
 }
@@ -547,8 +554,9 @@ interface ReviewerSummary {
 /** Where the reviewer's panel is now, from what it last remembered — so the row for it can be lit. */
 function reviewerHere(resume: unknown): ReviewerPlace | null {
   if (!resume || typeof resume !== 'object') return null;
-  const saved = resume as { view?: string; repoId?: string | null };
-  if (saved.view === 'prs' || saved.view === 'pr') return { view: 'prs', repoId: saved.repoId ?? null };
+  const saved = resume as { view?: string; repoId?: string | null; prId?: number | null };
+  if (saved.view === 'pr') return { view: 'pr', repoId: saved.repoId ?? null, prId: saved.prId ?? null };
+  if (saved.view === 'prs') return { view: 'prs', repoId: saved.repoId ?? null };
   if (saved.view === 'repoForm' || saved.view === 'import') return { view: 'repos' };
   if (saved.view === 'dashboard' || saved.view === 'repos' || saved.view === 'bus' || saved.view === 'usage' || saved.view === 'settings') {
     return { view: saved.view };
@@ -577,7 +585,7 @@ function ReviewerList() {
         (one) => one.kind === 'extension' && one.viewId === REVIEWER_VIEW && one.root === null,
       );
       const place = panel && panel.kind === 'extension' ? reviewerHere(panel.resume) : null;
-      return { view: place?.view ?? null, repoId: place?.repoId ?? null };
+      return { view: place?.view ?? null, repoId: place?.repoId ?? null, prId: place?.prId ?? null };
     }),
   );
 
@@ -612,8 +620,20 @@ function ReviewerList() {
     };
   }, []);
 
+  /*
+   * Which lines are unfolded, kept with the settings so the tree comes back
+   * the way it was left. The two top ones start open; a repository starts
+   * folded, or seven of them would push the pages off the bottom.
+   */
+  const unfolded = useStore((s) => s.settings.sidebarReviewerOpen);
+  const isOpen = (key: string, fallback = true) => unfolded?.[key] ?? fallback;
+  const toggle = (key: string, fallback = true) =>
+    updateSettings({ sidebarReviewerOpen: { ...(unfolded ?? {}), [key]: !isOpen(key, fallback) } });
+  // What the dashboard gathers: every pull request waiting on you, wherever it is.
+  const waitingPrs = (summary?.repos ?? []).flatMap((repo) =>
+    (repo.prs ?? []).filter((pr) => pr.mine).map((pr) => ({ repo, pr })),
+  );
   const pages: { view: ReviewerPlace['view']; label: string }[] = [
-    { view: 'repos', label: 'Repositories' },
     { view: 'bus', label: 'Coordination' },
     { view: 'usage', label: 'Usage' },
     { view: 'settings', label: 'Settings' },
@@ -649,42 +669,169 @@ function ReviewerList() {
         />
       }
     >
-      <button
-        className={`sidebar-item reviewer-row${here.view === 'dashboard' ? ' is-open' : ''}`}
+      {/*
+        A tree, like a folder's: the dashboard folds open onto the
+        repositories it gathers, and the pages beside it sit at its level.
+      */}
+      <ReviewerRow
+        label="Dashboard"
+        on={here.view === 'dashboard'}
+        count={summary?.waiting ?? 0}
+        note={summary && summary.running > 0 ? `${summary.running} running` : null}
         title="Everything waiting, across every repository"
-        onClick={() => openReviewerAt({ view: 'dashboard' })}
-      >
-        <span className="sidebar-item-title">Dashboard</span>
-        {summary && summary.running > 0 && <span className="reviewer-note">{summary.running} running</span>}
-        {summary && summary.waiting > 0 && <span className="reviewer-count" title="Waiting on you">{summary.waiting}</span>}
-      </button>
-      {error && <p className="sidebar-empty">{error}</p>}
-      {!error && summary && !summary.repos.length && <p className="sidebar-empty">No repositories yet.</p>}
-      {summary?.repos.map((repo) => (
-        <button
-          key={repo.id}
-          className={`sidebar-item reviewer-row is-repo${here.view === 'prs' && here.repoId === repo.id ? ' is-open' : ''}`}
-          title={`${repo.name} — ${repo.open} open, ${repo.waiting} waiting on you${repo.readError ? '\nThe last read failed' : ''}`}
-          onClick={() => openReviewerAt({ view: 'prs', repoId: repo.id })}
-        >
-          <span className={`cluster-dot is-${repo.readError ? 'bad' : repo.waiting ? 'warn' : repo.open ? 'ok' : 'unknown'}`} />
-          <span className="sidebar-item-title">{repo.name}</span>
-          {repo.open > repo.waiting && <span className="reviewer-note" title="Open">{repo.open}</span>}
-          {repo.waiting > 0 && <span className="reviewer-count" title="Waiting on you">{repo.waiting}</span>}
-        </button>
-      ))}
-      <div className="reviewer-pages">
-        {pages.map((page) => (
-          <button
-            key={page.view}
-            className={`reviewer-page${here.view === page.view ? ' is-open' : ''}`}
-            onClick={() => openReviewerAt({ view: page.view })}
-          >
-            {page.label}
-          </button>
+        expanded={isOpen('dash')}
+        onExpand={() => toggle('dash')}
+        onOpen={() => openReviewerAt({ view: 'dashboard' })}
+      />
+      {isOpen('dash') && error && <p className="sidebar-empty reviewer-nested">{error}</p>}
+      {isOpen('dash') && summary && !error && !waitingPrs.length && (
+        <p className="sidebar-empty reviewer-nested">Nothing waiting on you.</p>
+      )}
+      {isOpen('dash') &&
+        waitingPrs.map(({ repo, pr }) => (
+          <ReviewerPrRow key={`${repo.id}#${pr.id}`} repoId={repo.id} repoName={repo.name} pr={pr} depth={1} here={here} gathered />
         ))}
-      </div>
+      <ReviewerRow
+        label="Repositories"
+        on={here.view === 'repos'}
+        count={0}
+        note={summary ? String(summary.repos.length) : null}
+        title="Every repository, and adding one"
+        expanded={isOpen('repos')}
+        onExpand={() => toggle('repos')}
+        onOpen={() => openReviewerAt({ view: 'repos' })}
+      />
+      {isOpen('repos') && !error && summary && !summary.repos.length && (
+        <p className="sidebar-empty reviewer-nested">No repositories yet.</p>
+      )}
+      {isOpen('repos') &&
+        summary?.repos.map((repo) => (
+          <Fragment key={repo.id}>
+            <ReviewerRow
+              label={repo.name}
+              depth={1}
+              on={here.view === 'prs' && here.repoId === repo.id}
+              count={repo.waiting}
+              dot={repo.readError ? 'bad' : repo.waiting ? 'warn' : repo.open ? 'ok' : 'none'}
+              title={`${repo.name} — ${repo.open} open, ${repo.waiting} waiting on you${repo.readError ? '\nThe last read failed' : ''}`}
+              expanded={isOpen(`repo:${repo.id}`, false)}
+              onExpand={repo.prs?.length ? () => toggle(`repo:${repo.id}`, false) : undefined}
+              onOpen={() => openReviewerAt({ view: 'prs', repoId: repo.id })}
+            />
+            {isOpen(`repo:${repo.id}`, false) &&
+              (repo.prs ?? []).map((pr) => (
+                <ReviewerPrRow key={pr.id} repoId={repo.id} repoName={repo.name} pr={pr} depth={2} here={here} />
+              ))}
+          </Fragment>
+        ))}
+      {pages.map((page) => (
+        <ReviewerRow
+          key={page.view}
+          label={page.label}
+          on={here.view === page.view}
+          count={0}
+          onOpen={() => openReviewerAt({ view: page.view })}
+        />
+      ))}
     </List>
+  );
+}
+
+/** One line of the reviewer's list, drawn like every other line in the sidebar. */
+function ReviewerRow({
+  label,
+  on,
+  count,
+  note = null,
+  dot,
+  depth = 0,
+  expanded,
+  onExpand,
+  title,
+  onOpen,
+}: {
+  label: string;
+  on: boolean;
+  count: number;
+  note?: string | null;
+  dot?: 'ok' | 'warn' | 'bad' | 'none';
+  /** How far into the tree: 0 for the menu itself, 1 under it, 2 under that. */
+  depth?: number;
+  /** Set on a line that folds: whether it is open, and what opens or closes it. */
+  expanded?: boolean;
+  onExpand?(): void;
+  title?: string;
+  onOpen(): void;
+}) {
+  return (
+    <button
+      className={`sidebar-item reviewer-row${on ? ' is-open' : ''}`}
+      style={{ paddingLeft: 6 + depth * 14 }}
+      title={title}
+      onClick={onOpen}
+    >
+      {/* Every line keeps the chevron's room, so each level reads as one column. */}
+      <span
+          className={`reviewer-caret${onExpand ? '' : ' is-blank'}`}
+          role={onExpand ? 'button' : undefined}
+          aria-label={onExpand ? (expanded ? 'Fold' : 'Unfold') : undefined}
+          aria-expanded={onExpand ? expanded : undefined}
+          onClick={
+            onExpand
+              ? (event) => {
+                  event.stopPropagation();
+                  onExpand();
+                }
+              : undefined
+          }
+        >
+          {onExpand && (
+            <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ transform: expanded ? 'rotate(90deg)' : 'none' }}>
+              <path d="M3.5 2l3 3-3 3" />
+            </svg>
+          )}
+      </span>
+      {dot && <span className={`reviewer-dot is-${dot}`} />}
+      <span className="sidebar-item-title">{label}</span>
+      {note && <span className="reviewer-note">{note}</span>}
+      {count > 0 && (
+        <span className="reviewer-count" title="Waiting on you">
+          {count}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/** A pull request in the reviewer's tree: its number, its title, and a click that opens it. */
+function ReviewerPrRow({
+  repoId,
+  repoName,
+  pr,
+  depth,
+  here,
+  gathered = false,
+}: {
+  repoId: string;
+  repoName: string;
+  pr: { id: number; title: string; author: string; mine: boolean };
+  depth: number;
+  here: { view: string | null; repoId: string | null; prId: number | null };
+  /** Under the dashboard, where every one is waiting on you: the dot would say nothing. */
+  gathered?: boolean;
+}) {
+  const openReviewerAt = useStore((s) => s.openReviewerAt);
+  return (
+    <button
+      className={`sidebar-item reviewer-row reviewer-pr${here.view === 'pr' && here.repoId === repoId && Number(here.prId) === pr.id ? ' is-open' : ''}`}
+      style={{ paddingLeft: 6 + depth * 14 + 18 }}
+      title={`${repoName} #${pr.id} — ${pr.title}\nby ${pr.author}${pr.mine ? '\nWaiting on you' : ''}`}
+      onClick={() => openReviewerAt({ view: 'pr', repoId, prId: pr.id })}
+    >
+      <span className="reviewer-pr-num">#{pr.id}</span>
+      <span className="sidebar-item-title">{pr.title}</span>
+      {pr.mine && !gathered && <span className="reviewer-pr-mine" title="Waiting on you" />}
+    </button>
   );
 }
 

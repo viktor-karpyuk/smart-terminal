@@ -3931,19 +3931,26 @@ button:focus-visible, [role='button']:focus-visible, .tab:focus-visible {
 @container (max-width: 560px) { .git-ref:not(.is-head) { display: none; } }
 @container (max-width: 420px) { .git-sha { display: none; } }
 
-/* The Code Reviewer's menu in the sidebar: the dashboard, each repository, and its other pages. */
-.reviewer-row { width: 100%; text-align: left; font: inherit; color: var(--text); background: none; border: 0; align-items: center; }
-.reviewer-row.is-open { color: var(--accent); }
-.reviewer-row .cluster-dot { margin-top: 0; }
-.reviewer-note { margin-left: 6px; font-size: var(--fs-xs, 10.5px); color: var(--text-faint); white-space: nowrap; }
-.reviewer-count {
-  margin-left: 6px; flex: 0 0 auto; font-size: var(--fs-xs, 10.5px); color: var(--accent);
-  border: 1px solid var(--accent); border-radius: var(--r-pill); padding: 0 5px; line-height: 1.4;
-}
-.reviewer-pages { display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 6px 8px 4px; border-top: 1px solid var(--border); margin-top: 4px; }
-.reviewer-page { font: inherit; font-size: var(--fs-sm, 12px); color: var(--text-dim, var(--text-faint)); background: none; border: 0; padding: 2px 0; cursor: pointer; }
-.reviewer-page:hover { color: var(--text); }
-.reviewer-page.is-open { color: var(--accent); }
+/* The Code Reviewer's menu in the sidebar: lines like the sessions' and the clusters', nothing of its own to learn. */
+.reviewer-row { width: 100%; text-align: left; font: inherit; font-size: var(--fs-md); color: var(--text); background: none; border: 0; align-items: center; cursor: pointer; }
+.sidebar-item.reviewer-row { align-items: center; }
+.reviewer-row:hover { background: var(--bg-hover); }
+.reviewer-row.is-open { background: var(--bg-active); box-shadow: inset 2px 0 0 var(--accent); color: var(--text); }
+.reviewer-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; background: var(--border-strong); }
+.reviewer-dot.is-ok { background: var(--ok); }
+.reviewer-dot.is-warn { background: var(--git-new); }
+.reviewer-dot.is-bad { background: var(--danger); }
+.reviewer-note { font-size: var(--fs-xs, 10.5px); color: var(--text-faint); white-space: nowrap; }
+/* The same plain number the other lists use, in the accent because it is asking for you. */
+.reviewer-count { margin-left: auto; padding-left: 6px; flex: 0 0 auto; font-size: var(--fs-sm); color: var(--accent); font-variant-numeric: tabular-nums; }
+.reviewer-caret { flex: 0 0 auto; width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-faint); border-radius: 3px; margin-left: -2px; }
+.reviewer-caret:not(.is-blank):hover { color: var(--text); background: var(--bg-hover); }
+.reviewer-caret svg { transition: transform 0.12s ease; }
+.reviewer-nested { padding-left: 38px; }
+.reviewer-pr { font-size: var(--fs-sm); color: var(--text-dim); }
+.reviewer-pr.is-open { color: var(--text); }
+.reviewer-pr-num { flex: 0 0 auto; min-width: 3.2em; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.reviewer-pr-mine { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: var(--git-new); }
 .update-check-row { display: flex; margin: 8px 0 4px; }
 .update-table { border-collapse: collapse; margin: 6px 0; width: 100%; }
 .update-table th, .update-table td { text-align: left; vertical-align: top; padding: 3px 10px 3px 0; border-bottom: 1px solid var(--border); }

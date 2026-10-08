@@ -760,3 +760,16 @@ test('when the latest review found nothing new, the earlier findings are still d
   const onlyDone = reviewTab({ ...v, earlierFindings: [resolved] });
   assert.ok(onlyDone.includes('<card a>'), 'with nothing open, everything — the case that showed "Done 2" over nothing');
 });
+
+test('verification says first whether the code is fixed, in words and colour', () => {
+  const V = fromPanel(['esc', 'md', 'verdictHtml', 'VERDICT_WORDS']);
+  const fixed = V.verdictHtml('The guard now covers 404.', 'RESOLVED');
+  assert.match(fixed, /class="verdict is-ok"/);
+  assert.match(fixed, /Fixed in the code/);
+  assert.match(V.verdictHtml('Still returns early.', 'UNRESOLVED'), /class="verdict is-bad"[\s\S]*Not fixed/);
+  assert.match(V.verdictHtml('Half of it.', 'PARTIAL'), /is-part[\s\S]*Partly fixed/);
+  // A note with no ruling yet is still shown, without claiming either way.
+  const plain = V.verdictHtml('Read, not judged.', null);
+  assert.doesNotMatch(plain, /Fixed|Not fixed/);
+  assert.equal(V.verdictHtml('', 'RESOLVED'), '');
+});
