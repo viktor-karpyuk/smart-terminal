@@ -817,6 +817,22 @@ class ReviewService {
     const replies = this.store.replies(repoId, prId);
     const comments = this.store.comments(repoId, prId);
     const allFindings = this.store.findingsForPr(repoId, prId);
+    /*
+     * Every finding this pull request has had that still means something, not
+     * only the current review's.
+     *
+     * A comment verified as fixed stays with the review that published it, so
+     * a later review that found nothing new showed "0 findings" on a pull
+     * request whose comments had all been answered and fixed — the record of
+     * what was asked and done simply vanished. What is kept, besides the
+     * current review's own: from every earlier review whatever had a life of
+     * its own — published, closed, dismissed or ruled on. A draft nobody published,
+     * from a review a later one replaced, is left out: it is stale, and showing
+     * it would invite publishing it.
+     */
+    const shownHere = new Set(findings.map((finding) => finding.id));
+    const earlierFindings = allFindings.filter((finding) => !shownHere.has(finding.id) &&
+      Boolean(finding.publishedId || finding.dismissedAt || finding.closedAt || finding.resolution));
     const settings = this.settings();
     /*
      * Every thread that is on the pull request, not only the current review's.
@@ -840,6 +856,7 @@ class ReviewService {
       review,
       done,
       findings,
+      earlierFindings,
       notes,
       replies,
       comments,

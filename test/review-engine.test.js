@@ -1066,3 +1066,33 @@ test('comments left behind before reviews adopted them are brought back once', {
   assert.equal(service.store.adoptAllLiveFindings(), 0, 'twice is once');
   assert.deepEqual((await service.call('pr', { repoId: repo.id, prId: 7 })).findings.map((one) => one.title), ['add subtracts']);
 });
+
+/*
+ * A pull request whose comments were all answered and fixed read "0 findings"
+ * once a later review found nothing new: the fixed ones stayed with the review
+ * that published them. What the reviewer asked, and what became of it, stays listed.
+ */
+test('findings of earlier reviews that were published, ruled on or closed stay listed; stale drafts do not', { skip }, async () => {
+  const { service, repo, w, forgeState } = setup([
+    async () => ({ structured: { summary: 's', findings: [finding(), finding({ title: 'a draft nobody published', line: 1 })] } }),
+    async () => ({ structured: { summary: 'Nothing new.', findings: [] } }),
+  ]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  const [published, draft] = service.store.findingsForPr(repo.id, 7);
+  await service.call('publishFinding', { findingId: published.id });
+  service.store.setResolution(published.id, 'RESOLVED', 'fixed by the author');
+
+  fs.writeFileSync(path.join(w.seed, 'app.js'), 'function add(a, b) {\n  return a + b;\n}\n');
+  git(w.seed, 'commit', '-q', '-am', 'fix');
+  git(w.seed, 'push', '-q', 'origin', 'feature');
+  forgeState.prs[0].headSha = git(w.seed, 'rev-parse', 'HEAD');
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7, forceFull: true });
+
+  const view = await service.call('pr', { repoId: repo.id, prId: 7 });
+  assert.deepEqual(view.findings, [], 'the latest review found nothing new');
+  assert.deepEqual(view.earlierFindings.map((one) => [one.title, one.resolution]), [['add subtracts', 'RESOLVED']],
+    'the fixed one is still there, as done; the draft it replaced is not');
+  assert.ok(!view.earlierFindings.some((one) => one.id === draft.id));
+});
