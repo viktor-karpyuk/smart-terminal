@@ -4546,13 +4546,30 @@ function withGroup(
  * leaving the terminal at whatever it happened to be.
  */
 function applyGroupAppearance(get: () => State) {
-  const { sessions, groups, settings } = get();
-  const sizeByGroup = new Map(groups.map((group) => [group.id, group.fontSize]));
-  for (const session of Object.values(sessions)) {
-    // A group speaks for everything inside it; a tab on its own speaks for itself.
-    // Either way, no override means the global size — so clearing one restores it
-    // instead of leaving the terminal wherever it happened to be.
-    const override = session.groupId ? sizeByGroup.get(session.groupId) : session.fontSize;
-    setTerminalFontSize(session.id, override ?? settings.fontSize);
-  }
+  const state = get();
+  for (const session of Object.values(state.sessions)) setTerminalFontSize(session.id, terminalFontSizeFor(state, session.id));
+}
+
+/**
+ * The text size one session's terminal is drawn at.
+ *
+ * A group speaks for everything inside it; a tab on its own speaks for itself.
+ * Either way, no override means the global size — so clearing one restores it
+ * instead of leaving the terminal wherever it happened to be.
+ *
+ * Asked when a terminal is made as well as when a size changes. A terminal is
+ * made the first time its tab is shown, and it used to be made at the global
+ * size: so a group's size reached the tabs already open and missed every other
+ * tab in the group until the size was changed again.
+ */
+export function terminalFontSizeFor(state: Pick<State, 'sessions' | 'groups' | 'settings'>, sessionId: string): number {
+  const session = state.sessions[sessionId];
+  if (!session) return state.settings.fontSize;
+  const override = session.groupId ? state.groups.find((group) => group.id === session.groupId)?.fontSize : session.fontSize;
+  return override ?? state.settings.fontSize;
+}
+
+/** Every terminal at its own size again, after something set them all to the global one. */
+export function reapplyTerminalSizes() {
+  applyGroupAppearance(() => useStore.getState());
 }

@@ -455,3 +455,22 @@ test('an author\'s answer in a thread verified as fixed holds up neither the rea
     assert.equal(R.nextStep({ pr, review, findings, threads: open, finalPassDone: true }).action, 'tab-conversation');
   }
 });
+
+test('a branch that does not merge is not ready, is the next step, and blocks the merge', () => {
+  const pr = { headSha: 'h2', state: 'OPEN', targetBranch: 'develop', conflicts: ['a.ts', 'b.ts'] };
+  const review = { headSha: 'h1' };
+  const findings = [{ publishedId: 'c', filePath: 'a.ts', resolution: 'RESOLVED' }];
+  const ready = R.readiness({ pr, review, threads: [], findings, finalPassDone: true, finalPassBlockers: 0 });
+  assert.ok(ready.percent < 100);
+  assert.deepEqual(ready.items.filter((item) => item.key === 'conflicts').map((item) => [item.done, item.detail]), [[false, '2 in conflict']]);
+  const step = R.nextStep({ pr, review, findings, threads: [], finalPassDone: true });
+  assert.equal(step.action, 'conflicts-open');
+  assert.match(step.title, /2 files in conflict with develop/);
+  assert.match(R.mergeBlocker({ ...R.mergeCounts({ pr, review, findings, notes: [], replies: [] }), hasReview: true }), /2 file\(s\) conflict with develop/);
+  // Clean, or not known: nothing about conflicts anywhere.
+  for (const conflicts of [[], null]) {
+    const calm = { ...pr, conflicts };
+    assert.ok(!R.readiness({ pr: calm, review, threads: [], findings, finalPassDone: true, finalPassBlockers: 0 }).items.some((item) => item.key === 'conflicts'));
+    assert.notEqual(R.nextStep({ pr: calm, review, findings, threads: [], finalPassDone: true }).action, 'conflicts-open');
+  }
+});

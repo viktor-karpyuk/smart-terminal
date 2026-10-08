@@ -1087,10 +1087,16 @@ class ReviewEngine {
      */
     const stop = await this.beforeMerge?.(repo, pr);
     if (stop) throw new Error(stop);
+    // Asked again now, of the branches as they are: the forge would refuse, and later and less clearly.
+    const conflicting = await this.checkConflicts(repoId, prId, { fetch: true }).catch(() => null);
+    if (conflicting?.length) throw new Error(`${conflicting.length} file(s) conflict with ${pr.targetBranch}. Resolve them before merging.`);
     const text = String(message ?? '').trim() || `Merged in ${pr.sourceBranch} (pull request #${prId})\n\n${pr.title}`;
     const result = await this.forge.of(repo).merge(prId, { message: text, closeSourceBranch, strategy });
     this.store.setPref('merge.strategy', strategy);
     this.store.upsertPr(repoId, { ...pr, state: 'MERGED' });
+    // Its target has just moved: every other pull request into it asks again whether it still lands.
+    this.store.staleConflictsInto(repoId, pr.targetBranch, prId);
+    this.sweepBranches(repoId);
     this.changed(repoId, prId);
     return { ok: true, result };
   }

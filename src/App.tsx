@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { startDrag } from './lib/resize';
-import { terminalLook, useStore } from './state/store';
+import { reapplyTerminalSizes, terminalLook, useStore } from './state/store';
 import { applyLook } from './lib/looks';
 import { findLeaf } from './state/layout';
 import { GIT_TAB } from './state/types';
@@ -50,6 +50,8 @@ export function App() {
       applyLook(useStore.getState().settings);
       // "Follow the interface" follows the theme, which the OS may just have changed.
       applyAppearance(terminalLook(useStore.getState().settings));
+      // That set every terminal to the global size; the groups and tabs with their own get theirs back.
+      reapplyTerminalSizes();
     };
     applyLook(settings);
     if (settings.theme !== 'system') return;

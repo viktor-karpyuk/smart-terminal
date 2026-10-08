@@ -26,6 +26,7 @@ const { AutoReviewer } = require('./review-auto');
 const importer = require('./review-import');
 const { ReviewBus } = require('./review-bus');
 const { MigrationWatch, clashFor, clashSentence } = require('./review-migrations');
+const { ConflictResolver } = require('./review-conflicts');
 
 /**
  * Code Reviewer: the one door the panel knocks on.
@@ -116,6 +117,14 @@ class ReviewService {
       // Read at the moment it is used, so a forge swapped in later (tests, a token changed) is the one that answers.
       forge: { of: (repo) => this.forge.of(repo) },
       scratch: path.join(dataDir, 'code-review', 'renumber'),
+    });
+    this.conflicts = new ConflictResolver({
+      store: this.store,
+      git: this.git,
+      claude: this.claude,
+      engine: this.engine,
+      scratch: path.join(dataDir, 'code-review', 'conflicts'),
+      language: () => this.engine.language(),
     });
     this.engine.onBranches = (repoId) => this.migrations.check(repoId);
     this.engine.beforeMerge = (repo, pr) => this.migrations.blockMerge(repo, pr);
@@ -910,6 +919,7 @@ class ReviewService {
       finalPassDone,
       mergeBlocker: rules.mergeBlocker(counts),
       migrationClash,
+      conflictJob: pr ? this.conflicts.state(repoId, prId) : null,
       nextStep: rules.nextStep({ pr, review: done, findings: judged, notes, threads, running, finalPassDone, finalPassBlockers: done?.finalPassBlockers ?? 0, mergeBlocker: rules.mergeBlocker(counts) }),
       running,
       settings,
@@ -1556,6 +1566,14 @@ class ReviewService {
         })),
       }),
       checkConflicts: (args) => e.checkConflicts(str(args.repoId, 'A repository'), num(args.prId), { fetch: args.fetch !== false }),
+      /** Why the branch stopped merging, and a proposal per file. Writes nothing but a separate copy. */
+      conflictsAnalyze: async (args) => ({ ok: true, job: await s.conflicts.analyze(str(args.repoId, 'A repository'), num(args.prId)) }),
+      /** Carry the read proposal out in that copy, and commit the merge there. */
+      conflictsResolve: async (args) => ({ ok: true, job: await s.conflicts.resolve(str(args.repoId, 'A repository'), num(args.prId), { note: String(args.note ?? '').slice(0, 2000) }) }),
+      /** The merge commit to the pull request's branch, never forced. */
+      conflictsPush: async (args) => ({ ok: true, ...(await s.conflicts.push(str(args.repoId, 'A repository'), num(args.prId))) }),
+      conflictsDiscard: (args) => s.conflicts.discard(str(args.repoId, 'A repository'), num(args.prId)),
+      conflictsCancel: (args) => (s.engine.activity.cancel(s.conflicts.key(str(args.repoId, 'A repository'), num(args.prId))) ? { ok: true } : { ok: false, error: 'Nothing is running for these conflicts.' }),
       merge: (args) => e.merge(str(args.repoId, 'A repository'), num(args.prId), { message: args.message, closeSourceBranch: args.closeSourceBranch !== false, strategy: ['MERGE_COMMIT', 'SQUASH', 'FAST_FORWARD'].includes(args.strategy) ? args.strategy : 'MERGE_COMMIT' }),
 
       // what the app's doors need to know, never the doors themselves

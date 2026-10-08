@@ -571,7 +571,141 @@ function fixPrompt({ finding, prTitle, branch, language, guidelines = '', bus = 
   return lines.join('\n');
 }
 
+/**
+ * What a conflict analysis answers: why the branch stopped merging, and what
+ * to do about each file — a proposal somebody reads before anything is written.
+ */
+const CONFLICT_PLAN_SCHEMA = {
+  type: 'object',
+  properties: {
+    cause: { type: 'string' },
+    summary: { type: 'string' },
+    files: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          approach: { type: 'string', enum: ['OURS', 'THEIRS', 'COMBINE', 'MANUAL'] },
+          what: { type: 'string' },
+          proposal: { type: 'string' },
+        },
+        required: ['path', 'approach', 'what', 'proposal'],
+      },
+    },
+    risks: { type: 'string' },
+  },
+  required: ['cause', 'summary', 'files'],
+};
+
+const CONFLICT_RESOLVE_SCHEMA = {
+  type: 'object',
+  properties: { resolved: { type: 'boolean' }, summary: { type: 'string' }, files: { type: 'array', items: { type: 'string' } }, reason: { type: 'string' } },
+  required: ['resolved', 'summary'],
+};
+
+/** The history around a conflict, as the prompts quote it. */
+function conflictContext({ pr, target, files, targetLog, branchLog }) {
+  const lines = [
+    'CONTEXTO',
+    `- PR #${pr.id}: ${pr.title}`,
+    `- Rama del PR: ${pr.sourceBranch} (estás parado en ella, en una copia aparte del repositorio)`,
+    `- Destino: ${target}`,
+    '',
+    `LO QUE ENTRÓ A ${target} DESDE QUE LA RAMA SE SEPARÓ (más nuevo primero)`,
+    ...(targetLog.length ? targetLog.slice(0, 40).map((line) => `- ${line}`) : ['- (nada)']),
+    '',
+    `LO QUE TIENE LA RAMA ${pr.sourceBranch} QUE ${target} NO (más nuevo primero)`,
+    ...(branchLog.length ? branchLog.slice(0, 40).map((line) => `- ${line}`) : ['- (nada)']),
+    '',
+    'ARCHIVOS EN CONFLICTO',
+  ];
+  for (const file of files) {
+    lines.push(`- ${file.path}`);
+    if (file.targetLog.length) lines.push(`    en ${target}: ${file.targetLog.slice(0, 6).join(' · ')}`);
+    if (file.branchLog.length) lines.push(`    en la rama: ${file.branchLog.slice(0, 6).join(' · ')}`);
+  }
+  return lines;
+}
+
+/**
+ * Why a branch no longer merges, and what to do about it — read only.
+ *
+ * The merge has been tried and undone before this runs, so the model reads
+ * the three sides with git rather than markers: `git show :1:`-style stages
+ * are gone, and what it can always ask is the base, the branch and the target.
+ */
+function conflictAnalysisPrompt({ pr, target, base, files, targetLog, branchLog, language }) {
+  return [
+    `Sos el revisor de este PR. La rama ya no se puede mergear en ${target}: hay conflictos.`,
+    'Antes de tocar nada hay que entender qué pasó y proponer cómo resolverlo.',
+    '',
+    ...conflictContext({ pr, target, files, targetLog, branchLog }),
+    '',
+    'CÓMO LEERLO (sólo lectura: no edites nada)',
+    `- Base común: ${base}. Para cada archivo compará los tres lados:`,
+    `    git show ${base}:<archivo>   ·   git show HEAD:<archivo>   ·   git show ${target}:<archivo>`,
+    `    git diff ${base} HEAD -- <archivo>   y   git diff ${base} ${target} -- <archivo>`,
+    `- git log ${base}..${target} -- <archivo> y git log ${base}..HEAD -- <archivo> dicen quién cambió qué.`,
+    '- Un caso común: una rama de la que ésta depende entró al destino con squash. Entonces el',
+    '  destino tiene los mismos cambios en otro commit, y casi siempre lo correcto es quedarse con',
+    '  lo del destino en esas partes y conservar sólo lo que esta rama agrega encima. Fijate si es eso.',
+    '',
+    'QUÉ TENÉS QUE DEVOLVER',
+    `- cause: qué pasó, en ${language}, en dos a cinco líneas que entienda alguien que no vio la historia.`,
+    '- files: uno por archivo en conflicto, con',
+    '    approach: OURS (queda lo de la rama), THEIRS (queda lo del destino), COMBINE (las dos cosas),',
+    '              o MANUAL (hace falta una decisión de una persona),',
+    '    what: qué cambió cada lado en ese archivo,',
+    '    proposal: cómo quedaría resuelto, concreto (qué se conserva de cada lado y por qué).',
+    '- risks: lo que podría romperse o lo que conviene probar después; vacío si no hay nada.',
+    `- summary: una línea con la propuesta entera. Todo en ${language}.`,
+  ].join('\n');
+}
+
+/** Carry out an approved proposal on a merge left with its markers in. */
+function conflictResolvePrompt({ pr, target, files, plan, note = '', language }) {
+  const lines = [
+    `Sos el revisor de este PR. Hay un merge de ${target} en curso sobre la rama ${pr.sourceBranch},`,
+    'con los conflictos marcados en los archivos (<<<<<<< ======= >>>>>>>). Resolvelos siguiendo',
+    'la propuesta que la persona ya leyó y aprobó.',
+    '',
+    'LO QUE PASÓ',
+    String(plan.cause ?? '').slice(0, 2000),
+    '',
+    'LA PROPUESTA, ARCHIVO POR ARCHIVO',
+  ];
+  for (const file of plan.files ?? []) {
+    lines.push(`- ${file.path} — ${file.approach}`, `    ${String(file.proposal ?? '').replace(/\s+/g, ' ').slice(0, 1500)}`);
+  }
+  const listed = new Set((plan.files ?? []).map((file) => file.path));
+  const missing = files.filter((file) => !listed.has(file.path));
+  if (missing.length) lines.push('', 'ARCHIVOS EN CONFLICTO QUE LA PROPUESTA NO NOMBRA (resolvelos con el mismo criterio)', ...missing.map((file) => `- ${file.path}`));
+  if (String(note ?? '').trim()) lines.push('', 'LO QUE TE PIDIERON ESTA VEZ (manda sobre la propuesta)', String(note).trim().slice(0, 2000));
+  lines.push(
+    '',
+    'QUÉ TENÉS QUE HACER',
+    '1. En cada archivo en conflicto, reemplazá cada bloque marcado por el resultado de la propuesta.',
+    '2. No puede quedar ninguna línea <<<<<<<, ======= ni >>>>>>> en ningún archivo.',
+    '3. Si el resultado obliga a ajustar algo chico en otro archivo (un import, un tipo), hacelo.',
+    '',
+    'LÍMITES',
+    '- No toques nada fuera de los conflictos y de lo que ellos obligan.',
+    '- No hagas commit, ni merge --abort, ni reset, ni push: de eso se encarga la herramienta.',
+    '- Si un archivo no se puede resolver sin una decisión que no te corresponde, dejá todo como',
+    '  está y contestá resolved=false con el motivo. Un merge resuelto a medias es peor que ninguno.',
+    '',
+    'RESPUESTA',
+    `El JSON del esquema: \`resolved\`, \`summary\` (en ${language}, dos o tres líneas), \`files\` y \`reason\` si no resolviste.`,
+  );
+  return lines.join('\n');
+}
+
 module.exports = {
+  CONFLICT_PLAN_SCHEMA,
+  CONFLICT_RESOLVE_SCHEMA,
+  conflictAnalysisPrompt,
+  conflictResolvePrompt,
   SCHEMA,
   INCREMENTAL_SCHEMA,
   RESOLUTION_SCHEMA,

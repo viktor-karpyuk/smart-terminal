@@ -638,6 +638,8 @@ function mergeBlocker(counts) {
   if (!counts.prHeadSha) return 'The pull request is not loaded.';
   // Before everything the review says: a migration number taken twice breaks the deploy, whatever the code is like.
   if (counts.migrationClash) return counts.migrationClash;
+  // The forge refuses these anyway; saying so here is saying it before the click.
+  if (counts.conflicts > 0) return `${counts.conflicts} file(s) conflict with ${counts.targetBranch || 'the target'}: resolve them first.`;
   if (!counts.hasReview) return 'It has not been reviewed.';
   if (counts.pendingFindings > 0) return `${counts.pendingFindings} finding(s) not published or dismissed.`;
   if (counts.pendingNotes > 0) return `${counts.pendingNotes} note(s) not published.`;
@@ -658,6 +660,8 @@ function mergeCounts({ pr, review, findings, notes, replies }) {
   const live = findings.filter((finding) => finding.publishedId && !finding.dismissedAt && !finding.closedAt);
   return {
     prHeadSha: pr?.headSha ?? null,
+    conflicts: conflictCount(pr),
+    targetBranch: pr?.targetBranch ?? null,
     reviewHeadSha: review?.headSha ?? null,
     hasReview: Boolean(review),
     pendingFindings: findings.filter((finding) => !settled(finding)).length,
@@ -851,6 +855,9 @@ function readiness({ pr, review, threads, findings, finalPassDone, finalPassBloc
       done: published.every(shut) || !review.headSha || review.headSha !== pr.headSha,
     });
   }
+  // Last in the list, first in weight: a pull request that does not merge is not ready at any percentage.
+  const conflicting = conflictCount(pr);
+  if (conflicting) items.push({ key: 'conflicts', label: `Merges into ${pr.targetBranch || 'its target'}`, weight: 6, done: false, detail: `${conflicting} in conflict` });
   items.push({
     key: finalPassBlockers > 0 ? 'finalPassBlockers' : 'finalPass',
     label: finalPassBlockers > 0 ? 'Final pass found blockers' : 'Final pass on this commit',
@@ -1062,11 +1069,23 @@ function readableError(message) {
  * published, answers owed, verdicts owed, the author's turn, the final pass, and
  * then the merge.
  */
+/** How many files stand in the way of this branch merging, as last checked; 0 when clean or not known. */
+function conflictCount(pr) {
+  return Array.isArray(pr?.conflicts) ? pr.conflicts.length : 0;
+}
+
 function nextStep({ pr, review, findings = [], notes = [], threads = [], running = [], finalPassDone = false, finalPassBlockers = 0, mergeBlocker = null }) {
   if (!pr) return { kind: 'act', action: 'load', title: 'Load the pull request', detail: 'It is not in the local copy yet.' };
   if (pr.state && pr.state !== 'OPEN') return { kind: 'done', title: `This pull request is ${String(pr.state).toLowerCase()}`, detail: 'Nothing is waiting here.' };
-  const busy = running.find((run) => run.kind === 'review' || run.kind === 'verify' || run.kind === 'final');
-  if (busy) return { kind: 'wait', title: { review: 'A review is running', verify: 'Verifying the comments', final: 'The final pass is running' }[busy.kind], detail: 'This page updates when it ends.' };
+  const busy = running.find((run) => run.kind === 'review' || run.kind === 'verify' || run.kind === 'final' || run.kind === 'conflicts');
+  if (busy) return { kind: 'wait', title: { review: 'A review is running', verify: 'Verifying the comments', final: 'The final pass is running', conflicts: 'Working on the conflicts' }[busy.kind], detail: 'This page updates when it ends.' };
+  /*
+   * A branch that does not merge cannot be merged however good it is, so this
+   * comes before everything that is only about getting to "ready" — even
+   * the review: resolving changes the code a review would have read.
+   */
+  const conflicting = conflictCount(pr);
+  if (conflicting) return { kind: 'warn', action: 'conflicts-open', title: `${conflicting} file${conflicting === 1 ? '' : 's'} in conflict with ${pr.targetBranch || 'its target'}`, detail: 'It cannot be merged until they are resolved. Analyze them, read the proposal, then resolve.' };
   if (!review) return { kind: 'act', action: 'run-review', title: 'Review this pull request', detail: 'Nobody has reviewed it yet.' };
   const own = findings.filter((finding) => !finding.askedBy);
   const unpublished = own.filter((finding) => !settled(finding)).length + notes.filter((note) => !note.publishedId).length;
@@ -1121,6 +1140,7 @@ function ageMark(days) {
 
 module.exports = {
   wantsAnswer,
+  conflictCount,
   DEPTHS,
   KINDS,
   REVIEW_DENIED,

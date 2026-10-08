@@ -731,7 +731,7 @@ function reviewTab(v, filter = null) {
   const R = fromPanel(['esc', 'findingDone', 'drawReviewTab']);
   Object.assign(R, {
     state: { wide: false, findingFilter: filter, folds: {}, busy: {}, reviewProfile: { depth: 'AUTO', kind: 'AUTO' }, depths: null, edits: {} },
-    drawNextStep: () => '', drawActions: () => '', drawRuns: () => '',
+    drawNextStep: () => '', drawActions: () => '', drawRuns: () => '', drawConflictCard: () => '',
     fold: (key, head, summary, body) => `<fold ${key}>`, md: (text) => String(text), clamped: (key, text) => text,
     busyAttr: () => '', prKey: (key) => key, reviewKey: () => 'review', isOpen: () => false, when: () => 'now',
     findingCard: (f) => `<card ${f.id}>`,
@@ -772,4 +772,54 @@ test('verification says first whether the code is fixed, in words and colour', (
   const plain = V.verdictHtml('Read, not judged.', null);
   assert.doesNotMatch(plain, /Fixed|Not fixed/);
   assert.equal(V.verdictHtml('', 'RESOLVED'), '');
+});
+
+// ---------------------------------------------------------------- conflicts
+
+function conflictCard(v, extra = {}) {
+  const R = fromPanel(['esc', 'drawConflictCard', 'APPROACHES', 'plainDiffHtml']);
+  Object.assign(R, {
+    state: { folds: {}, busy: {}, edits: {} },
+    md: (text) => String(text), busyAttr: () => '', prKey: (key) => key, isOpen: () => false, edit: () => '',
+    sha7: (sha) => String(sha || '').slice(0, 7),
+    conflictState: (view) => (view.pr.conflicts && view.pr.conflicts.length ? { kind: 'conflicts', paths: view.pr.conflicts, stale: false } : null),
+    ...extra,
+  });
+  return R.drawConflictCard(v);
+}
+
+test('a branch that does not merge offers to analyze first, and says nothing changes until approved', () => {
+  const pr = { sourceBranch: 'POS-289', targetBranch: 'develop', conflicts: ['a.ts', 'b.ts'] };
+  const html = conflictCard({ pr, conflictJob: null, running: [] });
+  assert.match(html, /2 files conflict with develop/);
+  assert.match(html, /data-act="conflicts-analyze"/);
+  assert.match(html, /Nothing is changed until you approve it/);
+  assert.doesNotMatch(html, /conflicts-push/);
+  assert.equal(conflictCard({ pr: { ...pr, conflicts: [] }, conflictJob: null, running: [] }), '', 'nothing when it merges');
+});
+
+test('a proposal says what happened and what each file becomes, before the resolve button', () => {
+  const pr = { sourceBranch: 'POS-289', targetBranch: 'develop', conflicts: ['a.ts'] };
+  const plan = { cause: 'POS-288 was squashed into develop.', summary: 'Keep develop where they overlap.', files: [{ path: 'a.ts', approach: 'THEIRS', what: 'both', proposal: 'take develop' }, { path: 'b.ts', approach: 'MANUAL', what: '', proposal: '?' }], risks: '' };
+  const html = conflictCard({ pr, conflictJob: { state: 'PROPOSED', plan }, running: [] });
+  assert.match(html, /What happened[\s\S]*POS-288 was squashed/);
+  assert.match(html, /Keep the target/);
+  assert.match(html, /1 file needs a decision/);
+  assert.ok(html.indexOf('POS-288 was squashed') < html.indexOf('conflicts-resolve'), 'the explanation comes before the button');
+});
+
+test('a resolved merge is pushed only from its own card, and a failed check is said', () => {
+  const pr = { sourceBranch: 'POS-289', targetBranch: 'develop', conflicts: ['a.ts'] };
+  const html = conflictCard({ pr, conflictJob: { state: 'RESOLVED', sha: 'abcdef123', check: { state: 'FAILED', output: 'boom' }, stat: ' a.ts | 2 +-', diff: '+x' }, running: [] });
+  assert.match(html, /data-act="conflicts-push"[^>]*>Push to POS-289/);
+  assert.match(html, /The check did not pass/);
+  assert.match(html, /never forced/);
+});
+
+test('the merge button cannot be pressed on a branch that does not merge', () => {
+  const R = fromPanel(['esc', 'mergeButton']);
+  R.conflictState = () => ({ kind: 'conflicts', paths: ['a'] });
+  assert.match(R.mergeButton({ mergeBlocker: '1 file(s) conflict' }), /disabled[^>]*>Can't merge/);
+  R.conflictState = () => null;
+  assert.match(R.mergeButton({ mergeBlocker: null }), /data-act="merge-open"/);
 });
