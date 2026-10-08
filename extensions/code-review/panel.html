@@ -24,6 +24,10 @@
   #top { container-type: inline-size; }
   /* In a narrow pane the breadcrumb keeps its room: the sweep's age goes first, then the name. */
   @container (max-width: 980px) { .top .auto-state { display: none; } }
+  .top .text-size { flex: none; display: inline-flex; align-items: center; gap: 1px; }
+  .top .text-size .btn { padding-left: 6px; padding-right: 6px; }
+  .top .text-size .size-now { min-width: 2.6em; }
+  @container (max-width: 760px) { .top .text-size { display: none; } }
   @container (max-width: 760px) { .top .brand { display: none; } }
   @container (max-width: 600px) { .top .tab { padding-inline: 7px; } }
   /* Narrower still, the bar scrolls sideways instead of hanging off the pane. */
@@ -1394,6 +1398,15 @@
       html += '<span class="' + (rr.failed.length ? 'warn' : 'faint') + '" title="' + esc(rr.failed.map(function (f) { return f.repoName + ': ' + f.message; }).join('\n')) + '">' + rr.read + ' read' + (rr.failed.length ? ' · ' + rr.failed.length + ' failed' : '') + '</span>';
     }
     html += '<span class="faint auto-state" title="' + esc(auto && auto.lastMessage || '') + '">' + esc(autoText) + '</span>';
+    /*
+     * The text size, where it can be reached. It lived only at the bottom of
+     * Settings, which is a place nobody goes to while reading a review — the
+     * moment the text is too small. The same setting: Settings still has it.
+     */
+    html += '<span class="seg text-size" title="Text size of the whole panel. The code has its own, over the diff.">' +
+      '<button class="btn small" data-act="ui-font" data-delta="-1" aria-label="Smaller text"' + (uiFont() <= 10 ? ' disabled' : '') + '>A\u2212</button>' +
+      '<button class="btn small size-now" data-act="ui-font" data-delta="0" title="Back to 12">' + uiFont() + '</button>' +
+      '<button class="btn small" data-act="ui-font" data-delta="1" aria-label="Larger text"' + (uiFont() >= 20 ? ' disabled' : '') + '>A+</button></span>';
     html += '<button class="btn small refresh" data-act="refresh-all"' + busyAttr('refresh-all') + ' title="Read the open pull requests of every repository">' + (state.busy['refresh-all'] ? 'Refreshing…' : '↻ Refresh all') + '</button>';
     $('top').innerHTML = html;
   }
@@ -1541,7 +1554,7 @@
       html += fold('read-errors', '<span class="warn">⚠</span><strong>' + d.readErrors.length + ' repositor' + (d.readErrors.length === 1 ? 'y' : 'ies') + ' could not be read</strong>',
         esc(d.readErrors.map(function (e) { return e.repoName; }).join(', ')),
         '<table class="list">' + d.readErrors.map(function (e) {
-          return '<tr><td><strong>' + esc(e.repoName) + '</strong></td><td class="wrap">' + esc(e.message) + '<div class="faint mono" style="font-size:10.5px;margin-top:2px" title="' + esc(e.detail) + '">' + esc(String(e.detail).slice(0, 140)) + '</div></td><td class="faint">' + esc(when(e.at)) + '</td>' +
+          return '<tr><td><strong>' + esc(e.repoName) + '</strong></td><td class="wrap">' + esc(e.message) + '<div class="faint mono" style="font-size:0.875rem;margin-top:2px" title="' + esc(e.detail) + '">' + esc(String(e.detail).slice(0, 140)) + '</div></td><td class="faint">' + esc(when(e.at)) + '</td>' +
             '<td style="text-align:right"><button class="btn small" data-act="repo-edit" data-repo="' + esc(e.repoId) + '">Edit</button></td></tr>';
         }).join('') + '</table>', false, 'warn-fold');
     }
@@ -1862,7 +1875,7 @@
         lastRepo = row.repoId;
         var count = rows.filter(function (one) { return one.repoId === row.repoId; }).length;
         html += '<tr class="repo-group"><td colspan="6"><span class="repo-group-name">' + esc(row.repoName) + '</span> <span class="count">' + count + '</span>' +
-          ' <button class="link" data-act="open-prs" data-repo="' + esc(row.repoId) + '" style="font-size:11px;margin-left:6px">all its pull requests</button></td></tr>';
+          ' <button class="link" data-act="open-prs" data-repo="' + esc(row.repoId) + '" style="font-size:0.917rem;margin-left:6px">all its pull requests</button></td></tr>';
       }
       var pr = row.pr;
       var closed = pr.state !== 'OPEN';
@@ -1916,7 +1929,7 @@
         '<span style="width:' + (repo.debt.pendingReplies / total * 100) + '%;background:var(--danger)"></span>' +
         '<span style="width:' + (repo.debt.unverified / total * 100) + '%;background:var(--warn)"></span>' +
         '<span style="width:' + (repo.debt.unpublished / total * 100) + '%;background:var(--accent)"></span></div>' +
-        '<div class="faint" style="font-size:11px;margin-top:2px">' + repo.debt.pendingReplies + ' to answer · ' + repo.debt.unverified + ' to verify · ' + repo.debt.unpublished + ' to publish</div></div>' : '') +
+        '<div class="faint" style="font-size:0.917rem;margin-top:2px">' + repo.debt.pendingReplies + ' to answer · ' + repo.debt.unverified + ' to verify · ' + repo.debt.unpublished + ' to publish</div></div>' : '') +
       (oldest ? '<div class="' + (repo.oldestDays > 14 ? 'bad' : 'faint') + '" style="margin-top:4px">Oldest open PR opened ' + oldest + '</div>' : '') +
       '<div class="row" style="margin-top:8px"><button class="btn small primary" data-act="open-prs" data-repo="' + esc(repo.id) + '">Pull requests</button>' +
       '<button class="btn small" data-act="repo-hide" data-repo="' + esc(repo.id) + '" data-hidden="' + (repo.hidden ? '0' : '1') + '">' + (repo.hidden ? 'Show' : 'Hide') + '</button>' +
@@ -2180,7 +2193,7 @@
     if (r) {
       var left = r.items.filter(function (i) { return !i.done; });
       html += '<span class="readiness" style="margin:0 0 0 4px" title="' + esc(left.map(function (i) { return '• ' + i.label + (i.detail ? ' (' + i.detail + ')' : ''); }).join('\n')) + '"><span class="bar"><span style="width:' + r.percent + '%;background:' + (r.percent === 100 ? 'var(--ok)' : r.percent > 60 ? 'var(--accent)' : 'var(--warn)') + '"></span></span><strong>' + r.percent + '%</strong>' +
-        '<button class="link" data-act="fold" data-key="readiness" style="font-size:11px">' + (isOpen('readiness') ? 'hide' : left.length + ' left') + '</button></span>';
+        '<button class="link" data-act="fold" data-key="readiness" style="font-size:0.917rem">' + (isOpen('readiness') ? 'hide' : left.length + ' left') + '</button></span>';
     }
     // The outcome, next to the bar that says whether it is time for it — not at the far end of a row that can be two thousand pixels wide.
     html += '<span class="group-btns" style="margin-left:6px;padding-left:8px;border-left:1px solid var(--border);border-right:0">';
@@ -2456,7 +2469,7 @@
     var pending = (v.fixes || []).filter(pendingFix).slice().sort(function (a, b) {
       return String(a.createdAt).localeCompare(String(b.createdAt));
     });
-    var html = '<div class="faint mono" style="font-size:11px">' + esc(ws.dir) + '</div>';
+    var html = '<div class="faint mono" style="font-size:0.917rem">' + esc(ws.dir) + '</div>';
 
     if (!v.repo.checkCommand) {
       html += '<div class="help faint" style="margin-top:4px">No check command for this repository, so a fix is committed without anything being run. Set one in the repository\'s settings and every fix is checked before you are asked to take it.</div>';
@@ -3397,7 +3410,7 @@
     if (!c.data) return '<div class="loading">Reading commits…</div>';
     var d = c.data;
     var html = '<div class="split"' + splitStyle() + '><aside>';
-    if (d.note) html += '<div class="banner warn" style="margin:8px;font-size:11.5px">' + esc(d.note) + '</div>';
+    if (d.note) html += '<div class="banner warn" style="margin:8px;font-size:0.958rem">' + esc(d.note) + '</div>';
     if (!d.commits.length && !d.local.length) html += '<div class="empty" style="padding:16px">No commits between <span class="mono">' + esc(state.pr && state.pr.pr ? state.pr.pr.targetBranch : 'the target') + '</span> and <span class="mono">' + esc(d.branch) + '</span>.</div>';
     if (d.local.length) {
       html += '<div class="group">In your clone, not on origin</div><div style="padding:4px 10px"><button class="btn small primary" data-act="push"' + busyAttr(prKey('push')) + '>Push to origin/' + esc(d.branch) + '</button></div>' +
@@ -3676,7 +3689,7 @@
     if (!b.members.length) html += '<div class="faint">Nobody is on the bus right now.</div>';
     else html += '<table class="list"><tr><th>Who</th><th>Where</th><th>Claimed</th><th>Since</th></tr>' + b.members.map(function (m) {
       return '<tr><td><span class="chip ' + (m.kind === 'fix' ? 'accent' : '') + '">' + esc(m.kind) + '</span> ' + esc(m.label) + '</td><td>' + esc(m.where) + (m.branch ? ' <span class="faint mono">' + esc(m.branch) + '</span>' : '') + '</td>' +
-        '<td class="mono" style="font-size:11px">' + (m.claims.length ? m.claims.map(esc).join('<br>') : '<span class="faint">—</span>') + '</td><td class="faint">' + esc(when(m.startedAt)) + '</td></tr>';
+        '<td class="mono" style="font-size:0.917rem">' + (m.claims.length ? m.claims.map(esc).join('<br>') : '<span class="faint">—</span>') + '</td><td class="faint">' + esc(when(m.startedAt)) + '</td></tr>';
     }).join('') + '</table>';
     if (b.reservations.length) {
       html += '<h3>Migration numbers handed out</h3><table class="list"><tr><th>Number</th><th>Repository</th><th>To</th><th>When</th></tr>' + b.reservations.slice(0, 30).map(function (r) {
