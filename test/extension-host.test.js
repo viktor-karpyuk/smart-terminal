@@ -374,9 +374,8 @@ test('the reviewer routes by name, and asks only before what cannot be undone', 
   for (const quiet of ['review.review', 'review.publishFinding', 'review.fix', 'review.giveBack', 'review.approve', 'review.saveRepo']) {
     assert.equal(H.needsConsent(quiet, { prId: 7 }), null, `${quiet} should not stop to ask`);
   }
-  const merge = H.needsConsent('review.merge', { prId: 7, repoName: 'App', target: 'main', strategy: 'SQUASH', skipping: ['2 finding(s) not published'] });
-  assert.match(merge, /Merge pull request #7 of App into main \(squash\)\?/);
-  assert.match(merge, /• 2 finding\(s\) not published/);
+  // The merge is confirmed in the panel's own form, which names the target, the strategy and what is pending.
+  assert.equal(H.needsConsent('review.merge', { prId: 7, repoName: 'App', target: 'main', strategy: 'SQUASH', skipping: ['2 finding(s) not published'] }), null);
   assert.match(H.needsConsent('review.push', { count: 2, branch: 'feature' }), /Push 2 commit\(s\) to origin\/feature\?[\s\S]*never forced/);
   assert.match(H.needsConsent('review.decline', { prId: 7 }), /Decline pull request #7/);
   assert.match(H.needsConsent('review.deleteRepo', { repoName: 'App' }), /Stop reviewing App/);

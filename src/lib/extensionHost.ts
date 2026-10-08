@@ -489,7 +489,7 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
   }
 
   /*
-   * The reviewer's irreversible five. Everything else it does is a draft, a
+   * The reviewer's irreversible ones. Everything else it does is a draft, a
    * click that can be undone on the PR, or a commit in a workshop copy. These
    * change a shared branch, close somebody's PR, or throw away the only copy of
    * a fix — and each question says which PR and which branch, because "Merge?"
@@ -498,12 +498,12 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
   if (name.startsWith('review.')) {
     const pr = args?.prId ? ` #${String(args.prId)}` : '';
     const repo = args?.repoName ? ` of ${String(args.repoName)}` : '';
-    if (name === 'review.merge') {
-      const skipped = Array.isArray(args?.skipping) && args.skipping.length
-        ? `\n\nStill pending, merged anyway:\n${args.skipping.map((line) => `• ${String(line)}`).join('\n')}`
-        : '';
-      return `Merge pull request${pr}${repo} into ${String(args?.target ?? 'its target')} (${String(args?.strategy ?? 'MERGE_COMMIT').toLowerCase().replace('_', ' ')})?${skipped}\n\nA merge cannot be undone from here.`;
-    }
+    /*
+     * Not the merge. The panel's own merge form is the confirmation — it names
+     * the target, the strategy and anything still pending, and nothing merges
+     * until its Merge button is pressed — so a dialog on top of it asked the
+     * same question twice, and was the one people learned to click through.
+     */
     if (name === 'review.decline') {
       return `Decline pull request${pr}${repo}?\n\nThe reason is posted as a comment first, and the PR is closed.`;
     }
