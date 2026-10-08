@@ -119,11 +119,13 @@ const DEFAULT_SETTINGS: Settings = {
   sidebarShowFolders: true,
   sidebarShowMonitor: true,
   sidebarShowClusters: true,
+  sidebarShowReviewer: true,
   sidebarSessionsCollapsed: false,
   sidebarFoldersCollapsed: false,
   sidebarMonitorCollapsed: false,
   sidebarClustersCollapsed: false,
-  sidebarOrder: ['sessions', 'folders', 'monitor', 'clusters'],
+  sidebarReviewerCollapsed: false,
+  sidebarOrder: ['sessions', 'folders', 'monitor', 'clusters', 'reviewer'],
   sidebarSectionHeights: {},
   sessionAlerts: true,
   sessionSuggestions: true,
@@ -474,6 +476,13 @@ interface State {
   probeClusters(again?: boolean): Promise<void>;
   /** Open the Kubernetes panel on one cluster, or bring its tab forward. */
   openCluster(context: string): void;
+  /**
+   * The Code Reviewer, at a place in it — the board, a repository's pull
+   * requests, settings. Opened if it is not, brought forward if it is.
+   */
+  openReviewerAt(place: ReviewerPlace): void;
+  /** The last place the sidebar asked an extension panel to go, for that panel to hear. */
+  extensionNav: { panelId: string; place: ReviewerPlace; seq: number } | null;
   /** Ask one cluster whether it is there, whatever it answered last time. */
   probeCluster(context: string): Promise<void>;
   /** A shell aimed at one cluster: `k` means kubectl on that context, and nowhere else. */
@@ -822,6 +831,15 @@ function schedulePersist(get: () => State) {
 
 const baseName = (path: string) => path.split('/').filter(Boolean).pop() ?? path;
 
+/** Where in the Code Reviewer the sidebar can send somebody. */
+export interface ReviewerPlace {
+  view: 'dashboard' | 'repos' | 'prs' | 'bus' | 'usage' | 'settings';
+  repoId?: string | null;
+}
+
+/** The Code Reviewer's panel, by its contributed id. */
+export const REVIEWER_VIEW = 'code-review';
+
 export const useStore = create<State>((set, get) => ({
   ready: false,
   profiles: [],
@@ -845,6 +863,7 @@ export const useStore = create<State>((set, get) => ({
   usageLoading: {},
   usagePanelOpen: false,
   extensions: { rows: [], previews: [], panels: [] },
+  extensionNav: null,
   clusters: { list: [], current: null, reach: {}, probing: false, probedAt: null, loaded: false, error: null },
   analysisBySession: {},
   adviceBySession: {},
@@ -3258,6 +3277,24 @@ export const useStore = create<State>((set, get) => ({
       }));
     }
     set((state) => ({ clusters: { ...state.clusters, probing: false, probedAt: Date.now() } }));
+  },
+
+  openReviewerAt(place) {
+    const viewId = REVIEWER_VIEW;
+    get().launchExtensionView(viewId);
+    const panel = Object.values(get().panels).find((one) => one.kind === 'extension' && one.viewId === viewId && one.root === null);
+    if (!panel) return;
+    /*
+     * Said twice, because the frame may not be there yet. A panel already
+     * running hears `navigate`; one that is still loading reads where it was
+     * in `context` when it says it is ready — so the place goes there too.
+     */
+    const was = whereEachPanelWas.get(panel.id);
+    const resume = { ...(was && typeof was === 'object' ? (was as Record<string, unknown>) : {}), view: place.view, repoId: place.repoId ?? null };
+    whereEachPanelWas.set(panel.id, resume);
+    // Kept on the panel too, so the sidebar can light the row before the panel has said anything.
+    get().rememberPanel(panel.id, resume);
+    set({ extensionNav: { panelId: panel.id, place, seq: Date.now() } });
   },
 
   openCluster(context) {

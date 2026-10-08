@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { claudeForPanel, streamsFor, whereEachPanelWas } from '../lib/panelHolds';
 import { attachFrame, parkFrame } from '../lib/frameKeeper';
-import { useStore } from '../state/store';
+import { REVIEWER_VIEW, useStore } from '../state/store';
 import { leafOfTab, parentOf } from '../state/layout';
 import type { ExtensionPanelView } from '../global';
 import {
@@ -336,6 +336,7 @@ function Frame({
            * at — and go on asking a cluster about it.
            */
           showing: showingRef.current,
+          navInSidebar: navInSidebarRef.current,
         });
         return;
       }
@@ -907,6 +908,29 @@ function Frame({
     showingRef.current = showing;
     tell('showing', { showing });
   }, [showing]);
+
+  /*
+   * The Code Reviewer's menu lives in the app's sidebar when that list is
+   * showing, so the panel can leave its own row of tabs out; it puts them
+   * back the moment the list is closed, or there would be no way around it.
+   */
+  const navInSidebar = useStore(
+    (s) =>
+      view.id === REVIEWER_VIEW &&
+      s.settings.sidebarShowReviewer &&
+      s.extensions.panels.some((panel) => panel.id === REVIEWER_VIEW && !panel.error),
+  );
+  const navInSidebarRef = useRef(navInSidebar);
+  useEffect(() => {
+    navInSidebarRef.current = navInSidebar;
+    tell('chrome', { navInSidebar });
+  }, [navInSidebar]);
+
+  // Somewhere in the sidebar asked for this panel to show a place of its own.
+  const nav = useStore((s) => (s.extensionNav?.panelId === panelId ? s.extensionNav : null));
+  useEffect(() => {
+    if (nav) tell('navigate', nav.place);
+  }, [nav?.seq]);
 
   return (
     <div className="extension-view" hidden={!showing}>

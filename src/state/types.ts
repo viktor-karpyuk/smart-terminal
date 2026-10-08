@@ -494,6 +494,12 @@ export interface Settings {
    */
   sidebarShowClusters: boolean;
   /**
+   * The Code Reviewer's own menu — Dashboard, each repository, Coordination,
+   * Usage, Settings — when the reviewer is installed. While it is on the
+   * sidebar the panel drops its own row of the same links and keeps the room.
+   */
+  sidebarShowReviewer: boolean;
+  /**
    * Folded away rather than closed. Two different acts: collapsing keeps the
    * heading, so you can see the count and open it again without remembering it
    * was ever there; closing takes the whole thing off the sidebar.
@@ -502,8 +508,9 @@ export interface Settings {
   sidebarFoldersCollapsed: boolean;
   sidebarMonitorCollapsed: boolean;
   sidebarClustersCollapsed: boolean;
+  sidebarReviewerCollapsed: boolean;
   /** Which of the sidebar's lists comes first. Dragging a heading changes it. */
-  sidebarOrder: Array<'sessions' | 'folders' | 'monitor' | 'clusters'>;
+  sidebarOrder: Array<'sessions' | 'folders' | 'monitor' | 'clusters' | 'reviewer'>;
   /**
    * The height somebody has *chosen* for a list, in pixels.
    *

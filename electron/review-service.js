@@ -761,6 +761,27 @@ class ReviewService {
     };
   }
 
+  /**
+   * What the app's sidebar lists: each repository with its open pull requests
+   * and how many of them wait on you. Light on purpose — it is asked for
+   * whenever anything in the reviewer changes, and the board's usage, recent
+   * activity and read errors are not what a sidebar row says.
+   */
+  sidebarSummary() {
+    const repos = this.store.repos({ withHidden: false });
+    const reposById = new Map(repos.map((repo) => [repo.id, repo]));
+    const rows = this.rows(this.store.openPrs(), reposById, this.store.boardFacts());
+    const list = repos.map((repo) => {
+      const mine = rows.filter((row) => row.repoId === repo.id);
+      return { id: repo.id, name: repo.name, open: mine.length, waiting: mine.filter((row) => row.mine).length, readError: Boolean(this.readError(repo.id)) };
+    });
+    return {
+      repos: list,
+      waiting: list.reduce((sum, repo) => sum + repo.waiting, 0),
+      running: this.engine.activity.list().length,
+    };
+  }
+
   repoCards() {
     const repos = this.store.repos();
     const facts = this.store.boardFacts();
@@ -1112,6 +1133,7 @@ class ReviewService {
       // reading
       overview: () => ({ ok: true, ...s.overview() }),
       dashboard: () => ({ ok: true, ...s.dashboard() }),
+      sidebar: () => ({ ok: true, ...s.sidebarSummary() }),
       repos: () => ({ ok: true, repos: s.repoCards() }),
       repo: (args) => ({ ok: true, repo: s.publicRepo(e.requireRepo(str(args.repoId, 'A repository'))) }),
       prs: (args) => ({ ok: true, ...s.prRows(str(args.repoId, 'A repository'), Array.isArray(args.states) && args.states.length ? args.states : ['OPEN']) }),
