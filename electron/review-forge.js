@@ -344,6 +344,16 @@ class Bitbucket {
     });
     return object.links?.html?.href ?? object.merge_commit?.hash ?? '';
   }
+
+  /** A new pull request from a branch already pushed. Not retried: a second POST is a second pull request. */
+  async createPr({ title, description, source, destination }) {
+    const object = await this.json(`${this.base}/pullrequests`, {
+      method: 'POST',
+      body: { title, description, source: { branch: { name: source } }, destination: { branch: { name: destination } }, close_source_branch: true },
+      idempotent: false,
+    });
+    return { id: Number(object.id), url: object.links?.html?.href ?? '' };
+  }
 }
 
 class GitHub {
@@ -564,6 +574,15 @@ class GitHub {
       idempotent: false,
     });
     return object.sha ?? '';
+  }
+
+  async createPr({ title, description, source, destination }) {
+    const object = await this.json(`${this.base}/pulls`, {
+      method: 'POST',
+      body: { title, body: description, head: source, base: destination },
+      idempotent: false,
+    });
+    return { id: Number(object.number), url: object.html_url ?? '' };
   }
 }
 

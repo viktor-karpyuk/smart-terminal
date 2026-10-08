@@ -28,6 +28,15 @@ process.env.GIT_AUTHOR_EMAIL = 'test@example.com';
 process.env.GIT_COMMITTER_NAME = 'Test';
 process.env.GIT_COMMITTER_EMAIL = 'test@example.com';
 
+/*
+ * No test runs the real CLI. Every run is scripted; one that reaches the real
+ * runner is a module holding its own reference to it, and it would spend from
+ * whoever runs the suite. Caught here, loudly, instead.
+ */
+require('../electron/review-claude').ClaudeRunner.prototype.run = async function realClaudeInATest(options) {
+  throw new Error(`A test reached the real Claude CLI (kind: ${options?.kind}). Script it instead.`);
+};
+
 const git = (cwd, ...args) => execFileSync('git', ['-c', 'init.defaultBranch=main', ...args], { cwd, encoding: 'utf8' }).trim();
 
 /** An origin, a clone of it with a feature branch pushed, and the PR that branch is. */
@@ -68,6 +77,7 @@ function fakeForge(state) {
     undoRequestChanges: async () => state.calls.push('undoRequestChanges'),
     decline: async (prId, reason) => state.calls.push(`decline:${reason}`),
     merge: async (prId, options) => { state.calls.push(`merge:${options.strategy}`); return 'sha'; },
+    createPr: async (options) => { state.calls.push(`createPr:${options.source}->${options.destination}`); (state.created ??= []).push(options); return { id: 501, url: 'https://example.test/pr/501' }; },
     commits: async () => { state.calls.push('commits'); return [{ sha: 'abc1234def', author: 'Ana', date: '2026-09-01', subject: 'from the provider', body: '' }]; },
   };
   function post(comment) {
@@ -1295,4 +1305,63 @@ test('the author is told, by direct message from you, which files conflict and w
   assert.match(message.body, /• `src\/b\.ts`$/m);
   assert.match(message.body, /Qué pasó: KS-718 went into main as a squash/);
   assert.match(message.body, /Para probar después: Run the stock tests/);
+});
+
+
+test('a fix that needs another repository: the change made there in a copy, pushed as a new branch, a pull request opened', { skip }, async () => {
+  // The backend: its own origin and clone, configured as a second repository.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'review-backend-'));
+  const origin = path.join(root, 'origin.git');
+  const seed = path.join(root, 'seed');
+  const clone = path.join(root, 'clone');
+  git(root, 'init', '--bare', origin);
+  git(root, 'clone', '-q', origin, seed);
+  fs.writeFileSync(path.join(seed, 'Dto.java'), 'class Dto { String id; }\n');
+  git(seed, 'add', '.');
+  git(seed, 'commit', '-qm', 'base');
+  git(seed, 'push', '-q', 'origin', 'HEAD:main');
+  git(root, 'clone', '-q', origin, clone);
+
+  const { service, repo, forgeState } = setup([
+    async () => ({ structured: { summary: 's', findings: [finding()] } }),
+    async ({ prompt }) => {
+      assert.match(prompt, /Estos repositorios también los tenemos: Backend/);
+      return { structured: { fixed: false, summary: '', reason: 'The backend has to return openedAt first.', elsewhere: [{ repo: 'Backend', change: 'Add `openedAt` to Dto and fill it.' }] } };
+    },
+    async ({ cwd, prompt }) => {
+      assert.match(prompt, /Add `openedAt` to Dto/);
+      assert.match(git(cwd, 'rev-parse', '--abbrev-ref', 'HEAD'), /^feature-for-demo-app$/);
+      fs.writeFileSync(path.join(cwd, 'Dto.java'), 'class Dto { String id; String openedAt; }\n');
+      return { structured: { title: 'Return openedAt in Dto', summary: 'Added the field.' } };
+    },
+  ]);
+  const backend = service.store.saveRepo({ name: 'Backend', provider: 'GITHUB', owner: 'me', slug: 'backend', localPath: clone, token: 'secret' });
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  const [first] = service.store.findingsForPr(repo.id, 7);
+  const fixed = await service.call('fix', { findingId: first.id });
+  assert.equal(fixed.fix.state, 'NOTHING');
+  assert.deepEqual(fixed.fix.elsewhere, [{ repo: 'Backend', change: 'Add `openedAt` to Dto and fill it.' }]);
+
+  let view = await service.call('pr', { repoId: repo.id, prId: 7 });
+  assert.equal(view.crossfixes[fixed.fix.id][0].known, true);
+
+  const prepared = await service.call('crossfixPrepare', { fixId: fixed.fix.id, index: 0 });
+  assert.equal(prepared.job?.state, 'PREPARED', JSON.stringify(prepared));
+  assert.equal(prepared.job.base, 'main', 'from the branch the original pull request targets');
+  assert.match(prepared.job.diff, /\+class Dto \{ String id; String openedAt; \}/);
+  assert.throws(() => git(origin, 'rev-parse', '--verify', 'feature-for-demo-app'), 'nothing pushed yet');
+
+  const opened = await service.call('crossfixPublish', { fixId: fixed.fix.id, index: 0 });
+  assert.equal(opened.prId, 501);
+  assert.equal(git(origin, 'rev-parse', 'feature-for-demo-app'), prepared.job.sha, 'the branch is on the backend');
+  assert.ok(forgeState.calls.includes('createPr:feature-for-demo-app->main'));
+  assert.match(forgeState.created[0].description, /Needed by Demo App #7/);
+  view = await service.call('pr', { repoId: repo.id, prId: 7 });
+  assert.equal(view.crossfixes[fixed.fix.id][0].job.state, 'OPENED');
+
+  // A repository nobody configured is said plainly, not guessed at.
+  service.store.setFixElsewhere(fixed.fix.id, [{ repo: 'Nowhere', change: 'x' }]);
+  assert.match((await service.call('crossfixPrepare', { fixId: fixed.fix.id, index: 0 })).error, /not one of the repositories configured here/);
+  assert.ok(backend.id);
 });

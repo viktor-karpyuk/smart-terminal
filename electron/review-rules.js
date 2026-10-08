@@ -486,8 +486,13 @@ function finalPassText(parsed) {
 
 function parseFix(raw) {
   const object = parseJsonLoose(raw);
-  if (!object) return { fixed: false, summary: '', reason: '' };
-  return { fixed: object.fixed === true, summary: String(object.summary ?? ''), reason: String(object.reason ?? '') };
+  if (!object) return { fixed: false, summary: '', reason: '', elsewhere: [] };
+  // What has to change in another repository: named, and described well enough to be done there.
+  const elsewhere = (Array.isArray(object.elsewhere) ? object.elsewhere : [])
+    .filter((item) => item && String(item.repo ?? '').trim() && String(item.change ?? '').trim())
+    .map((item) => ({ repo: String(item.repo).trim(), change: String(item.change).trim().slice(0, 4000) }))
+    .slice(0, 3);
+  return { fixed: object.fixed === true, summary: String(object.summary ?? ''), reason: String(object.reason ?? ''), elsewhere };
 }
 
 // ---------------------------------------------------------------------------

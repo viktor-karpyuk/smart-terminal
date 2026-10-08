@@ -27,6 +27,7 @@ const importer = require('./review-import');
 const { ReviewBus } = require('./review-bus');
 const { MigrationWatch, clashFor, clashSentence } = require('./review-migrations');
 const { ConflictResolver } = require('./review-conflicts');
+const { CrossFix } = require('./review-crossfix');
 
 /**
  * Code Reviewer: the one door the panel knocks on.
@@ -118,12 +119,27 @@ class ReviewService {
       forge: { of: (repo) => this.forge.of(repo) },
       scratch: path.join(dataDir, 'code-review', 'renumber'),
     });
+    /*
+     * Claude, asked for at the moment it is used rather than held: whatever
+     * replaces the runner later (an account change, a test's script) is the one
+     * that answers. Held, it was the original — and a test ran the real CLI.
+     */
+    const claude = { run: (options) => this.claude.run(options) };
     this.conflicts = new ConflictResolver({
       store: this.store,
       git: this.git,
-      claude: this.claude,
+      claude,
       engine: this.engine,
       scratch: path.join(dataDir, 'code-review', 'conflicts'),
+      language: () => this.engine.language(),
+    });
+    this.crossfix = new CrossFix({
+      store: this.store,
+      git: this.git,
+      claude,
+      engine: this.engine,
+      forge: { of: (repo) => this.forge.of(repo) },
+      scratch: path.join(dataDir, 'code-review', 'crossfix'),
       language: () => this.engine.language(),
     });
     this.engine.onBranches = (repoId) => this.migrations.check(repoId);
@@ -949,6 +965,12 @@ class ReviewService {
       mergeBlocker: rules.mergeBlocker(counts),
       migrationClash,
       conflictJob: pr ? this.conflicts.state(repoId, prId) : null,
+      // For every fix that asked for a change elsewhere: which repository, whether it is configured here, and how far it got.
+      crossfixes: Object.fromEntries(fixes.filter((fix) => fix.elsewhere?.length).map((fix) => [fix.id, fix.elsewhere.map((item, index) => {
+        const target = this.crossfix.targetFor(item.repo);
+        const job = this.crossfix.state(fix.id, index);
+        return { ...item, known: Boolean(target), job: job ? { ...job, dir: undefined } : null };
+      })])),
       nextStep: rules.nextStep({ pr, review: done, findings: judged, notes, threads, running, finalPassDone, finalPassBlockers: done?.finalPassBlockers ?? 0, mergeBlocker: rules.mergeBlocker(counts) }),
       running,
       settings,
@@ -1554,6 +1576,10 @@ class ReviewService {
       followUpText: (args) => ({ ok: true, text: rules.followUpText(findingOf(args), e.language()) }),
       followUp: (args) => e.followUp(findingOf(args).id, args.body),
       /** Your own words, to the thread, the room, the author, or any of the three. */
+      /** The change a fix needs in another repository: made in a copy of it, then pushed as a pull request there. */
+      crossfixPrepare: async (args) => ({ ok: true, job: await s.crossfix.prepare(str(args.fixId, 'A fix'), Number(args.index ?? 0)) }),
+      crossfixPublish: async (args) => s.crossfix.publish(str(args.fixId, 'A fix'), Number(args.index ?? 0)),
+      crossfixDiscard: (args) => s.crossfix.discard(str(args.fixId, 'A fix'), Number(args.index ?? 0)),
       /** The author, by direct message: their branch does not merge, and what is in the way. */
       tellConflicts: (args) => s.tellConflicts(str(args.repoId, 'A repository'), num(args.prId), { note: args.note }),
       speak: (args) => s.speak(str(args.repoId, 'A repository'), num(args.prId), {

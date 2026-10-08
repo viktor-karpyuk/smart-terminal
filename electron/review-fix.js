@@ -137,6 +137,8 @@ class FixEngine {
           thread: this.threadFor(repo.id, pr.id, finding),
           note,
           previous: this.lastAttempt(finding.id, fixId),
+          // The others it could name when the fix needs a change somewhere else.
+          otherRepos: this.store.repos({ withHidden: true }).filter((one) => one.id !== repo.id).map((one) => one.name),
         }),
         model: repo.defaultModel || rules.DEPTHS.INTERMEDIATE.model,
         mcpConfig: attached?.config,
@@ -153,6 +155,10 @@ class FixEngine {
         throw new Error(message);
       }
       const outcome = rules.parseFix(result.structured ?? result.text);
+      if (outcome.elsewhere.length) {
+        this.store.setFixElsewhere(fixId, outcome.elsewhere);
+        activity.line(key, `Needs a change in ${outcome.elsewhere.map((item) => item.repo).join(', ')}.`);
+      }
       const dirty = await this.git.isDirty(dir);
       const sha = dirty ? await this.git.commitAll(dir, rules.fixCommitMessage(finding, outcome.summary)) : null;
       const after = await this.git.head(dir);
