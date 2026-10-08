@@ -23,7 +23,8 @@ const HOLD_SWEEP_MS = 5 * 60 * 1000;
  */
 class TeamsService {
   constructor({ db, secrets, fetch, notify = () => {}, emit = () => {}, now = Date.now }) {
-    this.store = new TeamsStore(db, secrets);
+    // One clock for deciding and for stamping: the store dates its rows by the same "now".
+    this.store = new TeamsStore(db, secrets, () => this.now());
     this.fetch = fetch;
     this.notify = notify;
     this.emit = emit;
