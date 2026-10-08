@@ -140,6 +140,16 @@ class RepoWatcher {
    * event and only the quiet at the end of a burst sends anything.
    */
   #saw(root, name) {
+    /*
+     * macOS reports the watched folder itself, under its own name, as though it
+     * were something inside it — when the folder was just created, or its own
+     * metadata changed. Read as a path inside the root it is a file that does
+     * not exist, classified as a change to the tree: a refresh for nothing, and
+     * a build's churn under `node_modules` dressed up as one. Only when nothing
+     * by that name is really there, so a folder inside the repository that
+     * shares the repository's name is still heard.
+     */
+    if (name && name === path.basename(root) && !fs.existsSync(path.join(root, name))) return;
     const kind = interesting(name ?? '');
     if (!kind) return;
     const entry = this.watching.get(root);
