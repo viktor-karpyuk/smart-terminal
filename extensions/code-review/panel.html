@@ -67,6 +67,10 @@
   .btn.primary:hover { background: var(--accent-soft); }
   .btn.go { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); }
   .btn.go:hover { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+  .btn.go.solid { background: var(--ok); border-color: var(--ok); color: var(--bg); font-weight: 600; }
+  .btn.go.solid:hover { background: color-mix(in srgb, var(--ok) 85%, white); }
+  .merge-confirm { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; max-width: 360px; }
+  .merge-confirm .btn { justify-content: center; }
   .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
   .btn.danger:hover { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
   .btn[disabled] { opacity: 0.4; pointer-events: none; }
@@ -2411,7 +2415,8 @@
           return '<option value="' + o[0] + '"' + (strategy === o[0] ? ' selected' : '') + '>' + o[1] + '</option>';
         }).join('') + '</select>' + (v.repo.provider === 'BITBUCKET' ? '<label class="check"><input type="checkbox" data-edit-check="merge-close"' + (edit('merge-close', true) ? ' checked' : '') + '> Close the source branch</label>' : '') + '</div>' +
         '<textarea rows="4" data-edit="merge-message" style="margin-top:6px">' + esc(edit('merge-message', 'Merged in ' + v.pr.sourceBranch + ' (pull request #' + v.pr.id + ')\n\n' + v.pr.title)) + '</textarea>' +
-        '<div class="row" style="margin-top:6px"><button class="btn primary" data-act="merge"' + busyAttr(prKey('merge')) + '>Merge</button><button class="btn" data-act="merge-close">Cancel</button></div></div>';
+        // The confirmation itself: nothing asks again after this, so the two answers look like answers — go in green, back out in red.
+        '<div class="merge-confirm"><button class="btn go solid" data-act="merge"' + busyAttr(prKey('merge')) + '>Merge</button><button class="btn danger" data-act="merge-close">Cancel</button></div></div>';
     }
     return html;
   }
