@@ -5,6 +5,8 @@
    * looks like comes from the app's tokens.
    */
   #app { display: grid; grid-template-rows: auto auto minmax(0, 1fr); height: 100%; min-height: 0; }
+  /* Its own row whether the tab strip is there or not: with the strip hidden it would slide up into an auto-sized one. */
+  #app > main#main { grid-row: 3; }
   /* The pull requests that are open, one tab each, under the bar and above whatever is in front. */
   .prtabs { display: flex; align-items: stretch; gap: 1px; padding: 0 8px; border-bottom: 1px solid var(--border); background: var(--bg-panel); overflow-x: auto; scrollbar-width: none; min-width: 0; }
   .prtabs:empty { display: none; }
@@ -37,6 +39,12 @@
   .top > .btn.refresh:last-child { position: sticky; right: 0; background: color-mix(in srgb, var(--accent) 16%, var(--bg-panel)); box-shadow: -14px 0 10px -4px var(--bg-panel); }
   .top > .crumbs { flex: 1 1 auto; }
   .top .brand { font-weight: 600; margin-right: 6px; }
+  /* One row: the pull requests on the left, the controls on the right. */
+  .top.merged { padding-top: 0; padding-bottom: 0; padding-left: 4px; min-height: 2.6rem; align-items: stretch; overflow: visible; }
+  .top.merged > :not(.prtabs) { align-self: center; }
+  .top.merged > .prtabs.inline { flex: 1 1 auto; border-bottom: 0; padding: 0; background: none; }
+  .top.merged > .crumbs { padding-left: 6px; }
+  .top.merged > .btn.refresh:last-child { position: static; box-shadow: none; }
   .tab { padding: 4px 10px; border-radius: var(--radius); color: var(--text-dim); cursor: pointer; border: 1px solid transparent; background: none; font: inherit; }
   .tab:hover { color: var(--text); background: var(--bg-elevated); }
   .tab.on { color: var(--text); border-color: var(--border); background: var(--bg-elevated); }
@@ -226,7 +234,18 @@
   .prside .side-facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 0 0 10px; font-size: 0.958rem; }
   .prside .side-facts dt { color: var(--text-faint); }
   .prside .side-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-  .prside .side-links { gap: 4px; margin-bottom: 4px; }
+  /* Four equal buttons in two rows, instead of a row that breaks wherever the width cuts it. */
+  .prside .side-links { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin: 10px 0 4px; }
+  .prside .side-links .btn { width: 100%; justify-content: center; }
+  .prside .side-num { color: var(--text-faint); font-weight: 500; }
+  .prside .side-by { color: var(--text-dim); font-size: 0.958rem; margin: -4px 0 4px; }
+  .prside .side-sec { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .prside .side-sec > h3 { margin: 0 0 8px; font-size: 0.833rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); }
+  .prside .side-sec .side-facts { margin: 0; }
+  .prside .side-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .prside .side-pair .btn { width: 100%; justify-content: center; }
+  .prside .side-ready { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 0.958rem; }
+  .prside .side-ready .bar { flex: 1; }
   /* In the column the next step stacks: what it is, then its button across the column. */
   .prside .next { margin-top: 12px; flex-wrap: wrap; }
   .prside .next .words { flex: 1 1 0; min-width: 0; }
@@ -280,6 +299,10 @@
   .entries > .cmt-msg:first-child { border-top: 0; }
   .verdict { margin-top: 8px; padding: 6px 10px; border-radius: var(--r-sm); background: var(--bg-elevated); color: var(--text-dim); font-size: 1rem; }
   .verdict-label { font-size: 0.833rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); margin-bottom: 2px; }
+  .verdict-says { text-transform: none; letter-spacing: 0; font-size: 1rem; }
+  .verdict.is-ok { border-left-color: var(--ok) !important; } .verdict.is-ok .verdict-says { color: var(--ok); }
+  .verdict.is-part { border-left-color: var(--warn) !important; } .verdict.is-part .verdict-says { color: var(--warn); }
+  .verdict.is-bad { border-left-color: var(--danger) !important; } .verdict.is-bad .verdict-says { color: var(--danger); }
   .verdict .md p:first-child, .verdict p:first-child { margin-top: 0; } .verdict p:last-child { margin-bottom: 0; }
 
   /* The viewport below the app bar and the sticky tabs: scroll the header away and the diff has the whole screen. */
@@ -1404,16 +1427,18 @@
       ? 'automatic off'
       : auto && auto.running ? 'sweeping…' : auto && auto.lastRunAt ? 'last sweep ' + when(auto.lastRunAt) : 'automatic on';
     var tabs = [['dashboard', 'Dashboard'], ['repos', 'Repositories'], ['bus', 'Coordination'], ['usage', 'Usage'], ['settings', 'Settings']];
-    var html = '<span class="brand">Code Reviewer</span>';
-    // With its menu in the app's sidebar, the row of tabs here would only say the same thing twice.
-    if (state.navInSidebar) tabs = [];
+    var merged = Boolean(state.navInSidebar);
+    // With its menu in the app's sidebar, its name and its tabs are already said there; the row holds the pull requests instead.
+    var html = merged ? '' : '<span class="brand">Code Reviewer</span>';
+    if (merged) tabs = [];
     tabs.forEach(function (tab) {
       var on = state.view === tab[0] || (tab[0] === 'repos' && (state.view === 'prs' || state.view === 'repoForm' || state.view === 'import')) ||
         (tab[0] === 'dashboard' && state.view === 'pr' && state.backTo === 'dashboard') || (tab[0] === 'repos' && state.view === 'pr' && state.backTo !== 'dashboard');
       html += '<button class="tab' + (on ? ' on' : '') + '" data-act="nav" data-view="' + tab[0] + '">' + tab[1] + '</button>';
     });
     // The breadcrumb takes whatever room is left and gives it up first; without one, a spacer does its job.
-    html += crumbs() || '<span class="spacer"></span>';
+    if (merged && state.prTabs.length) html += '<div class="prtabs inline" id="prtabs-inline" role="tablist" aria-label="Open pull requests">' + prTabsHtml() + '</div>';
+    else html += crumbs() || '<span class="spacer"></span>';
     if (runs.length) html += '<span class="chip accent" title="' + esc(runs.map(function (r) { return r.kind + ' · ' + (r.repoName || '') + ' #' + r.prId; }).join('\n')) + '"><span class="dot busy"></span>' + runs.length + ' running</span>';
     if (state.refreshResult && !state.busy['refresh-all']) {
       var rr = state.refreshResult;
@@ -1430,7 +1455,10 @@
       '<button class="btn small size-now" data-act="ui-font" data-delta="0" title="Back to 12">' + uiFont() + '</button>' +
       '<button class="btn small" data-act="ui-font" data-delta="1" aria-label="Larger text"' + (uiFont() >= 20 ? ' disabled' : '') + '>A+</button></span>';
     html += '<button class="btn small refresh" data-act="refresh-all"' + busyAttr('refresh-all') + ' title="Read the open pull requests of every repository">' + (state.busy['refresh-all'] ? 'Refreshing…' : '↻ Refresh all') + '</button>';
-    $('top').innerHTML = html;
+    var top = $('top');
+    top.innerHTML = html;
+    top.classList.toggle('merged', merged);
+    if (merged) showActiveTab($('prtabs-inline'));
   }
 
   /** Where you are, when that is deeper than a tab: a repository's list, a pull request, a form. */
@@ -1645,15 +1673,7 @@
      * A bar that is there only when it has something to say. Above the list, so
      * the count and the button are where the eye already is after ticking.
      */
-    var picked = chosenPrs();
-    if (picked.length) {
-      html += '<div class="row picked-bar">' +
-        '<strong>' + picked.length + ' chosen</strong>' +
-        '<span class="spacer"></span>' +
-        '<button class="btn" data-act="pick-none">Clear</button> ' +
-        '<button class="btn primary" data-act="review-chosen"' + busyAttr('review-chosen') + '>Review ' + picked.length + '</button>' +
-        '</div>';
-    }
+    html += pickedBar();
     if (!rows.length) html += '<div class="empty">No pull requests match.' + (f.flags.length || f.mine || f.authors.length || f.text ? ' <button class="link" data-act="dash-clear">Clear the filters</button>' : '') + '</div>';
     groups.forEach(function (g) {
       if (!g[2].length) return;
@@ -2105,6 +2125,18 @@
 
   // ---- PR list ---------------------------------------------------------------
 
+  /** What was ticked, and the button that reviews it — on the dashboard and on a repository's list alike. */
+  function pickedBar() {
+    var picked = chosenPrs();
+    if (!picked.length) return '';
+    return '<div class="row picked-bar">' +
+      '<strong>' + picked.length + ' chosen</strong>' +
+      '<span class="spacer"></span>' +
+      '<button class="btn" data-act="pick-none">Clear</button> ' +
+      '<button class="btn primary" data-act="review-chosen"' + busyAttr('review-chosen') + '>Review ' + picked.length + '</button>' +
+      '</div>';
+  }
+
   function drawPrList() {
     var list = state.prList;
     if (!list) return '<div class="loading">Loading pull requests…</div>';
@@ -2131,7 +2163,7 @@
     }).join('') + '</select></div>';
     if (list.readError) html += '<div class="banner bad" title="' + esc(list.readError.detail) + '"><strong>The last read failed ' + esc(when(list.readError.at)) + '.</strong> ' + esc(list.readError.message) + '</div>';
     if (!list.fetchedAt && !rows.length) html += '<div class="empty">This repository has not been read yet. <button class="btn primary" data-act="prs-refresh">Read pull requests</button></div>';
-    else html += drawPrTable(rows, false);
+    else html += pickedBar() + drawPrTable(rows, false);
     return html + '</div>';
   }
 
@@ -2223,22 +2255,22 @@
           return '<span class="chip ' + (a.state === 'APPROVED' ? 'okc' : 'badc') + '" title="' + esc(a.state === 'APPROVED' ? 'Approved' : 'Requested changes') + (a.byUs ? ' (you)' : '') + '">' + (a.state === 'APPROVED' ? '✓ ' : '✗ ') + esc(a.who) + '</span>';
         }).join('') +
       '</div>' +
-      '<h2 class="side-title">#' + pr.id + ' ' + esc(pr.title) + '</h2>' +
-      '<dl class="side-facts">' +
-        '<dt>Author</dt><dd>' + esc(pr.author) + '</dd>' +
-        (pr.sourceBranch ? '<dt>Branch</dt><dd class="mono">' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch) + '</dd>' : '') +
+      '<h2 class="side-title"><span class="side-num">#' + pr.id + '</span> ' + esc(pr.title) + '</h2>' +
+      '<div class="side-by">by <strong>' + esc(pr.author) + '</strong>' + (pr.createdOn ? ' · opened ' + esc(when(pr.createdOn)) : '') + '</div>' +
+      '<section class="side-sec"><h3>Branch</h3><dl class="side-facts">' +
+        (pr.sourceBranch ? '<dt>From</dt><dd class="mono">' + esc(pr.sourceBranch) + '</dd><dt>Into</dt><dd class="mono">' + esc(pr.targetBranch) + '</dd>' : '') +
         (pr.headSha ? '<dt>Head</dt><dd class="mono">' + sha7(pr.headSha) + '</dd>' : '') +
-        (pr.createdOn ? '<dt>Opened</dt><dd>' + esc(when(pr.createdOn)) + (pr.updatedOn ? ' <span class="faint">· updated ' + esc(when(pr.updatedOn)) + '</span>' : '') + '</dd>' : '') +
-        (open ? '<dt>Merge</dt><dd>' + mergeLine(v).replace(/^ · /, '') + '</dd>' : '') +
-      '</dl>' +
-      '<div class="row side-links">' +
+        (pr.updatedOn ? '<dt>Updated</dt><dd>' + esc(when(pr.updatedOn)) + '</dd>' : '') +
+        (open ? '<dt>Merges</dt><dd>' + mergeLine(v).replace(/^ · /, '') + '</dd>' : '') +
+      '</dl></section>' +
+      '<div class="side-links">' +
         (pr.url ? '<button class="btn small" data-act="open-url" data-url="' + esc(pr.url) + '" title="Open the pull request on ' + provider + '">' + provider + ' ↗</button>' : '') +
         '<button class="btn small" data-act="shell" data-where="clone" title="A terminal in the local clone">Terminal</button>' +
         '<button class="btn small" data-act="ask" title="A Claude session briefed on this pull request">Ask Claude</button>' +
         '<button class="btn small" data-act="pr-load"' + busyAttr(prKey('pr-load')) + ' title="Read the pull request, its stances and its thread again">Reload</button>' +
       '</div>' +
       drawNextStep(v, false) +
-      (open ? drawActions(v) : '') +
+      (open ? drawActions(v, true) : '') +
       '</aside>';
     return '<div class="prview side">' + side + '<div class="prmain">' + drawPrTabsAndBody(v, runs) + '</div></div>';
   }
@@ -2262,9 +2294,48 @@
     return '<div class="next ' + esc(step.kind) + '"' + (compact && step.detail ? ' title="' + esc(step.detail) + '"' : '') + '><span class="icon">' + icon + '</span><div class="words"><strong>' + esc(step.title) + '</strong><span>' + esc(step.detail || '') + '</span></div>' + button + '</div>';
   }
 
-  function drawActions(v) {
+  function drawActions(v, side) {
     var ours = v.approvals.filter(function (a) { return a.byUs; })[0];
     var publishedLive = (v.done ? v.findings : []).some(function (f) { return f.publishedId && !f.dismissedAt; });
+    var html = side ? drawSideDecisions(v, ours, publishedLive) : drawActionRow(v, ours, publishedLive);
+    var r = v.readiness;
+    return html + drawActionsRest(v, r);
+  }
+
+  /*
+   * The decisions, in the column: each kind under its own heading — checking
+   * the comments, your verdict, and whether it goes in — instead of eight
+   * buttons in a heap that wraps wherever the width happens to cut it.
+   */
+  function drawSideDecisions(v, ours, publishedLive) {
+    var html = '<section class="side-sec"><h3>Check</h3><div class="side-pair">' +
+      '<button class="btn small" data-act="verify"' + busyAttr(prKey('verify')) + (publishedLive ? '' : ' disabled') + ' title="Judge each published comment against the new code and the answers">Verify comments</button>' +
+      '<button class="btn small" data-act="final-pass"' + busyAttr(prKey('final-pass')) + (v.done ? '' : ' disabled') + ' title="The last look before merging: is there anything that must not go in?">Final pass</button>' +
+      '</div></section>';
+    html += '<section class="side-sec"><h3>Your verdict</h3><div class="side-pair">' +
+      (ours && ours.state === 'APPROVED'
+        ? '<button class="btn small" data-act="stance" data-stance="unapprove"' + busyAttr(prKey('stance')) + '>Withdraw approval</button>'
+        : '<button class="btn small go" data-act="stance" data-stance="approve"' + busyAttr(prKey('stance')) + '>Approve</button>') +
+      (ours && ours.state === 'CHANGES_REQUESTED'
+        ? '<button class="btn small" data-act="stance" data-stance="undoRequestChanges"' + busyAttr(prKey('stance')) + '>Withdraw request</button>'
+        : '<button class="btn small" data-act="stance" data-stance="requestChanges"' + busyAttr(prKey('stance')) + '>Request changes</button>') +
+      '</div></section>';
+    var r = v.readiness;
+    html += '<section class="side-sec"><h3>Merge</h3>';
+    if (r) {
+      var left = r.items.filter(function (i) { return !i.done; });
+      html += '<div class="side-ready" title="' + esc(left.map(function (i) { return '• ' + i.label + (i.detail ? ' (' + i.detail + ')' : ''); }).join('\n')) + '">' +
+        '<span class="bar"><span style="width:' + r.percent + '%;background:' + (r.percent === 100 ? 'var(--ok)' : r.percent > 60 ? 'var(--accent)' : 'var(--warn)') + '"></span></span>' +
+        '<strong>' + r.percent + '% ready</strong>' +
+        (left.length || isOpen('readiness') ? '<button class="link" data-act="fold" data-key="readiness">' + (isOpen('readiness') ? 'hide' : left.length + ' left') + '</button>' : '') + '</div>';
+    }
+    html += '<div class="side-pair">' +
+      '<button class="btn small merge' + (v.mergeBlocker ? ' blocked' : '') + '" data-act="merge-open" title="' + esc(v.mergeBlocker || 'Nothing is pending') + '">' + (v.mergeBlocker ? 'Merge anyway…' : 'Merge…') + '</button>' +
+      '<button class="btn small danger" data-act="decline-open">Decline…</button></div></section>';
+    return html;
+  }
+
+  function drawActionRow(v, ours, publishedLive) {
     var html = '<div class="row" style="margin-top:10px">';
     html += '<span class="group-btns">';
     html += '<button class="btn small" data-act="verify"' + busyAttr(prKey('verify')) + (publishedLive ? '' : ' disabled') + ' title="Judge each published comment against the new code and the answers">Verify</button>';
@@ -2285,6 +2356,12 @@
     html += '<span class="group-btns" style="margin-left:6px;padding-left:8px;border-left:1px solid var(--border);border-right:0">';
     html += '<button class="btn small merge' + (v.mergeBlocker ? ' blocked' : '') + '" data-act="merge-open" title="' + esc(v.mergeBlocker || 'Nothing is pending') + '">' + (v.mergeBlocker ? 'Merge anyway…' : 'Merge…') + '</button>';
     html += '<button class="btn small danger" data-act="decline-open">Decline…</button></span></div>';
+    return html;
+  }
+
+  /** What follows the decisions wherever they are drawn: the readiness list, the clashes, the forms. */
+  function drawActionsRest(v, r) {
+    var html = '';
     if (r && isOpen('readiness')) {
       html += '<ul class="check-list">' + r.items.slice().sort(function (a, b) { return Number(a.done) - Number(b.done) || b.weight - a.weight; }).map(function (i) {
         return '<li class="' + (i.done ? 'done' : '') + '">' + esc(i.label) + (i.detail ? ' <span class="faint">' + esc(i.detail) + '</span>' : '') + ' <span class="faint">· ' + i.weight + '</span></li>';
@@ -2487,7 +2564,7 @@
       var text = md(f.body) + (f.suggestion ? '<div class="suggestion"><div class="faint">How it could be fixed</div>' + md(f.suggestion) + '</div>' : '');
       html += clamped('body-' + f.id, text, String(f.body).length + String(f.suggestion || '').length > 520);
     }
-    html += verdictHtml(f.resolutionNote);
+    html += verdictHtml(f.resolutionNote, f.resolution);
     if (f.publishError) html += '<div class="banner bad">Publishing failed: ' + esc(f.publishError) + '</div>';
     html += '<div class="row" style="margin-top:6px">';
     if (v.pr.state === 'OPEN' && !settled) {
@@ -2781,9 +2858,23 @@
   }
 
   /** What verification concluded about a finding, set apart from the finding itself. */
-  function verdictHtml(note) {
-    return note ? '<div class="verdict"><div class="verdict-label">Verification</div>' + md(note) + '</div>' : '';
+  function verdictHtml(note, resolution) {
+    if (!note) return '';
+    /*
+     * The answer first, in words and colour, then the reasoning. A paragraph
+     * that had to be read to the end to learn whether the thing was fixed was
+     * the whole difficulty.
+     */
+    var res = resolution ? VERDICT_WORDS[resolution] : null;
+    return '<div class="verdict' + (res ? ' is-' + res[1] : '') + '"><div class="verdict-label">Verification' +
+      (res ? ' · <span class="verdict-says">' + res[0] + '</span>' : '') + '</div>' + md(note) + '</div>';
   }
+  var VERDICT_WORDS = {
+    RESOLVED: ['✓ Fixed in the code', 'ok'],
+    PARTIAL: ['◐ Partly fixed', 'part'],
+    UNRESOLVED: ['✗ Not fixed', 'bad'],
+    WONT_FIX: ['✓ Settled — won\'t fix', 'ok'],
+  };
 
   /**
    * A published finding opens with its own title in bold, which the card has
@@ -3370,7 +3461,7 @@
       '<strong class="cmt-title">' + titleHtml(f.title) + '</strong>' + status + (chain.length ? '<span class="chip">' + chain.length + ' repl' + (chain.length === 1 ? 'y' : 'ies') + '</span>' : '');
     var body = '<div class="cmt-body">' + clamped('code-' + f.id, md(f.body), String(f.body).length > 700) +
       (f.suggestion ? '<div class="suggestion"><div class="faint">How it could be fixed</div>' + md(f.suggestion) + '</div>' : '') +
-      verdictHtml(f.resolutionNote) + '</div>';
+      verdictHtml(f.resolutionNote, f.resolution) + '</div>';
     if (root) body = '<div class="cmt-body faint" style="padding-bottom:0">Posted by ' + esc(root.author) + ' ' + esc(when(root.createdOn)) + (f.publishedUrl ? ' · <button class="link" data-act="open-url" data-url="' + esc(f.publishedUrl) + '">view on the PR ↗</button>' : '') + '</div>' + body;
     body += chain.map(function (c) { return message(c.author, c.createdOn, c.body, c.ours); }).join('');
     if (!f.publishedId && !f.dismissedAt && v.pr.state === 'OPEN') {
@@ -3613,12 +3704,16 @@
         html += '<div class="finding-line sev-' + esc(t.severity) + '" data-act="fold" data-key="t-' + esc(t.findingId) + '" title="Show the thread"><span class="chip ' + label[1] + '">' + label[0] + '</span><span class="sev ' + esc(t.severity) + '">' + esc(t.severity) + '</span><span class="t">' + titleHtml(t.title) + '</span><span class="faint">' + t.entries.length + ' repl' + (t.entries.length === 1 ? 'y' : 'ies') + '</span></div>';
         return;
       }
-      html += '<div class="finding sev-' + esc(t.severity) + (t.state === 'OK' ? ' settled' : '') + '"><div class="meta"><span class="chip ' + label[1] + '">' + label[0] + '</span><span class="sev ' + esc(t.severity) + '">' + esc(t.severity) + '</span>' +
+      // Whether the code is fixed, beside whose turn it is: two different questions, both answered at a glance.
+      var fixed = t.publishedUrl || t.resolution ? (t.resolution && RESOLUTION_LABELS[t.resolution] ? RESOLUTION_LABELS[t.resolution] : t.state !== 'UNPUBLISHED' && t.state !== 'OK' ? ['Not verified yet', 'mine'] : null) : null;
+      html += '<div class="finding sev-' + esc(t.severity) + (t.state === 'OK' ? ' settled' : '') + '"><div class="meta"><span class="chip ' + label[1] + '">' + label[0] + '</span>' +
+        (fixed ? '<span class="chip ' + fixed[1] + '" title="What verification found in the code">' + (t.resolution === 'RESOLVED' || t.resolution === 'WONT_FIX' ? '✓ ' : t.resolution === 'UNRESOLVED' ? '✗ ' : '') + fixed[0] + '</span>' : '') +
+        '<span class="sev ' + esc(t.severity) + '">' + esc(t.severity) + '</span>' +
         (t.filePath ? '<button class="link mono" data-act="jump" data-file="' + esc(t.filePath) + '" data-line="' + (t.lineNo || '') + '">' + anchor(t.filePath, t.lineNo) + '</button>' : '') +
         (t.askedBy ? '<span class="chip accent">asked by ' + esc(t.askedBy) + '</span>' : '') + '<span class="spacer"></span>' +
         (t.waitingDays != null ? '<span class="faint">waiting ' + t.waitingDays + 'd</span>' : '') + '</div>' +
         '<div class="ftitle">' + titleHtml(t.title) + '</div>' + clamped('q-' + t.findingId, md(withoutTitle(t.question, t.title)), String(t.question).length > 520) +
-        verdictHtml(t.resolutionNote) +
+        verdictHtml(t.resolutionNote, t.resolution) +
         (t.entries.length ? '<div class="entries">' + t.entries.map(entryHtml).join('') + '</div>' : '');
       if (draft && draft.status !== 'PUBLISHED' && !draft.dismissedAt && open) {
         var key = 'reply-' + draft.id;
@@ -3858,7 +3953,29 @@
   function drawPrTabs() {
     var strip = $('prtabs');
     if (!strip) return;
+    // In one row with the bar above, when the menu is in the sidebar: drawn there, by drawTop.
+    if (state.navInSidebar) { strip.innerHTML = ''; strip.hidden = true; if (state.started) drawTop(); return; }
+    strip.hidden = false;
     if (!state.prTabs.length) { strip.innerHTML = ''; return; }
+    strip.innerHTML = prTabsHtml();
+    showActiveTab(strip);
+  }
+
+  /*
+   * The tab in front brought into sight by scrolling the strip, and only the
+   * strip. scrollIntoView moves every scrollable thing around it as well — the
+   * panel's own page included — and left the pane shifted sideways with its
+   * left edge out of sight.
+   */
+  function showActiveTab(strip) {
+    var on = strip && strip.querySelector('.prtab.on');
+    if (!on) return;
+    var left = on.offsetLeft - strip.offsetLeft;
+    if (left < strip.scrollLeft) strip.scrollLeft = left;
+    else if (left + on.offsetWidth > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = left + on.offsetWidth - strip.clientWidth;
+  }
+
+  function prTabsHtml() {
     var html = '<button class="prtab home' + (state.view !== 'pr' ? ' on' : '') + '" data-act="prtab-home" role="tab" title="Back to ' + esc(homeLabel()) + '"><span class="label">' + esc(homeLabel()) + '</span></button>';
     state.prTabs.forEach(function (tab, at) {
       var on = state.view === 'pr' && state.repoId === tab.repoId && state.prId === tab.prId;
@@ -3866,9 +3983,7 @@
         '<span class="num">#' + tab.prId + '</span><span class="label">' + esc(tab.title || '') + '</span>' +
         '<span class="x" data-act="prtab-close" data-at="' + at + '" title="Close (middle-click)">×</span></button>';
     });
-    strip.innerHTML = html;
-    var on = strip.querySelector('.prtab.on');
-    if (on) on.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    return html;
   }
 
   /** Into the tab at `at`, putting back what it was showing. */
@@ -4893,12 +5008,23 @@
     var inSidebar = Boolean(payload && payload.navInSidebar);
     if (inSidebar === Boolean(state.navInSidebar)) return;
     state.navInSidebar = inSidebar;
-    if (state.started) drawTop();
+    if (state.started) drawPrTabs();
   });
 
   /* The sidebar asked for a place: the dashboard, a repository's list, one of the pages. */
   host.on('navigate', function (place) {
     if (!place || !place.view) return;
+    // A pull request from the sidebar: into its tab, made if it has none.
+    if (place.view === 'pr') {
+      if (!place.repoId || !place.prId) return;
+      if (!state.started) {
+        state.view = 'pr'; state.repoId = place.repoId; state.prId = Number(place.prId);
+        if (!tabOf(state.repoId, state.prId)) state.prTabs.push({ repoId: state.repoId, prId: state.prId, title: '', repoName: '', prTab: 'review', file: null });
+        return;
+      }
+      openPr(place.repoId, place.prId, false);
+      return;
+    }
     var fields = place.view === 'prs' ? { repoId: place.repoId || null, prStates: ['OPEN'] } : null;
     if (place.view === 'prs' && !(fields && fields.repoId)) return;
     if (!state.started) {

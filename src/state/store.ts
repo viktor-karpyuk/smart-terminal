@@ -833,8 +833,10 @@ const baseName = (path: string) => path.split('/').filter(Boolean).pop() ?? path
 
 /** Where in the Code Reviewer the sidebar can send somebody. */
 export interface ReviewerPlace {
-  view: 'dashboard' | 'repos' | 'prs' | 'bus' | 'usage' | 'settings';
+  view: 'dashboard' | 'repos' | 'prs' | 'pr' | 'bus' | 'usage' | 'settings';
   repoId?: string | null;
+  /** With `pr`: which pull request, opened in a tab of its own. */
+  prId?: number | null;
 }
 
 /** The Code Reviewer's panel, by its contributed id. */
@@ -3290,7 +3292,12 @@ export const useStore = create<State>((set, get) => ({
      * in `context` when it says it is ready — so the place goes there too.
      */
     const was = whereEachPanelWas.get(panel.id);
-    const resume = { ...(was && typeof was === 'object' ? (was as Record<string, unknown>) : {}), view: place.view, repoId: place.repoId ?? null };
+    const resume = {
+      ...(was && typeof was === 'object' ? (was as Record<string, unknown>) : {}),
+      view: place.view,
+      repoId: place.repoId ?? null,
+      ...(place.view === 'pr' ? { prId: place.prId ?? null } : {}),
+    };
     whereEachPanelWas.set(panel.id, resume);
     // Kept on the panel too, so the sidebar can light the row before the panel has said anything.
     get().rememberPanel(panel.id, resume);
