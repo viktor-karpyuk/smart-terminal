@@ -2574,8 +2574,10 @@
     html += fold('pr-description', '<strong>Description</strong>', description ? esc(description.replace(/\s+/g, ' ').slice(0, 140)) : 'The author left no description.',
       description ? '<div class="md pr-description">' + md(description) + '</div>' : '<div class="faint">The author left no description.</div>', !done && Boolean(description), 'pr-description-fold');
 
-    // --- findings
-    var findings = v.findings || [];
+    // --- findings: this review's and every earlier one that still means something, open ones first
+    var current = v.findings || [];
+    var findings = current.concat(v.earlierFindings || []);
+    findings = findings.filter(function (f) { return !findingDone(f); }).concat(findings.filter(findingDone));
     if (done || findings.length) {
       var waiting = findings.filter(function (f) { return !f.publishedId && !f.dismissedAt && !f.closedAt; });
       var notes = (v.notes || []).filter(function (n) { return !n.publishedId; });
@@ -2592,6 +2594,7 @@
       if (open && v.repo.fixMode !== 'OFF' && fixable.length > 1) html += '<button class="btn small go" data-act="fix-all"' + busyAttr(prKey('fix-all')) + ' title="One after another, in the workshop">Fix all ' + fixable.length + '</button>';
       html += '</div>';
       if (!findings.length) html += '<div class="card faint">This review found nothing worth reporting.</div>';
+      else if (!current.length && done) html += '<div class="faint" style="margin:0 0 8px">The last review found nothing new. These are from earlier reviews of this pull request.</div>';
       else if (!shown.length) html += '<div class="card faint">Nothing here. <button class="link" data-act="finding-filter" data-filter="all">Show all findings</button></div>';
       else html += shown.map(function (f) { return findingCard(f, v); }).join('');
     }
