@@ -57,7 +57,8 @@ const MIGRATIONS = [
    CREATE INDEX IF NOT EXISTS tm_message_key ON tm_message(dedupe_key, state)`,
 ];
 
-const now = () => new Date().toISOString();
+/** The time, by whichever clock the store was given — the same one the service decides by. */
+const isoOf = (clock) => () => new Date(clock()).toISOString();
 const nul = (value) => (value === undefined || value === '' ? null : value);
 
 const personRow = (row) =>
@@ -98,8 +99,18 @@ const messageRow = (row) =>
   };
 
 class TeamsStore {
-  constructor(db, secrets) {
+  /**
+   * @param clock the service's own clock. Every row is stamped with it, so a
+   *   message's age is measured against the same "now" that decides whether it
+   *   is too old. With the system clock here and the service's there, a held
+   *   message stamped "today" was younger than a "now" set in the past, never
+   *   grew old enough to let go of, and the test for exactly that failed for
+   *   as long as the real date was later than the one it pretended.
+   */
+  constructor(db, secrets, clock = Date.now) {
     this.db = db;
+    this.clock = clock;
+    this.stamp = isoOf(clock);
     this.secrets = secrets ?? {
       encrypt: (text) => Buffer.from(text).toString('base64'),
       decrypt: (cipher) => Buffer.from(cipher, 'base64').toString(),
@@ -202,7 +213,7 @@ class TeamsStore {
     }
     this.run(
       'INSERT INTO tm_person (id, handle, display, address, matched_by, created_at) VALUES (?,?,?,?,?,?)',
-      randomUUID(), String(handle), display || String(handle), nul(address), nul(matchedBy), now(),
+      randomUUID(), String(handle), display || String(handle), nul(address), nul(matchedBy), this.stamp(),
     );
     return this.person(handle);
   }
@@ -215,7 +226,7 @@ class TeamsStore {
   }
 
   notePersonSent(handle) {
-    this.run('UPDATE tm_person SET last_sent_at = ? WHERE handle = ?', now(), String(handle));
+    this.run('UPDATE tm_person SET last_sent_at = ? WHERE handle = ?', this.stamp(), String(handle));
   }
 
   // --- the extensions that ask ------------------------------------------------
@@ -240,7 +251,7 @@ class TeamsStore {
       return this.app(id);
     }
     this.run('INSERT INTO tm_app (id, name, stance, daily_cap, first_seen_at) VALUES (?,?,?,?,?)',
-      String(id), name || String(id), 'ASK', 5, now());
+      String(id), name || String(id), 'ASK', 5, this.stamp());
     return this.app(id);
   }
 
@@ -257,7 +268,7 @@ class TeamsStore {
   }
 
   noteAppAsked(id) {
-    this.run('UPDATE tm_app SET last_asked_at = ? WHERE id = ?', now(), String(id));
+    this.run('UPDATE tm_app SET last_asked_at = ? WHERE id = ?', this.stamp(), String(id));
   }
 
   // --- messages ---------------------------------------------------------------
@@ -309,15 +320,15 @@ class TeamsStore {
     const id = randomUUID();
     this.run(
       'INSERT INTO tm_message (id, app_id, dedupe_key, person_id, to_label, title, body, payload, state, reason, created_at, sent_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-      id, String(appId), nul(key), nul(personId), to, title, body, JSON.stringify(payload ?? {}), state, nul(reason), now(),
+      id, String(appId), nul(key), nul(personId), to, title, body, JSON.stringify(payload ?? {}), state, nul(reason), this.stamp(),
       // Only a message that has actually gone carries the time it went.
-      state === 'SENT' ? now() : null,
+      state === 'SENT' ? this.stamp() : null,
     );
     return this.message(id);
   }
 
   markSent(id) {
-    this.run("UPDATE tm_message SET state = 'SENT', sent_at = ?, reason = NULL, attempts = attempts + 1 WHERE id = ?", now(), String(id));
+    this.run("UPDATE tm_message SET state = 'SENT', sent_at = ?, reason = NULL, attempts = attempts + 1 WHERE id = ?", this.stamp(), String(id));
   }
 
   markFailed(id, reason) {
@@ -344,7 +355,7 @@ class TeamsStore {
    * Only a message that actually went counts: one that failed, or that is still
    * waiting for somebody to press Send, has not been said to anybody yet.
    */
-  alreadySent(key, withinMs, at = Date.now()) {
+  alreadySent(key, withinMs, at = this.clock()) {
     if (!key) return null;
     const since = new Date(at - withinMs).toISOString();
     return messageRow(this.get(
