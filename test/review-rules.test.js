@@ -438,3 +438,20 @@ test('a closed pull request is last, run or no run', () => {
   assert.strictEqual(R.rowRank(R.prFlags({ state: 'MERGED' }, {})), 3);
   assert.strictEqual(R.rowRank(R.prFlags({ state: 'DECLINED' }, { reviewing: true })), 3);
 });
+
+test('an author\'s answer in a thread verified as fixed holds up neither the readiness nor the next step', () => {
+  const pr = { headSha: 'h2', state: 'OPEN' };
+  const review = { headSha: 'h1' };
+  const findings = [{ publishedId: 'c', filePath: 'a.ts', resolution: 'RESOLVED' }];
+  const fixed = [{ state: 'NEEDS_ANSWER', resolution: 'RESOLVED' }];
+  const done = R.readiness({ pr, review, threads: fixed, findings, finalPassDone: true, finalPassBlockers: 0 });
+  assert.equal(done.percent, 100);
+  assert.ok(!done.items.some((item) => item.key === 'replies'));
+  assert.notEqual(R.nextStep({ pr, review, findings, threads: fixed, finalPassDone: true }).action, 'tab-conversation');
+  // Still open, or ruled not fixed: the answer is wanted.
+  for (const resolution of [null, 'UNRESOLVED', 'PARTIAL']) {
+    const open = [{ state: 'NEEDS_ANSWER', resolution }];
+    assert.ok(R.readiness({ pr, review, threads: open, findings, finalPassDone: true, finalPassBlockers: 0 }).items.some((item) => item.key === 'replies'), String(resolution));
+    assert.equal(R.nextStep({ pr, review, findings, threads: open, finalPassDone: true }).action, 'tab-conversation');
+  }
+});

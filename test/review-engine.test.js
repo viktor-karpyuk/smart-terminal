@@ -1095,6 +1095,10 @@ test('findings of earlier reviews that were published, ruled on or closed stay l
   assert.deepEqual(view.earlierFindings.map((one) => [one.title, one.resolution]), [['add subtracts', 'RESOLVED']],
     'the fixed one is still there, as done; the draft it replaced is not');
   assert.ok(!view.earlierFindings.some((one) => one.id === draft.id));
+  // And they count: the readiness weighs the inherited comment, fixed, instead of leaving it out.
+  const inherited = view.readiness.items.filter((item) => item.key === 'finding');
+  assert.equal(inherited.length, 1, 'the earlier review\'s comment is judged');
+  assert.equal(inherited[0].done, true);
 });
 
 test('the sidebar gets a count per repository, and nothing about a hidden one', { skip }, async () => {

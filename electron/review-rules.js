@@ -605,6 +605,18 @@ function needsVerdict(finding) {
   return Boolean(finding.publishedId && !finding.dismissedAt && !finding.closedAt && !resolutionClosed(finding.resolution));
 }
 
+/**
+ * A thread that still wants an answer from us.
+ *
+ * Not one whose comment verification has already ruled fixed (or won't-fix):
+ * there the author's "done" was checked against the code and found true, and
+ * holding the readiness, the next step and the merge on a thank-you kept a
+ * pull request with everything fixed at half-ready.
+ */
+function wantsAnswer(thread) {
+  return (thread.state === 'NEEDS_ANSWER' || thread.state === 'DRAFT_READY') && !resolutionClosed(thread.resolution);
+}
+
 function replySettled(reply) {
   return reply.status === 'PUBLISHED' || Boolean(reply.dismissedAt);
 }
@@ -827,7 +839,7 @@ function readiness({ pr, review, threads, findings, finalPassDone, finalPassBloc
   for (const finding of findings.filter((item) => !item.publishedId && !item.dismissedAt)) {
     items.push({ key: 'unpublished', label: 'Finding published or dismissed', weight: 1, done: shut(finding), detail: finding.filePath.split('/').pop() });
   }
-  const unanswered = threads.filter((thread) => thread.state === 'NEEDS_ANSWER' || thread.state === 'DRAFT_READY').length;
+  const unanswered = threads.filter(wantsAnswer).length;
   if (unanswered > 0) items.push({ key: 'replies', label: 'Replies answered', weight: 2 * unanswered, done: false, detail: String(unanswered) });
   if (published.length) {
     items.push({
@@ -1060,7 +1072,7 @@ function nextStep({ pr, review, findings = [], notes = [], threads = [], running
   const unpublished = own.filter((finding) => !settled(finding)).length + notes.filter((note) => !note.publishedId).length;
   const newCode = Boolean(review.headSha && pr.headSha && review.headSha !== pr.headSha);
   if (unpublished) return { kind: 'act', action: 'publish-all', title: `Publish ${unpublished} finding${unpublished === 1 ? '' : 's'}`, detail: 'Or dismiss the ones that should not go out. The author sees nothing until then.' };
-  const answers = threads.filter((thread) => thread.state === 'NEEDS_ANSWER' || thread.state === 'DRAFT_READY').length;
+  const answers = threads.filter(wantsAnswer).length;
   if (answers) return { kind: 'act', action: 'tab-conversation', title: `Answer ${answers} repl${answers === 1 ? 'y' : 'ies'}`, detail: 'Someone answered your comments.' };
   const pending = own.filter(needsVerdict).length;
   if (newCode && pending) return { kind: 'act', action: 'verify', title: 'Verify the new commits', detail: `${pending} published comment${pending === 1 ? '' : 's'} may be addressed by them.` };
@@ -1108,6 +1120,7 @@ function ageMark(days) {
 }
 
 module.exports = {
+  wantsAnswer,
   DEPTHS,
   KINDS,
   REVIEW_DENIED,
