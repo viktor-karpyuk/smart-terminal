@@ -102,7 +102,16 @@ const FINAL_PASS_SCHEMA = {
 
 const FIX_SCHEMA = {
   type: 'object',
-  properties: { fixed: { type: 'boolean' }, summary: { type: 'string' }, files: { type: 'array', items: { type: 'string' } }, reason: { type: 'string' } },
+  properties: {
+    fixed: { type: 'boolean' },
+    summary: { type: 'string' },
+    files: { type: 'array', items: { type: 'string' } },
+    reason: { type: 'string' },
+    elsewhere: {
+      type: 'array',
+      items: { type: 'object', properties: { repo: { type: 'string' }, change: { type: 'string' } }, required: ['repo', 'change'] },
+    },
+  },
   required: ['fixed', 'summary'],
 };
 
@@ -537,7 +546,7 @@ Tono de par, no de auditor. Nada de condescendencia ni de disculpas de más.`;
  * not that it fails to fix the thing but that it reorders imports and renames on
  * the way, leaving a diff nobody can review at a glance.
  */
-function fixPrompt({ finding, prTitle, branch, language, guidelines = '', bus = '', thread = [], note = '', previous = null }) {
+function fixPrompt({ finding, prTitle, branch, language, guidelines = '', bus = '', thread = [], note = '', previous = null, otherRepos = [] }) {
   const lines = [
     'Sos el mismo revisor que encontró este problema. Ahora te toca arreglarlo.',
     '',
@@ -592,12 +601,30 @@ function fixPrompt({ finding, prTitle, branch, language, guidelines = '', bus = 
   );
   if (guidelines.trim()) lines.push('', 'CONVENCIONES DEL EQUIPO (el arreglo tiene que respetarlas)', guidelines);
   if (bus.trim()) lines.push('', bus);
+  /*
+   * Another repository is not a dead end. When the fix needs something this
+   * repository cannot provide — a field the backend has to return, a library
+   * change — it says which repository and what, exactly, so that change can be
+   * made there and offered as a pull request of its own.
+   */
+  if (otherRepos.length) {
+    lines.push(
+      '',
+      'SI EL ARREGLO NECESITA OTRO REPOSITORIO',
+      `Estos repositorios también los tenemos: ${otherRepos.join(', ')}.`,
+      'Si arreglar esto bien exige un cambio en uno de ellos (por ejemplo, que el backend devuelva un campo),',
+      'no lo des por imposible: describilo en `elsewhere`, con el nombre exacto del repositorio y el cambio',
+      'concreto (endpoint, DTO, campo, consulta, permiso), con el detalle suficiente para hacerlo allá sin',
+      'volver a preguntar. Acá hacé sólo lo que se sostenga solo; si lo de acá depende de lo de allá, no lo',
+      'hagas y dejá `fixed` en false: se hace después, cuando lo otro exista.',
+    );
+  }
   lines.push(
     '',
     'RESPUESTA',
     'Devolvé el JSON del esquema: `fixed` si tocaste el código, `summary` con qué',
     `cambiaste y por qué (en ${language}, dos o tres líneas), \`files\` con los archivos`,
-    'que tocaste, y `reason` sólo si no arreglaste nada.',
+    'que tocaste, `reason` sólo si no arreglaste nada, y `elsewhere` si hace falta un cambio en otro repositorio.',
   );
   return lines.join('\n');
 }

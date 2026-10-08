@@ -216,6 +216,16 @@ const MIGRATIONS = [
    * a commit. Null when the verdict did not name one, or it is not resolved.
    */
   `ALTER TABLE cr_finding ADD COLUMN resolution_commit TEXT`,
+
+  /*
+   * 8 — what a fix needs from another repository.
+   *
+   * A front-end fix that needs the backend to return a field cannot be made in
+   * the front alone, and "it needs another repository" in prose left it there.
+   * Kept as data — which repository, what change — so the change can be made
+   * there and offered as a pull request of its own.
+   */
+  `ALTER TABLE cr_finding_fix ADD COLUMN elsewhere TEXT`,
 ];
 
 const now = () => new Date().toISOString();
@@ -417,6 +427,13 @@ const prRow = (row) =>
 
 const fixRow = (row) =>
   row && {
+    elsewhere: (() => {
+      try {
+        return row.elsewhere ? JSON.parse(row.elsewhere) : [];
+      } catch {
+        return [];
+      }
+    })(),
     id: row.id,
     findingId: row.finding_id,
     reviewId: row.review_id,
@@ -1391,6 +1408,11 @@ class ReviewStore {
 
   fixCommitted(fixId, sha, summary, sessionId, costUsd) {
     this.run("UPDATE cr_finding_fix SET state = 'COMMITTED', sha = ?, summary = ?, session_id = ?, cost_usd = ?, finished_at = ? WHERE id = ?", sha, summary, sessionId ?? null, costUsd ?? 0, now(), fixId);
+  }
+
+  /** What the fix said has to change in other repositories, as `[{ repo, change }]`. */
+  setFixElsewhere(fixId, elsewhere) {
+    this.run('UPDATE cr_finding_fix SET elsewhere = ? WHERE id = ?', elsewhere && elsewhere.length ? JSON.stringify(elsewhere) : null, fixId);
   }
 
   fixNothing(fixId, reason, sessionId, costUsd) {

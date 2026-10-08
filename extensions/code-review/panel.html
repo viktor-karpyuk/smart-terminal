@@ -84,6 +84,9 @@
   .commit-item .commit-text { flex: 1; min-width: 0; }
   .commit-item .commit-mark { flex: none; margin-top: 2px; }
   .commit-fixes { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+  .crossfix { margin-top: 8px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); border-radius: var(--r-sm); background: color-mix(in srgb, var(--accent) 6%, var(--bg-panel)); }
+  .crossfix-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .crossfix-change { color: var(--text-dim); }
   .merge-confirm { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; max-width: 360px; }
   .merge-confirm .btn { justify-content: center; }
   .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
@@ -2720,6 +2723,7 @@
     // Still open: ask it again of the code as it is now, without a whole new review.
     if (v.pr.state === 'OPEN' && !f.dismissedAt && !findingDone(f)) html += recheckButton(f);
     html += '<span class="spacer"></span><button class="btn small" data-act="ask" data-finding="' + esc(f.id) + '" title="A Claude session briefed on this finding">Ask Claude</button></div>';
+    if (fix) html += crossfixHtml(v, f, fix);
     if (fix && fix.state === 'NOTHING' && fix.summary) html += '<div class="faint" style="margin-top:4px">Fix: ' + esc(fix.summary) + '</div>';
     if (fix && fix.state === 'FAILED' && fix.error) html += '<div class="faint bad" style="margin-top:4px">Fix: ' + esc(fix.error.slice(0, 300)) + '</div>';
     return html + '</div>';
@@ -2985,6 +2989,46 @@
 
   function entryHtml(entry) {
     return message(entry.author, entry.at, entry.body, entry.ours);
+  }
+
+  /*
+   * What a fix needs from another repository, and the way to get it there:
+   * prepare the change in a copy of that repository, look at it, open a pull
+   * request — then fix this side, told where the other half is.
+   */
+  function crossfixHtml(v, f, fix) {
+    var items = (v.crossfixes || {})[fix.id];
+    if (!items || !items.length) return '';
+    return items.map(function (item, index) {
+      var job = item.job || {};
+      var busy = job.busy || state.busy['crossfix-' + fix.id + '-' + index];
+      var html = '<div class="crossfix"><div class="crossfix-head"><span class="chip accent">needs ' + esc(item.repo) + '</span>' +
+        '<strong>' + (job.state === 'OPENED' ? 'Pull request opened in ' + esc(item.repo) : 'A change in ' + esc(item.repo) + ' comes first') + '</strong></div>' +
+        '<div class="md crossfix-change">' + md(item.change) + '</div>';
+      if (!item.known) return html + '<div class="faint">' + esc(item.repo) + ' is not one of the repositories configured here; add it on the Repositories page to make the change from here.</div></div>';
+      if (job.error) html += '<div class="banner bad" style="margin-top:6px">' + esc(job.error) + '</div>';
+      var at = ' data-id="' + esc(fix.id) + '" data-index="' + index + '"';
+      if (busy) return html + '<div class="faint">Making the change in a copy of ' + esc(item.repo) + '… The progress is in the run above.</div></div>';
+      if (job.state === 'PREPARED') {
+        html += '<div class="row" style="margin-top:6px"><span class="chip okc">ready</span><span>Branch <span class="mono">' + esc(job.branch) + '</span> from <span class="mono">' + esc(job.base) + '</span>, commit <span class="mono">' + sha7(job.sha) + '</span></span>' +
+          (job.check ? '<span class="chip ' + (job.check.state === 'PASSED' ? 'okc' : 'badc') + '" title="' + esc(job.check.output || '') + '">check ' + esc(String(job.check.state).toLowerCase()) + '</span>' : '') + '</div>';
+        if (job.summary) html += '<div class="md" style="margin-top:4px">' + md(job.summary) + '</div>';
+        if (job.stat) html += '<pre class="plain-diff stat">' + esc(job.stat) + '</pre>';
+        html += '<button class="link" data-act="fold" data-key="crossfix-diff-' + esc(fix.id) + '-' + index + '">' + (isOpen('crossfix-diff-' + fix.id + '-' + index) ? 'Hide the change' : 'Show the change') + '</button>';
+        if (isOpen('crossfix-diff-' + fix.id + '-' + index)) html += plainDiffHtml(job.diff);
+        return html + '<div class="merge-confirm" style="max-width:460px"><button class="btn go solid" data-act="crossfix-publish"' + at + busyAttr('crossfix-publish-' + fix.id + '-' + index) + '>Push and open the PR</button>' +
+          '<button class="btn danger" data-act="crossfix-discard"' + at + '>Discard</button></div>' +
+          '<div class="faint" style="margin-top:4px">A new branch in ' + esc(item.repo) + ', never forced, and a pull request into ' + esc(job.base) + '.</div></div>';
+      }
+      if (job.state === 'OPENED') {
+        html += '<div class="row" style="margin-top:6px">' + (job.url ? '<button class="btn small" data-act="open-url" data-url="' + esc(job.url) + '">#' + esc(job.prId) + ' in ' + esc(item.repo) + ' ↗</button>' : '<span class="chip">#' + esc(job.prId) + '</span>') +
+          '<span class="faint">branch <span class="mono">' + esc(job.branch) + '</span></span></div>';
+        if (!findingDone(f) && !f.closedAt) html += '<div class="row" style="margin-top:6px"><button class="btn small go" data-act="crossfix-front"' + at + ' data-finding="' + esc(f.id) + '" title="Fix this side now, told that the other half is in that pull request">Fix this side with it</button></div>';
+        return html + '</div>';
+      }
+      return html + '<div class="row" style="margin-top:6px"><button class="btn small primary" data-act="crossfix-prepare"' + at + '>Prepare the change in ' + esc(item.repo) + '</button>' +
+        '<span class="faint">A new branch in a copy of ' + esc(item.repo) + '; you see the diff before anything is pushed.</span></div></div>';
+    }).join('');
   }
 
   function recheckButton(f) {
@@ -4847,6 +4891,28 @@
       delete state.edits['fixnote-' + id];
       call('fix', { findingId: id, note: note }).then(function (r) {
         say(!r.fix ? 'Already closed: there was nothing left to fix.' : r.fix.sha ? 'Fix committed in the workshop: ' + r.fix.sha.slice(0, 7) : 'The fix changed nothing: ' + (r.fix.summary || ''));
+      }, fail);
+    },
+    'crossfix-prepare': function (el) {
+      var id = el.getAttribute('data-id');
+      var index = Number(el.getAttribute('data-index'));
+      act('crossfix-' + id + '-' + index, function () { return call('crossfixPrepare', { fixId: id, index: index }); }, function () { say('Ready in the copy. Look at it, then open the pull request.'); load(); });
+    },
+    'crossfix-publish': function (el) {
+      var id = el.getAttribute('data-id');
+      var index = Number(el.getAttribute('data-index'));
+      act('crossfix-publish-' + id + '-' + index, function () { return call('crossfixPublish', { fixId: id, index: index }); }, function (r) { say('Opened #' + r.prId + ' in ' + r.repo + '.'); load(); });
+    },
+    'crossfix-discard': function (el) { call('crossfixDiscard', { fixId: el.getAttribute('data-id'), index: Number(el.getAttribute('data-index')) }).then(load, fail); },
+    'crossfix-front': function (el) {
+      var fixId = el.getAttribute('data-id');
+      var item = ((state.pr.crossfixes || {})[fixId] || [])[Number(el.getAttribute('data-index'))];
+      var job = (item && item.job) || {};
+      var findingId = el.getAttribute('data-finding');
+      var note = 'La parte de ' + item.repo + ' ya está hecha en el PR #' + job.prId + ' (rama ' + job.branch + ', todavía sin mergear): ' + String(item.change).slice(0, 1200) + '\nHacé ahora la parte de este repositorio, contando con eso.';
+      call('fix', { findingId: findingId, note: note }).then(function (r) {
+        say(r.fix && r.fix.sha ? 'Fixed this side: ' + r.fix.sha.slice(0, 7) + ' in the workshop.' : 'This side changed nothing: ' + ((r.fix && r.fix.summary) || ''));
+        load();
       }, fail);
     },
     'fix-note-open': function (el) { state.edits['fixnote-' + el.getAttribute('data-id')] = ''; draw(); },
