@@ -32,6 +32,7 @@ import type {
   GitBranch,
   GitCommit,
   GitFile,
+  GitMerge,
   GitResult,
   UsageReport,
 } from '../global';
@@ -375,6 +376,8 @@ interface RepoState {
   behind: number;
   detached: boolean;
   files: GitFile[];
+  /** A merge in progress and what is still in conflict; null when there is none. */
+  merge: GitMerge | null;
   /**
    * Whether the line counts beside each file were read.
    *
@@ -2316,7 +2319,7 @@ export const useStore = create<State>((set, get) => ({
     async function readRepo(wanted: RepoRead) {
       const base: RepoState = get().repos[root] ?? {
         loading: false, error: null, branch: null, upstream: null, ahead: 0, behind: 0,
-        detached: false, files: [], counted: true, commits: [], graphWidth: 1, current: null,
+        detached: false, files: [], merge: null, counted: true, commits: [], graphWidth: 1, current: null,
         local: [], remote: [], tags: [], stashes: [], busy: null, notice: null,
       };
       set((prev) => ({ repos: { ...prev.repos, [root]: { ...base, loading: true } } }));
@@ -2346,6 +2349,7 @@ export const useStore = create<State>((set, get) => ({
                     behind: status.behind ?? 0,
                     detached: status.detached ?? false,
                     files: status.files ?? [],
+                    merge: status.merge ?? null,
                     counted: status.counted !== false,
                   }
                 : {}),

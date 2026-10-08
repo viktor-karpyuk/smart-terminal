@@ -25,6 +25,7 @@ const path = require('node:path');
 const rules = require('./review-rules');
 const prompts = require('./review-prompts');
 const { describeEvent } = require('./review-engine');
+const { hasConflictMarkers } = require('./git');
 
 /** Long enough for a large merge and its check; short enough that a hung run is noticed. */
 const RUN_TIMEOUT = 30 * 60 * 1000;
@@ -33,7 +34,6 @@ const CHECK_TIMEOUT = 15 * 60 * 1000;
 /** Never let a resolution undo itself or leave the copy: the tool merges, commits and pushes. */
 const RESOLVE_DENIED = [...rules.FIX_DENIED, 'Bash(git merge*)', 'Bash(git rebase*)', 'Bash(git stash*)', 'Bash(git pull*)', 'Bash(git fetch*)'];
 
-const MARKER = /^(<{7}|>{7})( |$)|^={7}$/m;
 
 class ConflictResolver {
   constructor({ store, git, claude, engine, forge = null, scratch, language = () => 'español' }) {
@@ -206,13 +206,7 @@ class ConflictResolver {
         const outcome = result.structured && typeof result.structured === 'object' ? result.structured : {};
         if (outcome.resolved === false) throw new Error(`Not resolved: ${String(outcome.reason || outcome.summary || 'no reason given').slice(0, 600)}`);
         // The model's word is not the check: every file that was in conflict is read for a marker.
-        const left = paths.filter((file) => {
-          try {
-            return MARKER.test(fs.readFileSync(path.join(dir, file), 'utf8'));
-          } catch {
-            return false;
-          }
-        });
+        const left = paths.filter((file) => hasConflictMarkers(path.join(dir, file)));
         if (left.length) throw new Error(`Conflict markers are still in ${left.join(', ')}. Nothing was committed.`);
         job.summary = String(outcome.summary ?? '').slice(0, 1500);
       }
@@ -308,4 +302,4 @@ function parsePlan(raw, paths) {
   return { cause: String(value?.cause ?? '').slice(0, 4000), summary: String(value?.summary ?? '').slice(0, 1000), files, risks: String(value?.risks ?? '').slice(0, 3000) };
 }
 
-module.exports = { ConflictResolver, parsePlan, MARKER };
+module.exports = { ConflictResolver, parsePlan };
