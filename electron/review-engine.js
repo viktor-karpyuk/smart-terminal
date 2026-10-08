@@ -586,6 +586,12 @@ class ReviewEngine {
         this.store.failReview(reviewId, message, cancelled ? 'CANCELLED' : 'FAILED');
         return { ok: false, error: message, cancelled };
       }
+      // Every git command refused: it read nothing of the branch, whatever it says.
+      const refused = rules.gitRefused(result);
+      if (refused) {
+        this.store.failReview(reviewId, refused);
+        return { ok: false, error: refused };
+      }
       // No tool at all: it did not open the diff, so what it said is not about this PR.
       if (result.toolUses === 0) {
         const message =
@@ -611,10 +617,10 @@ class ReviewEngine {
             this.store.carryForward(step.finding.id, reviewId, step.line);
             carry.stillOpen++;
           } else if (step.verdict === 'FIXED') {
-            this.store.setResolution(step.finding.id, 'RESOLVED', step.evidence);
+            this.store.setResolution(step.finding.id, 'RESOLVED', step.evidence, 'VERIFY', step.commit);
             carry.fixed++;
           } else {
-            this.store.setResolution(step.finding.id, 'RESOLVED', step.evidence);
+            this.store.setResolution(step.finding.id, 'RESOLVED', step.evidence, 'VERIFY', step.commit);
             this.store.closeFinding(step.finding.id, true);
             carry.obsolete++;
           }
@@ -716,8 +722,9 @@ class ReviewEngine {
       if (!result.ok) throw new Error(result.stderr || 'Claude Code returned no verdict.');
       // Believing a verdict that never looked at the diff would enable a merge.
       if (result.toolUses === 0) throw new Error('The model did not open the diff, so its verdict does not rest on the code.');
+      if (rules.gitRefused(result)) throw new Error(rules.gitRefused(result));
       const parsed = rules.parseResolution(result.structured ?? result.text, new Set(pending.map((finding) => finding.id)));
-      for (const item of parsed.items) this.store.setResolution(item.id, item.resolution, item.evidence);
+      for (const item of parsed.items) this.store.setResolution(item.id, item.resolution, item.evidence, 'VERIFY', item.commit);
       let text = parsed.summary;
       const missing = pending.length - parsed.items.length;
       if (missing > 0) text += `\n\n⚠️ ${missing} remark(s) were left without a verdict: they stay unverified.`;
@@ -726,6 +733,68 @@ class ReviewEngine {
     } finally {
       this.activity.end(key);
       this.changed(repoId, prId);
+    }
+  }
+
+  /**
+   * One finding, asked again of the branch as it is now.
+   *
+   * The whole review is the wrong tool for "the author already fixed this
+   * one": it re-reads everything, costs a full review, and can still carry the
+   * old finding forward. This reads the one finding against the current refs.
+   * Fixed or no longer applying: a draft is dismissed (it must not go out) and
+   * a published one is resolved; still true: it stays, with the reason why.
+   */
+  async recheckFinding(findingId) {
+    const finding = this.store.finding(findingId);
+    if (!finding) throw new Error('That finding is gone.');
+    const repo = this.requireRepo(finding.repoId);
+    this.requireClone(repo);
+    const pr = this.prOrThrow(finding.repoId, finding.prId);
+    const key = `recheck:${findingId}`;
+    if (this.activity.has(key)) throw new Error('That finding is already being checked again.');
+    this.activity.start(key, { kind: 'recheck', repoId: repo.id, prId: pr.id, repoName: repo.name, title: finding.title, findingId });
+    this.changed(repo.id, pr.id);
+    try {
+      const fetched = await this.inClone(repo.localPath, () => this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch));
+      if (!fetched.ok) throw this.fetchError(repo, fetched);
+      const headSha = await this.fetchedHead(repo, pr);
+      const reviewed = this.store.review(finding.reviewId);
+      const thread = finding.publishedId
+        ? this.store.comments(repo.id, pr.id)
+          .filter((comment) => !comment.deleted && (comment.parentId === finding.publishedId || comment.commentId === finding.publishedId))
+          .sort((a, b) => String(a.createdOn).localeCompare(String(b.createdOn)))
+          .map((comment) => ({ author: comment.author, body: comment.body, ours: comment.ours }))
+        : [];
+      const result = await this.claude.run({
+        kind: 'recheck',
+        cwd: repo.localPath,
+        prompt: prompts.recheckPrompt({ finding, prTitle: pr.title, source: pr.sourceBranch, target: pr.targetBranch, reviewedAt: reviewed?.headSha ?? null, language: this.language(), thread }),
+        model: repo.defaultModel || rules.DEPTHS.INTERMEDIATE.model,
+        allowedTools: rules.DEPTHS.HEAVY.tools,
+        disallowedTools: rules.REVIEW_DENIED,
+        schema: prompts.RECHECK_SCHEMA,
+        register: (handle) => this.activity.patch(key, { handle }),
+        onEvent: (event) => this.activity.line(key, describeEvent(event)),
+      });
+      if (!result.ok) throw new Error(result.stderr || 'Claude Code returned no verdict.');
+      // A verdict that never opened the code would dismiss a finding on a guess.
+      if (result.toolUses === 0) throw new Error('The model did not open the code, so its verdict does not rest on it.');
+      if (rules.gitRefused(result)) throw new Error(rules.gitRefused(result));
+      const outcome = rules.parseRecheck(result.structured ?? result.text);
+      const at = String(headSha ?? '').slice(0, 7);
+      const note = `Checked again on ${at}: ${outcome.evidence}`;
+      if (outcome.verdict === 'STILL') {
+        // Published: an answer to "is it fixed?". A draft has not been asked that yet, so it only carries the note.
+        this.store.setResolution(finding.id, finding.publishedId ? 'UNRESOLVED' : null, note, 'RECHECK');
+      } else {
+        this.store.setResolution(finding.id, outcome.verdict === 'FIXED' ? 'RESOLVED' : 'WONT_FIX', note, 'RECHECK', outcome.commit);
+        if (!finding.publishedId) this.store.dismissFinding(finding.id, true);
+      }
+      return { ok: true, verdict: outcome.verdict, evidence: outcome.evidence, head: at };
+    } finally {
+      this.activity.end(key);
+      this.changed(repo.id, pr.id);
     }
   }
 
@@ -763,6 +832,7 @@ class ReviewEngine {
       });
       if (!result.ok) throw new Error(result.stderr || 'Claude Code returned no verdict.');
       if (result.toolUses === 0) throw new Error('The model did not open the diff: a final pass that did not look at the code cannot decide anything.');
+      if (rules.gitRefused(result)) throw new Error(rules.gitRefused(result));
       const parsed = rules.parseFinalPass(result.structured ?? result.text);
       const text = rules.finalPassText(parsed);
       this.store.setFinalPass(review.id, headSha, text, parsed.blockers.length);

@@ -474,3 +474,17 @@ test('a branch that does not merge is not ready, is the next step, and blocks th
     assert.notEqual(R.nextStep({ pr: calm, review, findings, threads: [], finalPassDone: true }).action, 'conflicts-open');
   }
 });
+
+test('a run whose every git command was refused read nothing, and says so', () => {
+  assert.equal(R.gitRefused({ bashUses: 0, denials: [] }), null, 'no shell at all is a different question');
+  assert.equal(R.gitRefused({ bashUses: 3, denials: ['Bash(git fetch; git diff)'] }), null, 'some got through');
+  assert.match(R.gitRefused({ bashUses: 2, denials: ['Bash(git fetch -q origin 2>&1 | tail -2; git diff --stat a...b)', 'Bash(git -C /x diff --stat a...b)'] }), /Every git command it tried was refused \(2\)/);
+});
+
+test('a recheck answer is read carefully: anything unclear keeps the finding', () => {
+  assert.deepEqual(R.parseRecheck({ verdict: 'FIXED', evidence: 'renamed to V0669', commit: 'ABC1234' }), { verdict: 'FIXED', evidence: 'renamed to V0669', commit: 'abc1234' });
+  assert.equal(R.parseRecheck({ verdict: 'FIXED', evidence: 'e', commit: 'the last one' }).commit, null, 'only a sha is a commit');
+  assert.equal(R.parseRecheck({ verdict: 'maybe' }).verdict, 'STILL');
+  assert.equal(R.parseRecheck('not json').verdict, 'STILL');
+  assert.equal(R.parseRecheck('```json\n{"verdict":"NOT_APPLICABLE","evidence":"gone"}\n```').verdict, 'NOT_APPLICABLE');
+});

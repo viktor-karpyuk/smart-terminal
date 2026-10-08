@@ -221,6 +221,8 @@ class ClaudeRunner {
         stderr: '',
         structured: null,
         toolUses: 0,
+        /** The shell commands it tried, refused or not: set against the refusals, whether it ever read the repository. */
+        bashUses: 0,
         denials: [],
         limits: [],
         sessionId: null,
@@ -277,6 +279,7 @@ class ClaudeRunner {
             if (event.model) result.model = event.model;
           } else if (event.kind === 'tool') {
             result.toolUses++;
+            if (event.tool === 'Bash') result.bashUses++;
           } else if (event.kind === 'limit') {
             result.limits.push(event);
           } else if (event.kind === 'result') {

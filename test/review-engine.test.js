@@ -1183,3 +1183,116 @@ test('conflicts: a resolution that leaves a marker is not committed', { skip }, 
   assert.equal(job.state, 'PROPOSED', 'back to the proposal, to try again');
   assert.match(job.error, /markers/);
 });
+
+test('re-check: a draft the author already fixed is dismissed, a published one resolved, one still true stays', { skip }, async () => {
+  const { service, repo } = setup([
+    async () => ({ structured: { summary: 's', findings: [finding(), finding({ line: 1, title: 'second' })] } }),
+    async ({ prompt }) => {
+      assert.match(prompt, /git show origin\/feature:<archivo>/, 'read from the branch, not the working tree');
+      assert.match(prompt, /Un comando por llamada/);
+      return { structured: { verdict: 'NOT_APPLICABLE', evidence: 'The file is V0669 now.' } };
+    },
+    async () => ({ structured: { verdict: 'STILL', evidence: 'Still returns a - b.' } }),
+    async () => ({ structured: { verdict: 'FIXED', evidence: 'Returns a + b on the tip.' } }),
+  ]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  const [draft, other] = service.store.findingsForPr(repo.id, 7);
+
+  const gone = await service.call('recheckFinding', { findingId: draft.id });
+  assert.equal(gone.verdict, 'NOT_APPLICABLE');
+  const after = service.store.finding(draft.id);
+  assert.ok(after.dismissedAt, 'a stale draft must not go out');
+  assert.match(after.resolutionNote, /V0669/);
+
+  await service.call('publishFinding', { findingId: other.id });
+  const still = await service.call('recheckFinding', { findingId: other.id });
+  assert.equal(still.verdict, 'STILL');
+  assert.equal(service.store.finding(other.id).resolution, 'UNRESOLVED');
+  assert.equal(service.store.finding(other.id).dismissedAt, null);
+
+  await service.call('recheckFinding', { findingId: other.id });
+  const fixed = service.store.finding(other.id);
+  assert.equal(fixed.resolution, 'RESOLVED');
+  assert.equal(fixed.dismissedAt, null, 'published: resolved, not dismissed');
+});
+
+test('a review whose every git command was refused is failed, not kept', { skip }, async () => {
+  const { service, repo } = setup([
+    async () => ({ bashUses: 2, denials: ['Bash(git fetch -q origin; git diff --stat x)', 'Bash(git -C /x diff)'], structured: { summary: 'I could not read it', findings: [finding()] } }),
+  ]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  const result = await service.call('review', { repoId: repo.id, prId: 7 });
+  assert.match(String(result.error ?? JSON.stringify(result)), /Every git command it tried was refused/);
+  assert.equal(service.store.findingsForPr(repo.id, 7).length, 0, 'none of what it said was kept');
+});
+
+test('commits are marked read or new, a rebased one is still read, and a commit names what it fixed', { skip }, async () => {
+  const { service, repo, w, forgeState } = setup([async () => ({ structured: { summary: 's', findings: [finding()] } })]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  let list = await service.call('commits', { repoId: repo.id, prId: 7 });
+  assert.equal(list.unreviewed, 0);
+  assert.equal(list.commits[0].reviewed.how, 'read');
+
+  // A new commit on the branch: one new, the reviewed one still read.
+  git(w.seed, 'checkout', '-q', 'feature');
+  fs.writeFileSync(path.join(w.seed, 'app.js'), 'function add(a, b) {\n  return a + b;\n}\n');
+  git(w.seed, 'commit', '-qam', 'fix the sign');
+  git(w.seed, 'push', '-q', 'origin', 'feature');
+  const fixSha = git(w.seed, 'rev-parse', 'HEAD');
+  forgeState.prs[0].headSha = fixSha;
+  await service.call('refreshPrs', { repoId: repo.id });
+  list = await service.call('commits', { repoId: repo.id, prId: 7 });
+  assert.equal(list.unreviewed, 1);
+  assert.deepEqual(list.commits.map((commit) => [commit.subject, Boolean(commit.reviewed)]), [['fix the sign', false], ['change', true]]);
+  assert.equal(list.sinceReview, 1, 'the marker where the review stopped, even with a short head');
+
+  // The verdict names the fixing commit; the list says so.
+  const [first] = service.store.findingsForPr(repo.id, 7);
+  service.store.setResolution(first.id, 'RESOLVED', 'fixed', 'VERIFY', fixSha.slice(0, 10));
+  list = await service.call('commits', { repoId: repo.id, prId: 7 });
+  assert.deepEqual(list.fixes.map((fix) => [fix.commit, fix.title]), [[fixSha.slice(0, 10), 'add subtracts']]);
+  service.store.setResolution(first.id, 'UNRESOLVED', 'not yet', 'VERIFY', fixSha);
+  assert.equal(service.store.finding(first.id).resolutionCommit, null, 'only a fix names a commit');
+
+  // Rebased: the reviewed change under a new hash is still read; the new one is still new.
+  git(w.seed, 'checkout', '-q', 'main');
+  fs.writeFileSync(path.join(w.seed, 'other.txt'), 'x\n');
+  git(w.seed, 'add', '.');
+  git(w.seed, 'commit', '-qm', 'main moves');
+  git(w.seed, 'push', '-q', 'origin', 'main');
+  git(w.seed, 'checkout', '-q', 'feature');
+  git(w.seed, 'rebase', '-q', 'main');
+  git(w.seed, 'push', '-qf', 'origin', 'feature');
+  forgeState.prs[0].headSha = git(w.seed, 'rev-parse', 'HEAD');
+  await service.call('refreshPrs', { repoId: repo.id });
+  list = await service.call('commits', { repoId: repo.id, prId: 7 });
+  assert.deepEqual(list.commits.map((commit) => [commit.subject, commit.reviewed && commit.reviewed.how]), [['fix the sign', null], ['change', 'rebased']]);
+});
+
+test('the author is told, by direct message from you, which files conflict and what the analysis found', { skip }, async () => {
+  const { service, repo } = setup([]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  const sent = [];
+  service.deliver = async (message) => {
+    sent.push(message);
+    return { ok: true };
+  };
+  await assert.rejects(service.tellConflicts(repo.id, 7), /nothing to tell/);
+  service.store.setConflicts(repo.id, 7, ['src/a.ts', 'src/b.ts']);
+  service.store.setPref(service.conflicts.key(repo.id, 7), JSON.stringify({
+    state: 'PROPOSED',
+    plan: { cause: 'KS-718 went into main as a squash.', summary: '', risks: 'Run the stock tests.', files: [{ path: 'src/a.ts', approach: 'THEIRS', what: '', proposal: 'take main' }] },
+  }));
+  const result = await service.call('tellConflicts', { repoId: repo.id, prId: 7 });
+  assert.equal(result.person.ok, true);
+  const [message] = sent;
+  assert.equal(message.voice, 'me', 'from you, never the bot');
+  assert.equal(message.to.handle, 'github:Ana');
+  assert.match(message.body, /`feature` \(#7\) ya no se puede mergear en `main`: 2 archivos/);
+  assert.match(message.body, /• `src\/a\.ts` — take main/);
+  assert.match(message.body, /• `src\/b\.ts`$/m);
+  assert.match(message.body, /Qué pasó: KS-718 went into main as a squash/);
+  assert.match(message.body, /Para probar después: Run the stock tests/);
+});
