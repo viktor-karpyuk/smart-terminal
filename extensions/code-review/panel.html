@@ -1375,6 +1375,14 @@
       if (before && after && before !== after) {
         state.code = { files: null, file: state.code.file, lines: null, error: null, focusLine: null, noteAt: null };
         state.commits = { data: null, sha: null, files: null, file: null, lines: null, error: null };
+      } else if (state.commits.data && commitsStamp(state.pr) !== commitsStamp(r)) {
+        /*
+         * Same head, but what the list says about it moved: a review finished
+         * (its commits are reviewed now), or a verdict named the commit that
+         * fixed something. The list is read again; the commit being looked at
+         * stays open.
+         */
+        state.commits = { data: null, sha: state.commits.sha, files: state.commits.files, file: state.commits.file, lines: state.commits.lines, error: null };
       }
       state.pr = r;
       state.prError = null;
@@ -1383,6 +1391,14 @@
       if (state.prTab === 'code' && !state.code.files) loadFiles();
       if (state.prTab === 'commits' && !state.commits.data) loadCommits();
     });
+  }
+
+  /** What the Commits tab's marks depend on, besides the head: the reviews done, and the verdicts that name commits. */
+  function commitsStamp(v) {
+    if (!v) return '';
+    var done = (v.reviews || []).filter(function (one) { return one.status === 'DONE'; }).map(function (one) { return one.id; }).join(',');
+    var fixed = (v.findings || []).concat(v.earlierFindings || []).map(function (f) { return f.id + ':' + (f.resolution || '') + ':' + (f.resolutionCommit || ''); }).join(',');
+    return done + '|' + fixed;
   }
 
   /** Something about this PR changed on the other side: read it again, but not under someone's typing. */
@@ -4463,11 +4479,12 @@
       state.confirmRerun = null;
       act(reviewKey(), function () {
         return call('review', prArgs({ depth: p.depth === 'AUTO' ? undefined : p.depth, kind: p.kind === 'AUTO' ? undefined : p.kind, forceFull: full }));
-      }, function () { say('Review finished.'); });
+      }, function () { say('Review finished.'); load(); });
     };
     if (full || confirmed) return start();
     call('rerunCheck', prArgs()).then(function (r) {
-      if (r.existing) { state.confirmRerun = r.existing; draw(); } else start();
+      // The question is asked on the Review tab; from anywhere else it would have been asked out of sight.
+      if (r.existing) { state.confirmRerun = r.existing; state.prTab = 'review'; remember(); draw(); } else start();
     }).catch(fail);
   }
 
