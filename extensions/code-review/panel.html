@@ -130,7 +130,9 @@
   .crumbs { display: flex; align-items: center; gap: 6px; color: var(--text-faint); min-width: 0; }
   .crumbs .link { color: var(--text-dim); }
   .crumbs .here { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-  .crumbs .link { flex: none; }
+  /* The repository's name gives way too, with an ellipsis, rather than running under whatever comes after the crumb. */
+  .crumbs .link { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .top > .crumbs { overflow: hidden; }
   .section-title { display: flex; align-items: baseline; gap: 8px; margin: 16px 0 6px; }
   .section-title h3 { margin: 0; }
   .kbd { display: inline-block; padding: 0 4px; border: 1px solid var(--border); border-radius: 3px; font-family: ui-monospace, Menlo, monospace; font-size: 0.833rem; color: var(--text-faint); }
@@ -216,6 +218,24 @@
   .run + .run { margin-top: 6px; }
   .run .lines { margin-top: 6px; max-height: 150px; overflow: auto; font-family: ui-monospace, Menlo, monospace; font-size: 0.917rem; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
 
+  /* Wide: the pull request down the left, its tabs at the top edge of the rest. */
+  .prview.side { display: grid; grid-template-columns: minmax(280px, 26rem) minmax(0, 1fr); height: 100%; min-height: 0; }
+  .prside { overflow: auto; min-height: 0; padding: 12px 14px 24px; border-right: 1px solid var(--border); background: var(--bg-panel); }
+  .prside .row { flex-wrap: wrap; }
+  .prside .side-title { font-size: 1.167rem; line-height: 1.35; margin: 8px 0 10px; font-weight: 600; word-break: break-word; }
+  .prside .side-facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 0 0 10px; font-size: 0.958rem; }
+  .prside .side-facts dt { color: var(--text-faint); }
+  .prside .side-facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  .prside .side-links { gap: 4px; margin-bottom: 4px; }
+  /* In the column the next step stacks: what it is, then its button across the column. */
+  .prside .next { margin-top: 12px; flex-wrap: wrap; }
+  .prside .next .words { flex: 1 1 0; min-width: 0; }
+  .prside .next > .btn { flex: 1 0 100%; }
+  .prside .group-btns { border: 0 !important; margin: 0 !important; padding: 0 !important; }
+  .prside .readiness { width: 100%; margin: 4px 0 !important; }
+  .prside .readiness .bar { flex: 1; width: auto; }
+  .prmain { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .prmain > .subtabs { flex: none; position: static; padding-inline: var(--s4, 14px); }
   /* A pull request is a column: the header and the tabs stay, the body under them scrolls. */
   .prview { display: flex; flex-direction: column; height: 100%; min-height: 0; }
   .prview > .prhead, .prview > .subtabs { flex: none; position: static; }
@@ -1425,6 +1445,20 @@
     return parts.length ? '<span class="crumbs">› ' + parts.join(' › ') + '</span>' : '';
   }
 
+  /**
+   * Room for the pull request's own column (26rem, so it grows with the text)
+   * beside at least 760px of everything else — enough for a diff and its file
+   * list side by side.
+   */
+  function isWide() {
+    var main = $('main');
+    return Boolean(main) && main.clientWidth >= 26 * uiFont() + 760;
+  }
+  // Crossing the width redraws; anything smaller than that is the layout's own business.
+  if (window.ResizeObserver) {
+    new ResizeObserver(function () { if (state.view === 'pr' && isWide() !== Boolean(state.wide)) draw(); }).observe(document.getElementById('main'));
+  }
+
   function uiFont() { var s = state.overview && state.overview.settings; return (s && s.uiFont) || 12; }
 
   function draw() {
@@ -1438,6 +1472,7 @@
     drawTop();
     drawPrTabs();
     var main = $('main');
+    state.wide = isWide();
     var scroll = main.scrollTop;
     // In a pull request it is the body under the tabs that scrolls, and each tab keeps its own place.
     var body = $('prbody');
@@ -2122,6 +2157,7 @@
      * title on one line (the whole of it in the tooltip) and the commit. What
      * there is to *do* about it lives at the top of the Review tab.
      */
+    if (state.wide) return drawPrSide(v, provider, runs);
     var html = '<div class="prview"><div class="prhead"><div class="row">' +
       '<span class="chip ' + (open ? 'okc' : pr.state === 'MERGED' ? 'accent' : 'badc') + '">' + esc(pr.state.toLowerCase()) + '</span>' +
       (pr.isDraft ? '<span class="chip">draft</span>' : '') +
@@ -2138,12 +2174,17 @@
       (pr.createdOn ? ' · opened ' + esc(when(pr.createdOn)) : '') + (pr.updatedOn ? ' · updated ' + esc(when(pr.updatedOn)) : '') +
       mergeLine(v) + '</div>';
     html += '</div>';
+    return html + drawPrTabsAndBody(v, runs) + '</div>';
+  }
+
+  /** The pull request's own tabs, and the body under them that scrolls. */
+  function drawPrTabsAndBody(v, runs) {
     var counts = {
       review: (v.findings || []).filter(function (f) { return !f.publishedId && !f.dismissedAt && !f.closedAt; }).length,
       conversation: v.threads.filter(function (t) { return t.state === 'NEEDS_ANSWER' || t.state === 'DRAFT_READY'; }).length,
       commits: 0
     };
-    html += '<div class="subtabs">' + [['review', 'Review'], ['code', 'Code'], ['commits', 'Commits'], ['conversation', 'Conversation'], ['history', 'History']].map(function (t, i) {
+    var html = '<div class="subtabs">' + [['review', 'Review'], ['code', 'Code'], ['commits', 'Commits'], ['conversation', 'Conversation'], ['history', 'History']].map(function (t, i) {
       return '<button class="tab' + (state.prTab === t[0] ? ' on' : '') + '" data-act="pr-tab" data-tab="' + t[0] + '" title="' + (i + 1) + '">' + t[1] + (counts[t[0]] ? '<span class="count">' + counts[t[0]] + '</span>' : '') + '</button>';
     }).join('') + '<span class="spacer"></span>' + (runs.length ? '<span class="chip accent" style="align-self:center"><span class="dot busy"></span>' + runs.length + ' running</span>' : '') +
       '<button class="link faint keys-hint" data-act="keys-open" title="Keyboard shortcuts"><span class="kbd">?</span> keys</button></div>';
@@ -2154,7 +2195,50 @@
     else if (state.prTab === 'commits') html += drawCommitsTab(v);
     else if (state.prTab === 'conversation') html += drawConversationTab(v);
     else html += drawHistoryTab(v);
-    return html + '</div></div>';
+    return html + '</div>';
+  }
+
+  /*
+   * On a wide screen, the pull request down the left.
+   *
+   * The column the content is read in is 1180px, so a wide pane had a band of
+   * nothing at each side while the header took a strip of its own across the
+   * top. The header goes into that band instead, as a column of its own: the
+   * title whole, the commit a line at a time, the links, and what there is to
+   * do — the next step, the decisions, the readiness, merge — reachable from
+   * every tab. The tabs move up to the top edge and the body gets the height.
+   * Below the width it needs, the header and the Review tab go back to how
+   * they are on a narrow pane.
+   */
+  function drawPrSide(v, provider, runs) {
+    var pr = v.pr;
+    var open = pr.state === 'OPEN';
+    var side = '<aside class="prside">' +
+      '<div class="row">' +
+        '<span class="chip ' + (open ? 'okc' : pr.state === 'MERGED' ? 'accent' : 'badc') + '">' + esc(pr.state.toLowerCase()) + '</span>' +
+        (pr.isDraft ? '<span class="chip">draft</span>' : '') +
+        v.approvals.map(function (a) {
+          return '<span class="chip ' + (a.state === 'APPROVED' ? 'okc' : 'badc') + '" title="' + esc(a.state === 'APPROVED' ? 'Approved' : 'Requested changes') + (a.byUs ? ' (you)' : '') + '">' + (a.state === 'APPROVED' ? '✓ ' : '✗ ') + esc(a.who) + '</span>';
+        }).join('') +
+      '</div>' +
+      '<h2 class="side-title">#' + pr.id + ' ' + esc(pr.title) + '</h2>' +
+      '<dl class="side-facts">' +
+        '<dt>Author</dt><dd>' + esc(pr.author) + '</dd>' +
+        (pr.sourceBranch ? '<dt>Branch</dt><dd class="mono">' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch) + '</dd>' : '') +
+        (pr.headSha ? '<dt>Head</dt><dd class="mono">' + sha7(pr.headSha) + '</dd>' : '') +
+        (pr.createdOn ? '<dt>Opened</dt><dd>' + esc(when(pr.createdOn)) + (pr.updatedOn ? ' <span class="faint">· updated ' + esc(when(pr.updatedOn)) + '</span>' : '') + '</dd>' : '') +
+        (open ? '<dt>Merge</dt><dd>' + mergeLine(v).replace(/^ · /, '') + '</dd>' : '') +
+      '</dl>' +
+      '<div class="row side-links">' +
+        (pr.url ? '<button class="btn small" data-act="open-url" data-url="' + esc(pr.url) + '" title="Open the pull request on ' + provider + '">' + provider + ' ↗</button>' : '') +
+        '<button class="btn small" data-act="shell" data-where="clone" title="A terminal in the local clone">Terminal</button>' +
+        '<button class="btn small" data-act="ask" title="A Claude session briefed on this pull request">Ask Claude</button>' +
+        '<button class="btn small" data-act="pr-load"' + busyAttr(prKey('pr-load')) + ' title="Read the pull request, its stances and its thread again">Reload</button>' +
+      '</div>' +
+      drawNextStep(v, false) +
+      (open ? drawActions(v) : '') +
+      '</aside>';
+    return '<div class="prview side">' + side + '<div class="prmain">' + drawPrTabsAndBody(v, runs) + '</div></div>';
   }
 
   /**
@@ -2578,8 +2662,10 @@
     var reviewing = runs.some(function (run) { return run.kind === 'review'; });
     var html = '<div class="page">';
     // --- what there is to do about it: the next step, the decisions, and what stands in the way of a merge
-    html += drawNextStep(v, false);
-    if (open) html += drawActions(v);
+    if (!state.wide) {
+      html += drawNextStep(v, false);
+      if (open) html += drawActions(v);
+    }
     if (runs.length) html += drawRuns(runs, false);
 
     // --- what the author says the PR is: open until there is a review to read instead
@@ -2606,8 +2692,9 @@
       if (open && (waiting.length || notes.length)) html += '<button class="btn small primary" data-act="publish-all"' + busyAttr(prKey('publish-all')) + ' title="Every finding still waiting, then every note">Publish ' + (waiting.length + notes.length) + ' inline</button>';
       if (open && v.repo.fixMode !== 'OFF' && fixable.length > 1) html += '<button class="btn small go" data-act="fix-all"' + busyAttr(prKey('fix-all')) + ' title="One after another, in the workshop">Fix all ' + fixable.length + '</button>';
       html += '</div>';
+      // A line of its own, not a branch of the choice below: as one, it was drawn instead of the list it introduces.
+      if (findings.length && !current.length && done) html += '<div class="faint" style="margin:0 0 8px">The last review found nothing new. These are from earlier reviews of this pull request.</div>';
       if (!findings.length) html += '<div class="card faint">This review found nothing worth reporting.</div>';
-      else if (!current.length && done) html += '<div class="faint" style="margin:0 0 8px">The last review found nothing new. These are from earlier reviews of this pull request.</div>';
       else if (!shown.length) html += '<div class="card faint">Nothing here. <button class="link" data-act="finding-filter" data-filter="all">Show all findings</button></div>';
       else html += shown.map(function (f) { return findingCard(f, v); }).join('');
     }
