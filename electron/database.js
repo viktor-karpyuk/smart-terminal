@@ -255,6 +255,15 @@ class Database {
       this.db.exec('ALTER TABLE sessions ADD COLUMN paused INTEGER DEFAULT 0');
     }
     /*
+     * How a session looks: its own text size and colour, set from its menu.
+     *
+     * The renderer sent them with every save and nothing kept them, so every
+     * restart — an update included — put every session back to the app's
+     * default size and no colour.
+     */
+    if (!present.has('font_size')) this.db.exec('ALTER TABLE sessions ADD COLUMN font_size REAL');
+    if (!present.has('color')) this.db.exec('ALTER TABLE sessions ADD COLUMN color TEXT');
+    /*
      * When something last *happened* here, which is not when the row was last
      * written to.
      *
@@ -521,6 +530,8 @@ class Database {
       transcriptBytes: 'transcript_bytes',
       windowId: 'window_id',
       groupId: 'group_id',
+      fontSize: 'font_size',
+      color: 'color',
       lastCommand: 'last_command',
       resumeCommand: 'resume_command',
     };
@@ -1948,6 +1959,8 @@ function decorate(row) {
     resumedFrom: row.resumed_from,
     windowId: row.window_id,
     groupId: row.group_id,
+    fontSize: row.font_size ?? null,
+    color: row.color ?? null,
     lastCommand: row.last_command ?? null,
     resumeCommand: Boolean(row.resume_command),
     /** Put down on purpose. It comes back as a tab, not as a running session. */
