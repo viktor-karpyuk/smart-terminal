@@ -24,7 +24,7 @@ import react from '@vitejs/plugin-react';
  */
 const CSP =
   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-  "img-src 'self' data:; font-src 'self' data:; connect-src 'none'; worker-src blob:; frame-src panel:";
+  "img-src 'self' data: media:; media-src media:; font-src 'self' data:; connect-src 'none'; worker-src blob:; frame-src panel: media:";
 
 /**
  * The production bundle is fully local, so it gets a strict policy. Dev is left

@@ -18,6 +18,7 @@ import { readAll } from '../terminals/registry';
 import { FILE_MIME } from '../lib/drag';
 import { isInside, nameProblem, parentOf } from '../lib/fileOps';
 import { CaretIcon } from './icons';
+import { mediaKind, mediaUrl, type MediaKind } from '../lib/media';
 
 /**
  * Entries whose row should open for renaming the moment it appears — a file
@@ -1831,7 +1832,9 @@ function OpenFile({
     ),
   );
 
+  const media = mediaKind(path);
   if (!buffer) return <div className="files-empty"><p>opening…</p></div>;
+  if (media) return <MediaView path={path} kind={media} version={buffer.mtimeMs} />;
   if (buffer.loading) return <div className="files-empty"><p>opening…</p></div>;
   if (buffer.error && buffer.readOnly) {
     return (
@@ -1934,5 +1937,99 @@ function OpenFile({
         <span className={dirty ? 'files-status-dirty' : undefined}>{dirty ? 'unsaved · ⌘S' : 'saved'}</span>
       </footer>
     </>
+  );
+}
+
+/**
+ * A picture, a video, a sound or a PDF, shown as what it is.
+ *
+ * Served by the app's own `media:` scheme rather than read into memory, so a
+ * video plays while it streams and scrubbing asks only for what it needs. A
+ * picture opens fitted to the pane and goes to its real size on a click, over
+ * a checkerboard so transparency is visible. What is known about it — its
+ * size in pixels or its length, and its size on disk — sits in a bar above.
+ */
+function MediaView({ path, kind, version }: { path: string; kind: MediaKind; version: number }) {
+  const [actual, setActual] = useState(false);
+  const [facts, setFacts] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [reload, setReload] = useState(0);
+  const url = mediaUrl(path, `${version}-${reload}`);
+  const name = path.split('/').pop() ?? path;
+  useEffect(() => {
+    setFacts(null);
+    setFailed(false);
+    setActual(false);
+  }, [path]);
+
+  const length = (seconds: number) => {
+    if (!Number.isFinite(seconds)) return '';
+    const s = Math.round(seconds);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const rest = String(s % 60).padStart(2, '0');
+    return h ? `${h}:${String(m).padStart(2, '0')}:${rest}` : `${m}:${rest}`;
+  };
+
+  return (
+    <div className="media-view">
+      <div className="media-bar">
+        <span className="media-name" title={path}>{name}</span>
+        {facts && <span className="media-facts">{facts}</span>}
+        <span className="media-spacer" />
+        {kind === 'image' && !failed && (
+          <button className="ghost-btn tiny" onClick={() => setActual((on) => !on)}>
+            {actual ? 'Fit' : 'Actual size'}
+          </button>
+        )}
+        <button className="ghost-btn tiny" title="Read it from disk again" onClick={() => setReload((n) => n + 1)}>
+          Reload
+        </button>
+        <button className="ghost-btn tiny" onClick={() => window.api.files.reveal(path)}>
+          Show in Finder
+        </button>
+      </div>
+      <div className={`media-stage is-${kind}${actual ? ' is-actual' : ''}`}>
+        {failed ? (
+          <div className="files-empty">
+            <p>This {kind === 'image' ? 'picture' : kind} could not be shown here.</p>
+            <button className="ghost-btn" onClick={() => window.api.files.reveal(path)}>Show in Finder</button>
+          </div>
+        ) : kind === 'image' ? (
+          <img
+            key={url}
+            src={url}
+            alt={name}
+            draggable={false}
+            onClick={() => setActual((on) => !on)}
+            onLoad={(event) => setFacts(`${event.currentTarget.naturalWidth} × ${event.currentTarget.naturalHeight}`)}
+            onError={() => setFailed(true)}
+          />
+        ) : kind === 'video' ? (
+          <video
+            key={url}
+            src={url}
+            controls
+            preload="metadata"
+            onLoadedMetadata={(event) => {
+              const v = event.currentTarget;
+              setFacts([v.videoWidth && `${v.videoWidth} × ${v.videoHeight}`, length(v.duration)].filter(Boolean).join(' · '));
+            }}
+            onError={() => setFailed(true)}
+          />
+        ) : kind === 'audio' ? (
+          <audio
+            key={url}
+            src={url}
+            controls
+            preload="metadata"
+            onLoadedMetadata={(event) => setFacts(length(event.currentTarget.duration))}
+            onError={() => setFailed(true)}
+          />
+        ) : (
+          <iframe key={url} className="media-pdf" src={url} title={name} />
+        )}
+      </div>
+    </div>
   );
 }

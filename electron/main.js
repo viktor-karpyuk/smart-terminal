@@ -63,6 +63,7 @@ const buildTools = require('./build-tools');
 const { Updates, repoSlug } = require('./updates');
 const { ReviewService } = require('./review-service');
 const { TeamsService } = require('./teams-service');
+const { serveMedia } = require('./media');
 const { TeamsBot } = require('./teams-bot');
 const { resolvedPath } = require('./cli-env');
 
@@ -112,6 +113,8 @@ let updates = null;
  */
 protocol.registerSchemesAsPrivileged([
   { scheme: 'panel', privileges: { standard: true, secure: true, supportFetchAPI: false, corsEnabled: false } },
+  // Pictures, video, sound and PDFs from disk, for the Files panel. `stream` so a video plays while it loads.
+  { scheme: 'media', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true, corsEnabled: false } },
 ]);
 
 const isDev = process.env.SMART_TERMINAL_DEV === '1';
@@ -2264,6 +2267,7 @@ function launchFailed(error) {
 }
 
 if (isPrimaryInstance) app.whenReady().then(() => {
+  protocol.handle('media', (request) => serveMedia(request));
   protocol.handle('panel', (request) => {
     const id = new URL(request.url).hostname;
     const html = stagedPanels.get(id);
