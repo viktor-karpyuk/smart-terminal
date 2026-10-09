@@ -1016,6 +1016,12 @@ class ReviewEngine {
       const posted = await this.forge.of(repo).inline(finding.prId, rules.findingComment(finding, this.language()), finding.filePath, finding.lineNo, await this.anchorCommit(repo, pr, this.store.review(finding.reviewId)?.headSha));
       this.store.markFindingPublished(findingId, posted.id, posted.url);
       this.store.markPublishedIfComplete(finding.reviewId, posted.url);
+      // Whoever listens (the channel announcement) hears it; a listener's failure is not the publish's.
+      try {
+        this.onPublished?.(repo.id, finding.prId, findingId);
+      } catch {
+        /* not the publish's problem */
+      }
       await this.syncQuietly(repo, finding.prId);
       return { ok: true, url: posted.url };
     } catch (error) {

@@ -731,7 +731,7 @@ function reviewTab(v, filter = null) {
   const R = fromPanel(['esc', 'findingDone', 'drawReviewTab']);
   Object.assign(R, {
     state: { wide: false, findingFilter: filter, folds: {}, busy: {}, reviewProfile: { depth: 'AUTO', kind: 'AUTO' }, depths: null, edits: {} },
-    drawNextStep: () => '', drawActions: () => '', drawRuns: () => '', drawConflictCard: () => '',
+    drawNextStep: () => '', drawActions: () => '', drawRuns: () => '', drawConflictCard: () => '', remindHtml: () => '',
     fold: (key, head, summary, body) => `<fold ${key}>`, md: (text) => String(text), clamped: (key, text) => text,
     busyAttr: () => '', prKey: (key) => key, reviewKey: () => 'review', isOpen: () => false, when: () => 'now',
     findingCard: (f) => `<card ${f.id}>`,
