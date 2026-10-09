@@ -1360,6 +1360,8 @@ function registerIpc() {
           customTitle: row.title,
           claudeSessionId: row.claudeSessionId,
           groupId: row.groupId ?? null,
+          fontSize: row.fontSize ?? null,
+          color: row.color ?? null,
           // What it was running, and whether it was told to start that again.
           lastCommand: row.lastCommand ?? null,
           resumeCommand: row.resumeCommand ?? false,
@@ -1396,7 +1398,13 @@ function registerIpc() {
     });
     db.saveGroups(windowId, state.groups ?? []);
     for (const session of state.sessions ?? []) {
-      db.updateSession(session.id, { groupId: session.groupId ?? null });
+      const size = Number(session.fontSize);
+      db.updateSession(session.id, {
+        groupId: session.groupId ?? null,
+        // Its own look, so a restart brings it back as it was left.
+        fontSize: Number.isFinite(size) && size >= 6 && size <= 72 ? size : null,
+        color: typeof session.color === 'string' && session.color.length <= 64 ? session.color : null,
+      });
     }
   });
 
