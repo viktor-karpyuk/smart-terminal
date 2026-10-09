@@ -63,6 +63,7 @@ import {
   type TerminalLook,
 } from '../terminals/registry';
 import { NAME_MAX_DEFAULT, sessionLabel } from '../lib/labels';
+import { mediaKind } from '../lib/media';
 
 /** Panels whose terminal is being started, so a second press cannot start another. */
 const openingTerminal = new Set<string>();
@@ -2507,6 +2508,18 @@ export const useStore = create<State>((set, get) => ({
 
     // Already loaded, and possibly edited — re-reading would throw that away.
     if (get().buffers[path]) return;
+
+    // A picture, a video, a sound or a PDF is shown from disk as itself; there is no text to read.
+    if (mediaKind(path)) {
+      set((prev) => ({
+        buffers: {
+          ...prev.buffers,
+          [path]: { path, text: '', savedText: '', mtimeMs: Date.now(), conflict: null, reloadedAt: null, loading: false, error: null, readOnly: true },
+        },
+      }));
+      schedulePersist(get);
+      return;
+    }
 
     set((prev) => ({
       buffers: {
