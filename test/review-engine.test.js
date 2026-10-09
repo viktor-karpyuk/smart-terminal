@@ -1365,3 +1365,63 @@ test('a fix that needs another repository: the change made there in a copy, push
   assert.match((await service.call('crossfixPrepare', { fixId: fixed.fix.id, index: 0 })).error, /not one of the repositories configured here/);
   assert.ok(backend.id);
 });
+
+test('publishing tells the channel once per batch, unless switched off; and the open comments can be asked for', { skip }, async () => {
+  const { service, repo } = setup([async () => ({ structured: { summary: 's', findings: [finding(), finding({ line: 1, title: 'second', severity: 'minor' })] } })]);
+  const sent = [];
+  service.deliver = async (message) => {
+    sent.push(message);
+    return { ok: true };
+  };
+  service.publishedSettleMs = 20;
+  service.store.setPref('announce.channel', 'code-review');
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  await service.call('publishAll', { repoId: repo.id, prId: 7 });
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert.equal(sent.length, 1, 'one message for the batch, not one per comment');
+  assert.equal(sent[0].to.channel, 'code-review');
+  assert.match(sent[0].title, /2 new comments to resolve on Demo App #7/);
+  assert.ok(sent[0].body.indexOf('add subtracts') < sent[0].body.indexOf('second'), 'the worst first');
+
+  // Asking for one, to the author, from you.
+  sent.length = 0;
+  const [first] = service.store.findingsForPr(repo.id, 7);
+  const one = await service.call('notifyFindings', { repoId: repo.id, prId: 7, findingId: first.id, person: true });
+  assert.equal(one.person.ok, true);
+  assert.equal(sent[0].voice, 'me');
+  assert.match(sent[0].title, /Please resolve this comment/);
+
+  // Every open one, in the channel; a resolved one is left out.
+  sent.length = 0;
+  service.store.setResolution(first.id, 'RESOLVED', 'fixed');
+  await service.call('notifyFindings', { repoId: repo.id, prId: 7, channel: true });
+  assert.doesNotMatch(sent[0].body, /add subtracts/);
+  assert.match(sent[0].body, /second/);
+
+  // Switched off: publishing says nothing.
+  service.store.setPref('announce.published', 'false');
+  sent.length = 0;
+  assert.equal((await service.announcePublished(repo.id, 7, [first.id])).why, 'off');
+  assert.equal(sent.length, 0);
+});
+
+test('a reminder is remembered on the board and restarts the clock, so the automatic one repeats only after its days', { skip }, async () => {
+  const { service, repo } = setup([async () => ({ structured: { summary: 's', findings: [finding()] } })]);
+  service.deliver = async () => ({ ok: true });
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  await service.call('publishAll', { repoId: repo.id, prId: 7 });
+  const [published] = service.store.findingsForPr(repo.id, 7);
+  // As if published four days ago, with the rule asking after three.
+  service.store.db.prepare('UPDATE cr_pr_comment SET created_on = ? WHERE repo_id = ?').run('2026-01-01T00:00:00Z', repo.id);
+  service.store.setPref('reminders.rules', JSON.stringify({ UNANSWERED: { mode: 'AUTO', days: 3 } }));
+  const dueBefore = service.due().filter((one) => one.prId === 7 && one.rule.id === 'UNANSWERED');
+  assert.equal(dueBefore.length, 1, 'waiting long enough: due');
+
+  await service.call('notifyFindings', { repoId: repo.id, prId: 7, person: true });
+  assert.ok(service.store.finding(published.id).followedUpAt, 'the comment is stamped');
+  const row = (await service.call('dashboard')).rows.find((one) => one.pr.id === 7);
+  assert.equal(row.reminded.how, 'author');
+  assert.equal(service.due().filter((one) => one.prId === 7 && one.rule.id === 'UNANSWERED').length, 0, 'just reminded: not due again until its days pass');
+});

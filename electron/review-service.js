@@ -143,6 +143,9 @@ class ReviewService {
       language: () => this.engine.language(),
     });
     this.engine.onBranches = (repoId) => this.migrations.check(repoId);
+    /** Findings published, gathered per pull request so a batch is one message in the channel, not ten. */
+    this.publishedBatches = new Map();
+    this.engine.onPublished = (repoId, prId, findingId) => this.queuePublished(repoId, prId, findingId);
     this.engine.beforeMerge = (repo, pr) => this.migrations.blockMerge(repo, pr);
     this.auto = new AutoReviewer({
       store: this.store,
@@ -248,6 +251,8 @@ class ReviewService {
       remindInThread: prefs['reminders.inThread'] !== 'false',
       announceChannel: prefs['announce.channel'] ?? '',
       announceEnabled: prefs['announce.enabled'] === 'true',
+      // On unless switched off: publishing is exactly when the developers need to hear it.
+      announcePublished: prefs['announce.published'] !== 'false',
       escalateChannel: prefs['escalate.channel'] ?? '',
       escalateDays: Number(prefs['escalate.days'] ?? 0) || 0,
       watchEnabled: prefs['auto.watch'] !== 'false',
@@ -416,6 +421,8 @@ class ReviewService {
           mine: flags.some((flag) => rules.FLAGS[flag]?.mine),
           findings: { total: fact.findingCount ?? 0, published: fact.publishedCount ?? 0, pending: fact.pendingFindings ?? 0, unresolved: fact.unresolved ?? 0 },
           costUsd: fact.totalCost ?? 0,
+          // When the author was last asked about it, and how — so the board can say how long they have had it.
+          reminded: this.lastReminded(pr.repoId, pr.id),
           reviewedSha: fact.reviewedSha ?? null,
           lastStatus: fact.lastStatus ?? null,
           approvedByUs: Boolean(fact.approvedByUs),
@@ -537,6 +544,11 @@ class ReviewService {
     const delivered = await this.deliver(
       reminders.asMessage(found, { row: found.row, provider: repo.provider, me: settings.me }),
     );
+    if (delivered?.ok || posted?.ok) {
+      // The open comments' clocks start again from here: the next one is due in the rule's days, not at the next sweep.
+      const open = this.threadsOf(repoId, prId).filter((thread) => thread.state !== 'OK' && thread.state !== 'UNPUBLISHED' && thread.findingId).map((thread) => thread.findingId);
+      this.markReminded(repoId, prId, { how: found.rule.mode === 'AUTO' ? 'automatic' : 'reminder', findingIds: open });
+    }
     this.engine.changed(repoId, prId);
     return { ok: true, posted, delivered };
   }
@@ -560,6 +572,103 @@ class ReviewService {
    * that is off, a webhook that has gone — all of them mean the review happens
    * anyway and nobody is told.
    */
+  /**
+   * A reminder sent: when, and to whom. Kept per pull request so the board can
+   * say "reminded 2 days ago", and stamped on each open comment so the rule
+   * about unanswered comments counts from this reminder — which is what makes
+   * it repeat every so many days until they are resolved, and not every sweep.
+   */
+  markReminded(repoId, prId, { how, findingIds = [] } = {}) {
+    for (const id of findingIds) this.store.markFollowedUp(id);
+    this.store.setPref(`reminded:${repoId}#${prId}`, JSON.stringify({ at: new Date().toISOString(), how }));
+  }
+
+  lastReminded(repoId, prId) {
+    try {
+      const raw = this.store.pref(`reminded:${repoId}#${prId}`);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Where a repository's news goes: its own room, or the reviewer's. */
+  channelFor(repo) {
+    return String(repo?.alertChannel ?? '').trim() || this.store.pref('announce.channel', '').trim();
+  }
+
+  queuePublished(repoId, prId, findingId) {
+    const key = `${repoId}#${prId}`;
+    const batch = this.publishedBatches.get(key) ?? { ids: new Set(), timer: null };
+    batch.ids.add(findingId);
+    if (batch.timer) clearTimeout(batch.timer);
+    batch.timer = setTimeout(() => {
+      this.publishedBatches.delete(key);
+      void this.announcePublished(repoId, prId, [...batch.ids]).catch(() => {});
+    }, this.publishedSettleMs ?? 4000);
+    batch.timer.unref?.();
+    this.publishedBatches.set(key, batch);
+  }
+
+  /**
+   * Findings just published, told to the channel: so the developers know
+   * there is something to resolve without opening the pull request to find out.
+   * On unless switched off; said once per set of findings.
+   */
+  async announcePublished(repoId, prId, findingIds) {
+    if (this.store.pref('announce.published', 'true') !== 'true') return { ok: false, why: 'off' };
+    const repo = this.store.repo(repoId);
+    const pr = this.store.pr(repoId, prId);
+    const channel = this.channelFor(repo);
+    if (!repo || !pr || !channel) return { ok: false, why: channel ? 'gone' : 'no-channel' };
+    const findings = findingIds.map((id) => this.store.finding(id)).filter(Boolean);
+    if (!findings.length) return { ok: false, why: 'gone' };
+    const message = findingsMessage({ repo, pr, findings, intro: `${findings.length} new comment${findings.length === 1 ? '' : 's'} to resolve on ${repo.name} #${pr.id}` });
+    try {
+      return await this.deliver({ ...message, to: { channel }, key: `code-review:${repoId}:${prId}:published:${findings.map((one) => one.id).sort().join(',')}`, level: 'normal' });
+    } catch (error) {
+      return { ok: false, why: 'failed', detail: String(error?.message ?? error) };
+    }
+  }
+
+  /**
+   * Ask for comments to be resolved: one finding, or every published one still
+   * open on the pull request — in the channel, to the author, or both. Sent as
+   * you, now, like anything said from the panel.
+   */
+  async notifyFindings(repoId, prId, { findingId = null, channel = false, person = false, note = '' } = {}) {
+    const repo = this.store.repo(repoId);
+    const pr = this.store.pr(repoId, prId);
+    if (!repo || !pr) throw new Error('That pull request is gone.');
+    const findings = findingId
+      ? [this.store.finding(findingId)].filter(Boolean)
+      : this.store.findingsForPr(repoId, prId).filter((one) => one.publishedId && !one.dismissedAt && !one.closedAt && !['RESOLVED', 'WONT_FIX'].includes(one.resolution));
+    if (!findings.length) throw new Error('There is nothing open to ask about.');
+    const message = findingsMessage({
+      repo,
+      pr,
+      findings,
+      intro: findings.length === 1 ? `Please resolve this comment on ${repo.name} #${pr.id}` : `${findings.length} comments still to resolve on ${repo.name} #${pr.id}`,
+      note,
+    });
+    const out = { channel: null, person: null };
+    const where = this.channelFor(repo);
+    if (channel) {
+      out.channel = where
+        ? await this.deliver({ ...message, to: { channel: where }, level: 'urgent', key: null }).catch((error) => ({ ok: false, why: 'failed', detail: String(error?.message ?? error) }))
+        : { ok: false, why: 'no-channel' };
+    }
+    if (person) {
+      const provider = String(repo.provider ?? 'forge').toLowerCase();
+      out.person = await this.deliver({ ...message, voice: 'me', to: { handle: `${provider}:${pr.author}`, display: pr.author }, level: 'urgent', key: null })
+        .catch((error) => ({ ok: false, why: 'failed', detail: String(error?.message ?? error) }));
+    }
+    const went = [out.channel?.ok && 'channel', out.person?.ok && 'author'].filter(Boolean);
+    if (went.length) this.markReminded(repoId, prId, { how: went.join(' and '), findingIds: findings.map((one) => one.id) });
+    this.engine.changed(repoId, prId);
+    return out;
+  }
+
   async announceReview(repoId, prId, { kind = 'started' } = {}) {
     const channel = this.store.pref('announce.channel', '').trim();
     if (!channel || this.store.pref('announce.enabled', 'false') !== 'true') return { ok: false, why: 'off' };
@@ -965,6 +1074,7 @@ class ReviewService {
       mergeBlocker: rules.mergeBlocker(counts),
       migrationClash,
       conflictJob: pr ? this.conflicts.state(repoId, prId) : null,
+      reminded: this.lastReminded(repoId, prId),
       // For every fix that asked for a change elsewhere: which repository, whether it is configured here, and how far it got.
       crossfixes: Object.fromEntries(fixes.filter((fix) => fix.elsewhere?.length).map((fix) => [fix.id, fix.elsewhere.map((item, index) => {
         const target = this.crossfix.targetFor(item.repo);
@@ -1317,7 +1427,7 @@ class ReviewService {
       },
       saveSettings: (args) => {
         const input = args.settings ?? {};
-        const map = { language: 'review.language', me: 'me.author', profileId: 'claude.profileId', notify: 'notify.enabled', autoEnabled: 'auto.enabled', autoInterval: 'auto.interval.minutes', autoMax: 'auto.max.per.cycle', followUpDays: 'followup.days', asideWidth: 'ui.asideWidth', wrapLines: 'ui.wrapLines', diffLayout: 'ui.diffLayout', diffFont: 'ui.diffFont', uiFont: 'ui.font', announceChannel: 'announce.channel', announceEnabled: 'announce.enabled', escalateChannel: 'escalate.channel', watchEnabled: 'auto.watch', watchSeconds: 'auto.watch.seconds' };
+        const map = { language: 'review.language', me: 'me.author', profileId: 'claude.profileId', notify: 'notify.enabled', autoEnabled: 'auto.enabled', autoInterval: 'auto.interval.minutes', autoMax: 'auto.max.per.cycle', followUpDays: 'followup.days', asideWidth: 'ui.asideWidth', wrapLines: 'ui.wrapLines', diffLayout: 'ui.diffLayout', diffFont: 'ui.diffFont', uiFont: 'ui.font', announceChannel: 'announce.channel', announceEnabled: 'announce.enabled', announcePublished: 'announce.published', escalateChannel: 'escalate.channel', watchEnabled: 'auto.watch', watchSeconds: 'auto.watch.seconds' };
         for (const [field, key] of Object.entries(map)) {
           if (!(field in input)) continue;
           const value = input[field];
@@ -1580,6 +1690,13 @@ class ReviewService {
       crossfixPrepare: async (args) => ({ ok: true, job: await s.crossfix.prepare(str(args.fixId, 'A fix'), Number(args.index ?? 0)) }),
       crossfixPublish: async (args) => s.crossfix.publish(str(args.fixId, 'A fix'), Number(args.index ?? 0)),
       crossfixDiscard: (args) => s.crossfix.discard(str(args.fixId, 'A fix'), Number(args.index ?? 0)),
+      /** Ask for comments to be resolved: one, or every open one; in the channel and/or to the author. */
+      notifyFindings: (args) => s.notifyFindings(str(args.repoId, 'A repository'), num(args.prId), {
+        findingId: args.findingId ? String(args.findingId) : null,
+        channel: Boolean(args.channel),
+        person: Boolean(args.person),
+        note: String(args.note ?? '').slice(0, 1000),
+      }),
       /** The author, by direct message: their branch does not merge, and what is in the way. */
       tellConflicts: (args) => s.tellConflicts(str(args.repoId, 'A repository'), num(args.prId), { note: args.note }),
       speak: (args) => s.speak(str(args.repoId, 'A repository'), num(args.prId), {
@@ -1735,5 +1852,37 @@ class ReviewService {
     return lines.join('\n');
   }
 }
+
+/**
+ * Findings as one message: what to resolve, where, and how bad — the title
+ * and the place for each, the verification's latest word when there is one,
+ * and the way to the comment itself.
+ */
+function findingsMessage({ repo, pr, findings, intro, note = '' }) {
+  const sorted = findings.slice().sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));
+  const lines = sorted.slice(0, 12).map((finding) => {
+    const where = `${String(finding.filePath ?? '').split('/').pop()}${finding.lineNo ? `:${finding.lineNo}` : ''}`;
+    const verdict = finding.resolution === 'UNRESOLVED' || finding.resolution === 'PARTIAL' ? ` — ${finding.resolution === 'PARTIAL' ? 'partly fixed' : 'not fixed yet'}` : '';
+    return `• [${String(finding.severity ?? '').toUpperCase()}] ${finding.title} (\`${where}\`)${verdict}${finding.publishedUrl ? `\n  ${finding.publishedUrl}` : ''}`;
+  });
+  if (sorted.length > 12) lines.push(`… and ${sorted.length - 12} more on the pull request.`);
+  const body = [
+    pr.title,
+    '',
+    ...lines,
+    ...(String(note ?? '').trim() ? ['', String(note).trim()] : []),
+  ].join('\n');
+  return {
+    title: intro,
+    body,
+    facts: [
+      { label: 'Author', value: String(pr.author ?? '') },
+      pr.sourceBranch ? { label: 'Branch', value: `${pr.sourceBranch} → ${pr.targetBranch}` } : null,
+    ].filter(Boolean),
+    links: pr.url ? [{ text: 'Open the pull request', url: pr.url }] : [],
+  };
+}
+
+const SEVERITY_ORDER = ['blocker', 'major', 'minor'];
 
 module.exports = { ReviewService };

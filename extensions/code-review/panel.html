@@ -84,6 +84,8 @@
   .commit-item .commit-text { flex: 1; min-width: 0; }
   .commit-item .commit-mark { flex: none; margin-top: 2px; }
   .commit-fixes { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+  .remind { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); font-size: 0.958rem; color: var(--text-dim); }
+  .remind-buttons { display: inline-flex; gap: 6px; flex-wrap: wrap; }
   .crossfix { margin-top: 8px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); border-radius: var(--r-sm); background: color-mix(in srgb, var(--accent) 6%, var(--bg-panel)); }
   .crossfix-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
   .crossfix-change { color: var(--text-dim); }
@@ -1981,7 +1983,7 @@
         '<td class="title-cell"><div class="t">#' + pr.id + ' ' + esc(pr.title) + '</div><div class="s">' + (withRepo ? '<span class="chip">' + esc(row.repoName) + '</span> ' : '') + esc(pr.author) + (pr.sourceBranch ? ' · <span class="mono">' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch) + '</span>' : '') +
         (row.pendingReturn ? ' · <span class="warn">' + row.pendingReturn + ' fix(es) to hand back</span>' : '') + '</div>' + runStrip(row) + '</td>' +
         '<td class="faint" title="' + esc(pr.createdOn) + '">' + (row.ageDays != null ? row.ageDays + 'd ' : '') + '<span class="' + (row.ageDays >= 14 ? 'bad' : row.ageDays >= 7 ? 'warn' : '') + '">' + ageMark(row.ageDays) + '</span></td>' +
-        '<td><div class="row">' + conflictChip(row) + row.flags.map(flagChip).join('') + '</div></td>' +
+        '<td><div class="row">' + conflictChip(row) + row.flags.map(flagChip).join('') + remindCell(row) + '</div></td>' +
         '<td class="faint">' + (row.findings.total ? row.findings.published + '/' + row.findings.total + (row.findings.unresolved ? ' <span class="warn">· ' + row.findings.unresolved + ' open</span>' : '') : '') + '</td>' +
         '<td class="faint">' + (row.costUsd ? money(row.costUsd) : '') + '</td></tr>';
     });
@@ -2309,6 +2311,7 @@
         '<button class="btn small" data-act="pr-load"' + busyAttr(prKey('pr-load')) + ' title="Read the pull request, its stances and its thread again">Reload</button>' +
       '</div>' +
       drawNextStep(v, false) +
+      remindHtml(v) +
       (open ? drawActions(v, true) : '') +
       '</aside>';
     return '<div class="prview side">' + side + '<div class="prmain">' + drawPrTabsAndBody(v, runs) + '</div></div>';
@@ -2722,6 +2725,8 @@
     }
     // Still open: ask it again of the code as it is now, without a whole new review.
     if (v.pr.state === 'OPEN' && !f.dismissedAt && !findingDone(f)) html += recheckButton(f);
+    // Published and still open: ask for it to be resolved, where people will see it.
+    if (v.pr.state === 'OPEN' && f.publishedId && !f.dismissedAt && !findingDone(f)) html += notifyButtons(v, f.id);
     html += '<span class="spacer"></span><button class="btn small" data-act="ask" data-finding="' + esc(f.id) + '" title="A Claude session briefed on this finding">Ask Claude</button></div>';
     if (fix) html += crossfixHtml(v, f, fix);
     if (fix && fix.state === 'NOTHING' && fix.summary) html += '<div class="faint" style="margin-top:4px">Fix: ' + esc(fix.summary) + '</div>';
@@ -2875,7 +2880,7 @@
     var html = '<div class="page">';
     // --- what there is to do about it: the next step, the decisions, and what stands in the way of a merge
     if (!state.wide) {
-      html += drawNextStep(v, false);
+      html += drawNextStep(v, false) + remindHtml(v);
       if (open) html += drawActions(v);
     }
     if (runs.length) html += drawRuns(runs, false);
@@ -3029,6 +3034,44 @@
       return html + '<div class="row" style="margin-top:6px"><button class="btn small primary" data-act="crossfix-prepare"' + at + '>Prepare the change in ' + esc(item.repo) + '</button>' +
         '<span class="faint">A new branch in a copy of ' + esc(item.repo) + '; you see the diff before anything is pushed.</span></div></div>';
     }).join('');
+  }
+
+  /*
+   * On a row that waits on its author: how long since they were last asked,
+   * and a way to ask again without opening the pull request.
+   */
+  function remindCell(row) {
+    var waiting = row.flags.indexOf('AWAITING_THEM') >= 0 || (row.findings && row.findings.unresolved > 0 && !row.mine);
+    var delivery = (state.overview && state.overview.settings && state.overview.settings.delivery) || {};
+    var html = '';
+    if (row.reminded && row.reminded.at) html += '<span class="chip" title="Last asked ' + esc(new Date(row.reminded.at).toLocaleString()) + ' (' + esc(row.reminded.how || '') + ')">reminded ' + esc(when(row.reminded.at)) + '</span>';
+    if (waiting && delivery.person && row.pr.state === 'OPEN') {
+      var key = 'remind-row-' + row.repoId + '#' + row.pr.id;
+      html += '<button class="btn small" data-act="remind-row" data-repo="' + esc(row.repoId) + '" data-pr="' + row.pr.id + '"' + busyAttr(key) + ' title="A direct message to ' + esc(row.pr.author) + ' with every comment still open">' + (state.busy[key] ? 'Reminding…' : 'Remind') + '</button>';
+    }
+    return html;
+  }
+
+  /** "Tell the author" and "post in the channel", for one finding or — with no id — every open one. */
+  function notifyButtons(v, findingId) {
+    var delivery = (v.settings && v.settings.delivery) || {};
+    var channel = (v.settings && v.settings.announceChannel) || (v.repo && v.repo.alertChannel) || '';
+    var key = 'notify-' + (findingId || 'all');
+    var at = findingId ? ' data-finding="' + esc(findingId) + '"' : '';
+    var html = '';
+    if (delivery.person) html += '<button class="btn small" data-act="notify" data-to="person"' + at + busyAttr(key + '-person') + ' title="A direct message on Teams, from you, asking to resolve ' + (findingId ? 'it' : 'them') + '">Tell ' + esc(shortName(v.pr.author)) + '</button>';
+    if (delivery.channel && channel) html += '<button class="btn small" data-act="notify" data-to="channel"' + at + busyAttr(key + '-channel') + ' title="Posted in ' + esc(channel) + '">Post in the channel</button>';
+    return html;
+  }
+
+  /** Under the next step: every published comment still open, and the two ways to ask for them. */
+  function remindHtml(v) {
+    if (v.pr.state !== 'OPEN') return '';
+    var open = (v.findings || []).concat(v.earlierFindings || []).filter(function (f) { return f.publishedId && !f.dismissedAt && !findingDone(f); });
+    var buttons = open.length ? notifyButtons(v, null) : '';
+    if (!buttons) return '';
+    var last = v.reminded && v.reminded.at ? ' <span class="faint">· reminded ' + esc(when(v.reminded.at)) + '</span>' : '';
+    return '<div class="remind"><span>' + open.length + ' published comment' + (open.length === 1 ? '' : 's') + ' still open' + last + '</span><span class="remind-buttons">' + buttons + '</span></div>';
   }
 
   function recheckButton(f) {
@@ -4304,7 +4347,7 @@
     if (!rules.length) return '';
     var delivery = settings.delivery || {};
     var html = '<div class="section"><h3>Reminders</h3>' +
-      '<div class="help faint" style="margin-bottom:8px">Counted from the last thing anybody said in the thread, not from when the review ran.</div>';
+      '<div class="help faint" style="margin-bottom:8px">Counted from the last thing anybody said in the thread, or the last reminder — so “Send on its own” asks again every that many days until the comments are resolved, and stops by itself when they are.</div>';
 
     rules.forEach(function (rule) {
       var days = 'rule-days-' + rule.id;
@@ -4378,6 +4421,8 @@
       '<label class="check"><input type="checkbox" data-edit-check="announce-on"' + (settings.announceEnabled ? ' checked' : '') + '> on</label>' +
       '</div>' +
       '<div class="help">Said once when a review begins, so nobody wonders and two people do not review the same thing. It goes to the room as the app, not as you.</div>' +
+      '<div class="row" style="margin-top:6px"><label class="check"><input type="checkbox" data-edit-check="announce-published"' + (settings.announcePublished !== false ? ' checked' : '') + '> Say in the channel when comments are published</label></div>' +
+      '<div class="help">One message per batch, with what there is to resolve and where, so the developers find out without opening the pull request. To the repository\'s own room when it has one.</div>' +
       '<div class="row" style="margin-top:6px">' +
       '<span class="faint">Say in the channel when somebody has been sitting on changes for</span>' +
       '<input type="number" min="0" max="90" data-edit="escalate-days" value="' + esc(edit('escalate-days', settings.escalateDays || 0)) + '" style="width:64px">' +
@@ -4893,6 +4938,25 @@
         say(!r.fix ? 'Already closed: there was nothing left to fix.' : r.fix.sha ? 'Fix committed in the workshop: ' + r.fix.sha.slice(0, 7) : 'The fix changed nothing: ' + (r.fix.summary || ''));
       }, fail);
     },
+    'remind-row': function (el) {
+      var repoId = el.getAttribute('data-repo');
+      var prId = Number(el.getAttribute('data-pr'));
+      act('remind-row-' + repoId + '#' + prId, function () { return call('notifyFindings', { repoId: repoId, prId: prId, person: true }); }, function (r) {
+        if (r.person && r.person.ok) say('Reminded.'); else say('Could not send it: ' + ((r.person && (r.person.detail || r.person.why)) || 'nothing answered'), true);
+        load();
+      });
+    },
+    notify: function (el) {
+      var to = el.getAttribute('data-to');
+      var findingId = el.getAttribute('data-finding');
+      act('notify-' + (findingId || 'all') + '-' + to, function () {
+        return call('notifyFindings', prArgs({ findingId: findingId || undefined, channel: to === 'channel', person: to === 'person' }));
+      }, function (r) {
+        var res = r[to];
+        if (res && res.ok) say(to === 'channel' ? 'Posted in the channel.' : 'Told ' + shortName(state.pr.pr.author) + '.');
+        else say('Could not send it: ' + ((res && (res.detail || res.why)) || 'nothing answered'), true);
+      });
+    },
     'crossfix-prepare': function (el) {
       var id = el.getAttribute('data-id');
       var index = Number(el.getAttribute('data-index'));
@@ -5067,6 +5131,7 @@
         watchSeconds: Number(edit('watch-seconds', state.overview.settings.watchSeconds || 120)),
         announceChannel: String(edit('announce-channel', state.overview.settings.announceChannel || '')),
         announceEnabled: Boolean(state.edits['announce-on'] != null ? state.edits['announce-on'] : state.overview.settings.announceEnabled),
+        announcePublished: Boolean(state.edits['announce-published'] != null ? state.edits['announce-published'] : state.overview.settings.announcePublished !== false),
         escalateDays: Number(edit('escalate-days', state.overview.settings.escalateDays || 0)),
       };
       act('rules-save', function () { return call('saveSettings', { settings: patch }); }, function (r) {
