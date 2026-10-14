@@ -194,6 +194,7 @@ function secretDialog({ title, body, secret }) {
 let me = null;
 let current = null;
 let ticketUrl = '';
+let teams = [];
 let period = (() => { try { return Number(localStorage.getItem('period')) === 30 ? 30 : 7; } catch { return 7; } })();
 const setPeriod = (days) => { period = days; try { localStorage.setItem('period', String(days)); } catch {} redraw(); };
 const periodWords = () => (period === 30 ? 'the last 30 days' : 'the last seven days');
@@ -208,7 +209,7 @@ function ticket(key) {
   if (!ticketUrl) return el('span', { class: 'ticket' }, key);
   return el('a', { class: 'ticket', href: ticketUrl.replace('{ticket}', encodeURIComponent(key)), target: '_blank', rel: 'noopener noreferrer', onclick: (e) => e.stopPropagation() }, key);
 }
-const filters = { query: '', show: 'all', accounts: '' };
+const filters = { query: '', show: 'all', accounts: '', team: '' };
 const openPeople = new Set();
 
 const pages = {
@@ -258,11 +259,11 @@ const pages = {
     return [
       el('header', { class: 'page-head' }, el('div', {}, el('h1', {}, period === 30 ? 'Your month' : 'Your week'), el('p', { class: 'lede summary' }, lede)), el('div', { class: 'actions' }, periodPicker())),
       panel('Time worked', week(s.days), 'Two repositories at once count as one stretch of time'),
-      s.accounts.length ? panel('Claude usage left', el('div', { class: 'split' }, s.accounts.map(accountBlock))) : null,
+      s.accounts.length ? panel('Claude usage left', [el('div', { class: 'split' }, s.accounts.map(accountBlock)), usageHistory(s.usageHistory)]) : null,
       el('div', { class: 'split' },
         panel('Repositories', ranked(s.repos, 'No time in a repository yet.')),
         panel('Tickets', ranked(s.tickets, 'No tickets yet. They are read from branch names, session titles and commit subjects.', { tickets: true }))),
-      s.sessions.length ? panel('Open now', sessionsTable(s.sessions)) : null,
+      s.sessions.length ? panel('Open now', [sessionsTable(s.sessions), privateNote(s.hiddenSessions)]) : privateNote(s.hiddenSessions),
       el('p', { class: 'faint small', style: 'margin-top:20px' }, s.devices.length
         ? `Signed in on ${s.devices.map((d) => d.label).join(', ')}. Only you and ${s.orgName}'s administrators see this page.`
         : 'You are not signed in on any device yet. In Smart Terminal, open the Organization extension and sign in.'),
@@ -279,7 +280,8 @@ const pages = {
     const tickets = new Set(people.flatMap((p) => (p.online ? p.sessions.flatMap((s) => s.tickets) : [])));
     const shown = people.filter((p) => {
       const q = filters.query.toLowerCase();
-      if (q && !`${p.name} ${p.email} ${p.sessions.map((s) => `${s.repo} ${s.branch} ${s.tickets.join(' ')}`).join(' ')}`.toLowerCase().includes(q)) return false;
+      if (filters.team && (p.team || '') !== filters.team) return false;
+      if (q && !`${p.name} ${p.email} ${p.team ?? ''} ${p.sessions.map((s) => `${s.repo} ${s.branch} ${s.tickets.join(' ')}`).join(' ')}`.toLowerCase().includes(q)) return false;
       if (filters.show === 'working') return p.state.key === 'working';
       if (filters.show === 'paused') return p.state.key === 'paused';
       if (filters.show === 'away') return p.state.key === 'off';
@@ -292,6 +294,10 @@ const pages = {
     const seg = el('div', { class: 'segmented', role: 'group', 'aria-label': 'Show' }, [['all', 'Everyone'], ['working', 'Working'], ['paused', 'Paused'], ['away', 'Away'], ['low', `Running low${low.length ? ` (${low.length})` : ''}`]].map(([k, t]) =>
       el('button', { 'aria-pressed': String(filters.show === k), onclick: () => { filters.show = k; redraw(); } }, t)));
 
+    if (filters.team && !data.teamNames.includes(filters.team)) filters.team = '';
+    const teamPick = data.teamNames.length ? el('select', { 'aria-label': 'Team', onchange: (e) => { filters.team = e.target.value; redraw(); } },
+      el('option', { value: '' }, 'Every team'), data.teamNames.map((t) => el('option', { value: t, selected: filters.team === t }, t))) : null;
+
     return [
       el('header', { class: 'page-head' }, el('div', {}, el('h1', {}, 'Team'),
         el('p', { class: 'lede summary' },
@@ -299,7 +305,7 @@ const pages = {
           sessions ? [', in ', el('strong', {}, plural(sessions, 'session', 'sessions')), tickets.size ? [' on ', el('strong', {}, plural(tickets.size, 'ticket', 'tickets'))] : null] : null, '.'))),
       low.length ? el('div', { class: 'notice is-low' }, el('strong', {}, low.length === 1 ? `${low[0].name || low[0].email} is running low on Claude usage` : `${low.length} people are running low on Claude usage`),
         el('span', {}, ' ', low.map((p) => `${p.name || p.email}: ${p.low}`).join('; '), '.')) : null,
-      el('div', { class: 'toolbar' }, search, seg, el('span', { style: 'margin-left:auto' }, periodPicker())),
+      el('div', { class: 'toolbar' }, search, seg, teamPick, el('span', { style: 'margin-left:auto' }, periodPicker())),
       shown.length ? el('div', { class: 'roster' }, shown.map(personRow)) : el('div', { class: 'roster' }, el('div', { class: 'empty' },
         people.length <= 1 ? [el('strong', {}, 'Nobody to show yet'), el('span', {}, 'Add your developers under Accounts. They appear here once they sign in from Smart Terminal.')] : el('span', {}, 'Nobody matches that.'))),
     ];
@@ -317,13 +323,19 @@ const pages = {
       el('div', { class: 'split' },
         panel('Repositories', ranked(data.repos, 'No time counted yet.'), total ? duration(total) : null),
         panel('Tickets', ranked(data.tickets, 'No tickets yet. Set how tickets look under Settings.', { tickets: true }))),
+      el('div', { class: 'split' },
+        panel('By project', data.projects.length ? ranked(data.projects, 'No time counted yet.')
+          : el('p', { class: 'faint' }, 'Group repositories into projects under ', el('a', { href: '#settings', onclick: (e) => { e.preventDefault(); go('settings'); } }, 'Settings'), '.')),
+        panel('By team', data.teams.length ? ranked(data.teams, 'No time counted yet.')
+          : el('p', { class: 'faint' }, 'Give people a team under ', el('a', { href: '#users', onclick: (e) => { e.preventDefault(); go('users'); } }, 'Accounts'), '.'))),
     ];
   } },
 
   users: { label: 'Accounts', icon: ICONS.users, admin: true, async draw() {
     const { users: all } = await api('GET', '/api/admin/users');
     const q = filters.accounts.toLowerCase();
-    const users = all.filter((u) => !q || `${u.name} ${u.email}`.toLowerCase().includes(q));
+    const users = all.filter((u) => !q || `${u.name} ${u.email} ${u.team ?? ''}`.toLowerCase().includes(q));
+    teams = [...new Set(all.map((u) => u.team).filter(Boolean))].sort();
     const search = el('input', { type: 'search', placeholder: 'Find an account', value: filters.accounts, 'aria-label': 'Find an account' });
     search.addEventListener('input', () => { filters.accounts = search.value; redraw({ keepFocus: true }); });
     return [
@@ -332,21 +344,18 @@ const pages = {
         el('div', { class: 'actions' }, el('button', { class: 'primary', onclick: addAccount }, 'Add account'))),
       el('div', { class: 'toolbar' }, search, el('span', { class: 'faint small', style: 'margin-left:auto' }, `${plural(all.length, 'account', 'accounts')}, ${all.filter((u) => u.role === 'admin').length} administrators`)),
       el('div', { class: 'table-wrap' }, el('table', {},
-        el('thead', {}, el('tr', {}, ['Person', 'Role', 'Signs in with', 'Last seen', 'Devices', 'Status', ''].map((h) => el('th', {}, h)))),
+        el('thead', {}, el('tr', {}, ['Person', 'Team', 'Role', 'Signs in with', 'Last seen', 'Devices', 'Status', ''].map((h) => el('th', {}, h)))),
         el('tbody', {}, users.map((u) => el('tr', {},
           el('td', {}, el('div', { class: 'who-cell' }, el('span', { class: 'avatar' }, initials(u)),
             el('div', {}, el('div', { class: 'name' }, u.name || u.email), u.name ? el('div', { class: 'faint small' }, u.email) : null))),
+          el('td', { class: u.team ? '' : 'faint' }, u.team || '—'),
           el('td', {}, u.role === 'admin' ? 'Administrator' : 'Developer'),
-          el('td', { class: 'muted' }, u.hasPassword ? 'Password or single sign-on' : 'Single sign-on only'),
+          el('td', { class: 'muted' }, u.hasPassword ? 'Password or SSO' : 'SSO only'),
           el('td', { class: 'muted' }, u.lastSeen ? ago(u.lastSeen) : 'Never'),
           el('td', { class: 'muted' }, String(u.devices ?? 0)),
           el('td', {}, u.disabled ? el('span', { class: 'state is-low' }, 'Disabled') : el('span', { class: 'state is-working' }, 'Active')),
           el('td', { style: 'text-align:right; white-space:nowrap' },
-            u.id === me.id ? el('span', { class: 'faint small' }, 'You') : [
-              el('button', { class: 'quiet', onclick: () => resetPassword(u) }, 'New password'),
-              el('button', { class: 'quiet', onclick: () => changeRole(u) }, u.role === 'admin' ? 'Make developer' : 'Make administrator'),
-              el('button', { class: `quiet${u.disabled ? '' : ' danger'}`, onclick: () => toggleDisabled(u) }, u.disabled ? 'Enable' : 'Disable'),
-            ])))))),
+            el('button', { class: 'quiet', onclick: () => editAccount(u) }, u.id === me.id ? 'Edit' : 'Manage'))))))),
     ];
   } },
 
@@ -355,7 +364,7 @@ const pages = {
     const words = {
       'signin.web': 'Signed in to this page', 'signin.app': 'Signed in from Smart Terminal', 'account.created': 'Added an account',
       'account.disabled': 'Disabled an account', 'account.enabled': 'Enabled an account', 'account.role': 'Changed a role',
-      'account.password_reset': 'Made a new password', 'password.changed': 'Changed their password', 'device.signed_out': 'Signed out a device',
+      'account.password_reset': 'Made a new password', 'account.team': 'Changed a team', 'password.changed': 'Changed their password', 'device.signed_out': 'Signed out a device',
       'settings.changed': 'Changed settings', export: 'Exported time',
     };
     return [
@@ -375,6 +384,9 @@ const pages = {
     const s = await api('GET', '/api/admin/settings');
     const providers = el('div', { class: 'settings-fields' });
     const addProvider = (p) => providers.append(providerCard(p));
+    const projects = el('div', { class: 'settings-fields' });
+    const addProject = (p) => projects.append(projectRow(p));
+    (s.projects ?? []).forEach(addProject);
     (s.providers ?? []).forEach(addProvider);
     const form = el('form', { onsubmit: async (event) => {
       event.preventDefault();
@@ -385,6 +397,8 @@ const pages = {
         ticketPattern: f.ticketPattern.value,
         ticketUrl: f.ticketUrl.value,
         sharePaths: f.sharePaths.checked,
+        retentionDays: Number(f.retentionDays.value),
+        projects: [...projects.querySelectorAll('.project-row')].map((row) => ({ name: row.querySelector('[name=projectName]').value, patterns: row.querySelector('[name=projectPatterns]').value })),
         providers: [...providers.querySelectorAll('.provider')].map((card) => Object.fromEntries([...card.querySelectorAll('input, select')].map((i) => [i.name, i.value]))),
       };
       try {
@@ -406,6 +420,15 @@ const pages = {
         el('small', {}, 'Where a ticket opens when someone clicks it. {ticket} is replaced by the ticket. Empty, tickets are not links.')),
       el('label', { class: 'check' }, el('input', { type: 'checkbox', name: 'sharePaths', checked: s.sharePaths }),
         el('span', {}, el('span', {}, 'Collect full folder paths'), el('small', { class: 'faint' }, 'When off, only the folder and repository names are kept.')))),
+    section('Projects', 'Group repositories so time adds up by product or client. A repository goes to the first project that matches.',
+      projects,
+      el('div', { class: 'button-row' }, el('button', { type: 'button', onclick: () => { addProject({}); projects.lastElementChild.querySelector('input').focus(); } }, 'Add project'))),
+    section('Keeping data', 'How long time worked, repositories, tickets and usage are kept. Accounts and the activity log are kept.',
+      el('label', { class: 'field' }, el('span', {}, 'Keep'),
+        el('select', { name: 'retentionDays' }, [[0, 'Everything'], [30, '30 days'], [90, '90 days'], [180, 'Six months'], [365, 'One year'], [730, 'Two years']]
+          .concat([0, 30, 90, 180, 365, 730].includes(s.retentionDays) ? [] : [[s.retentionDays, `${s.retentionDays} days`]])
+          .map(([v, t]) => el('option', { value: v, selected: s.retentionDays === v }, t))),
+        el('small', {}, 'Older days are deleted when you save and once a day after that.'))),
     section('Single sign-on', 'Let people sign in with Microsoft, Google or your own identity provider instead of a password.',
       el('div', { class: 'field' }, el('span', {}, 'Redirect URI to register with the provider'),
         el('div', { class: 'copy-line' }, el('code', {}, s.callbackUrl),
@@ -426,6 +449,14 @@ function section(title, about, ...fields) {
     el('div', { class: 'settings-fields' }, fields));
 }
 
+function projectRow(p) {
+  const row = el('div', { class: 'project-row' },
+    el('label', { class: 'field' }, el('span', {}, 'Project'), el('input', { name: 'projectName', value: p.name ?? '', placeholder: 'Timelog', required: true })),
+    el('label', { class: 'field' }, el('span', {}, 'Repositories'), el('input', { name: 'projectPatterns', value: (p.patterns ?? []).join(', '), placeholder: 'acme/timelog-*, acme/billing', spellcheck: 'false', required: true })),
+    el('button', { type: 'button', class: 'quiet danger', 'aria-label': `Remove ${p.name || 'project'}`, onclick: () => row.remove() }, 'Remove'));
+  return row;
+}
+
 function providerCard(p) {
   const type = p.type || 'oidc';
   const card = el('div', { class: 'provider' },
@@ -444,6 +475,21 @@ function providerCard(p) {
     el('label', { class: 'field' }, el('span', {}, 'Let in anyone from these domains'), el('input', { name: 'allowDomains', value: (p.allowDomains ?? []).join(', '), placeholder: 'acme.com' }),
       el('small', {}, 'Empty means only the accounts you add can sign in this way. Anyone else from a listed domain joins as a developer.')));
   return card;
+}
+
+/** How close to the limit someone got over the period, or null when nothing was reported. */
+function usageHistory(h) {
+  if (!h) return null;
+  const parts = [];
+  parts.push(h.daysRanOut ? el('strong', { class: 'low-text' }, `Ran out of session ${plural(h.daysRanOut, 'day', 'days')}`) : 'Never ran out of session');
+  if (h.lowestWeekLeft != null) parts.push(['lowest the week got to was ', el('strong', {}, `${h.lowestWeekLeft}% left`)]);
+  return el('p', { class: 'small muted history' }, `In ${periodWords()}: `, parts.map((p, i) => [i ? '; ' : '', p]), '.');
+}
+
+const privateNote = (n) => (n ? el('p', { class: 'faint small' }, `And ${plural(n, 'private session', 'private sessions')}, in folders never shared.`) : null);
+
+function teamList(names) {
+  return el('datalist', { id: 'team-names' }, (names ?? []).map((t) => el('option', { value: t })));
 }
 
 /** Words for an account running out, or null: under 15% of the session or 10% of the week left. */
@@ -471,11 +517,11 @@ function personRow(p) {
     row.setAttribute('aria-expanded', String(open));
     detail.hidden = !open;
     wrap.toggleAttribute('open', open);
-    if (open && !detail.childElementCount) detail.append(...personDetail(p));
+    if (open && !detail.childElementCount) detail.append(...personDetail(p).filter(Boolean));
   } },
   el('span', { class: 'who-cell' },
     el('span', { class: `avatar is-${p.state.key}` }, initials(p)),
-    el('span', { style: 'min-width:0' }, el('div', { class: 'name' }, p.name || p.email), el('div', { class: `status is-${p.state.key}` }, p.state.text))),
+    el('span', { style: 'min-width:0' }, el('div', { class: 'name' }, p.name || p.email), el('div', { class: `status is-${p.state.key}` }, p.state.text, p.team ? el('span', { class: 'faint' }, ` · ${p.team}`) : null))),
   el('span', { class: 'work-cell' }, lead
     ? [el('span', { class: 'work-line' }, el('span', { class: 'repo' }, lead.repo || lead.folder || lead.title || 'A session'), lead.tickets.map((t) => ticket(t))),
       el('span', { class: 'branch' }, lead.branch || (lead.repo ? '' : 'Not in a repository')),
@@ -484,7 +530,7 @@ function personRow(p) {
   el('span', { class: 'gauges' }, best ? [gauge('Session', best.sessionUsed), gauge('Week', best.weekUsed)] : el('span', { class: 'faint small' }, 'No usage reported')),
   el('span', { class: 'chevron' }, icon(ICONS.chevron)));
   const wrap = el('div', { class: 'person', open: isOpen }, row, detail);
-  if (isOpen) detail.append(...personDetail(p));
+  if (isOpen) detail.append(...personDetail(p).filter(Boolean));
   return wrap;
 }
 
@@ -496,7 +542,9 @@ function personDetail(p) {
   return [
     chart,
     p.online && p.sessions.length ? sessionsTable(p.sessions, { withDevice: p.devices.length > 1 }) : null,
+    p.online ? privateNote(p.hiddenSessions) : null,
     p.accounts.length > 0 ? el('div', { class: 'split' }, p.accounts.map(accountBlock)) : null,
+    usageHistory(p.usageHistory),
     el('div', { class: 'split' },
       el('div', {}, el('h3', { style: 'margin-bottom:10px' }, `Repositories, ${periodWords().replace('the ', '')}`), ranked(p.repos, 'No time counted yet.')),
       el('div', {}, el('h3', { style: 'margin-bottom:10px' }, `Tickets, ${periodWords().replace('the ', '')}`), ranked(p.tickets, 'No tickets yet.', { tickets: true }))),
@@ -533,12 +581,43 @@ function addAccount() {
   } },
   el('h2', {}, 'Add an account'),
   el('label', { class: 'field' }, el('span', {}, 'E-mail'), el('input', { name: 'email', type: 'email', required: true, autocomplete: 'off' })),
-  el('label', { class: 'field' }, el('span', {}, 'Name'), el('input', { name: 'name', autocomplete: 'off' })),
+  el('div', { class: 'two' },
+    el('label', { class: 'field' }, el('span', {}, 'Name'), el('input', { name: 'name', autocomplete: 'off' })),
+    el('label', { class: 'field' }, el('span', {}, 'Team'), el('input', { name: 'team', autocomplete: 'off', list: 'team-names', placeholder: 'Optional' }))),
+  teamList(teams),
   el('label', { class: 'field' }, el('span', {}, 'Role'), el('select', { name: 'role' }, el('option', { value: 'member' }, 'Developer, sees only their own numbers'), el('option', { value: 'admin' }, 'Administrator, sees everyone and manages accounts'))),
   el('label', { class: 'field' }, el('span', {}, 'Signs in with'), how),
   pw,
   el('div', { class: 'sheet-actions' }, el('button', { type: 'button', onclick: () => close() }, 'Cancel'), el('button', { class: 'primary', type: 'submit' }, 'Add account')));
   const close = overlay(form);
+}
+
+function editAccount(u) {
+  const form = el('form', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', onsubmit: async (event) => {
+    event.preventDefault();
+    const f = event.target;
+    try {
+      await api('PATCH', `/api/admin/users/${u.id}`, { name: f.name.value, team: f.team.value });
+      close();
+      toast('Saved.');
+      redraw();
+    } catch (error) { toast(error.message, true); }
+  } },
+  el('h2', {}, u.name || u.email),
+  el('p', { class: 'muted small' }, u.email),
+  el('label', { class: 'field' }, el('span', {}, 'Name'), el('input', { name: 'name', value: u.name ?? '', autocomplete: 'off' })),
+  el('label', { class: 'field' }, el('span', {}, 'Team'), el('input', { name: 'team', value: u.team ?? '', autocomplete: 'off', list: 'team-names', placeholder: 'No team' }),
+    el('small', {}, 'Time adds up by team under Where the time went, and Team can show one team at a time.')),
+  teamList(teams),
+  el('div', { class: 'sheet-actions' }, el('button', { type: 'button', onclick: () => close() }, 'Cancel'), el('button', { class: 'primary', type: 'submit' }, 'Save')),
+  u.id === me.id ? null : el('div', { class: 'sheet-more' },
+    el('h3', {}, 'Sign-in and access'),
+    el('div', { class: 'button-row' },
+      el('button', { type: 'button', onclick: () => { close(); resetPassword(u); } }, 'Make a new password'),
+      el('button', { type: 'button', onclick: () => { close(); changeRole(u); } }, u.role === 'admin' ? 'Make developer' : 'Make administrator'),
+      el('button', { type: 'button', class: u.disabled ? '' : 'danger', onclick: () => { close(); toggleDisabled(u); } }, u.disabled ? 'Enable account' : 'Disable account'))));
+  const close = overlay(form);
+  form.querySelector('[name=team]').focus();
 }
 
 async function resetPassword(u) {

@@ -393,6 +393,12 @@ const ORG_VERBS = {
   openWeb: (s, args) => s.openWeb(String(args.page ?? 'mine')),
   logout: (s) => s.logout(),
   pause: (s, args) => s.setPaused(args.paused !== false),
+  addPrivateFolder: async (s) => {
+    const picked = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow() ?? undefined, { title: 'Never share this folder', buttonLabel: 'Never share', properties: ['openDirectory'] });
+    if (picked.canceled || !picked.filePaths[0]) return { ok: true, ...s.overview() };
+    return s.setPrivateFolders([...(s.overview().privateFolders ?? []), picked.filePaths[0]]);
+  },
+  removePrivateFolder: (s, args) => s.setPrivateFolders((s.overview().privateFolders ?? []).filter((f) => f !== String(args.folder ?? ''))),
   sendNow: async (s) => {
     await s.sendNow();
     return { ok: true, ...s.overview() };

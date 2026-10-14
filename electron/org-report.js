@@ -47,19 +47,32 @@ function ticketsIn(texts, pattern, { anyCase = [] } = {}) {
 
 const folderName = (cwd) => String(cwd ?? '').split('/').filter(Boolean).pop() ?? '';
 
+/** Whether this folder is one of the never-shared ones, or inside one. */
+function isPrivate(cwd, privateFolders) {
+  const at = String(cwd ?? '').replace(/\/+$/, '');
+  if (!at) return false;
+  return (privateFolders ?? []).some((folder) => {
+    const root = String(folder ?? '').replace(/\/+$/, '');
+    return root && (at === root || at.startsWith(`${root}/`));
+  });
+}
+
 /**
  * @param sessions  [{ kind, title, cwd, profileName, lastWorkedAt, lastOutputAt }]
  * @param repos     Map cwd → { remote, branch, subject } (what git said about that folder)
  * @param accounts  [{ name, email, plan, usage }]
+ * @param privateFolders  folders whose sessions are only counted, never described
  */
-function buildReport({ sessions, repos, accounts, policy, appVersion, paused, now, intervalSeconds }) {
+function buildReport({ sessions, repos, accounts, policy, appVersion, paused, now, intervalSeconds, privateFolders = [] }) {
   if (paused) return { appVersion, paused: true, intervalSeconds, sessions: [], accounts: [] };
   const window = Math.max(60, intervalSeconds) * 1000;
+  const shared = sessions.filter((s) => !isPrivate(s.cwd, privateFolders));
   return {
     appVersion,
     paused: false,
     intervalSeconds,
-    sessions: sessions.map((s) => {
+    hiddenSessions: sessions.length - shared.length,
+    sessions: shared.map((s) => {
       const git = repos.get(s.cwd) ?? {};
       return {
         kind: s.kind === 'claude' ? 'claude' : 'shell',
@@ -87,4 +100,4 @@ function buildReport({ sessions, repos, accounts, policy, appVersion, paused, no
   };
 }
 
-module.exports = { repoName, ticketsIn, buildReport, folderName };
+module.exports = { repoName, ticketsIn, buildReport, folderName, isPrivate };

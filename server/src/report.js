@@ -21,6 +21,8 @@ function readReport(body) {
     report: {
       appVersion: text(body.appVersion, 40),
       paused: body.paused === true,
+      // Sessions the developer keeps private: counted, never described.
+      hiddenSessions: body.paused === true ? 0 : Math.max(0, Math.min(100, Math.round(Number(body.hiddenSessions) || 0))),
       intervalSeconds: Math.max(0, Math.min(3600, Number(body.intervalSeconds) || 0)),
       sessions: body.paused === true ? [] : sessions.filter((s) => s && typeof s === 'object').map((s) => ({
         kind: s.kind === 'claude' ? 'claude' : 'shell',

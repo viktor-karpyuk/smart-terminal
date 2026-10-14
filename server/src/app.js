@@ -34,6 +34,10 @@ const ONLINE_MS = 5 * 60_000;
 const DEFAULTS = {
   orgName: 'Your company',
   ticketUrl: '',
+  /** Repositories grouped into projects: [{ name, patterns: ['acme/api', 'acme/web-*'] }] */
+  projects: [],
+  /** Days of activity kept; 0 keeps everything. */
+  retentionDays: 0,
   reportEveryMinutes: 2,
   ticketPattern: '\\b[A-Z][A-Z0-9]{1,9}-\\d{1,6}\\b',
   sharePaths: false,
@@ -52,6 +56,17 @@ const csvCell = (value) => {
   const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
   return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 };
+/** Which project a repository belongs to, by the first project with a matching pattern; `*` matches anything. */
+function projectOf(repo, projects) {
+  for (const project of projects ?? []) {
+    for (const pattern of project.patterns ?? []) {
+      const re = new RegExp(`^${String(pattern).split('*').map((part) => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`, 'i');
+      if (re.test(repo)) return project.name;
+    }
+  }
+  return null;
+}
+
 const emailOk = (email) => /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{1,63}$/.test(String(email ?? '').trim());
 const day = (at) => new Date(at).toISOString().slice(0, 10);
 
@@ -70,7 +85,17 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
   const publicProviders = () => settings().providers.filter((p) => p.enabled !== false && p.clientId)
     .map((p) => ({ id: p.id, label: p.label || (p.type === 'microsoft' ? 'Microsoft' : p.type === 'google' ? 'Google' : 'Single sign-on'), type: p.type }));
   const provider = (id) => settings().providers.find((p) => p.id === id && p.enabled !== false && p.clientId) ?? null;
-  const publicUser = (u) => ({ id: u.id, email: u.email, name: u.name, role: u.role, disabled: Boolean(u.disabled_at), hasPassword: Boolean(u.pass_hash) });
+  const publicUser = (u) => ({ id: u.id, email: u.email, name: u.name, role: u.role, team: u.team ?? '', disabled: Boolean(u.disabled_at), hasPassword: Boolean(u.pass_hash) });
+
+  /** Retention, applied when the server starts and once a day after. */
+  function applyRetention() {
+    const keep = Number(settings().retentionDays) || 0;
+    if (!keep) return 0;
+    return store.forgetBefore(day(now() - keep * 86_400_000));
+  }
+  applyRetention();
+  const retentionTimer = setInterval(applyRetention, 86_400_000);
+  retentionTimer.unref?.();
 
   // --- plumbing --------------------------------------------------------------
   function send(res, status, body, headers = {}) {
@@ -181,6 +206,8 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
     const snaps = store.snapshots();
     const since = day(t - (period - 1) * 86_400_000);
     const activity = store.activitySince(since);
+    const usage = new Map(store.usageSince(since).map((u) => [u.user_id, u]));
+    const projects = settings().projects;
     const people = users.map((u) => {
       const mine = snaps.filter((s) => s.user_id === u.id);
       const latest = mine.sort((a, b) => b.at - a.at)[0] ?? null;
@@ -200,6 +227,12 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
         accounts,
         repos: top('repo'),
         tickets: top('ticket'),
+        hiddenSessions: mine.filter((s) => t - s.at < ONLINE_MS).reduce((n, s) => n + (Number(s.payload.hiddenSessions) || 0), 0),
+        usageHistory: usage.has(u.id) ? {
+          daysRanOut: Number(usage.get(u.id).days_ran_out) || 0,
+          lowestWeekLeft: usage.get(u.id).lowest_week,
+          lowestSessionLeft: usage.get(u.id).lowest_session,
+        } : null,
       };
     });
     const totals = (kind) => {
@@ -207,7 +240,26 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       for (const a of activity) if (a.kind === kind) by.set(a.key, (by.get(a.key) ?? 0) + a.minutes);
       return [...by.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([key, minutes]) => ({ key, minutes: Math.round(minutes) }));
     };
-    return { orgName: settings().orgName, ticketUrl: settings().ticketUrl, period, since, now: t, people, repos: totals('repo'), tickets: totals('ticket') };
+    const byProject = new Map();
+    const byTeam = new Map();
+    const teamOf = new Map(users.map((u) => [u.id, u.team || '']));
+    for (const a of activity) {
+      if (a.kind !== 'repo') continue;
+      const project = projectOf(a.key, projects) ?? 'No project';
+      byProject.set(project, (byProject.get(project) ?? 0) + a.minutes);
+    }
+    for (const d of store.all('SELECT user_id, SUM(minutes) AS minutes FROM days WHERE day >= ? GROUP BY user_id', since)) {
+      const team = teamOf.get(d.user_id) || 'No team';
+      byTeam.set(team, (byTeam.get(team) ?? 0) + d.minutes);
+    }
+    const ranked = (map) => [...map.entries()].sort((a, b) => b[1] - a[1]).map(([key, minutes]) => ({ key, minutes: Math.round(minutes) }));
+    return {
+      orgName: settings().orgName, ticketUrl: settings().ticketUrl, period, since, now: t, people,
+      repos: totals('repo'), tickets: totals('ticket'),
+      projects: projects.length ? ranked(byProject) : [],
+      teams: users.some((u) => u.team) ? ranked(byTeam) : [],
+      teamNames: [...new Set(users.map((u) => u.team).filter(Boolean))].sort(),
+    };
   }
 
   /**
@@ -234,6 +286,8 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       devices: me?.devices ?? [],
       online: me?.online ?? false,
       paused: me?.paused ?? false,
+      hiddenSessions: me?.hiddenSessions ?? 0,
+      usageHistory: me?.usageHistory ?? null,
     };
   }
 
@@ -294,6 +348,11 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
         for (const ticket of counted.tickets) store.addMinutes(user.id, day(now()), 'ticket', ticket, counted.minutes);
       }
       if (!settings().sharePaths) for (const s of report.sessions) s.path = '';
+      if (!report.paused) {
+        for (const a of report.accounts) {
+          store.noteUsage(user.id, day(now()), a.name || 'Claude', a.sessionUsed == null ? null : 100 - a.sessionUsed, a.weekUsed == null ? null : 100 - a.weekUsed);
+        }
+      }
       store.saveSnapshot(token.id, user.id, report);
       return send(res, 200, { ok: true, policy: policy() });
     }
@@ -426,9 +485,13 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       const { user } = needWeb(req, 'admin');
       const period = periodOf(url);
       const since = day(now() - (period - 1) * 86_400_000);
-      const lines = [['date', 'name', 'email', 'what', 'key', 'minutes'].join(',')];
-      for (const r of store.dayRows(since)) lines.push([r.day, r.name, r.email, 'worked', '', Math.round(r.minutes)].map(csvCell).join(','));
-      for (const r of store.activityRows(since)) lines.push([r.day, r.name, r.email, r.kind, r.key, Math.round(r.minutes)].map(csvCell).join(','));
+      const teams = new Map(store.users().map((u) => [u.email, u.team ?? '']));
+      const projects = settings().projects;
+      const lines = [['date', 'name', 'email', 'team', 'what', 'key', 'project', 'minutes'].join(',')];
+      for (const r of store.dayRows(since)) lines.push([r.day, r.name, r.email, teams.get(r.email), 'worked', '', '', Math.round(r.minutes)].map(csvCell).join(','));
+      for (const r of store.activityRows(since)) {
+        lines.push([r.day, r.name, r.email, teams.get(r.email), r.kind, r.key, r.kind === 'repo' ? projectOf(r.key, projects) ?? '' : '', Math.round(r.minutes)].map(csvCell).join(','));
+      }
       store.log(user.id, 'export', `${period} days`);
       res.writeHead(200, {
         'content-type': 'text/csv; charset=utf-8',
@@ -461,6 +524,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
         if (problem) throw new HttpError(400, problem);
       }
       const user = store.createUser({ email, name: body.name ?? '', role, passHash: password ? await hashPassword(password) : null });
+      if (body.team) store.updateUser(user.id, { team: String(body.team) });
       store.log(webUser(req).user.id, 'account.created', email, `${role}${password ? '' : ', single sign-on only'}`);
       // The generated password is shown once, to the administrator who made it.
       return send(res, 201, { ok: true, user: publicUser(user), password: body.password ? null : password });
@@ -478,7 +542,9 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       store.updateUser(target.id, {
         name: body.name === undefined ? undefined : String(body.name),
         role: body.role === undefined ? undefined : body.role === 'admin' ? 'admin' : 'member',
+        team: body.team === undefined ? undefined : String(body.team),
       });
+      if (body.team !== undefined && String(body.team).trim() !== (target.team ?? '')) store.log(me.id, 'account.team', target.email, String(body.team).trim() || 'no team');
       if (body.disabled !== undefined) {
         store.setDisabled(target.id, body.disabled === true);
         store.log(me.id, body.disabled === true ? 'account.disabled' : 'account.enabled', target.email);
@@ -520,6 +586,18 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
         next.ticketPattern = body.ticketPattern.slice(0, 200);
       }
       if (body.sharePaths !== undefined) next.sharePaths = body.sharePaths === true;
+      if (Array.isArray(body.projects)) {
+        next.projects = body.projects.slice(0, 50).map((p) => ({
+          name: String(p.name ?? '').trim().slice(0, 60),
+          patterns: (Array.isArray(p.patterns) ? p.patterns : String(p.patterns ?? '').split(','))
+            .map((x) => String(x).trim()).filter(Boolean).slice(0, 20).map((x) => x.slice(0, 120)),
+        })).filter((p) => p.name && p.patterns.length);
+      }
+      if (body.retentionDays !== undefined) {
+        const keep = Math.round(Number(body.retentionDays) || 0);
+        if (keep !== 0 && (keep < 30 || keep > 3650)) throw new HttpError(400, 'Keep at least 30 days, or 0 to keep everything.');
+        next.retentionDays = keep;
+      }
       if (typeof body.ticketUrl === 'string') {
         const t = body.ticketUrl.trim();
         if (t && (!/^https:\/\//.test(t) || !t.includes('{ticket}'))) throw new HttpError(400, 'A ticket link is an https address with {ticket} where the ticket goes.');
@@ -548,6 +626,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
         });
       }
       store.setSetting('org', next);
+      if (next.retentionDays !== current.retentionDays) applyRetention();
       const changed = Object.keys(next).filter((k) => JSON.stringify(next[k]) !== JSON.stringify(current[k]) && k !== 'providers');
       if (JSON.stringify(next.providers.map(({ clientSecret, ...r }) => r)) !== JSON.stringify(current.providers.map(({ clientSecret, ...r }) => r))) changed.push('sign-in providers');
       store.log(webUser(req).user.id, 'settings.changed', '', changed.join(', ') || 'nothing');

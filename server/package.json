@@ -9,7 +9,8 @@
   "bin": { "smart-terminal-org": "bin/org-server.js" },
   "scripts": {
     "start": "node bin/org-server.js serve",
-    "invite-admin": "node bin/org-server.js invite-admin",
+    "create-admin": "node bin/org-server.js create-admin",
+    "backup": "node bin/org-server.js backup",
     "test": "node --no-warnings --test"
   }
 }

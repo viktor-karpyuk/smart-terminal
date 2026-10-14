@@ -68,6 +68,7 @@ class OrgService {
       user: s.user ?? null,
       policy: s.policy ?? null,
       paused: Boolean(s.paused),
+      privateFolders: s.privateFolders ?? [],
       lastReport: s.lastReport ?? null,
       lastSentAt: s.lastSentAt ?? null,
       lastError: s.lastError ?? null,
@@ -219,6 +220,14 @@ class OrgService {
     return { ok: true, ...this.overview() };
   }
 
+  /** Folders whose sessions are only counted, never described. Kept across sign-outs: they are the person's, not the company's. */
+  setPrivateFolders(folders) {
+    const list = [...new Set((Array.isArray(folders) ? folders : []).map((f) => String(f ?? '').trim().replace(/\/+$/, '')).filter((f) => f.startsWith('/')))].slice(0, 100);
+    this.save({ privateFolders: list });
+    void this.sendNow();
+    return { ok: true, ...this.overview() };
+  }
+
   deviceName() {
     return `${os.hostname().replace(/\.local$/, '')} (${process.platform === 'darwin' ? 'macOS' : process.platform})`.slice(0, 120);
   }
@@ -256,6 +265,7 @@ class OrgService {
         policy,
         appVersion: this.appVersion,
         paused: Boolean(this.state.paused),
+        privateFolders: this.state.privateFolders ?? [],
         now: this.now(),
         intervalSeconds: Math.round(this.everyMs() / 1000),
       });

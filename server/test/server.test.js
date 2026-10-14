@@ -342,8 +342,8 @@ test('administrators see one person\'s weeks, a 30-day period, the log, and an e
     const csv = await s.call('GET', '/api/admin/export.csv?days=7', { cookie: admin });
     assert.equal(csv.status, 200);
     assert.match(csv.headers.get('content-type'), /text\/csv/);
-    assert.match(csv.text, /^date,name,email,what,key,minutes\n/);
-    assert.match(csv.text, /repo,acme\/api,2/);
+    assert.match(csv.text, /^date,name,email,team,what,key,project,minutes\n/);
+    assert.match(csv.text, /repo,acme\/api,,2/);
     assert.match(csv.text, /"'=HYPERLINK\(""x""\)"/, 'a name that looks like a formula is written as text');
 
     const log = await s.call('GET', '/api/admin/audit', { cookie: admin });
@@ -367,5 +367,84 @@ test('a ticket link must be https and say where the ticket goes; devices are tol
     const made = await s.call('POST', '/api/admin/users', { cookie: admin, body: { email: 'ana@acme.com', role: 'member' } });
     const login = await s.call('POST', '/api/app/login', { body: { email: 'ana@acme.com', password: made.json.password } });
     assert.equal(login.json.policy.ticketUrl, 'https://acme.atlassian.net/browse/{ticket}');
+  } finally { await s.close(); }
+});
+
+test('teams and projects: time is grouped by both, and the export says which', async () => {
+  const s = await boot();
+  try {
+    const admin = await s.webLogin();
+    await s.call('PUT', '/api/admin/settings', { cookie: admin, body: { projects: [
+      { name: 'Timelog', patterns: 'acme/timelog-*' },
+      { name: 'Terminal', patterns: ['*/smart-terminal'] },
+    ] } });
+    const ana = await s.call('POST', '/api/admin/users', { cookie: admin, body: { email: 'ana@acme.com', role: 'member', team: 'Backend' } });
+    const leo = await s.call('POST', '/api/admin/users', { cookie: admin, body: { email: 'leo@acme.com', role: 'member' } });
+    await s.call('PATCH', `/api/admin/users/${leo.json.user.id}`, { cookie: admin, body: { team: 'Frontend' } });
+    const t1 = (await s.call('POST', '/api/app/login', { body: { email: 'ana@acme.com', password: ana.json.password } })).json.token;
+    const t2 = (await s.call('POST', '/api/app/login', { body: { email: 'leo@acme.com', password: leo.json.password } })).json.token;
+    await s.call('POST', '/api/app/report', { token: t1, body: { sessions: [{ kind: 'shell', title: 'a', repo: 'acme/timelog-api', active: true }] } });
+    await s.call('POST', '/api/app/report', { token: t2, body: { sessions: [{ kind: 'shell', title: 'b', repo: 'kubrik/smart-terminal', active: true }, { kind: 'shell', title: 'c', repo: 'acme/other', active: true }] } });
+
+    const view = (await s.call('GET', '/api/web/overview', { cookie: admin })).json;
+    assert.deepEqual(view.projects.map((p) => p.key).sort(), ['No project', 'Terminal', 'Timelog']);
+    assert.deepEqual(view.teams.map((t) => t.key).sort(), ['Backend', 'Frontend']);
+    assert.deepEqual(view.teamNames, ['Backend', 'Frontend']);
+    assert.equal(view.people.find((p) => p.email === 'ana@acme.com').team, 'Backend');
+    const csv = (await s.call('GET', '/api/admin/export.csv', { cookie: admin })).text;
+    assert.match(csv, /^date,name,email,team,what,key,project,minutes/);
+    assert.match(csv, /Backend,repo,acme\/timelog-api,Timelog,2/);
+  } finally { await s.close(); }
+});
+
+test('usage history: the lowest point each day, and the days the session ran out', async () => {
+  const s = await boot();
+  try {
+    const admin = await s.webLogin();
+    const ana = await s.call('POST', '/api/admin/users', { cookie: admin, body: { email: 'ana@acme.com', role: 'member' } });
+    const token = (await s.call('POST', '/api/app/login', { body: { email: 'ana@acme.com', password: ana.json.password } })).json.token;
+    for (const used of [40, 100, 70]) {
+      await s.call('POST', '/api/app/report', { token, body: { sessions: [], accounts: [{ name: 'Work', sessionUsed: used, weekUsed: 85 }] } });
+    }
+    const person = (await s.call('GET', '/api/web/overview', { cookie: admin })).json.people.find((p) => p.email === 'ana@acme.com');
+    assert.deepEqual(person.usageHistory, { daysRanOut: 1, lowestWeekLeft: 15, lowestSessionLeft: 0 });
+  } finally { await s.close(); }
+});
+
+test('private sessions are counted and never described', async () => {
+  const s = await boot();
+  try {
+    const admin = await s.webLogin();
+    const ana = await s.call('POST', '/api/admin/users', { cookie: admin, body: { email: 'ana@acme.com', role: 'member' } });
+    const token = (await s.call('POST', '/api/app/login', { body: { email: 'ana@acme.com', password: ana.json.password } })).json.token;
+    await s.call('POST', '/api/app/report', { token, body: { sessions: [{ kind: 'shell', title: 'work', repo: 'acme/api', active: true }], hiddenSessions: 2 } });
+    const person = (await s.call('GET', '/api/web/overview', { cookie: admin })).json.people.find((p) => p.email === 'ana@acme.com');
+    assert.equal(person.hiddenSessions, 2);
+    assert.equal(person.sessions.length, 1);
+  } finally { await s.close(); }
+});
+
+test('retention: at least 30 days or none, and old activity goes', async () => {
+  const s = await boot();
+  try {
+    const admin = await s.webLogin();
+    assert.equal((await s.call('PUT', '/api/admin/settings', { cookie: admin, body: { retentionDays: 5 } })).status, 400);
+    s.store.addMinutes(s.admin.id, '2020-01-01', 'repo', 'old/repo', 10);
+    s.store.addDayMinutes(s.admin.id, '2020-01-01', 10);
+    assert.equal((await s.call('PUT', '/api/admin/settings', { cookie: admin, body: { retentionDays: 90 } })).status, 200);
+    assert.equal(s.store.get("SELECT COUNT(*) AS n FROM activity WHERE day = '2020-01-01'").n, 0);
+    assert.equal(s.store.get("SELECT COUNT(*) AS n FROM days WHERE day = '2020-01-01'").n, 0);
+  } finally { await s.close(); }
+});
+
+test('a backup is a database that opens and holds the accounts', async () => {
+  const s = await boot();
+  try {
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'org-bk-')), 'copy.db');
+    s.store.backupTo(file);
+    const { Store } = require('../src/db');
+    const copy = new Store(file);
+    assert.equal(copy.userByEmail('boss@acme.com').role, 'admin');
+    copy.close();
   } finally { await s.close(); }
 });

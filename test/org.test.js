@@ -118,3 +118,18 @@ test('pausing sends at once, and sends nothing about the work', async () => {
   assert.equal(bodies.at(-1).paused, true);
   assert.deepEqual(bodies.at(-1).sessions, []);
 });
+
+test('sessions in a never-shared folder are counted and nothing else is said about them', () => {
+  const report = buildReport({
+    sessions: [
+      { kind: 'claude', title: 'secret', cwd: '/Users/ana/personal/diary' },
+      { kind: 'shell', title: 'also secret', cwd: '/Users/ana/personal' },
+      { kind: 'shell', title: 'work', cwd: '/Users/ana/personality-app' },
+    ],
+    repos: new Map(), accounts: [], policy: { ticketPattern: '', sharePaths: true },
+    appVersion: 't', paused: false, now: 0, intervalSeconds: 120, privateFolders: ['/Users/ana/personal/'],
+  });
+  assert.equal(report.hiddenSessions, 2);
+  assert.deepEqual(report.sessions.map((s) => s.title), ['work']);
+  assert.ok(!JSON.stringify(report).includes('secret'));
+});

@@ -5,6 +5,7 @@
  *   org-server serve                      start the server
  *   org-server create-admin <email> [name] make the first administrator; prints a password once
  *   org-server reset-password <email>      print a new password for an account
+ *   org-server backup [file]               a consistent copy of the database, while it runs
  *
  * Settings from the environment:
  *   ORG_DB          where the database lives            (./org.db)
@@ -36,6 +37,10 @@ async function main() {
     const password = makePassword();
     store.createUser({ email, name: name.join(' '), role: 'admin', passHash: await hashPassword(password) });
     console.log(`Administrator ${email} created.\nPassword (shown once): ${password}\nSign in at ${publicUrl}`);
+  } else if (command === 'backup') {
+    const file = args[0] || `org-backup-${new Date().toISOString().slice(0, 10)}.db`;
+    store.backupTo(file);
+    console.log(`Backed up to ${file}. Copy it somewhere else; restoring is pointing ORG_DB at it.`);
   } else if (command === 'reset-password') {
     const user = store.userByEmail(args[0] ?? '');
     if (!user) throw new Error('No account with that e-mail.');

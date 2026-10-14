@@ -323,3 +323,14 @@ td .state, .state { white-space: nowrap; }
 .form-gap { gap: 14px; }
 button.tall { padding: 10px; }
 .week-label { min-height: 1.5em; }
+
+/* projects in settings: name, repositories, remove — one line each */
+.project-row { display: grid; grid-template-columns: minmax(120px, 1fr) 2fr auto; gap: 12px; align-items: end; }
+.project-row > button { margin-bottom: 4px; }
+@media (max-width: 720px) { .project-row { grid-template-columns: 1fr; } }
+.history { margin-top: 14px; }
+.low-text { color: var(--low); }
+.toolbar select { width: auto; }
+.person-row .status { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+td.muted, th { white-space: nowrap; }
+.sheet-more { margin-top: 12px; padding-top: 18px; border-top: 1px solid var(--line); display: grid; gap: 10px; }

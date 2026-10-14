@@ -6,7 +6,8 @@ A company's own server for Smart Terminal. Developers sign in to it from the app
 - who is working, in which sessions, on which **repositories and branches**;
 - which **tickets** that work is on, found in branch names, session titles and commit subjects;
 - how much of each developer's **Claude usage** is left: the session and the week;
-- time per repository and per ticket over the last 7 days.
+- time per repository, ticket, **project** and **team**, over the last 7 or 30 days;
+- each developer's own numbers, which they see too (and only theirs).
 
 No dependencies: Node 22.5 or newer (`node:sqlite`), one SQLite file.
 
@@ -21,7 +22,8 @@ much of the session and the week is used, and when each resets.
 `user:password@` is stripped before the repository name is sent. Full folder
 paths only if the company turns that on in the backoffice. The developer sees
 the last report word for word in the app, can pause it, and the backoffice
-shows that it is paused.
+shows that it is paused. They can also name folders that are **never shared**:
+a session in one is counted, and nothing else about it is sent.
 
 ## Running it
 
@@ -32,6 +34,17 @@ ORG_PUBLIC_URL=https://smart-terminal.acme.com ORG_TRUST_PROXY=1 node bin/org-se
 ```
 
 `create-admin` prints a password once. `reset-password <email>` prints a new one.
+`backup [file]` writes a consistent copy of the database while it is serving.
+
+With Docker:
+
+```
+docker build -t smart-terminal-org server
+docker run -d --name org -p 8787:8787 -v org-data:/data \
+  -e ORG_PUBLIC_URL=https://smart-terminal.acme.com -e ORG_TRUST_PROXY=1 smart-terminal-org
+docker exec org node bin/org-server.js create-admin you@acme.com "Your Name"
+docker exec org node bin/org-server.js backup /data/backup.db
+```
 
 | Variable | Default | |
 | --- | --- | --- |
@@ -51,6 +64,19 @@ In the backoffice, **Accounts → Add an account**: an e-mail, a name, a role
 - **Microsoft / Google only**: no password at all.
 
 Disabling an account signs out every device it is signed in on, at once.
+
+Give people a **team** (Add an account, or Edit on Accounts): Team can then show
+one team at a time, and time adds up by team.
+
+## Projects and keeping data
+
+**Settings → Projects** groups repositories: a name and patterns such as
+`acme/timelog-*, acme/billing`. A repository counts toward the first project that
+matches; the export says which.
+
+**Settings → Keeping data** deletes time, repositories, tickets and usage older
+than 30 days to two years, when saved and daily after. Accounts and the activity
+log are kept.
 
 ## Sign in with Microsoft, Google or another provider
 

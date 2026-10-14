@@ -65,6 +65,15 @@ CREATE TABLE IF NOT EXISTS audit (
   detail TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS audit_at ON audit (at);
+CREATE TABLE IF NOT EXISTS usage_days (
+  user_id TEXT NOT NULL,
+  day TEXT NOT NULL,
+  account TEXT NOT NULL,
+  session_left_min INTEGER,
+  week_left_min INTEGER,
+  ran_out INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, day, account)
+);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `;
 
@@ -75,6 +84,9 @@ class Store {
     this.db = new DatabaseSync(file);
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
     this.db.exec(SCHEMA);
+    // Columns added after the first release, added to a database made before them.
+    const userColumns = new Set(this.all('PRAGMA table_info(users)').map((c) => c.name));
+    if (!userColumns.has('team')) this.db.exec("ALTER TABLE users ADD COLUMN team TEXT NOT NULL DEFAULT ''");
     this.now = now;
   }
 
@@ -103,7 +115,8 @@ class Store {
     return this.user(id);
   }
   setPassword(userId, passHash) { this.run('UPDATE users SET pass_hash = ? WHERE id = ?', passHash, userId); }
-  updateUser(userId, { name, role }) {
+  updateUser(userId, { name, role, team }) {
+    if (team !== undefined) this.run('UPDATE users SET team = ? WHERE id = ?', String(team).trim().slice(0, 60), userId);
     if (name !== undefined) this.run('UPDATE users SET name = ? WHERE id = ?', String(name).trim(), userId);
     if (role !== undefined) this.run('UPDATE users SET role = ? WHERE id = ?', role, userId);
   }
@@ -191,6 +204,28 @@ class Store {
   }
   dayRows(since) {
     return this.all('SELECT d.day, d.minutes, u.email, u.name FROM days d JOIN users u ON u.id = d.user_id WHERE d.day >= ? ORDER BY d.day, u.email', since);
+  }
+  /** The lowest each account got to in a day, and whether its session ran out. */
+  noteUsage(userId, day, account, sessionLeft, weekLeft) {
+    this.run(`INSERT INTO usage_days (user_id, day, account, session_left_min, week_left_min, ran_out) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id, day, account) DO UPDATE SET
+        session_left_min = CASE WHEN excluded.session_left_min IS NULL THEN session_left_min WHEN session_left_min IS NULL THEN excluded.session_left_min ELSE MIN(session_left_min, excluded.session_left_min) END,
+        week_left_min = CASE WHEN excluded.week_left_min IS NULL THEN week_left_min WHEN week_left_min IS NULL THEN excluded.week_left_min ELSE MIN(week_left_min, excluded.week_left_min) END,
+        ran_out = MAX(ran_out, excluded.ran_out)`,
+      userId, day, String(account).slice(0, 80), sessionLeft, weekLeft, sessionLeft != null && sessionLeft <= 0 ? 1 : 0);
+  }
+  usageSince(day) {
+    return this.all(`SELECT user_id, SUM(ran_out) AS days_ran_out, MIN(week_left_min) AS lowest_week, MIN(session_left_min) AS lowest_session
+      FROM usage_days WHERE day >= ? GROUP BY user_id`, day);
+  }
+  /** Delete what is older than the company keeps. Accounts, devices and the log are not touched. */
+  forgetBefore(day) {
+    let n = 0;
+    for (const table of ['activity', 'days', 'usage_days']) n += Number(this.run(`DELETE FROM ${table} WHERE day < ?`, day).changes);
+    return n;
+  }
+  backupTo(file) {
+    this.db.exec(`VACUUM INTO '${String(file).replace(/'/g, "''")}'`);
   }
   activitySince(day) {
     return this.all('SELECT user_id, kind, key, SUM(minutes) AS minutes FROM activity WHERE day >= ? GROUP BY user_id, kind, key', day);
