@@ -42,7 +42,7 @@
 </style>
 <div class="page" id="page"><p class="dim">Loading…</p></div>
 <script>
-  var state = { overview: null, stats: null, server: '', providers: null, orgName: '', busy: false, waiting: false, error: '' };
+  var state = { overview: null, stats: null, days: 7, server: '', providers: null, orgName: '', busy: false, waiting: false, error: '' };
   var $ = function (id) { return document.getElementById(id); };
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
   function call(name, args) {
@@ -145,14 +145,19 @@
   function drawStats() {
     var s = state.stats;
     if (!s) return '<div class="card"><h2>Your last 7 days</h2><p class="dim">Reading…</p></div>';
-    var most = Math.max.apply(null, [60].concat(s.days.map(function (d) { return d.minutes; })));
+    var most = Math.max.apply(null, [1].concat(s.days.map(function (d) { return d.minutes; })));
     var today = s.days.length ? s.days[s.days.length - 1].minutes : 0;
-    var html = '<div class="card"><h2>Your last 7 days</h2>' +
+    var html = '<div class="card"><div class="row"><h2 style="margin:0">Your last ' + (state.days === 30 ? '30' : '7') + ' days</h2><span class="spacer"></span>' +
+      '<button class="btn" data-act="days" data-days="' + (state.days === 30 ? 7 : 30) + '">Show ' + (state.days === 30 ? '7' : '30') + ' days</button>' +
+      '<button class="btn" data-act="web" data-page="mine">Open in browser</button></div>' +
       '<div class="figures"><div class="figure"><strong>' + hrs(today) + '</strong><span class="dim small">today</span></div>' +
-      '<div class="figure"><strong>' + hrs(s.totalMinutes) + '</strong><span class="dim small">7 days</span></div></div>';
-    html += '<div class="week">' + s.days.map(function (d) {
-      var name = new Date(d.day + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short' });
-      return '<div class="wday" title="' + esc(d.day + ': ' + hrs(d.minutes)) + '"><span class="dim">' + (d.minutes ? hrs(d.minutes) : '') + '</span>' +
+      '<div class="figure"><strong>' + hrs(s.totalMinutes) + '</strong><span class="dim small">' + s.days.length + ' days</span></div></div>';
+    var long = s.days.length > 10;
+    html += '<div class="week" style="grid-template-columns:repeat(' + s.days.length + ',1fr)' + (long ? ';gap:3px' : '') + '">' + s.days.map(function (d, i) {
+      var name = long ? (i % 5 === 0 ? String(Number(d.day.slice(8))) : '') : new Date(d.day + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short' });
+      // Thirty bars are too narrow for a figure on top; the title says it on hover.
+      var top = long ? '' : (d.minutes ? hrs(d.minutes) : '');
+      return '<div class="wday" title="' + esc(d.day + ': ' + hrs(d.minutes)) + '"><span class="dim">' + top + '</span>' +
         '<span class="wtrack"><span class="wbar" style="height:' + Math.round(d.minutes / most * 100) + '%"></span></span><span class="dim">' + esc(name) + '</span></div>';
     }).join('') + '</div>';
     var list = function (title, rows, empty) {
@@ -191,6 +196,8 @@
     else if (what === 'pause') act(call('pause', { paused: !state.overview.paused }));
     else if (what === 'send') act(call('sendNow'));
     else if (what === 'logout') act(call('logout').then(function (r) { state.providers = null; return r; }));
+    else if (what === 'days') { state.days = Number(b.getAttribute('data-days')); state.stats = null; draw(); load(); }
+    else if (what === 'web') call('openWeb', { page: b.getAttribute('data-page') });
   });
   document.addEventListener('keydown', function (event) {
     if (event.key === 'Enter' && (event.target.id === 'password' || event.target.id === 'email')) document.querySelector('[data-act=password]').click();
@@ -203,7 +210,7 @@
       if (!state.server) state.server = o.server || '';
       draw();
       if (!o.signedIn) { state.stats = null; return; }
-      return call('stats').then(function (s) { state.stats = s; draw(); }, function () { /* the report is what matters; the numbers can wait */ });
+      return call('stats', { days: state.days }).then(function (s) { state.stats = s; draw(); }, function () { /* the report is what matters; the numbers can wait */ });
     }, function (e) { state.error = e.message; draw(); });
   }
   host.on('context', load);

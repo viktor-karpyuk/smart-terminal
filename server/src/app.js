@@ -33,6 +33,7 @@ const WEB_DAYS = 1;
 const ONLINE_MS = 5 * 60_000;
 const DEFAULTS = {
   orgName: 'Your company',
+  ticketUrl: '',
   reportEveryMinutes: 2,
   ticketPattern: '\\b[A-Z][A-Z0-9]{1,9}-\\d{1,6}\\b',
   sharePaths: false,
@@ -43,6 +44,14 @@ class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 
+/** How far back a view looks: 7 or 30 days, or anything from 1 to 90 asked for. */
+const periodOf = (url) => Math.max(1, Math.min(90, Math.round(Number(url.searchParams.get('days')) || 7)));
+const csvCell = (value) => {
+  const text = String(value ?? '');
+  // A cell a spreadsheet would read as a formula is written as text.
+  const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+  return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+};
 const emailOk = (email) => /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{1,63}$/.test(String(email ?? '').trim());
 const day = (at) => new Date(at).toISOString().slice(0, 10);
 
@@ -56,7 +65,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
   /** What a device is told to do: never a secret. */
   const policy = () => {
     const s = settings();
-    return { orgName: s.orgName, reportEveryMinutes: s.reportEveryMinutes, ticketPattern: s.ticketPattern, sharePaths: s.sharePaths };
+    return { orgName: s.orgName, reportEveryMinutes: s.reportEveryMinutes, ticketPattern: s.ticketPattern, sharePaths: s.sharePaths, ticketUrl: s.ticketUrl };
   };
   const publicProviders = () => settings().providers.filter((p) => p.enabled !== false && p.clientId)
     .map((p) => ({ id: p.id, label: p.label || (p.type === 'microsoft' ? 'Microsoft' : p.type === 'google' ? 'Google' : 'Single sign-on'), type: p.type }));
@@ -166,11 +175,11 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
   }
 
   // --- the dashboard's numbers -------------------------------------------------
-  function overview() {
+  function overview(period = 7) {
     const t = now();
     const users = store.users();
     const snaps = store.snapshots();
-    const since = day(t - 6 * 86_400_000);
+    const since = day(t - (period - 1) * 86_400_000);
     const activity = store.activitySince(since);
     const people = users.map((u) => {
       const mine = snaps.filter((s) => s.user_id === u.id);
@@ -198,21 +207,23 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       for (const a of activity) if (a.kind === kind) by.set(a.key, (by.get(a.key) ?? 0) + a.minutes);
       return [...by.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([key, minutes]) => ({ key, minutes: Math.round(minutes) }));
     };
-    return { orgName: settings().orgName, since, now: t, people, repos: totals('repo'), tickets: totals('ticket') };
+    return { orgName: settings().orgName, ticketUrl: settings().ticketUrl, period, since, now: t, people, repos: totals('repo'), tickets: totals('ticket') };
   }
 
   /**
    * One person's own numbers: what they see about themselves, in the backoffice
    * and in the app. Never anybody else's.
    */
-  function personalStats(userId) {
+  function personalStats(userId, period = 7) {
     const t = now();
     const days = [];
-    for (let i = 6; i >= 0; i -= 1) days.push(day(t - i * 86_400_000));
+    for (let i = period - 1; i >= 0; i -= 1) days.push(day(t - i * 86_400_000));
     const worked = new Map(store.daysOf(userId, days[0]).map((d) => [d.day, d.minutes]));
-    const me = overview().people.find((p) => p.id === userId);
+    const me = overview(period).people.find((p) => p.id === userId);
     return {
       orgName: settings().orgName,
+      ticketUrl: settings().ticketUrl,
+      period,
       since: days[0],
       days: days.map((d) => ({ day: d, minutes: Math.round(worked.get(d) ?? 0) })),
       totalMinutes: Math.round(days.reduce((sum, d) => sum + (worked.get(d) ?? 0), 0)),
@@ -251,6 +262,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
     if (method === 'POST' && p === '/api/app/login') {
       const body = await readJson(req);
       const user = await passwordLogin(req, body);
+      store.log(user.id, 'signin.app', String(body.device ?? 'a device'), 'password');
       return send(res, 200, deviceAnswer(user, String(body.device ?? 'a device')));
     }
     if (method === 'POST' && p === '/api/app/exchange') {
@@ -261,6 +273,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       if (challenge !== held.challenge) throw new HttpError(400, 'That sign-in was started somewhere else.');
       const user = store.user(held.userId);
       if (!user || user.disabled_at) throw new HttpError(403, 'That account is disabled.');
+      store.log(user.id, 'signin.app', String(body.device ?? 'a device'), 'single sign-on');
       return send(res, 200, deviceAnswer(user, String(body.device ?? 'a device')));
     }
     if (method === 'GET' && p === '/api/app/me') {
@@ -286,7 +299,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
     }
     if (method === 'GET' && p === '/api/app/stats') {
       const { user } = needDevice(req);
-      return send(res, 200, { ok: true, ...personalStats(user.id) });
+      return send(res, 200, { ok: true, ...personalStats(user.id, periodOf(url)) });
     }
     if (method === 'POST' && p === '/api/app/logout') {
       const { token } = needDevice(req);
@@ -334,6 +347,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
         return redirect(res, back.toString());
       }
       const token = store.issueToken(user.id, { kind: 'web', label: 'browser', days: WEB_DAYS });
+      store.log(user.id, 'signin.web', '', `single sign-on (${prov.label || prov.type})`);
       return redirect(res, '/', { 'set-cookie': sessionCookie(req, token.secret, WEB_DAYS * 86_400) });
     }
 
@@ -342,6 +356,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       sameSite(req);
       const user = await passwordLogin(req, await readJson(req));
       const token = store.issueToken(user.id, { kind: 'web', label: 'browser', days: WEB_DAYS });
+      store.log(user.id, 'signin.web', '', 'password');
       return send(res, 200, { ok: true, user: publicUser(user) }, { 'set-cookie': sessionCookie(req, token.secret, WEB_DAYS * 86_400) });
     }
     if (method === 'POST' && p === '/api/web/logout') {
@@ -356,16 +371,80 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
     }
     if (method === 'GET' && p === '/api/web/stats') {
       const { user } = needWeb(req);
-      return send(res, 200, { ok: true, ...personalStats(user.id) });
+      return send(res, 200, { ok: true, ...personalStats(user.id, periodOf(url)) });
     }
     if (method === 'GET' && p === '/api/web/overview') {
       // Everybody's work is the administrators' view. A developer has their own: /api/web/stats.
       needWeb(req, 'admin');
-      return send(res, 200, overview());
+      return send(res, 200, overview(periodOf(url)));
+    }
+
+    // ----- your own account, whoever you are -----
+    if (method === 'GET' && p === '/api/web/account') {
+      const { user, token } = needWeb(req);
+      const devices = store.tokensOf(user.id).filter((t) => t.kind === 'device')
+        .map((t) => ({ id: t.id, label: t.label, lastSeen: t.last_seen_at, createdAt: t.created_at }));
+      return send(res, 200, { ok: true, user: publicUser(user), devices, ssoOnly: !user.pass_hash, thisSession: token.id });
+    }
+    if (method === 'POST' && p === '/api/web/password') {
+      sameSite(req);
+      const { user, token } = needWeb(req);
+      const body = await readJson(req);
+      if (!logins.allow(`${clientIp(req)}|password|${user.id}`)) throw new HttpError(429, 'Too many tries. Wait a few minutes.');
+      if (user.pass_hash && !(await checkPassword(String(body.current ?? ''), user.pass_hash))) throw new HttpError(400, 'Your current password is not right.');
+      const problem = passwordProblem(body.next);
+      if (problem) throw new HttpError(400, problem);
+      store.setPassword(user.id, await hashPassword(String(body.next)));
+      // Every other browser that was signed in as you is signed out; devices stay.
+      for (const t of store.tokensOf(user.id)) if (t.kind === 'web' && t.id !== token.id) store.revokeToken(t.id);
+      store.log(user.id, 'password.changed', user.email);
+      return send(res, 200, { ok: true });
+    }
+    const ownDevice = /^\/api\/web\/devices\/([0-9a-f-]{36})$/.exec(p);
+    if (method === 'DELETE' && ownDevice) {
+      if (req.headers.origin && base && req.headers.origin !== new URL(base).origin) throw new HttpError(403, 'Not from this site.');
+      const { user } = needWeb(req);
+      const mine = store.tokensOf(user.id).find((t) => t.id === ownDevice[1] && t.kind === 'device');
+      if (!mine) throw new HttpError(404, 'No such device of yours.');
+      store.revokeToken(mine.id);
+      store.log(user.id, 'device.signed_out', mine.label, 'by its owner');
+      return send(res, 200, { ok: true });
+    }
+
+    // ----- administrators: one person, the log, an export -----
+    const personMatch = /^\/api\/admin\/people\/([0-9a-f-]{36})\/stats$/.exec(p);
+    if (method === 'GET' && personMatch) {
+      needWeb(req, 'admin');
+      if (!store.user(personMatch[1])) throw new HttpError(404, 'No such account.');
+      return send(res, 200, { ok: true, ...personalStats(personMatch[1], periodOf(url)) });
+    }
+    if (method === 'GET' && p === '/api/admin/audit') {
+      needWeb(req, 'admin');
+      return send(res, 200, { ok: true, entries: store.auditLog(Number(url.searchParams.get('limit')) || 200) });
+    }
+    if (method === 'GET' && p === '/api/admin/export.csv') {
+      const { user } = needWeb(req, 'admin');
+      const period = periodOf(url);
+      const since = day(now() - (period - 1) * 86_400_000);
+      const lines = [['date', 'name', 'email', 'what', 'key', 'minutes'].join(',')];
+      for (const r of store.dayRows(since)) lines.push([r.day, r.name, r.email, 'worked', '', Math.round(r.minutes)].map(csvCell).join(','));
+      for (const r of store.activityRows(since)) lines.push([r.day, r.name, r.email, r.kind, r.key, Math.round(r.minutes)].map(csvCell).join(','));
+      store.log(user.id, 'export', `${period} days`);
+      res.writeHead(200, {
+        'content-type': 'text/csv; charset=utf-8',
+        'content-disposition': `attachment; filename="smart-terminal-${since}-${day(now())}.csv"`,
+        'cache-control': 'no-store',
+      });
+      return res.end(lines.join('\n') + '\n');
     }
     if (method === 'GET' && p === '/api/admin/users') {
       needWeb(req, 'admin');
-      return send(res, 200, { users: store.users().map(publicUser) });
+      return send(res, 200, { users: store.users().map((u) => {
+        const tokens = store.tokensOf(u.id);
+        const devices = tokens.filter((t) => t.kind === 'device');
+        const lastSeen = Math.max(0, ...tokens.map((t) => t.last_seen_at ?? 0)) || null;
+        return { ...publicUser(u), devices: devices.length, lastSeen, createdAt: u.created_at };
+      }) });
     }
     if (method === 'POST' && p === '/api/admin/users') {
       sameSite(req);
@@ -382,6 +461,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
         if (problem) throw new HttpError(400, problem);
       }
       const user = store.createUser({ email, name: body.name ?? '', role, passHash: password ? await hashPassword(password) : null });
+      store.log(webUser(req).user.id, 'account.created', email, `${role}${password ? '' : ', single sign-on only'}`);
       // The generated password is shown once, to the administrator who made it.
       return send(res, 201, { ok: true, user: publicUser(user), password: body.password ? null : password });
     }
@@ -399,19 +479,26 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
         name: body.name === undefined ? undefined : String(body.name),
         role: body.role === undefined ? undefined : body.role === 'admin' ? 'admin' : 'member',
       });
-      if (body.disabled !== undefined) store.setDisabled(target.id, body.disabled === true);
+      if (body.disabled !== undefined) {
+        store.setDisabled(target.id, body.disabled === true);
+        store.log(me.id, body.disabled === true ? 'account.disabled' : 'account.enabled', target.email);
+      }
+      if (body.role !== undefined && body.role !== target.role) store.log(me.id, 'account.role', target.email, body.role === 'admin' ? 'administrator' : 'developer');
       let password = null;
       if (body.resetPassword === true) {
         password = makePassword();
         store.setPassword(target.id, await hashPassword(password));
+        store.log(me.id, 'account.password_reset', target.email);
       }
       return send(res, 200, { ok: true, user: publicUser(store.user(target.id)), password });
     }
     const deviceMatch = /^\/api\/admin\/devices\/([0-9a-f-]{36})$/.exec(p);
     if (method === 'DELETE' && deviceMatch) {
       if (req.headers.origin && base && req.headers.origin !== new URL(base).origin) throw new HttpError(403, 'Not from this site.');
-      needWeb(req, 'admin');
+      const { user: admin } = needWeb(req, 'admin');
+      const device = store.get('SELECT t.label, u.email FROM tokens t JOIN users u ON u.id = t.user_id WHERE t.id = ?', deviceMatch[1]);
       store.revokeToken(deviceMatch[1]);
+      store.log(admin.id, 'device.signed_out', device ? `${device.label} (${device.email})` : deviceMatch[1]);
       return send(res, 200, { ok: true });
     }
     if (method === 'GET' && p === '/api/admin/settings') {
@@ -433,6 +520,11 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
         next.ticketPattern = body.ticketPattern.slice(0, 200);
       }
       if (body.sharePaths !== undefined) next.sharePaths = body.sharePaths === true;
+      if (typeof body.ticketUrl === 'string') {
+        const t = body.ticketUrl.trim();
+        if (t && (!/^https:\/\//.test(t) || !t.includes('{ticket}'))) throw new HttpError(400, 'A ticket link is an https address with {ticket} where the ticket goes.');
+        next.ticketUrl = t.slice(0, 300);
+      }
       if (Array.isArray(body.providers)) {
         next.providers = body.providers.slice(0, 6).map((raw, i) => {
           const type = ['microsoft', 'google', 'oidc'].includes(raw.type) ? raw.type : 'oidc';
@@ -456,6 +548,9 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
         });
       }
       store.setSetting('org', next);
+      const changed = Object.keys(next).filter((k) => JSON.stringify(next[k]) !== JSON.stringify(current[k]) && k !== 'providers');
+      if (JSON.stringify(next.providers.map(({ clientSecret, ...r }) => r)) !== JSON.stringify(current.providers.map(({ clientSecret, ...r }) => r))) changed.push('sign-in providers');
+      store.log(webUser(req).user.id, 'settings.changed', '', changed.join(', ') || 'nothing');
       return send(res, 200, { ok: true });
     }
 

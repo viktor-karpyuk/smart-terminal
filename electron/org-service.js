@@ -186,10 +186,17 @@ class OrgService {
   }
 
   /** This person's own numbers, from the company server. Nobody else's. */
-  async stats() {
+  async stats({ days = 7 } = {}) {
     const token = this.token();
     if (!token) throw new Error('Not signed in.');
-    return this.call('GET', '/api/app/stats', { token });
+    return this.call('GET', `/api/app/stats?days=${days === 30 ? 30 : 7}`, { token });
+  }
+
+  /** The person's own page on the company server, in the browser. */
+  openWeb(page = 'mine') {
+    const base = this.serverUrl();
+    this.openExternal(`${base}/#${page === 'account' ? 'account' : 'mine'}`);
+    return { ok: true };
   }
 
   cancelSignIn() {

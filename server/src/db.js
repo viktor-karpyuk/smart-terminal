@@ -57,6 +57,14 @@ CREATE TABLE IF NOT EXISTS days (
   minutes REAL NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, day)
 );
+CREATE TABLE IF NOT EXISTS audit (
+  at INTEGER NOT NULL,
+  actor_id TEXT,
+  action TEXT NOT NULL,
+  target TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS audit_at ON audit (at);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `;
 
@@ -167,6 +175,22 @@ class Store {
   }
   daysOf(userId, since) {
     return this.all('SELECT day, minutes FROM days WHERE user_id = ? AND day >= ? ORDER BY day', userId, since);
+  }
+  // --- what administrators did, and who signed in ----------------------------------
+  log(actorId, action, target = '', detail = '') {
+    this.run('INSERT INTO audit (at, actor_id, action, target, detail) VALUES (?, ?, ?, ?, ?)',
+      this.now(), actorId, action, String(target).slice(0, 200), String(detail).slice(0, 500));
+  }
+  auditLog(limit = 200) {
+    return this.all(`SELECT a.at, a.action, a.target, a.detail, u.email AS actor_email, u.name AS actor_name
+      FROM audit a LEFT JOIN users u ON u.id = a.actor_id ORDER BY a.at DESC LIMIT ?`, Math.min(1000, limit));
+  }
+  activityRows(since) {
+    return this.all(`SELECT a.day, a.kind, a.key, a.minutes, u.email, u.name FROM activity a JOIN users u ON u.id = a.user_id
+      WHERE a.day >= ? ORDER BY a.day, u.email, a.kind, a.minutes DESC`, since);
+  }
+  dayRows(since) {
+    return this.all('SELECT d.day, d.minutes, u.email, u.name FROM days d JOIN users u ON u.id = d.user_id WHERE d.day >= ? ORDER BY d.day, u.email', since);
   }
   activitySince(day) {
     return this.all('SELECT user_id, kind, key, SUM(minutes) AS minutes FROM activity WHERE day >= ? GROUP BY user_id, kind, key', day);

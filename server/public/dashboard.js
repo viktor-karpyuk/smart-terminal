@@ -11,6 +11,9 @@ function el(tag, attrs = {}, ...kids) {
   for (const [k, v] of Object.entries(attrs)) {
     if (v === false || v == null) continue;
     if (k === 'class') node.className = v;
+    // Through the CSSOM: the page's policy refuses style attributes, and a
+    // width set as one is silently ignored — every bar drawn full, or empty.
+    else if (k === 'style') node.style.cssText = v;
     else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
     else node.setAttribute(k, v === true ? '' : v);
   }
@@ -39,6 +42,9 @@ const ICONS = {
   users: 'M3.5 5.5h13v10h-13z|M7 9h6|M7 12h4',
   settings: 'M10 12.6a2.6 2.6 0 1 0 0-5.2 2.6 2.6 0 0 0 0 5.2Z|M10 2.8v2|M10 15.2v2|M2.8 10h2|M15.2 10h2|M4.9 4.9l1.4 1.4|M13.7 13.7l1.4 1.4|M4.9 15.1l1.4-1.4|M13.7 6.3l1.4-1.4',
   chevron: 'M7.5 5l5 5-5 5',
+  account: 'M6.5 8.5V6.3a3.5 3.5 0 0 1 7 0v2.2|M4.5 8.5h11v8h-11z|M10 11.6v2',
+  log: 'M5 4.5h10|M5 8.5h10|M5 12.5h6|M5 16.5h4',
+  download: 'M10 3.5v9|M6.5 9l3.5 3.5L13.5 9|M4 16.5h12',
   copy: 'M7 7h9v9H7z|M4 13V4h9',
 };
 
@@ -110,11 +116,11 @@ function accountBlock(a) {
     el('div', { class: 'faint small' }, [a.weekResets ? `Week resets ${a.weekResets}` : null, `read ${ago(a.readAt || a.reportedAt)}`].filter(Boolean).join(', ')));
 }
 
-function ranked(rows, empty) {
+function ranked(rows, empty, { tickets = false } = {}) {
   if (!rows.length) return el('p', { class: 'faint' }, empty);
   const most = Math.max(...rows.map((r) => r.minutes), 1);
   return el('ol', { class: 'ranked' }, rows.map((r) => el('li', {},
-    el('span', { class: 'key' }, r.key),
+    el('span', { class: 'key' }, tickets && ticketUrl ? ticket(r.key) : r.key),
     el('span', { class: 'value' }, duration(r.minutes)),
     el('span', { class: 'bar' }, el('span', { style: `width:${Math.max(3, (r.minutes / most) * 100)}%` })))));
 }
@@ -132,7 +138,7 @@ function sessionsTable(sessions, { withDevice = false } = {}) {
       el('td', {}, s.title || 'Untitled', el('div', { class: 'faint small' }, s.kind === 'claude' ? 'Claude session' : 'Terminal')),
       el('td', { title: s.path || null }, s.repo || s.folder || '—'),
       el('td', { class: 'muted' }, s.branch || '—'),
-      el('td', {}, s.tickets.length ? s.tickets.map((t) => el('span', { class: 'ticket' }, t), ' ') : el('span', { class: 'faint' }, '—')),
+      el('td', {}, s.tickets.length ? s.tickets.map((t) => [ticket(t), ' ']) : el('span', { class: 'faint' }, '—')),
       el('td', {}, s.busy ? el('span', { class: 'state is-working' }, 'Working') : s.active ? el('span', { class: 'state is-working' }, 'Active') : el('span', { class: 'state is-off' }, 'Idle')),
       withDevice ? el('td', { class: 'faint small' }, s.device || '') : null)))));
 }
@@ -141,10 +147,10 @@ function week(days) {
   // Scaled to this week, so a short day still shows next to a shorter one.
   const most = Math.max(1, ...days.map((d) => d.minutes));
   const today = days.at(-1)?.day;
-  return el('div', { class: 'week' }, days.map((d) => el('div', { class: `week-day${d.day === today ? ' is-today' : ''}`, title: `${weekday(d.day, true)}: ${duration(d.minutes)}` },
+  return el('div', { class: `week${days.length > 10 ? ' is-long' : ''}`, style: `grid-template-columns: repeat(${days.length}, 1fr)` }, days.map((d, i) => el('div', { class: `week-day${d.day === today ? ' is-today' : ''}`, title: `${weekday(d.day, true)}: ${duration(d.minutes)}` },
     el('span', { class: 'week-value' }, d.minutes ? duration(d.minutes) : ''),
     el('span', { class: 'week-track' }, el('span', { class: 'week-bar', style: `height:${d.minutes ? Math.max(3, (d.minutes / most) * 100) : 0}%` })),
-    el('span', { class: 'week-label' }, d.day === today ? 'Today' : weekday(d.day)))));
+    el('span', { class: 'week-label' }, d.day === today ? 'Today' : days.length > 10 ? (i % 5 === 0 ? String(Number(d.day.slice(8))) : '') : weekday(d.day)))));
 }
 
 // ---------- overlays ----------
@@ -187,24 +193,75 @@ function secretDialog({ title, body, secret }) {
 // ---------- pages ----------
 let me = null;
 let current = null;
-const filters = { query: '', show: 'all' };
+let ticketUrl = '';
+let period = (() => { try { return Number(localStorage.getItem('period')) === 30 ? 30 : 7; } catch { return 7; } })();
+const setPeriod = (days) => { period = days; try { localStorage.setItem('period', String(days)); } catch {} redraw(); };
+const periodWords = () => (period === 30 ? 'the last 30 days' : 'the last seven days');
+
+function periodPicker() {
+  return el('div', { class: 'segmented', role: 'group', 'aria-label': 'Period' }, [[7, '7 days'], [30, '30 days']].map(([d, t]) =>
+    el('button', { 'aria-pressed': String(period === d), onclick: () => setPeriod(d) }, t)));
+}
+
+/** A ticket, as a link to where the company keeps it when it said where that is. */
+function ticket(key) {
+  if (!ticketUrl) return el('span', { class: 'ticket' }, key);
+  return el('a', { class: 'ticket', href: ticketUrl.replace('{ticket}', encodeURIComponent(key)), target: '_blank', rel: 'noopener noreferrer', onclick: (e) => e.stopPropagation() }, key);
+}
+const filters = { query: '', show: 'all', accounts: '' };
 const openPeople = new Set();
 
 const pages = {
+  account: { label: 'Your account', icon: ICONS.account, hidden: true, async draw() {
+    const a = await api('GET', '/api/web/account');
+    const form = el('form', { class: 'settings-fields', onsubmit: async (event) => {
+      event.preventDefault();
+      const f = event.target;
+      if (f.next.value !== f.again.value) { toast('The two new passwords are not the same.', true); return; }
+      try {
+        await api('POST', '/api/web/password', { current: f.current?.value ?? '', next: f.next.value });
+        f.reset();
+        toast('Password changed. Other browsers signed in as you are signed out.');
+      } catch (error) { toast(error.message, true); }
+    } },
+    a.ssoOnly ? el('p', { class: 'muted' }, 'You sign in with single sign-on. Setting a password lets you sign in without it too.') :
+      el('label', { class: 'field' }, el('span', {}, 'Current password'), el('input', { name: 'current', type: 'password', autocomplete: 'current-password', required: true })),
+    el('label', { class: 'field' }, el('span', {}, 'New password'), el('input', { name: 'next', type: 'password', autocomplete: 'new-password', minlength: 10, required: true }), el('small', {}, 'At least 10 characters.')),
+    el('label', { class: 'field' }, el('span', {}, 'New password again'), el('input', { name: 'again', type: 'password', autocomplete: 'new-password', minlength: 10, required: true })),
+    el('div', {}, el('button', { class: 'primary', type: 'submit' }, a.ssoOnly ? 'Set password' : 'Change password')));
+    const devices = a.devices.length ? el('div', { class: 'table-wrap' }, el('table', {},
+      el('thead', {}, el('tr', {}, ['Device', 'Signed in', 'Last report', ''].map((h) => el('th', {}, h)))),
+      el('tbody', {}, a.devices.map((d) => el('tr', {},
+        el('td', {}, d.label),
+        el('td', { class: 'muted' }, ago(d.createdAt)),
+        el('td', { class: 'muted' }, ago(d.lastSeen)),
+        el('td', { style: 'text-align:right' }, el('button', { class: 'quiet danger', onclick: async () => {
+          if (!await confirmDialog({ title: `Sign out ${d.label}?`, body: 'Smart Terminal on that device stops reporting until you sign in there again.', action: 'Sign out device', danger: true })) return;
+          try { await api('DELETE', `/api/web/devices/${d.id}`); toast(`${d.label} is signed out.`); redraw(); } catch (error) { toast(error.message, true); }
+        } }, 'Sign out')))))))
+      : el('p', { class: 'faint' }, 'Not signed in on any device. In Smart Terminal, open the Organization extension and sign in.');
+    return [
+      el('header', { class: 'page-head' }, el('div', {}, el('h1', {}, 'Your account'), el('p', { class: 'lede' }, `${a.user.name ? `${a.user.name}, ` : ''}${a.user.email}. ${a.user.role === 'admin' ? 'Administrator.' : 'Developer.'}`))),
+      section('Password', 'Used to sign in here and in Smart Terminal.', form),
+      section('Devices', 'Where Smart Terminal is signed in as you and reporting.', devices),
+    ];
+  } },
+
   mine: { label: 'My week', icon: ICONS.mine, async draw() {
-    const s = await api('GET', '/api/web/stats');
+    const s = await api('GET', `/api/web/stats?days=${period}`);
+    ticketUrl = s.ticketUrl || '';
     const today = s.days.at(-1)?.minutes ?? 0;
     const busiest = [...s.days].sort((a, b) => b.minutes - a.minutes)[0];
     const lede = s.totalMinutes
-      ? [el('strong', {}, duration(today)), ' today and ', el('strong', {}, duration(s.totalMinutes)), ' in the last seven days', busiest?.minutes ? [', most of it on ', el('strong', {}, weekday(busiest.day, true))] : null, '.']
+      ? [el('strong', {}, duration(today)), ' today and ', el('strong', {}, duration(s.totalMinutes)), ` in ${periodWords()}`, busiest?.minutes ? [', most of it on ', el('strong', {}, period === 30 ? new Date(`${busiest.day}T12:00:00`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' }) : weekday(busiest.day, true))] : null, '.']
       : 'Nothing counted yet this week. Time is counted while one of your Smart Terminal sessions is doing something.';
     return [
-      el('header', { class: 'page-head' }, el('div', {}, el('h1', {}, 'Your week'), el('p', { class: 'lede summary' }, lede))),
+      el('header', { class: 'page-head' }, el('div', {}, el('h1', {}, period === 30 ? 'Your month' : 'Your week'), el('p', { class: 'lede summary' }, lede)), el('div', { class: 'actions' }, periodPicker())),
       panel('Time worked', week(s.days), 'Two repositories at once count as one stretch of time'),
       s.accounts.length ? panel('Claude usage left', el('div', { class: 'split' }, s.accounts.map(accountBlock))) : null,
       el('div', { class: 'split' },
         panel('Repositories', ranked(s.repos, 'No time in a repository yet.')),
-        panel('Tickets', ranked(s.tickets, 'No tickets yet. They are read from branch names, session titles and commit subjects.'))),
+        panel('Tickets', ranked(s.tickets, 'No tickets yet. They are read from branch names, session titles and commit subjects.', { tickets: true }))),
       s.sessions.length ? panel('Open now', sessionsTable(s.sessions)) : null,
       el('p', { class: 'faint small', style: 'margin-top:20px' }, s.devices.length
         ? `Signed in on ${s.devices.map((d) => d.label).join(', ')}. Only you and ${s.orgName}'s administrators see this page.`
@@ -213,8 +270,10 @@ const pages = {
   } },
 
   team: { label: 'Team', icon: ICONS.team, admin: true, async draw() {
-    const data = await api('GET', '/api/web/overview');
-    const people = data.people.map((p) => ({ ...p, state: personState(p) }));
+    const data = await api('GET', `/api/web/overview?days=${period}`);
+    ticketUrl = data.ticketUrl || '';
+    const people = data.people.map((p) => ({ ...p, state: personState(p), low: lowOn(p) }));
+    const low = people.filter((p) => p.low);
     const working = people.filter((p) => p.state.key === 'working').length;
     const sessions = people.reduce((n, p) => n + (p.online ? p.sessions.length : 0), 0);
     const tickets = new Set(people.flatMap((p) => (p.online ? p.sessions.flatMap((s) => s.tickets) : [])));
@@ -224,12 +283,13 @@ const pages = {
       if (filters.show === 'working') return p.state.key === 'working';
       if (filters.show === 'paused') return p.state.key === 'paused';
       if (filters.show === 'away') return p.state.key === 'off';
+      if (filters.show === 'low') return Boolean(p.low);
       return true;
     }).sort((a, b) => ({ working: 0, idle: 1, paused: 2, off: 3 }[a.state.key] - { working: 0, idle: 1, paused: 2, off: 3 }[b.state.key]) || (a.name || a.email).localeCompare(b.name || b.email));
 
     const search = el('input', { type: 'search', placeholder: 'Find a person, repository or ticket', value: filters.query, 'aria-label': 'Filter the team' });
     search.addEventListener('input', () => { filters.query = search.value; redraw({ keepFocus: true }); });
-    const seg = el('div', { class: 'segmented', role: 'group', 'aria-label': 'Show' }, [['all', 'Everyone'], ['working', 'Working'], ['paused', 'Paused'], ['away', 'Away']].map(([k, t]) =>
+    const seg = el('div', { class: 'segmented', role: 'group', 'aria-label': 'Show' }, [['all', 'Everyone'], ['working', 'Working'], ['paused', 'Paused'], ['away', 'Away'], ['low', `Running low${low.length ? ` (${low.length})` : ''}`]].map(([k, t]) =>
       el('button', { 'aria-pressed': String(filters.show === k), onclick: () => { filters.show = k; redraw(); } }, t)));
 
     return [
@@ -237,37 +297,49 @@ const pages = {
         el('p', { class: 'lede summary' },
           el('strong', {}, `${working} of ${people.length}`), people.length === 1 ? ' person is working now' : ' people are working now',
           sessions ? [', in ', el('strong', {}, plural(sessions, 'session', 'sessions')), tickets.size ? [' on ', el('strong', {}, plural(tickets.size, 'ticket', 'tickets'))] : null] : null, '.'))),
-      el('div', { class: 'toolbar' }, search, seg),
+      low.length ? el('div', { class: 'notice is-low' }, el('strong', {}, low.length === 1 ? `${low[0].name || low[0].email} is running low on Claude usage` : `${low.length} people are running low on Claude usage`),
+        el('span', {}, ' ', low.map((p) => `${p.name || p.email}: ${p.low}`).join('; '), '.')) : null,
+      el('div', { class: 'toolbar' }, search, seg, el('span', { style: 'margin-left:auto' }, periodPicker())),
       shown.length ? el('div', { class: 'roster' }, shown.map(personRow)) : el('div', { class: 'roster' }, el('div', { class: 'empty' },
         people.length <= 1 ? [el('strong', {}, 'Nobody to show yet'), el('span', {}, 'Add your developers under Accounts. They appear here once they sign in from Smart Terminal.')] : el('span', {}, 'Nobody matches that.'))),
     ];
   } },
 
   work: { label: 'Where the time went', icon: ICONS.work, admin: true, async draw() {
-    const data = await api('GET', '/api/web/overview');
+    const data = await api('GET', `/api/web/overview?days=${period}`);
+    ticketUrl = data.ticketUrl || '';
     const total = data.repos.reduce((n, r) => n + r.minutes, 0);
     return [
       el('header', { class: 'page-head' }, el('div', {}, el('h1', {}, 'Where the time went'),
-        el('p', { class: 'lede' }, `The last seven days, across everyone. Time is counted while a session is doing something; an open but idle session counts for nothing.`))),
+        el('p', { class: 'lede' }, `${periodWords()[0].toUpperCase()}${periodWords().slice(1)}, across everyone. Time is counted while a session is doing something; an open but idle session counts for nothing.`)),
+        el('div', { class: 'actions' }, periodPicker(),
+          el('a', { class: 'button', href: `/api/admin/export.csv?days=${period}`, download: '' }, icon(ICONS.download), 'Export CSV'))),
       el('div', { class: 'split' },
         panel('Repositories', ranked(data.repos, 'No time counted yet.'), total ? duration(total) : null),
-        panel('Tickets', ranked(data.tickets, 'No tickets yet. Set how tickets look under Settings.'))),
+        panel('Tickets', ranked(data.tickets, 'No tickets yet. Set how tickets look under Settings.', { tickets: true }))),
     ];
   } },
 
   users: { label: 'Accounts', icon: ICONS.users, admin: true, async draw() {
-    const { users } = await api('GET', '/api/admin/users');
+    const { users: all } = await api('GET', '/api/admin/users');
+    const q = filters.accounts.toLowerCase();
+    const users = all.filter((u) => !q || `${u.name} ${u.email}`.toLowerCase().includes(q));
+    const search = el('input', { type: 'search', placeholder: 'Find an account', value: filters.accounts, 'aria-label': 'Find an account' });
+    search.addEventListener('input', () => { filters.accounts = search.value; redraw({ keepFocus: true }); });
     return [
       el('header', { class: 'page-head' },
         el('div', {}, el('h1', {}, 'Accounts'), el('p', { class: 'lede' }, 'Who can sign in, from Smart Terminal and to this page.')),
         el('div', { class: 'actions' }, el('button', { class: 'primary', onclick: addAccount }, 'Add account'))),
+      el('div', { class: 'toolbar' }, search, el('span', { class: 'faint small', style: 'margin-left:auto' }, `${plural(all.length, 'account', 'accounts')}, ${all.filter((u) => u.role === 'admin').length} administrators`)),
       el('div', { class: 'table-wrap' }, el('table', {},
-        el('thead', {}, el('tr', {}, ['Person', 'Role', 'Signs in with', 'Status', ''].map((h) => el('th', {}, h)))),
+        el('thead', {}, el('tr', {}, ['Person', 'Role', 'Signs in with', 'Last seen', 'Devices', 'Status', ''].map((h) => el('th', {}, h)))),
         el('tbody', {}, users.map((u) => el('tr', {},
           el('td', {}, el('div', { class: 'who-cell' }, el('span', { class: 'avatar' }, initials(u)),
             el('div', {}, el('div', { class: 'name' }, u.name || u.email), u.name ? el('div', { class: 'faint small' }, u.email) : null))),
           el('td', {}, u.role === 'admin' ? 'Administrator' : 'Developer'),
           el('td', { class: 'muted' }, u.hasPassword ? 'Password or single sign-on' : 'Single sign-on only'),
+          el('td', { class: 'muted' }, u.lastSeen ? ago(u.lastSeen) : 'Never'),
+          el('td', { class: 'muted' }, String(u.devices ?? 0)),
           el('td', {}, u.disabled ? el('span', { class: 'state is-low' }, 'Disabled') : el('span', { class: 'state is-working' }, 'Active')),
           el('td', { style: 'text-align:right; white-space:nowrap' },
             u.id === me.id ? el('span', { class: 'faint small' }, 'You') : [
@@ -275,6 +347,27 @@ const pages = {
               el('button', { class: 'quiet', onclick: () => changeRole(u) }, u.role === 'admin' ? 'Make developer' : 'Make administrator'),
               el('button', { class: `quiet${u.disabled ? '' : ' danger'}`, onclick: () => toggleDisabled(u) }, u.disabled ? 'Enable' : 'Disable'),
             ])))))),
+    ];
+  } },
+
+  log: { label: 'Activity log', icon: ICONS.log, admin: true, async draw() {
+    const { entries } = await api('GET', '/api/admin/audit?limit=300');
+    const words = {
+      'signin.web': 'Signed in to this page', 'signin.app': 'Signed in from Smart Terminal', 'account.created': 'Added an account',
+      'account.disabled': 'Disabled an account', 'account.enabled': 'Enabled an account', 'account.role': 'Changed a role',
+      'account.password_reset': 'Made a new password', 'password.changed': 'Changed their password', 'device.signed_out': 'Signed out a device',
+      'settings.changed': 'Changed settings', export: 'Exported time',
+    };
+    return [
+      el('header', { class: 'page-head' }, el('div', {}, el('h1', {}, 'Activity log'), el('p', { class: 'lede' }, 'Who signed in, and every change made to accounts, devices and settings.'))),
+      entries.length ? el('div', { class: 'table-wrap' }, el('table', {},
+        el('thead', {}, el('tr', {}, ['When', 'Who', 'What', 'About', ''].map((h) => el('th', {}, h)))),
+        el('tbody', {}, entries.map((e) => el('tr', {},
+          el('td', { class: 'muted', title: new Date(e.at).toLocaleString() }, ago(e.at)),
+          el('td', {}, e.actor_name || e.actor_email || 'Someone removed'),
+          el('td', {}, words[e.action] ?? e.action),
+          el('td', {}, e.target || '—'),
+          el('td', { class: 'faint small' }, e.detail || '')))))) : el('div', { class: 'empty' }, el('strong', {}, 'Nothing yet')),
     ];
   } },
 
@@ -290,6 +383,7 @@ const pages = {
         orgName: f.orgName.value,
         reportEveryMinutes: Number(f.reportEveryMinutes.value),
         ticketPattern: f.ticketPattern.value,
+        ticketUrl: f.ticketUrl.value,
         sharePaths: f.sharePaths.checked,
         providers: [...providers.querySelectorAll('.provider')].map((card) => Object.fromEntries([...card.querySelectorAll('input, select')].map((i) => [i.name, i.value]))),
       };
@@ -307,6 +401,9 @@ const pages = {
       el('label', { class: 'field' }, el('span', {}, 'Tickets look like'),
         el('input', { name: 'ticketPattern', value: s.ticketPattern, spellcheck: 'false', style: 'font-family: ui-monospace, Menlo, monospace' }),
         el('small', {}, 'A regular expression, looked for in branch names, session titles and the latest commit subject. The default finds Jira keys such as KS-142.')),
+      el('label', { class: 'field' }, el('span', {}, 'Link tickets to'),
+        el('input', { name: 'ticketUrl', value: s.ticketUrl ?? '', placeholder: 'https://acme.atlassian.net/browse/{ticket}', spellcheck: 'false' }),
+        el('small', {}, 'Where a ticket opens when someone clicks it. {ticket} is replaced by the ticket. Empty, tickets are not links.')),
       el('label', { class: 'check' }, el('input', { type: 'checkbox', name: 'sharePaths', checked: s.sharePaths }),
         el('span', {}, el('span', {}, 'Collect full folder paths'), el('small', { class: 'faint' }, 'When off, only the folder and repository names are kept.')))),
     section('Single sign-on', 'Let people sign in with Microsoft, Google or your own identity provider instead of a password.',
@@ -349,6 +446,18 @@ function providerCard(p) {
   return card;
 }
 
+/** Words for an account running out, or null: under 15% of the session or 10% of the week left. */
+function lowOn(p) {
+  const words = [];
+  for (const a of p.accounts) {
+    const session = a.sessionUsed == null ? null : 100 - a.sessionUsed;
+    const week = a.weekUsed == null ? null : 100 - a.weekUsed;
+    if (session != null && session < 15) words.push(`${session}% of the session left${a.sessionResets ? `, back ${a.sessionResets}` : ''}`);
+    if (week != null && week < 10) words.push(`${week}% of the week left${a.weekResets ? `, back ${a.weekResets}` : ''}`);
+  }
+  return words.length ? words.join(', ') : null;
+}
+
 function personRow(p) {
   const isOpen = openPeople.has(p.id);
   const active = p.online ? p.sessions.filter((s) => s.busy || s.active) : [];
@@ -368,7 +477,7 @@ function personRow(p) {
     el('span', { class: `avatar is-${p.state.key}` }, initials(p)),
     el('span', { style: 'min-width:0' }, el('div', { class: 'name' }, p.name || p.email), el('div', { class: `status is-${p.state.key}` }, p.state.text))),
   el('span', { class: 'work-cell' }, lead
-    ? [el('span', { class: 'work-line' }, el('span', { class: 'repo' }, lead.repo || lead.folder || lead.title || 'A session'), lead.tickets.map((t) => el('span', { class: 'ticket' }, t))),
+    ? [el('span', { class: 'work-line' }, el('span', { class: 'repo' }, lead.repo || lead.folder || lead.title || 'A session'), lead.tickets.map((t) => ticket(t))),
       el('span', { class: 'branch' }, lead.branch || (lead.repo ? '' : 'Not in a repository')),
       others > 0 ? el('span', { class: 'more' }, `and ${plural(others, 'other session', 'other sessions')}`) : null]
     : el('span', { class: 'faint' }, p.paused ? 'Not sharing what they work on' : 'Nothing open')),
@@ -380,12 +489,17 @@ function personRow(p) {
 }
 
 function personDetail(p) {
+  const chart = el('div', {}, el('p', { class: 'faint small' }, 'Reading…'));
+  api('GET', `/api/admin/people/${p.id}/stats?days=${period}`)
+    .then((s) => chart.replaceChildren(el('h3', { style: 'margin-bottom:10px' }, `Time worked, ${periodWords().replace('the ', '')}: ${duration(s.totalMinutes)}`), week(s.days)))
+    .catch((e) => chart.replaceChildren(el('p', { class: 'faint small' }, e.message)));
   return [
+    chart,
     p.online && p.sessions.length ? sessionsTable(p.sessions, { withDevice: p.devices.length > 1 }) : null,
     p.accounts.length > 0 ? el('div', { class: 'split' }, p.accounts.map(accountBlock)) : null,
     el('div', { class: 'split' },
-      el('div', {}, el('h3', { style: 'margin-bottom:10px' }, 'Repositories, last 7 days'), ranked(p.repos, 'No time counted yet.')),
-      el('div', {}, el('h3', { style: 'margin-bottom:10px' }, 'Tickets, last 7 days'), ranked(p.tickets, 'No tickets yet.'))),
+      el('div', {}, el('h3', { style: 'margin-bottom:10px' }, `Repositories, ${periodWords().replace('the ', '')}`), ranked(p.repos, 'No time counted yet.')),
+      el('div', {}, el('h3', { style: 'margin-bottom:10px' }, `Tickets, ${periodWords().replace('the ', '')}`), ranked(p.tickets, 'No tickets yet.', { tickets: true }))),
     p.devices.length ? el('div', { class: 'small muted' }, 'Signed in on ', p.devices.map((d, i) => [i ? ', ' : '', el('strong', {}, d.label), ` (${ago(d.lastSeen)}) `,
       el('button', { class: 'quiet danger small', onclick: async (e) => {
         e.stopPropagation();
@@ -449,7 +563,7 @@ async function toggleDisabled(u) {
 
 // ---------- the frame ----------
 function nav() {
-  $('nav').replaceChildren(...Object.entries(pages).filter(([, p]) => !p.admin || me.role === 'admin').map(([key, p]) =>
+  $('nav').replaceChildren(...Object.entries(pages).filter(([, p]) => !p.hidden && (!p.admin || me.role === 'admin')).map(([key, p]) =>
     el('button', { 'aria-current': key === current ? 'page' : null, onclick: () => go(key) }, icon(p.icon), key === 'mine' ? 'My week' : p.label)));
 }
 
@@ -485,7 +599,7 @@ function go(key) {
     $('mark').textContent = info.orgName.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
     document.title = `${info.orgName} · Smart Terminal`;
   }
-  $('me').textContent = me.name ? `${me.name}` : me.email;
+  $('me').replaceChildren(el('button', { class: 'quiet', style: 'padding-left:0', onclick: () => go('account') }, icon(ICONS.account), me.name || me.email));
   $('me').title = me.email;
   $('logout').addEventListener('click', async () => { await api('POST', '/api/web/logout', {}); location.href = '/login'; });
   go(location.hash.slice(1) || (me.role === 'admin' ? 'team' : 'mine'));

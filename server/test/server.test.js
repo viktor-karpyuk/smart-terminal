@@ -289,3 +289,83 @@ test('settings never send a client secret back, and a blank one keeps it', async
     assert.equal(s.store.setting('org').providers[0].clientSecret, 's');
   } finally { await s.close(); }
 });
+
+test('a person changes their own password; other browsers are signed out, devices are not', async () => {
+  const s = await boot();
+  try {
+    const admin = await s.webLogin();
+    const made = await s.call('POST', '/api/admin/users', { cookie: admin, body: { email: 'ana@acme.com', role: 'member' } });
+    const first = await s.webLogin('ana@acme.com', made.json.password);
+    const second = await s.webLogin('ana@acme.com', made.json.password);
+    const { token } = (await s.call('POST', '/api/app/login', { body: { email: 'ana@acme.com', password: made.json.password, device: 'laptop' } })).json;
+    assert.equal((await s.call('POST', '/api/web/password', { cookie: first, body: { current: 'wrong', next: 'a brand new password' } })).status, 400);
+    assert.equal((await s.call('POST', '/api/web/password', { cookie: first, body: { current: made.json.password, next: 'short' } })).status, 400);
+    assert.equal((await s.call('POST', '/api/web/password', { cookie: first, body: { current: made.json.password, next: 'a brand new password' } })).status, 200);
+    assert.equal((await s.call('GET', '/api/web/account', { cookie: first })).status, 200, 'this browser stays');
+    assert.equal((await s.call('GET', '/api/web/account', { cookie: second })).status, 401, 'other browsers are signed out');
+    assert.equal((await s.call('GET', '/api/app/me', { token })).status, 200, 'devices stay signed in');
+    assert.equal((await s.call('POST', '/api/app/login', { body: { email: 'ana@acme.com', password: 'a brand new password' } })).status, 200);
+  } finally { await s.close(); }
+});
+
+test('a person signs out their own devices, and only their own', async () => {
+  const s = await boot();
+  try {
+    const admin = await s.webLogin();
+    const ana = await s.call('POST', '/api/admin/users', { cookie: admin, body: { email: 'ana@acme.com', role: 'member' } });
+    const leo = await s.call('POST', '/api/admin/users', { cookie: admin, body: { email: 'leo@acme.com', role: 'member' } });
+    await s.call('POST', '/api/app/login', { body: { email: 'ana@acme.com', password: ana.json.password, device: 'ana-mac' } });
+    const leoToken = (await s.call('POST', '/api/app/login', { body: { email: 'leo@acme.com', password: leo.json.password, device: 'leo-mac' } })).json.token;
+    const anaWeb = await s.webLogin('ana@acme.com', ana.json.password);
+    const account = await s.call('GET', '/api/web/account', { cookie: anaWeb });
+    assert.deepEqual(account.json.devices.map((d) => d.label), ['ana-mac']);
+    const leoDeviceId = leoToken.split('.')[0];
+    assert.equal((await s.call('DELETE', `/api/web/devices/${leoDeviceId}`, { cookie: anaWeb })).status, 404, 'not somebody else\'s');
+    assert.equal((await s.call('DELETE', `/api/web/devices/${account.json.devices[0].id}`, { cookie: anaWeb })).status, 200);
+    assert.equal((await s.call('GET', '/api/web/account', { cookie: anaWeb })).json.devices.length, 0);
+  } finally { await s.close(); }
+});
+
+test('administrators see one person\'s weeks, a 30-day period, the log, and an export that is safe to open', async () => {
+  const s = await boot();
+  try {
+    const admin = await s.webLogin();
+    const made = await s.call('POST', '/api/admin/users', { cookie: admin, body: { email: 'ana@acme.com', name: '=HYPERLINK("x")', role: 'member' } });
+    const { token } = (await s.call('POST', '/api/app/login', { body: { email: 'ana@acme.com', password: made.json.password, device: 'mac' } })).json;
+    await s.call('POST', '/api/app/report', { token, body: { sessions: [{ kind: 'claude', title: 'x', repo: 'acme/api', tickets: ['KS-1'], active: true }] } });
+
+    const person = await s.call('GET', `/api/admin/people/${made.json.user.id}/stats?days=30`, { cookie: admin });
+    assert.equal(person.json.days.length, 30);
+    assert.equal(person.json.period, 30);
+    assert.equal((await s.call('GET', '/api/web/overview?days=30', { cookie: admin })).json.period, 30);
+
+    const csv = await s.call('GET', '/api/admin/export.csv?days=7', { cookie: admin });
+    assert.equal(csv.status, 200);
+    assert.match(csv.headers.get('content-type'), /text\/csv/);
+    assert.match(csv.text, /^date,name,email,what,key,minutes\n/);
+    assert.match(csv.text, /repo,acme\/api,2/);
+    assert.match(csv.text, /"'=HYPERLINK\(""x""\)"/, 'a name that looks like a formula is written as text');
+
+    const log = await s.call('GET', '/api/admin/audit', { cookie: admin });
+    const actions = log.json.entries.map((e) => e.action);
+    for (const a of ['account.created', 'signin.app', 'signin.web', 'export']) assert.ok(actions.includes(a), a);
+
+    const anaWeb = await s.webLogin('ana@acme.com', made.json.password);
+    for (const route of [`/api/admin/people/${made.json.user.id}/stats`, '/api/admin/audit', '/api/admin/export.csv']) {
+      assert.equal((await s.call('GET', route, { cookie: anaWeb })).status, 403, route);
+    }
+  } finally { await s.close(); }
+});
+
+test('a ticket link must be https and say where the ticket goes; devices are told it', async () => {
+  const s = await boot();
+  try {
+    const admin = await s.webLogin();
+    assert.equal((await s.call('PUT', '/api/admin/settings', { cookie: admin, body: { ticketUrl: 'http://jira/browse/{ticket}' } })).status, 400);
+    assert.equal((await s.call('PUT', '/api/admin/settings', { cookie: admin, body: { ticketUrl: 'https://acme.atlassian.net/browse/' } })).status, 400);
+    assert.equal((await s.call('PUT', '/api/admin/settings', { cookie: admin, body: { ticketUrl: 'https://acme.atlassian.net/browse/{ticket}' } })).status, 200);
+    const made = await s.call('POST', '/api/admin/users', { cookie: admin, body: { email: 'ana@acme.com', role: 'member' } });
+    const login = await s.call('POST', '/api/app/login', { body: { email: 'ana@acme.com', password: made.json.password } });
+    assert.equal(login.json.policy.ticketUrl, 'https://acme.atlassian.net/browse/{ticket}');
+  } finally { await s.close(); }
+});
