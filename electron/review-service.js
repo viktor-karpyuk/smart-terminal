@@ -45,7 +45,7 @@ const { CrossFix } = require('./review-crossfix');
 const GUIDELINE_MAX = 60000;
 
 class ReviewService {
-  constructor({ db, secrets, fetch, profiles, resolvePath, notify, emit, dataDir, pickFolder, openExternal, DatabaseSync, importSource, busServer, deliver, deliveryState }) {
+  constructor({ db, secrets, fetch, profiles, resolvePath, notify, emit, dataDir, pickFolder, openExternal, DatabaseSync, importSource, busServer, deliver, deliveryState, matchPerson }) {
     this.emitRaw = emit ?? (() => {});
     this.store = new ReviewStore(db, secrets);
     this.profiles = profiles ?? { list: () => [] };
@@ -64,6 +64,7 @@ class ReviewService {
      */
     this.deliver = deliver ?? (async () => ({ ok: false, why: 'no-delivery' }));
     this.deliveryState = deliveryState ?? (() => ({ installed: false, ready: false }));
+    this.matchPerson = matchPerson ?? (() => ({ ok: false, why: 'no-delivery' }));
     /** Whether the author asked, from Teams, not to be reminded about a pull request yet. Set by main. */
     this.snoozed = () => false;
     /*
@@ -1690,6 +1691,14 @@ class ReviewService {
       crossfixPrepare: async (args) => ({ ok: true, job: await s.crossfix.prepare(str(args.fixId, 'A fix'), Number(args.index ?? 0)) }),
       crossfixPublish: async (args) => s.crossfix.publish(str(args.fixId, 'A fix'), Number(args.index ?? 0)),
       crossfixDiscard: (args) => s.crossfix.discard(str(args.fixId, 'A fix'), Number(args.index ?? 0)),
+      /** The pull request's author's Teams address, given by hand when a message to them had nowhere to go. */
+      matchAuthor: (args) => {
+        const repo = e.requireRepo(str(args.repoId, 'A repository'));
+        const pr = e.prOrThrow(repo.id, num(args.prId));
+        const address = String(args.address ?? '').trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) throw new Error('A Teams address looks like somebody@yourcompany.com.');
+        return s.matchPerson(`${String(repo.provider ?? 'forge').toLowerCase()}:${pr.author}`, address);
+      },
       /** Ask for comments to be resolved: one, or every open one; in the channel and/or to the author. */
       notifyFindings: (args) => s.notifyFindings(str(args.repoId, 'A repository'), num(args.prId), {
         findingId: args.findingId ? String(args.findingId) : null,
@@ -1759,7 +1768,7 @@ class ReviewService {
         return { ok: true, ...(await f.fixAll(open.map((finding) => finding.id))) };
       },
       retryFixReply: (args) => f.retryReply(str(args.fixId, 'A fix')),
-      giveBack: (args) => f.giveBack(str(args.repoId, 'A repository'), num(args.prId), { upToFixId: args.upToFixId ? String(args.upToFixId) : null }),
+      giveBack: (args) => f.giveBack(str(args.repoId, 'A repository'), num(args.prId), { upToFixId: args.upToFixId ? String(args.upToFixId) : null, push: args.push === true }),
       discardWorkshop: (args) => f.discard(str(args.repoId, 'A repository'), num(args.prId)),
       push: (args) => f.push(str(args.repoId, 'A repository'), num(args.prId)),
 

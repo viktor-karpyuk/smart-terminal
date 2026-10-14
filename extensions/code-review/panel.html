@@ -84,6 +84,9 @@
   .commit-item .commit-text { flex: 1; min-width: 0; }
   .commit-item .commit-mark { flex: none; margin-top: 2px; }
   .commit-fixes { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+  #ask-address { position: fixed; right: 16px; bottom: 56px; z-index: 50; max-width: 380px; }
+  .ask-address-card { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--accent); border-radius: var(--r-sm); background: var(--bg-panel); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35); }
+  .ask-address-card input { width: 100%; box-sizing: border-box; }
   .remind { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: var(--r-sm); font-size: 0.958rem; color: var(--text-dim); }
   .remind-buttons { display: inline-flex; gap: 6px; flex-wrap: wrap; }
   .crossfix { margin-top: 8px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); border-radius: var(--r-sm); background: color-mix(in srgb, var(--accent) 6%, var(--bg-panel)); }
@@ -1542,6 +1545,7 @@
     document.documentElement.style.setProperty('--ui-font', uiFont() + 'px');
     drawTop();
     drawPrTabs();
+    drawAddressAsk();
     var main = $('main');
     state.wide = isWide();
     var scroll = main.scrollTop;
@@ -2787,7 +2791,8 @@
     if (ws.pendingReturn) {
       html += '<button class="btn small" data-act="workshop-diff" title="Everything the workshop has that your clone does not, as one diff">' +
         (state.wsDiff && state.wsDiff.open ? 'Hide the diff' : 'Review the ' + ws.pendingReturn + ' waiting') + '</button>';
-      html += '<button class="btn small primary" data-act="give-back"' + busyAttr(prKey('give-back')) + ' title="Push the workshop commits into your clone, on ' + esc(v.pr.sourceBranch) + '. Your clone must not have that branch checked out.">Hand ' + ws.pendingReturn + ' back</button>';
+      html += '<button class="btn small primary" data-act="give-back" data-push="1"' + busyAttr(prKey('give-back')) + ' title="Into your clone and on to origin/' + esc(v.pr.sourceBranch) + ', never forced, so the fix is on the PR. Your clone must not have that branch checked out.">Push ' + ws.pendingReturn + ' to the PR</button>' +
+        '<button class="btn small" data-act="give-back"' + busyAttr(prKey('give-back')) + ' title="Into your clone only, on ' + esc(v.pr.sourceBranch) + ': nothing goes to origin until you push it from the Commits tab.">To my clone only</button>';
     } else {
       html += '<span class="faint">Nothing waiting to be handed back.</span>';
     }
@@ -2841,7 +2846,7 @@
     var index = pending.map(function (x) { return x.id; }).indexOf(fix.id);
     // Handing back pushes a branch, so anything under this commit goes with it — said, not hidden.
     if (index >= 0 && index < pending.length - 1) {
-      html += '<button class="btn small" data-act="give-back" data-up-to="' + esc(fix.id) + '"' + busyAttr(prKey('give-back')) + ' title="Hand back this commit and the ' + index + ' under it, leaving the rest in the workshop">Hand back to here</button>';
+      html += '<button class="btn small" data-act="give-back" data-push="1" data-up-to="' + esc(fix.id) + '"' + busyAttr(prKey('give-back')) + ' title="Push this commit and the ' + index + ' under it to the PR, leaving the rest in the workshop">Push up to here</button>';
     }
     if (index >= 0) html += '<button class="btn small danger" data-act="drop-open" data-id="' + esc(fix.id) + '">Take out</button>';
     return html;
@@ -3047,9 +3052,39 @@
     if (row.reminded && row.reminded.at) html += '<span class="chip" title="Last asked ' + esc(new Date(row.reminded.at).toLocaleString()) + ' (' + esc(row.reminded.how || '') + ')">reminded ' + esc(when(row.reminded.at)) + '</span>';
     if (waiting && delivery.person && row.pr.state === 'OPEN') {
       var key = 'remind-row-' + row.repoId + '#' + row.pr.id;
-      html += '<button class="btn small" data-act="remind-row" data-repo="' + esc(row.repoId) + '" data-pr="' + row.pr.id + '"' + busyAttr(key) + ' title="A direct message to ' + esc(row.pr.author) + ' with every comment still open">' + (state.busy[key] ? 'Reminding…' : 'Remind') + '</button>';
+      html += '<button class="btn small" data-act="remind-row" data-repo="' + esc(row.repoId) + '" data-pr="' + row.pr.id + '" data-author="' + esc(row.pr.author) + '"' + busyAttr(key) + ' title="A direct message to ' + esc(row.pr.author) + ' with every comment still open">' + (state.busy[key] ? 'Reminding…' : 'Remind') + '</button>';
     }
     return html;
+  }
+
+  /*
+   * A message to somebody Teams cannot place: ask who they are, here, at the
+   * moment it matters — "no-address" alone sent people hunting for the Teams
+   * panel's People page. Saved there too, so it is asked once per person.
+   */
+  function askAddress(result, repoId, prId, author, retry) {
+    if (!result || result.why !== 'no-address') return false;
+    state.needAddress = { repoId: repoId, prId: Number(prId), author: author, retry: retry };
+    draw();
+    var input = document.querySelector('#ask-address input');
+    if (input) input.focus();
+    return true;
+  }
+
+  function drawAddressAsk() {
+    var box = document.getElementById('ask-address');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'ask-address';
+      document.body.appendChild(box);
+    }
+    var ask = state.needAddress;
+    if (!ask) { box.innerHTML = ''; box.hidden = true; return; }
+    box.hidden = false;
+    box.innerHTML = '<div class="ask-address-card"><strong>Who is ' + esc(ask.author) + ' on Teams?</strong>' +
+      '<div class="faint">Teams has no address for the name Bitbucket uses. Say it once; it is kept on the Teams panel\'s People page.</div>' +
+      '<input type="email" data-edit="ask-address" placeholder="somebody@yourcompany.com" value="' + esc(edit('ask-address', '')) + '">' +
+      '<div class="row"><button class="btn small primary" data-act="address-save"' + busyAttr('address-save') + '>Save and send again</button><button class="btn small" data-act="address-cancel">Cancel</button></div></div>';
   }
 
   /** "Tell the author" and "post in the channel", for one finding or — with no id — every open one. */
@@ -4607,6 +4642,14 @@
         if (r.thread) (r.thread.ok === false ? failed : went).push('the thread');
         if (r.channel) (r.channel.ok ? went : failed).push('the channel');
         if (r.person) (r.person.ok ? went : failed).push('them');
+        // Nobody to send it to: ask who they are, then send only to them again.
+        if (r.person && !r.person.ok && askAddress(r.person, state.repoId, state.prId, state.pr.pr.author, function () {
+          // Only to them, this once: the thread and the channel already have it, and the saved choice stays as it was.
+          var before = state.sayTo;
+          state.sayTo = { thread: false, channel: false, person: true };
+          actions.say();
+          state.sayTo = before;
+        })) return;
         if (!failed.length) {
           delete state.edits['say-text'];
           say('Said in ' + went.join(' and ') + '.');
@@ -4748,7 +4791,7 @@
     'conflicts-tell': function () {
       act(prKey('conflicts-tell'), function () { return call('tellConflicts', prArgs()); }, function (r) {
         if (r.person && r.person.ok) say('Told ' + shortName(state.pr.pr.author) + ' on Teams.');
-        else say('Could not reach them: ' + ((r.person && (r.person.detail || r.person.why)) || 'nothing answered'), true);
+        else if (!askAddress(r.person, state.repoId, state.prId, state.pr.pr.author, function () { actions['conflicts-tell'](); })) say('Could not reach them: ' + ((r.person && (r.person.detail || r.person.why)) || 'nothing answered'), true);
       });
     },
     'conflicts-discard': function () { call('conflictsDiscard', prArgs()).then(load, fail); },
@@ -4938,11 +4981,24 @@
         say(!r.fix ? 'Already closed: there was nothing left to fix.' : r.fix.sha ? 'Fix committed in the workshop: ' + r.fix.sha.slice(0, 7) : 'The fix changed nothing: ' + (r.fix.summary || ''));
       }, fail);
     },
+    'address-save': function () {
+      var ask = state.needAddress;
+      if (!ask) return;
+      act('address-save', function () { return call('matchAuthor', { repoId: ask.repoId, prId: ask.prId, address: edit('ask-address', '') }); }, function (r) {
+        if (!r || r.ok === false) return say('Could not save it: ' + ((r && (r.why || r.error)) || 'nothing answered'), true);
+        delete state.edits['ask-address'];
+        state.needAddress = null;
+        draw();
+        if (ask.retry) ask.retry();
+      });
+    },
+    'address-cancel': function () { state.needAddress = null; delete state.edits['ask-address']; draw(); },
     'remind-row': function (el) {
       var repoId = el.getAttribute('data-repo');
       var prId = Number(el.getAttribute('data-pr'));
       act('remind-row-' + repoId + '#' + prId, function () { return call('notifyFindings', { repoId: repoId, prId: prId, person: true }); }, function (r) {
-        if (r.person && r.person.ok) say('Reminded.'); else say('Could not send it: ' + ((r.person && (r.person.detail || r.person.why)) || 'nothing answered'), true);
+        if (r.person && r.person.ok) say('Reminded.');
+        else if (!askAddress(r.person, repoId, prId, el.getAttribute('data-author') || '', function () { actions['remind-row'](el); })) say('Could not send it: ' + ((r.person && (r.person.detail || r.person.why)) || 'nothing answered'), true);
         load();
       });
     },
@@ -4954,7 +5010,7 @@
       }, function (r) {
         var res = r[to];
         if (res && res.ok) say(to === 'channel' ? 'Posted in the channel.' : 'Told ' + shortName(state.pr.pr.author) + '.');
-        else say('Could not send it: ' + ((res && (res.detail || res.why)) || 'nothing answered'), true);
+        else if (!askAddress(res, state.repoId, state.prId, state.pr.pr.author, function () { actions.notify(el); })) say('Could not send it: ' + ((res && (res.detail || res.why)) || 'nothing answered'), true);
       });
     },
     'crossfix-prepare': function (el) {
@@ -4985,9 +5041,16 @@
     'retry-fix-reply': function (el) { var id = el.getAttribute('data-id'); act('fixreply-' + id, function () { return call('retryFixReply', { fixId: id }); }); },
     'give-back': function (el) {
       var upTo = el && el.getAttribute('data-up-to');
-      act(prKey('give-back'), function () { return call('giveBack', prArgs(upTo ? { upToFixId: upTo } : {})); }, function (r) {
+      var push = Boolean(el && el.getAttribute('data-push'));
+      var args = upTo ? { upToFixId: upTo } : {};
+      if (push) args.push = true;
+      act(prKey('give-back'), function () { return call('giveBack', prArgs(args)); }, function (r) {
         state.wsDiff = null;
-        say(r.count + ' fix(es) handed back to your clone.' + (r.left ? ' ' + r.left + ' still in the workshop.' : ''));
+        var left = r.left ? ' ' + r.left + ' still in the workshop.' : '';
+        if (!r.pushed) say(r.count + ' fix(es) handed back to your clone.' + left);
+        else if (r.pushed.ok) say(r.count + ' fix(es) pushed to origin/' + r.branch + '.' + left);
+        else say(r.count + ' fix(es) are in your clone, but the push to origin/' + r.branch + ' was refused: ' + (r.pushed.output || 'git said nothing') + ' Pull, then push from the Commits tab.', true);
+        state.commits.data = null;
         load();
       });
     },

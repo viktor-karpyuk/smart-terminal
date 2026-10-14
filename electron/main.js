@@ -401,6 +401,16 @@ function createReviewService() {
        * a person are reached differently and each has to be asked about
        * separately.
        */
+      /*
+       * Who somebody is in Teams, said from the reviewer at the moment a message
+       * to them could not go — instead of a bare "no-address" and a trip to the
+       * Teams panel's People page. The same record that page edits.
+       */
+      matchPerson: (handle, address) => {
+        if (!teamsService) return { ok: false, why: 'no-delivery' };
+        const person = teamsService.store.matchPerson(handle, address);
+        return { ok: true, person: { handle: person?.handle, address: person?.address } };
+      },
       deliveryState: () => {
         const connection = teamsService?.connection();
         return {

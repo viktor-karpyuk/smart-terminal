@@ -291,6 +291,42 @@ test('a fix: written in the workshop, committed by the tool, the finding closed,
   assert.equal(git(w.origin, 'rev-parse', 'refs/heads/feature'), git(w.clone, 'rev-parse', 'refs/heads/feature'));
 });
 
+test('handing back with push puts the fix on origin in one go, and a refused push says so', { skip }, async () => {
+  const { service, repo, w } = setup([
+    async () => ({ structured: { summary: 's', findings: [finding(), finding({ title: 'second', line: 2 })] } }),
+    async (options) => { fs.writeFileSync(path.join(options.cwd, 'app.js'), 'one\n'); return { structured: { fixed: true, summary: 'one' } }; },
+    async (options) => { fs.writeFileSync(path.join(options.cwd, 'app.js'), 'two\n'); return { structured: { fixed: true, summary: 'two' } }; },
+  ]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  const [a, b] = service.store.findingsForReview(service.store.latestDone(repo.id, 7).id);
+  const first = (await service.call('fix', { findingId: a.id })).fix;
+  await service.call('fix', { findingId: b.id });
+
+  const given = await service.call('giveBack', { repoId: repo.id, prId: 7, upToFixId: first.id, push: true });
+  assert.equal(given.ok, true, given.error);
+  assert.deepEqual(given.pushed, { ok: true });
+  assert.equal(given.left, 1);
+  assert.equal(git(w.origin, 'rev-parse', 'refs/heads/feature'), first.sha, 'the chosen commit is on origin, the other is not');
+
+  // Someone pushed to the branch meanwhile: origin refuses, the fix stays handed back, and the answer says why.
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-other-'));
+  git(other, 'clone', w.origin, '.');
+  git(other, 'checkout', 'feature');
+  fs.writeFileSync(path.join(other, 'other.txt'), 'x\n');
+  git(other, 'add', '-A');
+  git(other, '-c', 'user.name=o', '-c', 'user.email=o@o', 'commit', '-m', 'meanwhile');
+  git(other, 'push', 'origin', 'feature');
+  const rest = await service.call('giveBack', { repoId: repo.id, prId: 7, push: true });
+  assert.equal(rest.ok, true, rest.error);
+  assert.equal(rest.pushed.ok, false);
+  assert.ok(rest.pushed.output.length > 0);
+  assert.equal(service.store.pendingReturn(repo.id, 7).length, 0, 'in the clone, which is true');
+
+  // Without push, nothing leaves the machine — as before.
+  assert.equal((await service.call('giveBack', { repoId: repo.id, prId: 7 })).ok, false, 'nothing left to hand back');
+});
+
 test('handing back refuses when the clone has the branch checked out, and says so', { skip }, async () => {
   const { service, repo, w } = setup([
     async () => ({ structured: { summary: 's', findings: [finding()] } }),
@@ -1424,4 +1460,18 @@ test('a reminder is remembered on the board and restarts the clock, so the autom
   const row = (await service.call('dashboard')).rows.find((one) => one.pr.id === 7);
   assert.equal(row.reminded.how, 'author');
   assert.equal(service.due().filter((one) => one.prId === 7 && one.rule.id === 'UNANSWERED').length, 0, 'just reminded: not due again until its days pass');
+});
+
+test('the author\'s Teams address, given from the reviewer, is matched to the name the forge uses', { skip }, async () => {
+  const { service, repo } = setup([]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  const matched = [];
+  service.matchPerson = (handle, address) => {
+    matched.push([handle, address]);
+    return { ok: true, person: { handle, address } };
+  };
+  assert.match((await service.call('matchAuthor', { repoId: repo.id, prId: 7, address: 'Mateo' })).error, /somebody@yourcompany\.com/);
+  const saved = await service.call('matchAuthor', { repoId: repo.id, prId: 7, address: ' ana@example.com ' });
+  assert.equal(saved.ok, true);
+  assert.deepEqual(matched, [['github:Ana', 'ana@example.com']], 'the same handle every message to them uses');
 });
