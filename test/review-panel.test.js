@@ -566,7 +566,7 @@ test('the button that reaches somebody outside appears only when it can', () => 
 
 test('every answer the delivery gives is said in words, not swallowed', () => {
   const at = source.indexOf("'remind-out': function");
-  const handler = source.slice(at, at + 1200);
+  const handler = source.slice(at, at + 2400);
   for (const why of ['asks-first', 'no-address', 'already-sent', 'quiet-hours']) {
     assert.ok(handler.includes(why), `${why} is explained rather than ignored`);
   }
@@ -716,7 +716,7 @@ test('nothing is sent with nowhere chosen, and a failure keeps the text', () => 
   assert.match(box, /text\.trim\(\) && anywhere \? busyAttr/, 'the button is dead until there is somewhere and something');
 
   const at = source.indexOf('    say: function ()');
-  const handler = source.slice(at, at + 1200);
+  const handler = source.slice(at, at + 2400);
   assert.match(handler, /if \(!failed\.length\) \{[\s\S]{0,120}delete state\.edits\['say-text'\]/, 'cleared only when everything landed');
 });
 

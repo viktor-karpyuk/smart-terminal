@@ -373,7 +373,7 @@ class FixEngine {
    * when the clone has that branch checked out — git will not update a checked-out
    * branch — and the message says so, because that is nearly always why.
    */
-  async giveBack(repoId, prId, { upToFixId = null } = {}) {
+  async giveBack(repoId, prId, { upToFixId = null, push = false } = {}) {
     const repo = this.engine.requireRepo(repoId);
     const pr = this.engine.prOrThrow(repoId, prId);
     const dir = this.dirFor(repo, prId);
@@ -403,8 +403,19 @@ class FixEngine {
       throw new Error(checkedOut ? `The clone is on "${branch}": switch it to another branch and hand back again.` : pushed.output.slice(0, 300));
     }
     this.store.markReturned(chosen.map((fix) => fix.id));
+    /*
+     * And on to origin, when asked: what the person wants from the button is the
+     * fix on the PR. The clone's branch goes, never forced. A refused push leaves
+     * the fixes handed back — they are in the clone, which is true — and says why,
+     * so the Commits tab's push can finish the job.
+     */
+    let toOrigin = null;
+    if (push) {
+      const res = await this.git.pushBranch(repo.localPath, branch);
+      toOrigin = res.ok ? { ok: true } : { ok: false, output: res.output.slice(-300) };
+    }
     this.engine.changed(repoId, prId);
-    return { ok: true, count: chosen.length, left: pending.length - chosen.length };
+    return { ok: true, count: chosen.length, left: pending.length - chosen.length, branch, pushed: toOrigin };
   }
 
   /** Refuses while fixes are waiting to be handed back: the workshop holds the only copy of them. */
