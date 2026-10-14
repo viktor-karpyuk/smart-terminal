@@ -389,6 +389,7 @@ const ORG_VERBS = {
   loginPassword: (s, args) => s.loginWithPassword({ server: args.server, email: String(args.email ?? ''), password: String(args.password ?? '') }),
   loginProvider: (s, args) => s.loginWithProvider({ server: args.server, provider: String(args.provider ?? '') }),
   cancelSignIn: (s) => s.cancelSignIn(),
+  stats: (s) => s.stats(),
   logout: (s) => s.logout(),
   pause: (s, args) => s.setPaused(args.paused !== false),
   sendNow: async (s) => {

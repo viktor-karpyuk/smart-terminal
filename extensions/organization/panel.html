@@ -29,10 +29,20 @@
   .bar { height: 7px; border-radius: 99px; background: var(--bg-input); overflow: hidden; }
   .fill { display: block; height: 100%; background: var(--ok); }
   .never li { margin: 2px 0; }
+  .figures { display: flex; gap: 10px; flex-wrap: wrap; }
+  .figure { display: grid; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; min-width: 96px; }
+  .figure strong { font-size: 16px; font-variant-numeric: tabular-nums; }
+  .week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; height: 120px; align-items: end; }
+  .wday { display: grid; grid-template-rows: auto 1fr auto; gap: 3px; height: 100%; text-align: center; font-size: 11px; }
+  .wtrack { position: relative; background: var(--bg-input); border-radius: 5px; overflow: hidden; }
+  .wbar { position: absolute; left: 0; right: 0; bottom: 0; background: var(--accent); min-height: 2px; }
+  .ranked { margin: 0; padding-left: 18px; font-size: 12px; }
+  .ranked li { display: flex; justify-content: space-between; gap: 8px; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
 </style>
 <div class="page" id="page"><p class="dim">Loading…</p></div>
 <script>
-  var state = { overview: null, server: '', providers: null, orgName: '', busy: false, waiting: false, error: '' };
+  var state = { overview: null, stats: null, server: '', providers: null, orgName: '', busy: false, waiting: false, error: '' };
   var $ = function (id) { return document.getElementById(id); };
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
   function call(name, args) {
@@ -100,6 +110,8 @@
     html += '<p>' + status + '</p>';
     if (state.error) html += '<p class="bad">' + esc(state.error) + '</p>';
 
+    html += drawStats();
+
     var r = o.lastReport;
     html += '<div class="card"><h2>Exactly what was sent last</h2>';
     if (!r) html += '<p class="dim">Nothing yet.</p>';
@@ -125,6 +137,31 @@
     html += '</div>';
     html += '<p class="faint small">Tickets are found with the pattern your company set: <code>' + esc(p.ticketPattern || '') + '</code>. Full paths are ' + (p.sharePaths ? '' : 'not ') + 'shared.</p>';
     return html;
+  }
+
+  function hrs(m) { return m >= 60 ? (m / 60).toFixed(1) + ' h' : m + ' min'; }
+
+  /** Your own last seven days, as the company server counts them. */
+  function drawStats() {
+    var s = state.stats;
+    if (!s) return '<div class="card"><h2>Your last 7 days</h2><p class="dim">Reading…</p></div>';
+    var most = Math.max.apply(null, [60].concat(s.days.map(function (d) { return d.minutes; })));
+    var today = s.days.length ? s.days[s.days.length - 1].minutes : 0;
+    var html = '<div class="card"><h2>Your last 7 days</h2>' +
+      '<div class="figures"><div class="figure"><strong>' + hrs(today) + '</strong><span class="dim small">today</span></div>' +
+      '<div class="figure"><strong>' + hrs(s.totalMinutes) + '</strong><span class="dim small">7 days</span></div></div>';
+    html += '<div class="week">' + s.days.map(function (d) {
+      var name = new Date(d.day + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short' });
+      return '<div class="wday" title="' + esc(d.day + ': ' + hrs(d.minutes)) + '"><span class="dim">' + (d.minutes ? hrs(d.minutes) : '') + '</span>' +
+        '<span class="wtrack"><span class="wbar" style="height:' + Math.round(d.minutes / most * 100) + '%"></span></span><span class="dim">' + esc(name) + '</span></div>';
+    }).join('') + '</div>';
+    var list = function (title, rows, empty) {
+      return '<div><h2>' + title + '</h2>' + (rows.length ? '<ol class="ranked">' + rows.map(function (r) {
+        return '<li><span>' + esc(r.key) + '</span><span class="dim">' + hrs(r.minutes) + '</span></li>';
+      }).join('') + '</ol>' : '<p class="dim small">' + empty + '</p>') + '</div>';
+    };
+    html += '<div class="cols">' + list('Repositories', s.repos, 'Nothing yet.') + list('Tickets', s.tickets, 'No tickets seen yet.') + '</div>';
+    return html + '<p class="faint small">Counted while a session of yours does something. Only you and your company\'s administrators see this.</p></div>';
   }
 
   function meter(label, used, resets) {
@@ -165,6 +202,8 @@
       state.overview = o;
       if (!state.server) state.server = o.server || '';
       draw();
+      if (!o.signedIn) { state.stats = null; return; }
+      return call('stats').then(function (s) { state.stats = s; draw(); }, function () { /* the report is what matters; the numbers can wait */ });
     }, function (e) { state.error = e.message; draw(); });
   }
   host.on('context', load);

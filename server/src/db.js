@@ -51,6 +51,12 @@ CREATE TABLE IF NOT EXISTS activity (
   minutes REAL NOT NULL DEFAULT 0,
   PRIMARY KEY (user_id, day, kind, key)
 );
+CREATE TABLE IF NOT EXISTS days (
+  user_id TEXT NOT NULL,
+  day TEXT NOT NULL,
+  minutes REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (user_id, day)
+);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `;
 
@@ -153,6 +159,14 @@ class Store {
   addMinutes(userId, day, kind, key, minutes) {
     this.run(`INSERT INTO activity (user_id, day, kind, key, minutes) VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(user_id, day, kind, key) DO UPDATE SET minutes = minutes + excluded.minutes`, userId, day, kind, key, minutes);
+  }
+  /** Time worked in a day, counted once however many repositories it touched. */
+  addDayMinutes(userId, day, minutes) {
+    this.run(`INSERT INTO days (user_id, day, minutes) VALUES (?, ?, ?)
+      ON CONFLICT(user_id, day) DO UPDATE SET minutes = minutes + excluded.minutes`, userId, day, minutes);
+  }
+  daysOf(userId, since) {
+    return this.all('SELECT day, minutes FROM days WHERE user_id = ? AND day >= ? ORDER BY day', userId, since);
   }
   activitySince(day) {
     return this.all('SELECT user_id, kind, key, SUM(minutes) AS minutes FROM activity WHERE day >= ? GROUP BY user_id, kind, key', day);

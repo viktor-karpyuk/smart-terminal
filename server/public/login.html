@@ -7,17 +7,25 @@
 <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
-<main class="narrow">
-  <h1 id="org">Smart Terminal</h1>
-  <p class="dim">Sign in to your company's Smart Terminal backoffice.</p>
-  <div id="providers" class="stack"></div>
-  <p id="or" class="or" hidden>or</p>
-  <form id="form" class="stack">
-    <label>E-mail <input type="email" name="email" autocomplete="username" required></label>
-    <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
-    <button class="primary" type="submit">Sign in</button>
-    <p id="error" class="error" role="alert"></p>
-  </form>
+<main class="signin">
+  <div class="signin-card">
+    <div class="brand">
+      <span class="brand-mark" id="mark">ST</span>
+      <div><strong id="org">Smart Terminal</strong><small>Smart Terminal</small></div>
+    </div>
+    <div>
+      <h1>Sign in</h1>
+      <p class="muted" style="margin-top:6px">See your week, and if you manage the team, everyone’s.</p>
+    </div>
+    <div class="sso" id="providers"></div>
+    <div class="divider" id="or" hidden>or with your password</div>
+    <form id="form" class="sso" style="gap:14px">
+      <label class="field"><span>E-mail</span><input type="email" name="email" autocomplete="username" required autofocus></label>
+      <label class="field"><span>Password</span><input type="password" name="password" autocomplete="current-password" required></label>
+      <button class="primary" type="submit" style="padding:10px">Sign in</button>
+      <p id="error" class="error" role="alert"></p>
+    </form>
+  </div>
 </main>
 <script src="/assets/login.js"></script>
 </body>

@@ -185,6 +185,13 @@ class OrgService {
     return this.signedIn(base, answer);
   }
 
+  /** This person's own numbers, from the company server. Nobody else's. */
+  async stats() {
+    const token = this.token();
+    if (!token) throw new Error('Not signed in.');
+    return this.call('GET', '/api/app/stats', { token });
+  }
+
   cancelSignIn() {
     this.pendingSso?.();
     return { ok: true };

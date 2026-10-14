@@ -144,8 +144,37 @@ test('members cannot reach the backoffice, and see only themselves', async () =>
     const mia = await s.webLogin('mia@acme.com', made.json.password);
     assert.equal((await s.call('GET', '/api/admin/users', { cookie: mia })).status, 403);
     assert.equal((await s.call('PUT', '/api/admin/settings', { cookie: mia, body: { orgName: 'x' } })).status, 403);
-    const view = await s.call('GET', '/api/web/overview', { cookie: mia });
-    assert.deepEqual(view.json.people.map((p) => p.email), ['mia@acme.com']);
+    assert.equal((await s.call('GET', '/api/web/overview', { cookie: mia })).status, 403, 'the team view is the administrators\'');
+  } finally { await s.close(); }
+});
+
+test('everybody sees their own stats, a day counted once however many repositories it touched', async () => {
+  const s = await boot();
+  try {
+    const cookie = await s.webLogin();
+    const made = await s.call('POST', '/api/admin/users', { cookie, body: { email: 'mia@acme.com', name: 'Mia', role: 'member' } });
+    const other = await s.call('POST', '/api/admin/users', { cookie, body: { email: 'leo@acme.com', role: 'member' } });
+    const mia = (await s.call('POST', '/api/app/login', { body: { email: 'mia@acme.com', password: made.json.password } })).json.token;
+    const leo = (await s.call('POST', '/api/app/login', { body: { email: 'leo@acme.com', password: other.json.password } })).json.token;
+    const two = { sessions: [
+      { kind: 'claude', title: 'a', repo: 'acme/api', tickets: ['KS-1'], active: true },
+      { kind: 'claude', title: 'b', repo: 'acme/web', tickets: [], active: true },
+    ], accounts: [{ name: 'Mia', sessionUsed: 40, weekUsed: 10 }] };
+    await s.call('POST', '/api/app/report', { token: mia, body: two });
+    await s.call('POST', '/api/app/report', { token: leo, body: { sessions: [{ kind: 'shell', title: 'x', repo: 'acme/secret', active: true }] } });
+
+    const fromApp = await s.call('GET', '/api/app/stats', { token: mia });
+    assert.equal(fromApp.status, 200);
+    assert.equal(fromApp.json.days.length, 7);
+    assert.equal(fromApp.json.days.at(-1).minutes, 2, 'two repositories at once is two minutes of work, not four');
+    assert.deepEqual(fromApp.json.repos.map((r) => r.key).sort(), ['acme/api', 'acme/web']);
+    assert.deepEqual(fromApp.json.tickets.map((t) => t.key), ['KS-1']);
+    assert.equal(fromApp.json.accounts[0].sessionUsed, 40);
+    assert.ok(!JSON.stringify(fromApp.json).includes('acme/secret'), 'nobody else\'s work');
+
+    const miaWeb = await s.webLogin('mia@acme.com', made.json.password);
+    const fromWeb = await s.call('GET', '/api/web/stats', { cookie: miaWeb });
+    assert.deepEqual(fromWeb.json.repos, fromApp.json.repos);
   } finally { await s.close(); }
 });
 

@@ -261,7 +261,7 @@ const KUBE_VERBS = new Map<string, Channel>([
  * downloaded extension can ask for names this channel.
  */
 const ORG_VERBS = new Map<string, Channel>(
-  ['overview', 'providers', 'loginPassword', 'loginProvider', 'cancelSignIn', 'logout', 'pause', 'sendNow'].map((name) => [name, 'org'] as [string, Channel]),
+  ['overview', 'providers', 'loginPassword', 'loginProvider', 'cancelSignIn', 'logout', 'pause', 'sendNow', 'stats'].map((name) => [name, 'org'] as [string, Channel]),
 );
 
 export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review' | 'teams' | 'org';

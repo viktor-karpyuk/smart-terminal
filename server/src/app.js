@@ -201,6 +201,31 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
     return { orgName: settings().orgName, since, now: t, people, repos: totals('repo'), tickets: totals('ticket') };
   }
 
+  /**
+   * One person's own numbers: what they see about themselves, in the backoffice
+   * and in the app. Never anybody else's.
+   */
+  function personalStats(userId) {
+    const t = now();
+    const days = [];
+    for (let i = 6; i >= 0; i -= 1) days.push(day(t - i * 86_400_000));
+    const worked = new Map(store.daysOf(userId, days[0]).map((d) => [d.day, d.minutes]));
+    const me = overview().people.find((p) => p.id === userId);
+    return {
+      orgName: settings().orgName,
+      since: days[0],
+      days: days.map((d) => ({ day: d, minutes: Math.round(worked.get(d) ?? 0) })),
+      totalMinutes: Math.round(days.reduce((sum, d) => sum + (worked.get(d) ?? 0), 0)),
+      repos: me?.repos ?? [],
+      tickets: me?.tickets ?? [],
+      sessions: me?.sessions ?? [],
+      accounts: me?.accounts ?? [],
+      devices: me?.devices ?? [],
+      online: me?.online ?? false,
+      paused: me?.paused ?? false,
+    };
+  }
+
   // --- routes ------------------------------------------------------------------
   async function route(req, res) {
     const url = new URL(req.url, 'http://local');
@@ -249,12 +274,19 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       const previous = store.snapshots().find((s) => s.token_id === token.id);
       const counted = minutesFrom(report, { previousAt: previous?.at ?? null, now: now(), everyMinutes: settings().reportEveryMinutes });
       if (!report.paused && counted.minutes > 0) {
+        if (counted.repos.length || counted.tickets.length || report.sessions.some((s) => s.active)) {
+          store.addDayMinutes(user.id, day(now()), counted.minutes);
+        }
         for (const repo of counted.repos) store.addMinutes(user.id, day(now()), 'repo', repo, counted.minutes);
         for (const ticket of counted.tickets) store.addMinutes(user.id, day(now()), 'ticket', ticket, counted.minutes);
       }
       if (!settings().sharePaths) for (const s of report.sessions) s.path = '';
       store.saveSnapshot(token.id, user.id, report);
       return send(res, 200, { ok: true, policy: policy() });
+    }
+    if (method === 'GET' && p === '/api/app/stats') {
+      const { user } = needDevice(req);
+      return send(res, 200, { ok: true, ...personalStats(user.id) });
     }
     if (method === 'POST' && p === '/api/app/logout') {
       const { token } = needDevice(req);
@@ -322,12 +354,14 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       const { user } = needWeb(req);
       return send(res, 200, { ok: true, user: publicUser(user) });
     }
-    if (method === 'GET' && p === '/api/web/overview') {
+    if (method === 'GET' && p === '/api/web/stats') {
       const { user } = needWeb(req);
-      const all = overview();
-      // A member sees only themselves: what the company sees about them, and nothing about anybody else.
-      if (user.role !== 'admin') return send(res, 200, { ...all, people: all.people.filter((x) => x.id === user.id), repos: [], tickets: [] });
-      return send(res, 200, all);
+      return send(res, 200, { ok: true, ...personalStats(user.id) });
+    }
+    if (method === 'GET' && p === '/api/web/overview') {
+      // Everybody's work is the administrators' view. A developer has their own: /api/web/stats.
+      needWeb(req, 'admin');
+      return send(res, 200, overview());
     }
     if (method === 'GET' && p === '/api/admin/users') {
       needWeb(req, 'admin');
