@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Terminal · Backoffice</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<header class="top">
+  <strong id="org">Smart Terminal</strong>
+  <nav id="tabs">
+    <button data-tab="team" class="on">Team</button>
+    <button data-tab="work">Work</button>
+    <button data-tab="users" data-admin>Accounts</button>
+    <button data-tab="settings" data-admin>Sign-in &amp; settings</button>
+  </nav>
+  <span class="spacer"></span>
+  <span id="me" class="dim"></span>
+  <button id="logout">Sign out</button>
+</header>
+<main>
+  <section id="team"></section>
+  <section id="work" hidden></section>
+  <section id="users" hidden></section>
+  <section id="settings" hidden></section>
+  <p id="note" class="note" role="status"></p>
+</main>
+<script src="/assets/dashboard.js"></script>
+</body>
+</html>

@@ -281,6 +281,9 @@ contextBridge.exposeInMainWorld('api', {
     },
   },
 
+  org: {
+    call: (name, args) => ipcRenderer.invoke('org:call', { name, args }),
+  },
   teams: {
     call: (name, args) => ipcRenderer.invoke('teams:call', { name, args }),
     onEvent: (handler) => on('teams:event', handler),

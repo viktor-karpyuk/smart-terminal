@@ -1,0 +1,21 @@
+{
+  "id": "organization",
+  "name": "Organization",
+  "version": "1.0.0",
+  "author": "Smart Terminal",
+  "summary": "Sign in to your company's Smart Terminal server, and see exactly what it is told.",
+  "description": "For companies that run their own Smart Terminal server. Sign in with the account an administrator made for you, or with Microsoft, Google or your company's identity provider. Every few minutes the app tells that server which sessions are open, the folder, repository and branch each is in, the tickets those name, and how much of each Claude account's session and week is left. Never file contents, conversations or commands, and full paths only if your company turns that on. This panel shows the last report word for word, and you can pause it; the company sees that it is paused.",
+  "contributes": {
+    "panels": [
+      {
+        "id": "organization",
+        "title": "Organization",
+        "summary": "Your company's Smart Terminal server: sign in, and what is shared with it.",
+        "needs": null,
+        "launcher": true,
+        "icon": "org",
+        "render": "panel.html"
+      }
+    ]
+  }
+}

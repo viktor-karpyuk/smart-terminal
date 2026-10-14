@@ -1,0 +1,174 @@
+<style>
+  :root { --gap: 12px; }
+  body { overflow: auto; }
+  .page { max-width: 760px; margin: 0 auto; padding: 20px 18px 40px; display: grid; gap: 16px; }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  h2 { font-size: 11px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); font-weight: 600; }
+  p { margin: 0; line-height: 1.55; }
+  .dim { color: var(--text-dim); } .faint { color: var(--text-faint); } .small { font-size: 11px; }
+  .bad { color: var(--danger); }
+  .card { border: 1px solid var(--border); border-radius: 8px; padding: 14px; background: var(--bg-panel); display: grid; gap: 10px; }
+  label { display: grid; gap: 4px; font-size: 12px; color: var(--text-dim); }
+  input { font: inherit; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; padding: 7px 9px; }
+  input:focus { outline: none; border-color: var(--accent); }
+  .btn { font: inherit; font-size: 12px; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; background: var(--bg-elevated); cursor: pointer; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+  .btn.wide { width: 100%; padding: 8px; }
+  .btn[disabled] { opacity: .5; cursor: default; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+  .or { text-align: center; color: var(--text-faint); font-size: 11px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); display: inline-block; }
+  .dot.on { background: var(--ok); } .dot.paused { background: var(--git-new); } .dot.bad { background: var(--danger); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; color: var(--text-dim); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+  td { padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+  .chip { display: inline-block; padding: 0 6px; margin: 0 3px 2px 0; border: 1px solid var(--border); border-radius: 99px; font-size: 11px; }
+  .meter { display: grid; grid-template-columns: 60px 1fr 70px; gap: 8px; align-items: center; font-size: 12px; }
+  .bar { height: 7px; border-radius: 99px; background: var(--bg-input); overflow: hidden; }
+  .fill { display: block; height: 100%; background: var(--ok); }
+  .never li { margin: 2px 0; }
+</style>
+<div class="page" id="page"><p class="dim">Loading…</p></div>
+<script>
+  var state = { overview: null, server: '', providers: null, orgName: '', busy: false, waiting: false, error: '' };
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
+  function call(name, args) {
+    return host.call('org.' + name, args || {}).then(function (r) {
+      if (r && r.ok === false) throw new Error(r.error || 'it did not say why');
+      return r;
+    });
+  }
+  function ago(at) {
+    if (!at) return 'never';
+    var s = Math.round((Date.now() - at) / 1000);
+    if (s < 60) return s + 's ago';
+    if (s < 3600) return Math.round(s / 60) + ' min ago';
+    return Math.round(s / 3600) + ' h ago';
+  }
+  function act(promise) {
+    state.busy = true; state.error = ''; draw();
+    return promise.then(function (r) { if (r && 'signedIn' in r) state.overview = r; }, function (e) { state.error = e.message; })
+      .then(function () { state.busy = false; state.waiting = false; draw(); });
+  }
+
+  function drawSignIn() {
+    var html = '<div><h1>Sign in to your company</h1><p class="dim">If your company runs a Smart Terminal server, sign in to it here. You will see exactly what is shared before anything is.</p></div>';
+    html += '<div class="card"><label>Server <input id="server" placeholder="https://smart-terminal.yourcompany.com" value="' + esc(state.server) + '"></label>';
+    if (!state.providers) {
+      html += '<div class="row"><button class="btn primary" data-act="find"' + (state.busy ? ' disabled' : '') + '>Continue</button></div>';
+    } else {
+      html += '<p><strong>' + esc(state.orgName || 'Your company') + '</strong> <span class="dim">· ' + esc(state.server) + '</span> <button class="btn small" data-act="change">Change</button></p>';
+      if (state.waiting) {
+        html += '<p>Finish signing in in your browser, then come back here.</p><div class="row"><button class="btn" data-act="cancel">Cancel</button></div>';
+      } else {
+        state.providers.forEach(function (p) {
+          html += '<button class="btn wide" data-act="sso" data-id="' + esc(p.id) + '"' + (state.busy ? ' disabled' : '') + '>Continue with ' + esc(p.label) + '</button>';
+        });
+        if (state.providers.length) html += '<p class="or">or with the password an administrator gave you</p>';
+        html += '<label>E-mail <input id="email" type="email" autocomplete="username"></label>' +
+          '<label>Password <input id="password" type="password" autocomplete="current-password"></label>' +
+          '<div class="row"><button class="btn primary" data-act="password"' + (state.busy ? ' disabled' : '') + '>Sign in</button></div>';
+      }
+    }
+    if (state.error) html += '<p class="bad">' + esc(state.error) + '</p>';
+    html += '</div>';
+    html += whatIsShared();
+    return html;
+  }
+
+  function whatIsShared() {
+    return '<div class="card"><h2>What a company server is told</h2><ul class="never">' +
+      '<li>Which sessions are open, their titles, and whether they are working.</li>' +
+      '<li>The folder, repository and branch each one is in, and the tickets those names mention.</li>' +
+      '<li>How much of each Claude account\'s session and week is used.</li></ul>' +
+      '<p class="dim">Never the contents of a file, a conversation or a command. Full folder paths only if your company turns that on. You can pause it whenever you like; the company sees that it is paused.</p></div>';
+  }
+
+  function drawSignedIn() {
+    var o = state.overview;
+    var p = o.policy || {};
+    var status = o.paused ? '<span class="dot paused"></span> Sharing paused'
+      : o.lastError ? '<span class="dot bad"></span> <span class="bad">' + esc(o.lastError) + '</span>'
+      : '<span class="dot on"></span> Sharing every ' + esc(p.reportEveryMinutes || 2) + ' min · last sent ' + esc(ago(o.lastSentAt));
+    var html = '<div class="row"><div><h1>' + esc(p.orgName || 'Your company') + '</h1><p class="dim">' + esc(o.user ? (o.user.name ? o.user.name + ' · ' : '') + o.user.email : '') + ' · ' + esc(o.server) + '</p></div><span class="spacer"></span>' +
+      '<button class="btn" data-act="pause"' + (state.busy ? ' disabled' : '') + '>' + (o.paused ? 'Resume sharing' : 'Pause sharing') + '</button>' +
+      '<button class="btn" data-act="send"' + (state.busy || o.paused ? ' disabled' : '') + '>Send now</button>' +
+      '<button class="btn" data-act="logout"' + (state.busy ? ' disabled' : '') + '>Sign out</button></div>';
+    html += '<p>' + status + '</p>';
+    if (state.error) html += '<p class="bad">' + esc(state.error) + '</p>';
+
+    var r = o.lastReport;
+    html += '<div class="card"><h2>Exactly what was sent last</h2>';
+    if (!r) html += '<p class="dim">Nothing yet.</p>';
+    else if (r.paused) html += '<p class="dim">Only that sharing is paused.</p>';
+    else {
+      if (!r.sessions.length) html += '<p class="dim">No sessions open.</p>';
+      else {
+        html += '<table><thead><tr><th>Session</th><th>Folder / repository</th><th>Branch</th><th>Tickets</th><th></th></tr></thead><tbody>';
+        r.sessions.forEach(function (s) {
+          html += '<tr><td>' + esc(s.title || '—') + ' <span class="faint">' + esc(s.kind) + '</span></td>' +
+            '<td>' + esc(s.repo || s.folder || '—') + (s.path ? '<div class="faint small">' + esc(s.path) + '</div>' : '') + '</td>' +
+            '<td>' + esc(s.branch || '—') + '</td>' +
+            '<td>' + (s.tickets.length ? s.tickets.map(function (t) { return '<span class="chip">' + esc(t) + '</span>'; }).join('') : '—') + '</td>' +
+            '<td class="dim">' + (s.busy ? 'working' : s.active ? 'active' : '') + '</td></tr>';
+        });
+        html += '</tbody></table>';
+      }
+      r.accounts.forEach(function (a) {
+        html += '<div><strong>' + esc(a.name) + '</strong> <span class="dim">' + esc([a.email, a.plan].filter(Boolean).join(' · ')) + '</span>' +
+          meter('Session', a.sessionUsed, a.sessionResets) + meter('Week', a.weekUsed, a.weekResets) + '</div>';
+      });
+    }
+    html += '</div>';
+    html += '<p class="faint small">Tickets are found with the pattern your company set: <code>' + esc(p.ticketPattern || '') + '</code>. Full paths are ' + (p.sharePaths ? '' : 'not ') + 'shared.</p>';
+    return html;
+  }
+
+  function meter(label, used, resets) {
+    if (used == null) return '';
+    var left = 100 - used;
+    return '<div class="meter"><span class="dim">' + label + '</span><span class="bar"><span class="fill" style="width:' + left + '%"></span></span><span>' + left + '% left</span></div>' +
+      (resets ? '<div class="faint small" style="margin-left:68px">resets ' + esc(resets) + '</div>' : '');
+  }
+
+  function draw() {
+    var o = state.overview;
+    $('page').innerHTML = o && o.signedIn ? drawSignedIn() : drawSignIn();
+  }
+
+  document.addEventListener('click', function (event) {
+    var b = event.target.closest('[data-act]');
+    if (!b) return;
+    var what = b.getAttribute('data-act');
+    var server = $('server') ? $('server').value.trim() : state.server;
+    if (what === 'find') {
+      state.server = server;
+      act(call('providers', { server: server }).then(function (r) { state.server = r.server; state.providers = r.providers; state.orgName = r.orgName; }));
+    } else if (what === 'change') { state.providers = null; draw(); }
+    else if (what === 'password') act(call('loginPassword', { server: state.server, email: $('email').value, password: $('password').value }));
+    else if (what === 'sso') { state.waiting = true; act(call('loginProvider', { server: state.server, provider: b.getAttribute('data-id') })); }
+    else if (what === 'cancel') call('cancelSignIn');
+    else if (what === 'pause') act(call('pause', { paused: !state.overview.paused }));
+    else if (what === 'send') act(call('sendNow'));
+    else if (what === 'logout') act(call('logout').then(function (r) { state.providers = null; return r; }));
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Enter' && (event.target.id === 'password' || event.target.id === 'email')) document.querySelector('[data-act=password]').click();
+    if (event.key === 'Enter' && event.target.id === 'server') document.querySelector('[data-act=find]') && document.querySelector('[data-act=find]').click();
+  });
+
+  function load() {
+    return call('overview').then(function (o) {
+      state.overview = o;
+      if (!state.server) state.server = o.server || '';
+      draw();
+    }, function (e) { state.error = e.message; draw(); });
+  }
+  host.on('context', load);
+  // The report goes out on its own clock; keep "last sent" honest without asking the server.
+  setInterval(function () { if (!state.busy) load(); }, 15000);
+  host.ready();
+</script>

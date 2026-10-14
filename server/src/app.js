@@ -1,0 +1,445 @@
+'use strict';
+
+/**
+ * The company's Smart Terminal server.
+ *
+ * Three audiences, three doors:
+ * - the app on a developer's machine, with a device token (Bearer) it got by
+ *   signing in with a password or with a company identity provider;
+ * - the backoffice in a browser, with a session cookie, where an administrator
+ *   creates accounts, sets up Microsoft or Google sign-in and reads the
+ *   dashboard;
+ * - the identity provider, coming back from a sign-in.
+ *
+ * Plain `node:http`, no framework: a small server whose every route is here.
+ */
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { Store } = require('./db');
+const { hashPassword, checkPassword, makePassword, passwordProblem, limiter } = require('./auth');
+const oidc = require('./oidc');
+const { readReport, minutesFrom } = require('./report');
+
+const PUBLIC = path.join(__dirname, '..', 'public');
+const STATIC = {
+  '/assets/app.css': 'text/css; charset=utf-8',
+  '/assets/dashboard.js': 'text/javascript; charset=utf-8',
+  '/assets/login.js': 'text/javascript; charset=utf-8',
+};
+const DEVICE_DAYS = 90;
+const WEB_DAYS = 1;
+const ONLINE_MS = 5 * 60_000;
+const DEFAULTS = {
+  orgName: 'Your company',
+  reportEveryMinutes: 2,
+  ticketPattern: '\\b[A-Z][A-Z0-9]{1,9}-\\d{1,6}\\b',
+  sharePaths: false,
+  providers: [],
+};
+
+class HttpError extends Error {
+  constructor(status, message) { super(message); this.status = status; }
+}
+
+const emailOk = (email) => /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{1,63}$/.test(String(email ?? '').trim());
+const day = (at) => new Date(at).toISOString().slice(0, 10);
+
+function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.now, trustProxy = false } = {}) {
+  const store = new Store(dbFile, { now });
+  const sso = oidc.client({ fetch, now });
+  const logins = limiter({ limit: 10, windowMs: 15 * 60_000, now });
+  const base = String(publicUrl || '').replace(/\/+$/, '');
+
+  const settings = () => ({ ...DEFAULTS, ...store.setting('org', {}) });
+  /** What a device is told to do: never a secret. */
+  const policy = () => {
+    const s = settings();
+    return { orgName: s.orgName, reportEveryMinutes: s.reportEveryMinutes, ticketPattern: s.ticketPattern, sharePaths: s.sharePaths };
+  };
+  const publicProviders = () => settings().providers.filter((p) => p.enabled !== false && p.clientId)
+    .map((p) => ({ id: p.id, label: p.label || (p.type === 'microsoft' ? 'Microsoft' : p.type === 'google' ? 'Google' : 'Single sign-on'), type: p.type }));
+  const provider = (id) => settings().providers.find((p) => p.id === id && p.enabled !== false && p.clientId) ?? null;
+  const publicUser = (u) => ({ id: u.id, email: u.email, name: u.name, role: u.role, disabled: Boolean(u.disabled_at), hasPassword: Boolean(u.pass_hash) });
+
+  // --- plumbing --------------------------------------------------------------
+  function send(res, status, body, headers = {}) {
+    const json = typeof body === 'string' ? body : JSON.stringify(body);
+    res.writeHead(status, {
+      'content-type': typeof body === 'string' ? 'text/html; charset=utf-8' : 'application/json',
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff',
+      'referrer-policy': 'no-referrer',
+      'x-frame-options': 'DENY',
+      ...headers,
+    });
+    res.end(json);
+  }
+  const redirect = (res, to, headers = {}) => { res.writeHead(302, { location: to, 'cache-control': 'no-store', ...headers }); res.end(); };
+
+  async function readJson(req) {
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > 512 * 1024) throw new HttpError(413, 'Too large.');
+      chunks.push(chunk);
+    }
+    if (!size) return {};
+    try {
+      return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    } catch {
+      throw new HttpError(400, 'That is not JSON.');
+    }
+  }
+
+  const isHttps = (req) => Boolean(req.socket.encrypted) || (trustProxy && req.headers['x-forwarded-proto'] === 'https');
+  const clientIp = (req) => (trustProxy && String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim()) || req.socket.remoteAddress || '?';
+
+  function cookie(req, name) {
+    for (const part of String(req.headers.cookie ?? '').split(';')) {
+      const [k, ...v] = part.trim().split('=');
+      if (k === name) return decodeURIComponent(v.join('='));
+    }
+    return null;
+  }
+  function sessionCookie(req, value, maxAge) {
+    return `org_session=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${isHttps(req) ? '; Secure' : ''}`;
+  }
+
+  /** The browser's signed-in user, or null. */
+  const webUser = (req) => store.resolveToken(cookie(req, 'org_session'), 'web');
+
+  /**
+   * A change made from the browser must come from this site's own pages: the
+   * session cookie is Lax, and on top of that the Origin has to be ours and the
+   * body JSON, which a plain cross-site form cannot send.
+   */
+  function sameSite(req) {
+    const origin = req.headers.origin;
+    if (origin && base && origin !== new URL(base).origin) throw new HttpError(403, 'Not from this site.');
+    if (!String(req.headers['content-type'] ?? '').startsWith('application/json')) throw new HttpError(415, 'Send JSON.');
+  }
+  function needWeb(req, role = null) {
+    const who = webUser(req);
+    if (!who) throw new HttpError(401, 'Sign in first.');
+    if (role && who.user.role !== role) throw new HttpError(403, 'Only an administrator can do that.');
+    return who;
+  }
+  function needDevice(req) {
+    const header = String(req.headers.authorization ?? '');
+    const who = header.startsWith('Bearer ') ? store.resolveToken(header.slice(7), 'device') : null;
+    if (!who) throw new HttpError(401, 'This device is not signed in, or was signed out.');
+    return who;
+  }
+
+  // --- signing in ------------------------------------------------------------
+  async function passwordLogin(req, body) {
+    const email = String(body.email ?? '').trim().toLowerCase();
+    if (!logins.allow(`${clientIp(req)}|${email}`)) throw new HttpError(429, 'Too many tries. Wait a few minutes.');
+    const user = store.userByEmail(email);
+    const ok = await checkPassword(String(body.password ?? ''), user?.pass_hash);
+    if (!user || !ok || user.disabled_at) throw new HttpError(401, 'That e-mail and password do not match an account.');
+    logins.reset(`${clientIp(req)}|${email}`);
+    return user;
+  }
+
+  /** The user an SSO sign-in is for: one that exists, or one an allowed domain may create. */
+  function userForSso(p, who) {
+    let user = store.userByEmail(who.email);
+    if (user?.disabled_at) throw new HttpError(403, 'That account is disabled.');
+    if (!user) {
+      const domain = who.email.split('@')[1];
+      const allowed = (p.allowDomains ?? []).map((d) => String(d).toLowerCase());
+      if (!allowed.includes(domain)) throw new HttpError(403, `${who.email} has no account here. Ask an administrator to add it.`);
+      user = store.createUser({ email: who.email, name: who.name, role: 'member' });
+    } else if (!user.name && who.name) {
+      store.updateUser(user.id, { name: who.name });
+    }
+    return user;
+  }
+
+  function deviceAnswer(user, label) {
+    const token = store.issueToken(user.id, { kind: 'device', label, days: DEVICE_DAYS });
+    return { ok: true, token: token.secret, user: publicUser(user), policy: policy() };
+  }
+
+  // --- the dashboard's numbers -------------------------------------------------
+  function overview() {
+    const t = now();
+    const users = store.users();
+    const snaps = store.snapshots();
+    const since = day(t - 6 * 86_400_000);
+    const activity = store.activitySince(since);
+    const people = users.map((u) => {
+      const mine = snaps.filter((s) => s.user_id === u.id);
+      const latest = mine.sort((a, b) => b.at - a.at)[0] ?? null;
+      const devices = store.tokensOf(u.id).filter((tk) => tk.kind === 'device');
+      const sessions = mine.filter((s) => t - s.at < ONLINE_MS).flatMap((s) => s.payload.sessions.map((x) => ({ ...x, device: s.label })));
+      const accounts = mine.flatMap((s) => s.payload.accounts.map((a) => ({ ...a, device: s.label, reportedAt: s.at })));
+      const mineActivity = activity.filter((a) => a.user_id === u.id);
+      const top = (kind) => mineActivity.filter((a) => a.kind === kind).sort((a, b) => b.minutes - a.minutes).slice(0, 8)
+        .map((a) => ({ key: a.key, minutes: Math.round(a.minutes) }));
+      return {
+        ...publicUser(u),
+        online: Boolean(latest && t - latest.at < ONLINE_MS),
+        paused: Boolean(latest?.payload.paused),
+        lastSeen: latest?.at ?? null,
+        devices: devices.map((d) => ({ id: d.id, label: d.label, lastSeen: d.last_seen_at })),
+        sessions,
+        accounts,
+        repos: top('repo'),
+        tickets: top('ticket'),
+      };
+    });
+    const totals = (kind) => {
+      const by = new Map();
+      for (const a of activity) if (a.kind === kind) by.set(a.key, (by.get(a.key) ?? 0) + a.minutes);
+      return [...by.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([key, minutes]) => ({ key, minutes: Math.round(minutes) }));
+    };
+    return { orgName: settings().orgName, since, now: t, people, repos: totals('repo'), tickets: totals('ticket') };
+  }
+
+  // --- routes ------------------------------------------------------------------
+  async function route(req, res) {
+    const url = new URL(req.url, 'http://local');
+    const p = url.pathname;
+    const method = req.method;
+
+    if (method === 'GET' && STATIC[p]) {
+      const file = path.join(PUBLIC, path.basename(p));
+      return send(res, 200, fs.readFileSync(file, 'utf8'), { 'content-type': STATIC[p], 'cache-control': 'no-cache' });
+    }
+    if (method === 'GET' && (p === '/' || p === '/login')) {
+      const who = webUser(req);
+      const page = who ? 'dashboard.html' : 'login.html';
+      if (p === '/login' && who) return redirect(res, '/');
+      return send(res, 200, fs.readFileSync(path.join(PUBLIC, page), 'utf8'), {
+        'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      });
+    }
+    if (method === 'GET' && p === '/api/health') return send(res, 200, { ok: true });
+    if (method === 'GET' && p === '/api/providers') return send(res, 200, { orgName: settings().orgName, providers: publicProviders() });
+
+    // ----- the app -----
+    if (method === 'POST' && p === '/api/app/login') {
+      const body = await readJson(req);
+      const user = await passwordLogin(req, body);
+      return send(res, 200, deviceAnswer(user, String(body.device ?? 'a device')));
+    }
+    if (method === 'POST' && p === '/api/app/exchange') {
+      const body = await readJson(req);
+      const held = store.takePending(String(body.code ?? ''), 'app-code');
+      if (!held) throw new HttpError(400, 'That sign-in expired. Try again.');
+      const challenge = crypto.createHash('sha256').update(String(body.verifier ?? '')).digest('base64url');
+      if (challenge !== held.challenge) throw new HttpError(400, 'That sign-in was started somewhere else.');
+      const user = store.user(held.userId);
+      if (!user || user.disabled_at) throw new HttpError(403, 'That account is disabled.');
+      return send(res, 200, deviceAnswer(user, String(body.device ?? 'a device')));
+    }
+    if (method === 'GET' && p === '/api/app/me') {
+      const { user } = needDevice(req);
+      return send(res, 200, { ok: true, user: publicUser(user), policy: policy() });
+    }
+    if (method === 'POST' && p === '/api/app/report') {
+      const { user, token } = needDevice(req);
+      const { report, error } = readReport(await readJson(req));
+      if (error) throw new HttpError(400, error);
+      const previous = store.snapshots().find((s) => s.token_id === token.id);
+      const counted = minutesFrom(report, { previousAt: previous?.at ?? null, now: now(), everyMinutes: settings().reportEveryMinutes });
+      if (!report.paused && counted.minutes > 0) {
+        for (const repo of counted.repos) store.addMinutes(user.id, day(now()), 'repo', repo, counted.minutes);
+        for (const ticket of counted.tickets) store.addMinutes(user.id, day(now()), 'ticket', ticket, counted.minutes);
+      }
+      if (!settings().sharePaths) for (const s of report.sessions) s.path = '';
+      store.saveSnapshot(token.id, user.id, report);
+      return send(res, 200, { ok: true, policy: policy() });
+    }
+    if (method === 'POST' && p === '/api/app/logout') {
+      const { token } = needDevice(req);
+      store.revokeToken(token.id);
+      return send(res, 200, { ok: true });
+    }
+
+    // ----- single sign-on, for the browser and for the app -----
+    const startMatch = /^\/auth\/([a-z0-9-]{1,40})\/start$/.exec(p);
+    if (method === 'GET' && startMatch) {
+      const prov = provider(startMatch[1]);
+      if (!prov) throw new HttpError(404, 'No such sign-in provider.');
+      const forApp = url.searchParams.get('for') === 'app';
+      const keep = { providerId: prov.id, forApp };
+      if (forApp) {
+        const appRedirect = String(url.searchParams.get('redirect') ?? '');
+        // Only back to the app on this machine: a loopback address, as RFC 8252 says.
+        if (!/^http:\/\/127\.0\.0\.1:\d{2,5}\/callback$/.test(appRedirect)) throw new HttpError(400, 'Not a sign-in the app started.');
+        keep.appRedirect = appRedirect;
+        keep.appState = String(url.searchParams.get('state') ?? '').slice(0, 200);
+        keep.challenge = String(url.searchParams.get('challenge') ?? '').slice(0, 100);
+        if (!keep.appState || keep.challenge.length < 43) throw new HttpError(400, 'Not a sign-in the app started.');
+      }
+      const started = await sso.start(prov, `${base}/auth/callback`);
+      store.putPending(started.state, 'sso', { ...keep, ...started.keep }, 10 * 60_000);
+      return redirect(res, started.url);
+    }
+    if (method === 'GET' && p === '/auth/callback') {
+      const held = store.takePending(String(url.searchParams.get('state') ?? ''), 'sso');
+      if (!held) throw new HttpError(400, 'That sign-in expired or was already used. Start again.');
+      const prov = provider(held.providerId);
+      if (!prov) throw new HttpError(404, 'That sign-in provider is no longer set up.');
+      if (url.searchParams.get('error')) throw new HttpError(401, String(url.searchParams.get('error_description') || url.searchParams.get('error')).slice(0, 300));
+      // Whatever the provider or its token got wrong is said to the person, not hidden as a server error.
+      const who = await sso.finish(prov, String(url.searchParams.get('code') ?? ''), held).catch((error) => {
+        throw new HttpError(401, String(error?.message ?? error).slice(0, 300));
+      });
+      const user = userForSso(prov, who);
+      if (held.forApp) {
+        const code = crypto.randomBytes(24).toString('base64url');
+        store.putPending(code, 'app-code', { userId: user.id, challenge: held.challenge }, 2 * 60_000);
+        const back = new URL(held.appRedirect);
+        back.searchParams.set('code', code);
+        back.searchParams.set('state', held.appState);
+        return redirect(res, back.toString());
+      }
+      const token = store.issueToken(user.id, { kind: 'web', label: 'browser', days: WEB_DAYS });
+      return redirect(res, '/', { 'set-cookie': sessionCookie(req, token.secret, WEB_DAYS * 86_400) });
+    }
+
+    // ----- the backoffice -----
+    if (method === 'POST' && p === '/api/web/login') {
+      sameSite(req);
+      const user = await passwordLogin(req, await readJson(req));
+      const token = store.issueToken(user.id, { kind: 'web', label: 'browser', days: WEB_DAYS });
+      return send(res, 200, { ok: true, user: publicUser(user) }, { 'set-cookie': sessionCookie(req, token.secret, WEB_DAYS * 86_400) });
+    }
+    if (method === 'POST' && p === '/api/web/logout') {
+      sameSite(req);
+      const who = webUser(req);
+      if (who) store.revokeToken(who.token.id);
+      return send(res, 200, { ok: true }, { 'set-cookie': sessionCookie(req, '', 0) });
+    }
+    if (method === 'GET' && p === '/api/web/me') {
+      const { user } = needWeb(req);
+      return send(res, 200, { ok: true, user: publicUser(user) });
+    }
+    if (method === 'GET' && p === '/api/web/overview') {
+      const { user } = needWeb(req);
+      const all = overview();
+      // A member sees only themselves: what the company sees about them, and nothing about anybody else.
+      if (user.role !== 'admin') return send(res, 200, { ...all, people: all.people.filter((x) => x.id === user.id), repos: [], tickets: [] });
+      return send(res, 200, all);
+    }
+    if (method === 'GET' && p === '/api/admin/users') {
+      needWeb(req, 'admin');
+      return send(res, 200, { users: store.users().map(publicUser) });
+    }
+    if (method === 'POST' && p === '/api/admin/users') {
+      sameSite(req);
+      needWeb(req, 'admin');
+      const body = await readJson(req);
+      const email = String(body.email ?? '').trim().toLowerCase();
+      if (!emailOk(email)) throw new HttpError(400, 'That is not an e-mail address.');
+      if (store.userByEmail(email)) throw new HttpError(409, 'There is already an account with that e-mail.');
+      const role = body.role === 'admin' ? 'admin' : 'member';
+      let password = null;
+      if (body.password !== 'sso-only') {
+        password = body.password ? String(body.password) : makePassword();
+        const problem = passwordProblem(password);
+        if (problem) throw new HttpError(400, problem);
+      }
+      const user = store.createUser({ email, name: body.name ?? '', role, passHash: password ? await hashPassword(password) : null });
+      // The generated password is shown once, to the administrator who made it.
+      return send(res, 201, { ok: true, user: publicUser(user), password: body.password ? null : password });
+    }
+    const userMatch = /^\/api\/admin\/users\/([0-9a-f-]{36})$/.exec(p);
+    if (method === 'PATCH' && userMatch) {
+      sameSite(req);
+      const { user: me } = needWeb(req, 'admin');
+      const target = store.user(userMatch[1]);
+      if (!target) throw new HttpError(404, 'No such account.');
+      const body = await readJson(req);
+      if (target.id === me.id && (body.disabled === true || body.role === 'member')) {
+        throw new HttpError(400, 'You cannot disable yourself or take away your own administrator role.');
+      }
+      store.updateUser(target.id, {
+        name: body.name === undefined ? undefined : String(body.name),
+        role: body.role === undefined ? undefined : body.role === 'admin' ? 'admin' : 'member',
+      });
+      if (body.disabled !== undefined) store.setDisabled(target.id, body.disabled === true);
+      let password = null;
+      if (body.resetPassword === true) {
+        password = makePassword();
+        store.setPassword(target.id, await hashPassword(password));
+      }
+      return send(res, 200, { ok: true, user: publicUser(store.user(target.id)), password });
+    }
+    const deviceMatch = /^\/api\/admin\/devices\/([0-9a-f-]{36})$/.exec(p);
+    if (method === 'DELETE' && deviceMatch) {
+      if (req.headers.origin && base && req.headers.origin !== new URL(base).origin) throw new HttpError(403, 'Not from this site.');
+      needWeb(req, 'admin');
+      store.revokeToken(deviceMatch[1]);
+      return send(res, 200, { ok: true });
+    }
+    if (method === 'GET' && p === '/api/admin/settings') {
+      needWeb(req, 'admin');
+      const s = settings();
+      // Secrets are never sent back; the page only learns that one is set.
+      return send(res, 200, { ...s, providers: s.providers.map(({ clientSecret, ...rest }) => ({ ...rest, hasSecret: Boolean(clientSecret) })), callbackUrl: `${base}/auth/callback` });
+    }
+    if (method === 'PUT' && p === '/api/admin/settings') {
+      sameSite(req);
+      needWeb(req, 'admin');
+      const body = await readJson(req);
+      const current = settings();
+      const next = { ...current };
+      if (typeof body.orgName === 'string') next.orgName = body.orgName.trim().slice(0, 80) || DEFAULTS.orgName;
+      if (body.reportEveryMinutes !== undefined) next.reportEveryMinutes = Math.max(1, Math.min(60, Math.round(Number(body.reportEveryMinutes) || 2)));
+      if (typeof body.ticketPattern === 'string') {
+        try { new RegExp(body.ticketPattern, 'g'); } catch { throw new HttpError(400, 'The ticket pattern is not a valid regular expression.'); }
+        next.ticketPattern = body.ticketPattern.slice(0, 200);
+      }
+      if (body.sharePaths !== undefined) next.sharePaths = body.sharePaths === true;
+      if (Array.isArray(body.providers)) {
+        next.providers = body.providers.slice(0, 6).map((raw, i) => {
+          const type = ['microsoft', 'google', 'oidc'].includes(raw.type) ? raw.type : 'oidc';
+          const id = String(raw.id || type).toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 40) || `sso${i}`;
+          const kept = current.providers.find((p) => p.id === id);
+          const issuer = String(raw.issuer ?? '').trim();
+          if (type === 'oidc' && !/^https:\/\//.test(issuer)) throw new HttpError(400, 'A generic provider needs an https issuer URL.');
+          return {
+            id,
+            type,
+            label: String(raw.label ?? '').slice(0, 40),
+            clientId: String(raw.clientId ?? '').trim().slice(0, 200),
+            // Blank keeps the one already stored.
+            clientSecret: raw.clientSecret ? String(raw.clientSecret).slice(0, 500) : kept?.clientSecret ?? '',
+            tenant: String(raw.tenant ?? '').trim().slice(0, 100),
+            issuer,
+            allowDomains: (Array.isArray(raw.allowDomains) ? raw.allowDomains : String(raw.allowDomains ?? '').split(','))
+              .map((d) => String(d).trim().toLowerCase()).filter((d) => /^[a-z0-9.-]+\.[a-z]{2,}$/.test(d)).slice(0, 20),
+            enabled: raw.enabled !== false,
+          };
+        });
+      }
+      store.setSetting('org', next);
+      return send(res, 200, { ok: true });
+    }
+
+    throw new HttpError(404, 'Not found.');
+  }
+
+  const server = http.createServer((req, res) => {
+    route(req, res).catch((error) => {
+      const status = error instanceof HttpError ? error.status : 500;
+      if (status === 500) console.error(error);
+      const wantsJson = String(req.url).startsWith('/api/');
+      const message = status === 500 ? 'Something went wrong on the server.' : error.message;
+      if (wantsJson) return send(res, status, { ok: false, error: message });
+      return send(res, status, `<!doctype html><meta charset="utf-8"><title>Smart Terminal</title><link rel="stylesheet" href="/assets/app.css"><main class="narrow"><h1>Could not sign in</h1><p>${message.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}</p><p><a href="/">Back</a></p></main>`);
+    });
+  });
+
+  return { server, store, overview };
+}
+
+module.exports = { createServer, DEFAULTS };

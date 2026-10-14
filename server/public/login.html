@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in · Smart Terminal</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<main class="narrow">
+  <h1 id="org">Smart Terminal</h1>
+  <p class="dim">Sign in to your company's Smart Terminal backoffice.</p>
+  <div id="providers" class="stack"></div>
+  <p id="or" class="or" hidden>or</p>
+  <form id="form" class="stack">
+    <label>E-mail <input type="email" name="email" autocomplete="username" required></label>
+    <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
+    <button class="primary" type="submit">Sign in</button>
+    <p id="error" class="error" role="alert"></p>
+  </form>
+</main>
+<script src="/assets/login.js"></script>
+</body>
+</html>

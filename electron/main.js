@@ -54,6 +54,7 @@ const {
   readFilenamesPlist,
 } = require('./files');
 const git = require('./git');
+const { OrgService } = require('./org-service');
 const { LocalConflicts } = require('./git-conflicts');
 const { layout: layoutGraph } = require('./git-graph');
 const kube = require('./kube');
@@ -217,6 +218,8 @@ let db = null;
  */
 let reviewService = null;
 let teamsService = null;
+/** Signed in to a company's Smart Terminal server, and reporting to it. */
+let orgService = null;
 /** The Code Reviewer's bot: reads what Teams said from the Azure queue, and answers as the bot. */
 let teamsBot = null;
 /** Where the bus's MCP server lives and the socket it talks to, once messaging has opened it. */
@@ -306,6 +309,91 @@ const TEAMS_VERBS = {
   saveBot: (service, args) => {
     if (!service.bot) throw new Error('The bot needs both Teams and the Code Reviewer running.');
     return { ok: true, bot: service.bot.save(args.bot ?? {}) };
+  },
+};
+
+/**
+ * What the company server is told comes from here: the sessions running in this
+ * app, what git says about the folder each is in, and each account's usage.
+ */
+async function gatherForOrg() {
+  const rows = roster();
+  const sessions = rows.map((row) => {
+    const full = db.getSession(row.id);
+    return {
+      kind: row.kind,
+      title: row.title,
+      cwd: row.cwd,
+      profileName: row.profileName,
+      lastWorkedAt: full?.lastWorkedAt ?? null,
+      lastOutputAt: lastOutputBySession.get(row.id) ?? null,
+    };
+  });
+  const repos = new Map();
+  for (const cwd of new Set(sessions.map((s) => s.cwd).filter(Boolean))) {
+    const root = await git.repoRoot(cwd).catch(() => null);
+    if (!root) continue;
+    const ask = async (args) => {
+      const out = await git.run(root, args).catch(() => null);
+      return out?.ok ? out.stdout.trim() : '';
+    };
+    repos.set(cwd, {
+      root,
+      remote: await ask(['remote', 'get-url', 'origin']),
+      branch: await ask(['rev-parse', '--abbrev-ref', 'HEAD']),
+      subject: await ask(['log', '-1', '--format=%s']),
+    });
+  }
+  // Every account with a session open, read no more often than the usage cache allows.
+  const accounts = [];
+  const used = new Set(rows.map((row) => row.profileId));
+  for (const profile of profiles.list().filter((p) => used.has(p.id))) {
+    let usage = usageCache.get(profile.id);
+    if (!usage || Date.now() - usage.readAt > USAGE_TTL) {
+      usage = await readUsage(profile).then((r) => ({ ...r, readAt: Date.now() })).catch(() => null);
+      if (usage?.ok) usageCache.set(profile.id, usage);
+    }
+    const auth = await authStatus(profile).catch(() => null);
+    accounts.push({ name: profile.name, email: auth?.email ?? '', plan: auth?.subscriptionType ?? '', usage: usage?.ok ? usage : null });
+  }
+  return { sessions, repos, accounts };
+}
+
+function createOrgService() {
+  try {
+    return new OrgService({
+      file: path.join(app.getPath('userData'), 'organization.json'),
+      secrets: {
+        encrypt: (text) => {
+          if (!safeStorage.isEncryptionAvailable()) throw new Error('This system offers no encrypted storage, so the sign-in cannot be kept safely.');
+          return safeStorage.encryptString(text).toString('base64');
+        },
+        decrypt: (cipher) => safeStorage.decryptString(Buffer.from(cipher, 'base64')),
+      },
+      fetch: (url, init) => net.fetch(url, init),
+      openExternal: (url) => shell.openExternal(url),
+      gather: gatherForOrg,
+      appVersion: app.getVersion(),
+      changed: () => send('org:changed', orgService?.overview()),
+      log: (line) => console.log(`[org] ${line}`),
+    });
+  } catch (error) {
+    console.error('[org] could not start:', error);
+    return null;
+  }
+}
+
+const ORG_VERBS = {
+  overview: (s) => ({ ok: true, ...s.overview() }),
+  providers: (s, args) => s.providers({ server: args.server }),
+  loginPassword: (s, args) => s.loginWithPassword({ server: args.server, email: String(args.email ?? ''), password: String(args.password ?? '') }),
+  loginProvider: (s, args) => s.loginWithProvider({ server: args.server, provider: String(args.provider ?? '') }),
+  cancelSignIn: (s) => s.cancelSignIn(),
+  logout: (s) => s.logout(),
+  pause: (s, args) => s.setPaused(args.paused !== false),
+  sendNow: async (s) => {
+    await s.sendNow();
+    return { ok: true, ...s.overview() };
   },
 };
 
@@ -1917,6 +2005,17 @@ function registerIpc() {
    * reach it through the app rather than through this channel — a panel cannot
    * name another extension's service, and should not be able to.
    */
+  ipcMain.handle('org:call', async (_e, { name, args } = {}) => {
+    if (!orgService) return { ok: false, error: 'The organization service is not running.' };
+    const handler = Object.prototype.hasOwnProperty.call(ORG_VERBS, String(name)) ? ORG_VERBS[name] : null;
+    if (!handler) return { ok: false, error: `No such organization action: ${name}` };
+    try {
+      return await handler(orgService, args ?? {});
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  });
+
   ipcMain.handle('teams:call', async (_e, { name, args } = {}) => {
     if (!teamsService) return { ok: false, error: 'Teams is not running.' };
     try {
@@ -2309,6 +2408,9 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   // restart, not history — and history is the only thing the prune is for.
   db.prune({ keep: crashed });
   teamsService = createTeamsService();
+  orgService = createOrgService();
+  // Only once signed in: a machine that never joined a company says nothing to anybody.
+  orgService?.start();
   // What the hours held back is looked at again on a clock of its own: the
   // delivery extension promises the morning, and something has to bring it.
   teamsService?.start();
@@ -3112,6 +3214,7 @@ app.on('will-quit', () => {
   kubeForwards.stopAll();
   // A `claude -p` nobody can see would go on spending on the person's account.
   reviewService?.stop();
+  orgService?.stop();
   teamsBot?.stop();
   // A Gradle client asked for a task list is a JVM that would otherwise
   // outlive the app by up to three minutes.

@@ -1,0 +1,15 @@
+{
+  "name": "smart-terminal-org-server",
+  "private": true,
+  "version": "1.0.0",
+  "description": "A company's own server for Smart Terminal: developers sign in from the app, and the company sees who is working on which repositories and tickets, and how much Claude usage each one has left.",
+  "license": "MIT",
+  "engines": { "node": ">=22.5" },
+  "main": "src/app.js",
+  "bin": { "smart-terminal-org": "bin/org-server.js" },
+  "scripts": {
+    "start": "node bin/org-server.js serve",
+    "invite-admin": "node bin/org-server.js invite-admin",
+    "test": "node --no-warnings --test"
+  }
+}
