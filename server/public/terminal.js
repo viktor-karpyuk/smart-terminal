@@ -67,7 +67,7 @@ async function refresh() {
 
 function drawDevices() {
   const box = $('devices');
-  box.replaceChildren(...drawMachines(), drawShells());
+  box.replaceChildren(...drawMachines(), ...[drawShells()].filter(Boolean));
 }
 
 function drawMachines() {
