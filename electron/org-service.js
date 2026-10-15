@@ -30,9 +30,10 @@ class OrgService {
    * @param openExternal opens the system browser
    * @param gather      async () => { sessions, repos, accounts } from the rest of the app
    * @param appVersion  this build's version
+   * @param relay       the terminal relay (org-relay.js), or null
    */
-  constructor({ file, secrets, fetch, openExternal, gather, appVersion, changed = () => {}, now = Date.now, log = () => {} }) {
-    Object.assign(this, { file, secrets, fetch, openExternal, gather, appVersion, changed, now, log });
+  constructor({ file, secrets, fetch, openExternal, gather, appVersion, relay = null, changed = () => {}, now = Date.now, log = () => {} }) {
+    Object.assign(this, { file, secrets, fetch, openExternal, gather, appVersion, relay, changed, now, log });
     this.timer = null;
     this.state = this.load();
   }
@@ -49,6 +50,7 @@ class OrgService {
     this.state = { ...this.state, ...patch };
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     fs.writeFileSync(this.file, JSON.stringify(this.state, null, 2), { mode: 0o600 });
+    this.syncRelay();
     this.changed();
   }
   token() {
@@ -69,6 +71,11 @@ class OrgService {
       policy: s.policy ?? null,
       paused: Boolean(s.paused),
       privateFolders: s.privateFolders ?? [],
+      webTerminal: {
+        allowed: Boolean(s.allowWeb),
+        companyAllows: s.policy?.webTerminal !== false,
+        ...(this.relay?.status() ?? { connected: false, error: null, viewers: [] }),
+      },
       lastReport: s.lastReport ?? null,
       lastSentAt: s.lastSentAt ?? null,
       lastError: s.lastError ?? null,
@@ -196,7 +203,7 @@ class OrgService {
   /** The person's own page on the company server, in the browser. */
   openWeb(page = 'mine') {
     const base = this.serverUrl();
-    this.openExternal(`${base}/#${page === 'account' ? 'account' : 'mine'}`);
+    this.openExternal(page === 'terminal' ? `${base}/terminal` : `${base}/#${page === 'account' ? 'account' : 'mine'}`);
     return { ok: true };
   }
 
@@ -228,6 +235,23 @@ class OrgService {
     return { ok: true, ...this.overview() };
   }
 
+  /**
+   * Whether this person lets their own browser open the sessions on this
+   * machine. Off until they turn it on; kept across sign-outs, like the folders.
+   */
+  setAllowWeb(allow) {
+    this.save({ allowWeb: Boolean(allow) });
+    return { ok: true, ...this.overview() };
+  }
+
+  /** The relay runs exactly while someone is signed in, they allow it, and the company does. */
+  syncRelay() {
+    if (!this.relay) return;
+    const token = this.state.token ? this.token() : null;
+    if (token && this.state.allowWeb && this.state.policy?.webTerminal !== false) this.relay.start(this.serverUrl(), token);
+    else this.relay.stop();
+  }
+
   deviceName() {
     return `${os.hostname().replace(/\.local$/, '')} (${process.platform === 'darwin' ? 'macOS' : process.platform})`.slice(0, 120);
   }
@@ -239,6 +263,7 @@ class OrgService {
 
   start() {
     this.stop();
+    this.syncRelay();
     if (!this.token()) return;
     const tick = async () => {
       await this.sendNow();

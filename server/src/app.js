@@ -21,12 +21,17 @@ const { Store } = require('./db');
 const { hashPassword, checkPassword, makePassword, passwordProblem, limiter } = require('./auth');
 const oidc = require('./oidc');
 const { readReport, minutesFrom } = require('./report');
+const { createRelay } = require('./relay');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const STATIC = {
   '/assets/app.css': 'text/css; charset=utf-8',
   '/assets/dashboard.js': 'text/javascript; charset=utf-8',
   '/assets/login.js': 'text/javascript; charset=utf-8',
+  '/assets/terminal.js': 'text/javascript; charset=utf-8',
+  '/assets/xterm.js': 'text/javascript; charset=utf-8',
+  '/assets/xterm.css': 'text/css; charset=utf-8',
+  '/assets/addon-fit.js': 'text/javascript; charset=utf-8',
 };
 const DEVICE_DAYS = 90;
 const WEB_DAYS = 1;
@@ -41,6 +46,8 @@ const DEFAULTS = {
   reportEveryMinutes: 2,
   ticketPattern: '\\b[A-Z][A-Z0-9]{1,9}-\\d{1,6}\\b',
   sharePaths: false,
+  /** People may open their own sessions from the browser, when their app allows it too. */
+  webTerminal: true,
   providers: [],
 };
 
@@ -80,7 +87,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
   /** What a device is told to do: never a secret. */
   const policy = () => {
     const s = settings();
-    return { orgName: s.orgName, reportEveryMinutes: s.reportEveryMinutes, ticketPattern: s.ticketPattern, sharePaths: s.sharePaths, ticketUrl: s.ticketUrl };
+    return { orgName: s.orgName, reportEveryMinutes: s.reportEveryMinutes, ticketPattern: s.ticketPattern, sharePaths: s.sharePaths, ticketUrl: s.ticketUrl, webTerminal: s.webTerminal !== false };
   };
   const publicProviders = () => settings().providers.filter((p) => p.enabled !== false && p.clientId)
     .map((p) => ({ id: p.id, label: p.label || (p.type === 'microsoft' ? 'Microsoft' : p.type === 'google' ? 'Google' : 'Single sign-on'), type: p.type }));
@@ -144,6 +151,15 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
 
   /** The browser's signed-in user, or null. */
   const webUser = (req) => store.resolveToken(cookie(req, 'org_session'), 'web');
+
+  const relay = createRelay({
+    store,
+    enabled: () => settings().webTerminal !== false,
+    webUser,
+    // A browser always says where a WebSocket comes from; one from another site is refused.
+    sameOrigin: (req) => Boolean(req.headers.origin) && (!base || req.headers.origin === new URL(base).origin),
+    log: (line) => console.log(line),
+  });
 
   /**
    * A change made from the browser must come from this site's own pages: the
@@ -309,6 +325,17 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
         'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
       });
     }
+    if (method === 'GET' && p === '/terminal') {
+      if (!webUser(req)) return redirect(res, '/login');
+      return send(res, 200, fs.readFileSync(path.join(PUBLIC, 'terminal.html'), 'utf8'), {
+        // The terminal draws with style elements of its own; scripts stay as strict as everywhere else.
+        'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      });
+    }
+    if (method === 'GET' && p === '/api/web/terminals') {
+      const { user } = needWeb(req);
+      return send(res, 200, { ok: true, enabled: settings().webTerminal !== false, devices: relay.devicesOf(user.id) });
+    }
     if (method === 'GET' && p === '/api/health') return send(res, 200, { ok: true });
     if (method === 'GET' && p === '/api/providers') return send(res, 200, { orgName: settings().orgName, providers: publicProviders() });
 
@@ -363,6 +390,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
     if (method === 'POST' && p === '/api/app/logout') {
       const { token } = needDevice(req);
       store.revokeToken(token.id);
+      relay.forgetToken(token.id);
       return send(res, 200, { ok: true });
     }
 
@@ -466,6 +494,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       const mine = store.tokensOf(user.id).find((t) => t.id === ownDevice[1] && t.kind === 'device');
       if (!mine) throw new HttpError(404, 'No such device of yours.');
       store.revokeToken(mine.id);
+      relay.forgetToken(mine.id);
       store.log(user.id, 'device.signed_out', mine.label, 'by its owner');
       return send(res, 200, { ok: true });
     }
@@ -547,6 +576,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       if (body.team !== undefined && String(body.team).trim() !== (target.team ?? '')) store.log(me.id, 'account.team', target.email, String(body.team).trim() || 'no team');
       if (body.disabled !== undefined) {
         store.setDisabled(target.id, body.disabled === true);
+        if (body.disabled === true) relay.forgetUser(target.id);
         store.log(me.id, body.disabled === true ? 'account.disabled' : 'account.enabled', target.email);
       }
       if (body.role !== undefined && body.role !== target.role) store.log(me.id, 'account.role', target.email, body.role === 'admin' ? 'administrator' : 'developer');
@@ -564,6 +594,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       const { user: admin } = needWeb(req, 'admin');
       const device = store.get('SELECT t.label, u.email FROM tokens t JOIN users u ON u.id = t.user_id WHERE t.id = ?', deviceMatch[1]);
       store.revokeToken(deviceMatch[1]);
+      relay.forgetToken(deviceMatch[1]);
       store.log(admin.id, 'device.signed_out', device ? `${device.label} (${device.email})` : deviceMatch[1]);
       return send(res, 200, { ok: true });
     }
@@ -586,6 +617,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
         next.ticketPattern = body.ticketPattern.slice(0, 200);
       }
       if (body.sharePaths !== undefined) next.sharePaths = body.sharePaths === true;
+      if (body.webTerminal !== undefined) next.webTerminal = body.webTerminal === true;
       if (Array.isArray(body.projects)) {
         next.projects = body.projects.slice(0, 50).map((p) => ({
           name: String(p.name ?? '').trim().slice(0, 60),
@@ -627,6 +659,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       }
       store.setSetting('org', next);
       if (next.retentionDays !== current.retentionDays) applyRetention();
+      if (current.webTerminal !== false && next.webTerminal === false) relay.turnedOff();
       const changed = Object.keys(next).filter((k) => JSON.stringify(next[k]) !== JSON.stringify(current[k]) && k !== 'providers');
       if (JSON.stringify(next.providers.map(({ clientSecret, ...r }) => r)) !== JSON.stringify(current.providers.map(({ clientSecret, ...r }) => r))) changed.push('sign-in providers');
       store.log(webUser(req).user.id, 'settings.changed', '', changed.join(', ') || 'nothing');
@@ -647,7 +680,9 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
     });
   });
 
-  return { server, store, overview };
+  server.on('upgrade', (req, socket) => relay.upgrade(req, socket));
+
+  return { server, store, overview, relay };
 }
 
 module.exports = { createServer, DEFAULTS };

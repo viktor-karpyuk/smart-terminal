@@ -8,6 +8,8 @@ const { DatabaseSync } = require('node:sqlite');
 const { createHash, randomUUID } = require('node:crypto');
 
 const { PtyManager, claudeLaunchLine, quoteArg } = require('./pty-manager');
+const { OrgRelay, RecentOutput } = require('./org-relay');
+const { isPrivate } = require('./org-report');
 const { readUsage } = require('./usage');
 const { ProfileStore, discoverAccountDirs } = require('./profiles');
 const { accountsRoot, authStatus, ensureConfigDir, invalidateAuthCache, suggestConfigDirs } = require('./auth');
@@ -220,6 +222,9 @@ let reviewService = null;
 let teamsService = null;
 /** Signed in to a company's Smart Terminal server, and reporting to it. */
 let orgService = null;
+let orgRelay = null;
+/** What each session printed lately, kept only while the browser may open sessions. */
+const recentOutput = new RecentOutput();
 /** The Code Reviewer's bot: reads what Teams said from the Azure queue, and answers as the bot. */
 let teamsBot = null;
 /** Where the bus's MCP server lives and the socket it talks to, once messaging has opened it. */
@@ -359,9 +364,47 @@ async function gatherForOrg() {
   return { sessions, repos, accounts };
 }
 
+/** The pty a session runs in now, or null. */
+function ptyOfSession(sessionId) {
+  for (const [ptyId, owner] of sessionByPty) if (owner === sessionId) return ptyId;
+  return null;
+}
+
+function createOrgRelay() {
+  return new OrgRelay({
+    sessions: () => roster().filter((row) => ptyOfSession(row.id)).map((row) => ({ id: row.id, title: row.title, kind: row.kind, cwd: row.cwd })),
+    attach: (sessionId) => {
+      const ptyId = ptyOfSession(sessionId);
+      const size = ptyId ? ptys.size(ptyId) : null;
+      if (!size) return null;
+      return { ptyId, cols: size.cols, rows: size.rows, kind: size.kind, title: db.getSession(sessionId)?.title ?? '', replay: recentOutput.get(ptyId) };
+    },
+    write: (ptyId, data) => {
+      cwdWatcher?.wake();
+      noteTyping(sessionByPty.get(ptyId));
+      ptys.write(ptyId, data);
+    },
+    // One row shorter and back: the program is told the size changed, and draws everything again.
+    redraw: (ptyId) => {
+      const size = ptys.size(ptyId);
+      if (!size || size.rows < 3) return;
+      ptys.resize(ptyId, size.cols, size.rows - 1);
+      setTimeout(() => ptys.resize(ptyId, size.cols, size.rows), 80);
+    },
+    isPrivate: (cwd) => isPrivate(cwd, orgService?.state.privateFolders ?? []),
+    notify: (title, body) => {
+      if (Notification.isSupported()) new Notification({ title, body }).show();
+    },
+    changed: () => send('org:changed', orgService?.overview()),
+    log: (line) => console.log(`[org] ${line}`),
+  });
+}
+
 function createOrgService() {
   try {
+    orgRelay = createOrgRelay();
     return new OrgService({
+      relay: orgRelay,
       file: path.join(app.getPath('userData'), 'organization.json'),
       secrets: {
         encrypt: (text) => {
@@ -393,6 +436,11 @@ const ORG_VERBS = {
   openWeb: (s, args) => s.openWeb(String(args.page ?? 'mine')),
   logout: (s) => s.logout(),
   pause: (s, args) => s.setPaused(args.paused !== false),
+  allowWeb: (s, args) => s.setAllowWeb(args.allow === true),
+  disconnectWeb: (s, args) => {
+    orgRelay?.disconnect(args.ch ? String(args.ch) : null);
+    return { ok: true, ...s.overview() };
+  },
   addPrivateFolder: async (s) => {
     const picked = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow() ?? undefined, { title: 'Never share this folder', buttonLabel: 'Never share', properties: ['openDirectory'] });
     if (picked.canceled || !picked.filePaths[0]) return { ok: true, ...s.overview() };
@@ -891,7 +939,10 @@ function registerIpc() {
     noteTyping(sessionByPty.get(id));
     ptys.write(id, data);
   });
-  ipcMain.on('pty:resize', (_e, { id, cols, rows }) => ptys.resize(id, cols, rows));
+  ipcMain.on('pty:resize', (_e, { id, cols, rows }) => {
+    ptys.resize(id, cols, rows);
+    orgRelay?.resized(id, cols, rows);
+  });
   ipcMain.on('pty:kill', (_e, { id }) => {
     cwdWatcher.forget(id);
     ptys.kill(id);
@@ -2449,6 +2500,12 @@ if (isPrimaryInstance) app.whenReady().then(() => {
         autopilot.noteOutput(owner);
         lastOutputBySession.set(owner, Date.now());
       }
+      if (orgRelay?.target) {
+        recentOutput.add(payload.id, payload.data);
+        orgRelay.output(payload.id, payload.data);
+      } else if (recentOutput.byPty.size) {
+        recentOutput.clear();
+      }
     }
     sendToPtyOwner(channel, payload);
     /*
@@ -2465,7 +2522,11 @@ if (isPrimaryInstance) app.whenReady().then(() => {
      * `foregroundByPty` was frozen too, because the watcher only ever polls
      * living ptys — so "is Claude up" answered for a process that had exited.
      */
-    if (channel === 'pty:exit') forgetPty(payload.id);
+    if (channel === 'pty:exit') {
+      forgetPty(payload.id);
+      recentOutput.forget(payload.id);
+      orgRelay?.exited(payload.id);
+    }
   });
 
   autopilot = new Autopilot({

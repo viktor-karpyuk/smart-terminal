@@ -133,3 +133,96 @@ test('sessions in a never-shared folder are counted and nothing else is said abo
   assert.deepEqual(report.sessions.map((s) => s.title), ['work']);
   assert.ok(!JSON.stringify(report).includes('secret'));
 });
+
+const { OrgRelay, RecentOutput } = require('../electron/org-relay');
+
+/** A WebSocket the test plays the server side of. */
+function fakeSockets() {
+  const made = [];
+  class FakeWs {
+    constructor(url) {
+      this.url = url;
+      this.readyState = 0;
+      this.sent = [];
+      made.push(this);
+      setImmediate(() => { this.readyState = 1; this.onopen?.(); });
+    }
+    send(text) { this.sent.push(JSON.parse(text)); }
+    close(code = 1000) { this.readyState = 3; this.onclose?.({ code }); }
+    say(m) { this.onmessage?.({ data: JSON.stringify(m) }); }
+  }
+  return { FakeWs, made };
+}
+
+test('the relay offers what is open, opens it for the browser, and types what comes back', async () => {
+  const { FakeWs, made } = fakeSockets();
+  const typed = [];
+  const told = [];
+  const relay = new OrgRelay({
+    WebSocketImpl: FakeWs,
+    sessions: () => [
+      { id: 's1', title: 'API', kind: 'shell', cwd: '/Users/ana/acme/api' },
+      { id: 's2', title: 'Diary', kind: 'shell', cwd: '/Users/ana/personal/diary' },
+    ],
+    attach: (id) => (id === 's1' ? { ptyId: 'p1', cols: 100, rows: 30, kind: 'shell', title: 'API', replay: '$ ' } : null),
+    write: (ptyId, data) => typed.push([ptyId, data]),
+    isPrivate: (cwd) => cwd.startsWith('/Users/ana/personal'),
+    notify: (title, body) => told.push(body),
+  });
+  relay.start('https://org.acme.com', 'tok.en');
+  await new Promise((r) => setImmediate(r));
+  const ws = made[0];
+  assert.equal(ws.url, 'wss://org.acme.com/api/app/relay');
+  assert.deepEqual(ws.sent[0], { t: 'hello', token: 'tok.en' });
+
+  ws.say({ t: 'welcome' });
+  assert.equal(relay.status().connected, true);
+  assert.deepEqual(ws.sent[1], { t: 'sessions', list: [{ id: 's1', title: 'API', kind: 'shell', folder: 'api', repo: '' }] }, 'the never-shared one is not offered');
+
+  ws.say({ t: 'open', ch: 'c2', session: 's2', from: 'Chrome on macOS' });
+  assert.equal(ws.sent.at(-1).t, 'refused', 'even when asked for by id');
+
+  ws.say({ t: 'open', ch: 'c1', session: 's1', from: 'Chrome on macOS' });
+  assert.deepEqual(ws.sent.at(-1), { t: 'opened', ch: 'c1', cols: 100, rows: 30, title: 'API', replay: '$ ' });
+  assert.match(told[0], /API, from Chrome on macOS/);
+  assert.equal(relay.status().viewers.length, 1);
+
+  ws.say({ t: 'in', ch: 'c1', data: 'ls\r' });
+  assert.deepEqual(typed, [['p1', 'ls\r']]);
+  relay.output('p1', 'README.md\r\n');
+  relay.output('p9', 'not this one');
+  assert.deepEqual(ws.sent.at(-1), { t: 'out', ch: 'c1', data: 'README.md\r\n' });
+  relay.resized('p1', 120, 40);
+  assert.deepEqual(ws.sent.at(-1), { t: 'size', ch: 'c1', cols: 120, rows: 40 });
+
+  relay.disconnect();
+  assert.deepEqual(ws.sent.at(-1), { t: 'ended', ch: 'c1', reason: 'Closed from Smart Terminal.' });
+  assert.equal(relay.status().viewers.length, 0);
+  relay.stop();
+});
+
+test('a relay the server refuses as signed out stops trying; one cut off tries again', async () => {
+  const { FakeWs, made } = fakeSockets();
+  const relay = new OrgRelay({ WebSocketImpl: FakeWs, sessions: () => [], attach: () => null, write: () => {} });
+  relay.start('http://localhost:8787', 't');
+  await new Promise((r) => setImmediate(r));
+  made[0].close(4001);
+  assert.equal(relay.target, null);
+  assert.match(relay.status().error, /Sign in again/);
+
+  relay.start('http://localhost:8787', 't2');
+  await new Promise((r) => setImmediate(r));
+  assert.equal(made[1].url, 'ws://localhost:8787/api/app/relay');
+  made[1].close(1006);
+  assert.ok(relay.retryTimer, 'tries again later');
+  relay.stop();
+  assert.equal(relay.retryTimer, null);
+});
+
+test('recent output is cut at a line break, never inside an escape', () => {
+  const recent = new RecentOutput(20);
+  recent.add('p', 'first line\r\n\x1b[1msecond\x1b[0m line\r\nthird');
+  assert.ok(recent.get('p').length <= 20);
+  assert.ok(!recent.get('p').startsWith('[') && !recent.get('p').startsWith('\x1b[0m'));
+  assert.match(recent.get('p'), /third$/);
+});

@@ -137,9 +137,29 @@
     }
     if (r && !r.paused && r.hiddenSessions) html += '<p class="dim">And ' + r.hiddenSessions + ' private session' + (r.hiddenSessions === 1 ? '' : 's') + ': counted, nothing else said about ' + (r.hiddenSessions === 1 ? 'it' : 'them') + '.</p>';
     html += '</div>';
+    html += drawWeb();
     html += drawPrivate();
     html += '<p class="faint small">Tickets are found with the pattern your company set: <code>' + esc(p.ticketPattern || '') + '</code>. Full paths are ' + (p.sharePaths ? '' : 'not ') + 'shared.</p>';
     return html;
+  }
+
+  /** Your sessions, opened from your own browser: off until you turn it on. */
+  function drawWeb() {
+    var w = state.overview.webTerminal || {};
+    var html = '<div class="card"><div class="row"><h2 style="margin:0">Open my sessions from the browser</h2><span class="spacer"></span>';
+    if (w.companyAllows === false) return html + '</div><p class="dim">Your company has turned this off.</p></div>';
+    html += (w.allowed ? '<button class="btn" data-act="web" data-page="terminal"' + (w.connected ? '' : ' disabled') + '>Open in browser</button>' : '') +
+      '<button class="btn' + (w.allowed ? '' : ' primary') + '" data-act="allowWeb" data-allow="' + (w.allowed ? '0' : '1') + '"' + (state.busy ? ' disabled' : '') + '>' + (w.allowed ? 'Turn off' : 'Turn on') + '</button></div>';
+    if (!w.allowed) return html + '<p class="dim">Use these sessions from any browser where you are signed in to ' + esc((state.overview.policy || {}).orgName || 'your company') + '. Only you can open them, not an administrator. What you type passes through your company\'s server, which keeps none of it. Sessions in never-shared folders are not offered.</p></div>';
+    html += '<p>' + (w.connected ? '<span class="dot on"></span> Ready. Open the server in a browser and pick Terminal.' : '<span class="dot bad"></span> <span class="bad">' + esc(w.error || 'Connecting…') + '</span>') + '</p>';
+    var viewers = w.viewers || [];
+    if (viewers.length) {
+      html += '<ul class="private">' + viewers.map(function (v) {
+        return '<li><span style="flex:1"><strong>' + esc(v.title) + '</strong> <span class="dim">open in ' + esc(v.from) + ' since ' + esc(ago(v.at)) + '</span></span><button class="btn small" data-act="disconnectWeb" data-ch="' + esc(v.ch) + '">Close there</button></li>';
+      }).join('') + '</ul>';
+      if (viewers.length > 1) html += '<div class="row"><button class="btn" data-act="disconnectWeb">Close all in the browser</button></div>';
+    }
+    return html + '</div>';
   }
 
   /** Folders the company never hears about: a session in one is counted as open, and that is all. */
@@ -211,6 +231,8 @@
     else if (what === 'pause') act(call('pause', { paused: !state.overview.paused }));
     else if (what === 'send') act(call('sendNow'));
     else if (what === 'addPrivate') act(call('addPrivateFolder'));
+    else if (what === 'allowWeb') act(call('allowWeb', { allow: b.getAttribute('data-allow') === '1' }));
+    else if (what === 'disconnectWeb') act(call('disconnectWeb', b.getAttribute('data-ch') ? { ch: b.getAttribute('data-ch') } : {}));
     else if (what === 'removePrivate') act(call('removePrivateFolder', { folder: b.getAttribute('data-folder') }));
     else if (what === 'logout') act(call('logout').then(function (r) { state.providers = null; return r; }));
     else if (what === 'days') { state.days = Number(b.getAttribute('data-days')); state.stats = null; draw(); load(); }
@@ -232,6 +254,15 @@
   }
   host.on('context', load);
   // The report goes out on its own clock; keep "last sent" honest without asking the server.
-  setInterval(function () { if (!state.busy) load(); }, 15000);
+  setInterval(function () { if (!state.busy) load(); }, 60000);
+  // Who has a session open in the browser changes by the second; only redrawn when something did.
+  setInterval(function () {
+    if (state.busy || !state.overview || !state.overview.signedIn) return;
+    call('overview').then(function (o) {
+      if (JSON.stringify(o) === JSON.stringify(state.overview)) return;
+      state.overview = o;
+      draw();
+    }, function () {});
+  }, 3000);
   host.ready();
 </script>

@@ -46,6 +46,7 @@ const ICONS = {
   log: 'M5 4.5h10|M5 8.5h10|M5 12.5h6|M5 16.5h4',
   download: 'M10 3.5v9|M6.5 9l3.5 3.5L13.5 9|M4 16.5h12',
   copy: 'M7 7h9v9H7z|M4 13V4h9',
+  terminal: 'M3.5 4.5h13v11h-13z|M6.5 8.5l2.5 2-2.5 2|M10.5 12.5h3',
 };
 
 async function api(method, url, body) {
@@ -365,7 +366,7 @@ const pages = {
       'signin.web': 'Signed in to this page', 'signin.app': 'Signed in from Smart Terminal', 'account.created': 'Added an account',
       'account.disabled': 'Disabled an account', 'account.enabled': 'Enabled an account', 'account.role': 'Changed a role',
       'account.password_reset': 'Made a new password', 'account.team': 'Changed a team', 'password.changed': 'Changed their password', 'device.signed_out': 'Signed out a device',
-      'settings.changed': 'Changed settings', export: 'Exported time',
+      'settings.changed': 'Changed settings', 'terminal.opened': 'Opened a session in the browser', export: 'Exported time',
     };
     return [
       el('header', { class: 'page-head' }, el('div', {}, el('h1', {}, 'Activity log'), el('p', { class: 'lede' }, 'Who signed in, and every change made to accounts, devices and settings.'))),
@@ -397,6 +398,7 @@ const pages = {
         ticketPattern: f.ticketPattern.value,
         ticketUrl: f.ticketUrl.value,
         sharePaths: f.sharePaths.checked,
+        webTerminal: f.webTerminal.checked,
         retentionDays: Number(f.retentionDays.value),
         projects: [...projects.querySelectorAll('.project-row')].map((row) => ({ name: row.querySelector('[name=projectName]').value, patterns: row.querySelector('[name=projectPatterns]').value })),
         providers: [...providers.querySelectorAll('.provider')].map((card) => Object.fromEntries([...card.querySelectorAll('input, select')].map((i) => [i.name, i.value]))),
@@ -419,7 +421,10 @@ const pages = {
         el('input', { name: 'ticketUrl', value: s.ticketUrl ?? '', placeholder: 'https://acme.atlassian.net/browse/{ticket}', spellcheck: 'false' }),
         el('small', {}, 'Where a ticket opens when someone clicks it. {ticket} is replaced by the ticket. Empty, tickets are not links.')),
       el('label', { class: 'check' }, el('input', { type: 'checkbox', name: 'sharePaths', checked: s.sharePaths }),
-        el('span', {}, el('span', {}, 'Collect full folder paths'), el('small', { class: 'faint' }, 'When off, only the folder and repository names are kept.')))),
+        el('span', {}, el('span', {}, 'Collect full folder paths'), el('small', { class: 'faint' }, 'When off, only the folder and repository names are kept.'))),
+      el('label', { class: 'check' }, el('input', { type: 'checkbox', name: 'webTerminal', checked: s.webTerminal !== false }),
+        el('span', {}, el('span', {}, 'Let people open their own sessions in the browser'),
+          el('small', { class: 'faint' }, 'Only the person signed in on that computer, never an administrator, and only when they turn it on in their app. What they type passes through this server and is not kept.')))),
     section('Projects', 'Group repositories so time adds up by product or client. A repository goes to the first project that matches.',
       projects,
       el('div', { class: 'button-row' }, el('button', { type: 'button', onclick: () => { addProject({}); projects.lastElementChild.querySelector('input').focus(); } }, 'Add project'))),
@@ -643,7 +648,9 @@ async function toggleDisabled(u) {
 // ---------- the frame ----------
 function nav() {
   $('nav').replaceChildren(...Object.entries(pages).filter(([, p]) => !p.hidden && (!p.admin || me.role === 'admin')).map(([key, p]) =>
-    el('button', { 'aria-current': key === current ? 'page' : null, onclick: () => go(key) }, icon(p.icon), key === 'mine' ? 'My week' : p.label)));
+    el('button', { 'aria-current': key === current ? 'page' : null, onclick: () => go(key) }, icon(p.icon), key === 'mine' ? 'My week' : p.label)),
+    // Its own page: a terminal wants the whole window.
+    el('a', { class: 'button nav-link', href: '/terminal' }, icon(ICONS.terminal), 'Terminal'));
 }
 
 async function redraw({ keepFocus = false } = {}) {

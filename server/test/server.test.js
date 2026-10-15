@@ -448,3 +448,94 @@ test('a backup is a database that opens and holds the accounts', async () => {
     copy.close();
   } finally { await s.close(); }
 });
+
+/** A WebSocket that queues what it is told, so a test can wait for the next one. */
+function socket(url, headers = {}) {
+  const ws = new WebSocket(url, { headers });
+  const inbox = [];
+  const waiting = [];
+  ws.onmessage = (event) => {
+    const m = JSON.parse(event.data);
+    const w = waiting.shift();
+    if (w) w(m); else inbox.push(m);
+  };
+  const closed = new Promise((resolve) => { ws.onclose = (event) => resolve(event); });
+  return {
+    ws,
+    closed,
+    ready: new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = () => reject(new Error('could not connect')); }),
+    next: () => (inbox.length ? Promise.resolve(inbox.shift()) : new Promise((resolve) => waiting.push(resolve))),
+    send: (m) => ws.send(JSON.stringify(m)),
+  };
+}
+
+test('the browser reaches its owner\'s session through the device, and nobody else\'s', async () => {
+  const s = await boot();
+  const wsBase = `ws://127.0.0.1:${s.server.address().port}`;
+  const open = [];
+  try {
+    const admin = await s.webLogin();
+    const ana = await s.call('POST', '/api/admin/users', { cookie: admin, body: { email: 'ana@acme.com', role: 'member' } });
+    const login = await s.call('POST', '/api/app/login', { body: { email: 'ana@acme.com', password: ana.json.password, device: 'Ana Mac' } });
+    assert.equal(login.json.policy.webTerminal, true);
+
+    const device = socket(`${wsBase}/api/app/relay`);
+    open.push(device);
+    await device.ready;
+    device.send({ t: 'hello', token: login.json.token });
+    assert.equal((await device.next()).t, 'welcome');
+    device.send({ t: 'sessions', list: [{ id: 's1', title: 'API', kind: 'claude', folder: 'api', repo: 'acme/api' }] });
+    await new Promise((r) => setTimeout(r, 50));
+
+    const anaWeb = await s.webLogin('ana@acme.com', ana.json.password);
+    const list = (await s.call('GET', '/api/web/terminals', { cookie: anaWeb })).json;
+    assert.equal(list.devices.length, 1);
+    assert.equal(list.devices[0].label, 'Ana Mac');
+    assert.deepEqual(list.devices[0].sessions.map((x) => x.title), ['API']);
+    assert.equal((await s.call('GET', '/api/web/terminals', { cookie: admin })).json.devices.length, 0, 'an administrator does not see Ana\'s devices');
+
+    const url = `${wsBase}/api/web/terminal?device=${list.devices[0].id}&session=s1`;
+    const stranger = socket(url, { cookie: admin, origin: 'http://localhost:1' });
+    open.push(stranger);
+    await assert.rejects(stranger.ready, 'an administrator cannot open Ana\'s session');
+    const elsewhere = socket(url, { cookie: anaWeb, origin: 'https://evil.example' });
+    open.push(elsewhere);
+    await assert.rejects(elsewhere.ready, 'a page on another site cannot either');
+
+    const browser = socket(url, { cookie: anaWeb, origin: 'http://localhost:1' });
+    open.push(browser);
+    await browser.ready;
+    const asked = await device.next();
+    assert.equal(asked.t, 'open');
+    assert.equal(asked.session, 's1');
+    device.send({ t: 'opened', ch: asked.ch, cols: 100, rows: 30, title: 'API', replay: 'hello\r\n' });
+    assert.deepEqual(await browser.next(), { t: 'opened', cols: 100, rows: 30, title: 'API', replay: 'hello\r\n' });
+    browser.send({ t: 'in', data: 'ls\r' });
+    assert.deepEqual(await device.next(), { t: 'in', ch: asked.ch, data: 'ls\r' });
+    device.send({ t: 'out', ch: asked.ch, data: 'README.md\r\n' });
+    assert.deepEqual(await browser.next(), { t: 'out', data: 'README.md\r\n' });
+
+    browser.ws.close();
+    assert.deepEqual(await device.next(), { t: 'close', ch: asked.ch });
+    const log = (await s.call('GET', '/api/admin/audit', { cookie: admin })).json.entries;
+    assert.ok(log.some((e) => e.action === 'terminal.opened' && e.target === 'Ana Mac'));
+
+    // Turned off by the company: the device is let go at once.
+    await s.call('PUT', '/api/admin/settings', { cookie: admin, body: { webTerminal: false } });
+    assert.equal((await device.closed).code, 4003);
+  } finally {
+    for (const o of open) try { o.ws.close(); } catch {}
+    s.server.closeAllConnections?.();
+    await s.close();
+  }
+});
+
+test('a device that does not say who it is, or says it wrongly, is let go', async () => {
+  const s = await boot();
+  try {
+    const device = socket(`ws://127.0.0.1:${s.server.address().port}/api/app/relay`);
+    await device.ready;
+    device.send({ t: 'hello', token: 'nope.nope' });
+    assert.equal((await device.closed).code, 4001);
+  } finally { s.server.closeAllConnections?.(); await s.close(); }
+});
