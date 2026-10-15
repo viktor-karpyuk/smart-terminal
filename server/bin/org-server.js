@@ -13,6 +13,9 @@
  *   ORG_HOST        the address to listen on            (127.0.0.1)
  *   ORG_PUBLIC_URL  how people reach it, for sign-in redirects (http://localhost:8787)
  *   ORG_TRUST_PROXY "1" behind a reverse proxy that sets X-Forwarded-Proto/For
+ *   ORG_SHELL_COMMAND what a shell on the server runs, {user} being the person's id
+ *                   (unset: no shells). A container per person, not a bare shell — see the README.
+ *   ORG_SHELL_HOME  the folder a shell starts in                         ($HOME)
  */
 const { createServer } = require('../src/app');
 const { hashPassword, makePassword } = require('../src/auth');
@@ -25,7 +28,13 @@ const publicUrl = process.env.ORG_PUBLIC_URL || `http://localhost:${port}`;
 async function main() {
   const [command = 'serve', ...args] = process.argv.slice(2);
   if (command === 'serve') {
-    const { server } = createServer({ dbFile: db, publicUrl, trustProxy: process.env.ORG_TRUST_PROXY === '1' });
+    const shellCommand = process.env.ORG_SHELL_COMMAND || '';
+    let spawnPty = null;
+    if (shellCommand) {
+      // Only needed for shells on the server, so it is optional: everything else runs without it.
+      try { spawnPty = require('node-pty').spawn; } catch { console.warn('ORG_SHELL_COMMAND is set but node-pty is not installed; shells stay off.'); }
+    }
+    const { server } = createServer({ dbFile: db, publicUrl, trustProxy: process.env.ORG_TRUST_PROXY === '1', shellCommand, spawnPty });
     server.listen(port, host, () => console.log(`Smart Terminal organization server on ${publicUrl} (listening on ${host}:${port}, data in ${db})`));
     return;
   }

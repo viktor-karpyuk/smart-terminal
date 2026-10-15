@@ -53,6 +53,11 @@ docker exec org node bin/org-server.js backup /data/backup.db
 | `ORG_HOST` | `127.0.0.1` | put a TLS reverse proxy in front; the app refuses plain http unless the server is on the same machine |
 | `ORG_PUBLIC_URL` | `http://localhost:8787` | how people reach it; used in sign-in redirects |
 | `ORG_TRUST_PROXY` | off | `1` behind a proxy that sets `X-Forwarded-Proto` / `X-Forwarded-For` |
+| `ORG_SHELL_COMMAND` | unset | what a shell on the server runs; unset, there are none (see below) |
+| `ORG_SHELL_HOME` | `$HOME` | the folder a shell on the server starts in |
+
+The proxy in front has to pass WebSocket upgrades (`/api/app/relay`,
+`/api/web/terminal`, `/api/web/shell`) for the terminal in the browser.
 
 ## Accounts
 
@@ -77,6 +82,50 @@ matches; the export says which.
 **Settings → Keeping data** deletes time, repositories, tickets and usage older
 than 30 days to two years, when saved and daily after. Accounts and the activity
 log are kept.
+
+## The terminal in the browser
+
+**Terminal**, in the backoffice's menu, opens `/terminal`: a full terminal in the
+browser, on a laptop or a phone. It shows two kinds of thing.
+
+**Your computers' sessions.** When someone turns on *Open my sessions from the
+browser* in the app's Organization extension, their Smart Terminal keeps a
+connection to this server and lists its open sessions there. Opening one types
+into the real session on that computer and shows what it prints, as the app
+does. Only the person signed in on that computer can open them, never an
+administrator; folders marked never shared are not offered; the app says every
+time one is opened and can close it. Nothing typed or printed is kept here.
+*Settings → Let people open their own sessions in the browser* turns it off for
+everybody at once.
+
+**Shells on this server**, for when the computer is closed. Off unless both:
+
+1. whoever runs the server sets `ORG_SHELL_COMMAND` and installs `node-pty`
+   (`npm install node-pty` in `server/`; it needs a C++ toolchain on Linux), and
+2. an administrator picks who may use them under *Settings → Shells on this
+   server*: administrators or everyone.
+
+A shell keeps running when the browser closes, like tmux, keeps what it printed
+lately so reopening shows where it was, and ends after eight hours with nobody
+looking. Four per person; each person sees only their own; starting and ending
+one is in the activity log. Disabling an account, or narrowing the setting, ends
+the shells of whoever lost access.
+
+**What runs is your decision, and it matters.** A shell runs as the server's own
+system user. A bare `bash -l` would let anybody who may use shells read the
+server's database (password hashes, single sign-on secrets) and each other's
+files. Give each person a container instead; `{user}` in the command is their
+account id:
+
+```
+ORG_SHELL_COMMAND='docker run --rm -it --network=bridge --memory=2g --cpus=2 -v "st-home-{user}:/home/dev" -w /home/dev your-dev-image bash -l'
+```
+
+The shell gets a clean environment (`TERM`, `LANG`, `PATH`, `HOME` and
+`SMART_TERMINAL_USER`), nothing of the server's. Running the server itself in
+Docker and starting containers from it means giving it the Docker socket, which
+is root on that host: run it on a host of its own, or run the server directly
+there instead.
 
 ## Sign in with Microsoft, Google or another provider
 
@@ -107,7 +156,8 @@ provider's keys, issuer, audience, expiry and nonce.
 - Ten sign-in attempts per address and e-mail per 15 minutes.
 - Device tokens last 90 days and can be revoked from the backoffice; web
   sessions last a day, in an `HttpOnly`, `SameSite=Lax` cookie (`Secure` over https).
-- A change made from the browser must be JSON from this site's own origin.
+- A change made from the browser must be JSON from this site's own origin, and
+  a WebSocket from the browser must come from this site's own origin too.
 - The backoffice pages run with a strict Content-Security-Policy and put
   everything a device reported on the page as text.
 

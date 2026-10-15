@@ -22,6 +22,8 @@ const { hashPassword, checkPassword, makePassword, passwordProblem, limiter } = 
 const oidc = require('./oidc');
 const { readReport, minutesFrom } = require('./report');
 const { createRelay } = require('./relay');
+const { createShells } = require('./shells');
+const { accept, refuse } = require('./ws');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const STATIC = {
@@ -48,6 +50,8 @@ const DEFAULTS = {
   sharePaths: false,
   /** People may open their own sessions from the browser, when their app allows it too. */
   webTerminal: true,
+  /** Who may start a shell on this server: 'off', 'admins' or 'everyone'. Needs ORG_SHELL_COMMAND too. */
+  serverShells: 'off',
   providers: [],
 };
 
@@ -77,7 +81,7 @@ function projectOf(repo, projects) {
 const emailOk = (email) => /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{1,63}$/.test(String(email ?? '').trim());
 const day = (at) => new Date(at).toISOString().slice(0, 10);
 
-function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.now, trustProxy = false } = {}) {
+function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.now, trustProxy = false, shellCommand = '', spawnPty = null } = {}) {
   const store = new Store(dbFile, { now });
   const sso = oidc.client({ fetch, now });
   const logins = limiter({ limit: 10, windowMs: 15 * 60_000, now });
@@ -160,6 +164,26 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
     sameOrigin: (req) => Boolean(req.headers.origin) && (!base || req.headers.origin === new URL(base).origin),
     log: (line) => console.log(line),
   });
+
+  const shells = createShells({ command: shellCommand, spawnPty, store, now, log: (line) => console.log(line) });
+  /** Shells need the operator's command on the server and an administrator's yes, for this person's role. */
+  const mayUseShells = (user) => {
+    const mode = settings().serverShells;
+    return shells.available() && !user.disabled_at && (mode === 'everyone' || (mode === 'admins' && user.role === 'admin'));
+  };
+  const sameOriginSocket = (req) => Boolean(req.headers.origin) && (!base || req.headers.origin === new URL(base).origin);
+
+  /** A browser showing one of its own shells. */
+  function shellSocket(req, socket, url) {
+    if (!sameOriginSocket(req)) return refuse(socket, 403, 'Not from this site.');
+    const who = webUser(req);
+    if (!who) return refuse(socket, 401, 'Sign in first.');
+    if (!mayUseShells(who.user)) return refuse(socket, 403, 'Shells on the server are turned off for you.');
+    const id = String(url.searchParams.get('id') ?? '');
+    if (!shells.list(who.user.id).some((s) => s.id === id)) return refuse(socket, 404, 'That shell is not running.');
+    const conn = accept(req, socket);
+    if (conn) shells.attach(id, who.user.id, conn);
+  }
 
   /**
    * A change made from the browser must come from this site's own pages: the
@@ -335,6 +359,31 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
     if (method === 'GET' && p === '/api/web/terminals') {
       const { user } = needWeb(req);
       return send(res, 200, { ok: true, enabled: settings().webTerminal !== false, devices: relay.devicesOf(user.id) });
+    }
+    if (method === 'GET' && p === '/api/web/shells') {
+      const { user } = needWeb(req);
+      const allowed = mayUseShells(user);
+      return send(res, 200, { ok: true, allowed, shells: allowed ? shells.list(user.id) : [] });
+    }
+    if (method === 'POST' && p === '/api/web/shells') {
+      sameSite(req);
+      const { user } = needWeb(req);
+      if (!mayUseShells(user)) throw new HttpError(403, 'Shells on the server are turned off for you.');
+      const body = await readJson(req);
+      try {
+        return send(res, 200, { ok: true, shell: shells.create(user, { cols: Number(body.cols) || 100, rows: Number(body.rows) || 30, name: body.name }) });
+      } catch (error) {
+        if (error.status) throw new HttpError(error.status, error.message);
+        console.error(error);
+        throw new HttpError(500, 'The server could not start a shell.');
+      }
+    }
+    const shellMatch = /^\/api\/web\/shells\/([0-9a-f-]{36})$/.exec(p);
+    if (method === 'DELETE' && shellMatch) {
+      if (req.headers.origin && base && req.headers.origin !== new URL(base).origin) throw new HttpError(403, 'Not from this site.');
+      const { user } = needWeb(req);
+      if (!shells.kill(shellMatch[1], user.id)) throw new HttpError(404, 'That shell is not running.');
+      return send(res, 200, { ok: true });
     }
     if (method === 'GET' && p === '/api/health') return send(res, 200, { ok: true });
     if (method === 'GET' && p === '/api/providers') return send(res, 200, { orgName: settings().orgName, providers: publicProviders() });
@@ -576,7 +625,10 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       if (body.team !== undefined && String(body.team).trim() !== (target.team ?? '')) store.log(me.id, 'account.team', target.email, String(body.team).trim() || 'no team');
       if (body.disabled !== undefined) {
         store.setDisabled(target.id, body.disabled === true);
-        if (body.disabled === true) relay.forgetUser(target.id);
+        if (body.disabled === true) {
+          relay.forgetUser(target.id);
+          shells.endWhere((id) => id === target.id, 'The account was disabled.');
+        }
         store.log(me.id, body.disabled === true ? 'account.disabled' : 'account.enabled', target.email);
       }
       if (body.role !== undefined && body.role !== target.role) store.log(me.id, 'account.role', target.email, body.role === 'admin' ? 'administrator' : 'developer');
@@ -602,7 +654,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       needWeb(req, 'admin');
       const s = settings();
       // Secrets are never sent back; the page only learns that one is set.
-      return send(res, 200, { ...s, providers: s.providers.map(({ clientSecret, ...rest }) => ({ ...rest, hasSecret: Boolean(clientSecret) })), callbackUrl: `${base}/auth/callback` });
+      return send(res, 200, { ...s, providers: s.providers.map(({ clientSecret, ...rest }) => ({ ...rest, hasSecret: Boolean(clientSecret) })), callbackUrl: `${base}/auth/callback`, shellsAvailable: shells.available(), shellsWhy: shells.why() });
     }
     if (method === 'PUT' && p === '/api/admin/settings') {
       sameSite(req);
@@ -618,6 +670,10 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       }
       if (body.sharePaths !== undefined) next.sharePaths = body.sharePaths === true;
       if (body.webTerminal !== undefined) next.webTerminal = body.webTerminal === true;
+      if (body.serverShells !== undefined) {
+        if (!['off', 'admins', 'everyone'].includes(body.serverShells)) throw new HttpError(400, 'Shells on the server are off, for administrators, or for everyone.');
+        next.serverShells = body.serverShells;
+      }
       if (Array.isArray(body.projects)) {
         next.projects = body.projects.slice(0, 50).map((p) => ({
           name: String(p.name ?? '').trim().slice(0, 60),
@@ -660,6 +716,10 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       store.setSetting('org', next);
       if (next.retentionDays !== current.retentionDays) applyRetention();
       if (current.webTerminal !== false && next.webTerminal === false) relay.turnedOff();
+      if (next.serverShells !== current.serverShells) {
+        // Narrowed: whoever may no longer use them loses the ones running.
+        shells.endWhere((id) => { const u = store.user(id); return !u || !mayUseShells(u); }, 'An administrator turned off shells on the server.');
+      }
       const changed = Object.keys(next).filter((k) => JSON.stringify(next[k]) !== JSON.stringify(current[k]) && k !== 'providers');
       if (JSON.stringify(next.providers.map(({ clientSecret, ...r }) => r)) !== JSON.stringify(current.providers.map(({ clientSecret, ...r }) => r))) changed.push('sign-in providers');
       store.log(webUser(req).user.id, 'settings.changed', '', changed.join(', ') || 'nothing');
@@ -680,9 +740,16 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
     });
   });
 
-  server.on('upgrade', (req, socket) => relay.upgrade(req, socket));
+  server.on('upgrade', (req, socket) => {
+    if (new URL(req.url, 'http://local').pathname === '/api/web/shell') {
+      socket.on('error', () => {});
+      return shellSocket(req, socket, new URL(req.url, 'http://local'));
+    }
+    return relay.upgrade(req, socket);
+  });
+  server.on('close', () => shells.closeAll());
 
-  return { server, store, overview, relay };
+  return { server, store, overview, relay, shells };
 }
 
 module.exports = { createServer, DEFAULTS };

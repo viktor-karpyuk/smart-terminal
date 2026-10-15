@@ -46,10 +46,10 @@ function fakeIdp({ issuer = 'https://idp.example', email = 'dev@acme.com', verif
   return { fetch, authorize, issuer };
 }
 
-async function boot(idp) {
+async function boot(idp, options = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'org-'));
   const realFetch = globalThis.fetch;
-  const { server, store } = createServer({ dbFile: path.join(dir, 'org.db'), publicUrl: 'http://localhost:1', fetch: idp ? idp.fetch : realFetch });
+  const { server, store } = createServer({ dbFile: path.join(dir, 'org.db'), publicUrl: 'http://localhost:1', fetch: idp ? idp.fetch : realFetch, ...options });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   const call = async (method, url, { body, token, cookie, headers = {} } = {}) => {
@@ -538,4 +538,122 @@ test('a device that does not say who it is, or says it wrongly, is let go', asyn
     device.send({ t: 'hello', token: 'nope.nope' });
     assert.equal((await device.closed).code, 4001);
   } finally { s.server.closeAllConnections?.(); await s.close(); }
+});
+
+/** A pty that echoes what it is typed, and remembers how it was started. */
+function fakePty() {
+  const started = [];
+  const spawn = (file, args, opts) => {
+    let onData = () => {};
+    let onExit = () => {};
+    const pty = {
+      file, args, opts, killed: false, size: [opts.cols, opts.rows],
+      onData: (fn) => { onData = fn; },
+      onExit: (fn) => { onExit = fn; },
+      write: (data) => onData(`echo:${data}`),
+      resize: (cols, rows) => { pty.size = [cols, rows]; },
+      kill: () => { pty.killed = true; },
+      exit: (exitCode = 0) => onExit({ exitCode }),
+      print: (data) => onData(data),
+    };
+    started.push(pty);
+    return pty;
+  };
+  return { spawn, started };
+}
+
+test('shells on the server: off until the operator and an administrator both say so, and only ever their owner\'s', async () => {
+  const pty = fakePty();
+  const s = await boot(null, { shellCommand: 'docker run --rm -it "home {user}" img', spawnPty: pty.spawn });
+  const wsBase = `ws://127.0.0.1:${s.server.address().port}`;
+  const open = [];
+  try {
+    const admin = await s.webLogin();
+    const ana = await s.call('POST', '/api/admin/users', { cookie: admin, body: { email: 'ana@acme.com', role: 'member' } });
+    const anaWeb = await s.webLogin('ana@acme.com', ana.json.password);
+
+    // Off by default, even with the operator's command set.
+    assert.equal((await s.call('GET', '/api/web/shells', { cookie: anaWeb })).json.allowed, false);
+    assert.equal((await s.call('POST', '/api/web/shells', { cookie: anaWeb, body: {} })).status, 403);
+    const settings = (await s.call('GET', '/api/admin/settings', { cookie: admin })).json;
+    assert.equal(settings.serverShells, 'off');
+    assert.equal(settings.shellsAvailable, true);
+    assert.equal((await s.call('PUT', '/api/admin/settings', { cookie: admin, body: { serverShells: 'root' } })).status, 400);
+
+    // For administrators only: Ana still cannot.
+    await s.call('PUT', '/api/admin/settings', { cookie: admin, body: { serverShells: 'admins' } });
+    assert.equal((await s.call('POST', '/api/web/shells', { cookie: anaWeb, body: {} })).status, 403);
+
+    await s.call('PUT', '/api/admin/settings', { cookie: admin, body: { serverShells: 'everyone' } });
+    const made = await s.call('POST', '/api/web/shells', { cookie: anaWeb, body: { cols: 90, rows: 20, name: 'Build' } });
+    assert.equal(made.status, 200);
+    const shell = made.json.shell;
+    assert.equal(shell.name, 'Build');
+    const started = pty.started[0];
+    const anaId = (await s.call('GET', '/api/web/me', { cookie: anaWeb })).json?.user?.id;
+    assert.equal(started.file, 'docker');
+    assert.deepEqual(started.args.slice(0, 3), ['run', '--rm', '-it']);
+    assert.match(started.args[3], /^home [0-9a-f-]{36}$/, '{user} becomes the person\'s id');
+    if (anaId) assert.equal(started.args[3], `home ${anaId}`);
+    assert.equal(started.opts.env.ORG_DB, undefined, 'nothing of the server\'s own reaches the shell');
+    assert.deepEqual(Object.keys(started.opts.env).sort(), ['COLORTERM', 'HOME', 'LANG', 'PATH', 'SMART_TERMINAL_USER', 'TERM']);
+    started.print('ready$ ');
+
+    // Only Ana sees it, and only Ana can open or close it.
+    assert.equal((await s.call('GET', '/api/web/shells', { cookie: anaWeb })).json.shells.length, 1);
+    assert.equal((await s.call('GET', '/api/web/shells', { cookie: admin })).json.shells.length, 0);
+    assert.equal((await s.call('DELETE', `/api/web/shells/${shell.id}`, { cookie: admin })).status, 404);
+    const url = `${wsBase}/api/web/shell?id=${shell.id}`;
+    const stranger = socket(url, { cookie: admin, origin: 'http://localhost:1' });
+    open.push(stranger);
+    await assert.rejects(stranger.ready, 'an administrator cannot open Ana\'s shell');
+    const elsewhere = socket(url, { cookie: anaWeb, origin: 'https://evil.example' });
+    open.push(elsewhere);
+    await assert.rejects(elsewhere.ready, 'a page on another site cannot either');
+
+    const browser = socket(url, { cookie: anaWeb, origin: 'http://localhost:1' });
+    open.push(browser);
+    await browser.ready;
+    assert.deepEqual(await browser.next(), { t: 'opened', cols: 90, rows: 20, title: 'Build', replay: 'ready$ ' });
+    browser.send({ t: 'in', data: 'ls\r' });
+    assert.deepEqual(await browser.next(), { t: 'out', data: 'echo:ls\r' });
+    browser.send({ t: 'resize', cols: 120, rows: 40 });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(started.size, [120, 40]);
+
+    // Closing the tab leaves it running; narrowing the setting ends it.
+    browser.ws.close();
+    await browser.closed;
+    assert.equal(started.killed, false);
+    await s.call('PUT', '/api/admin/settings', { cookie: admin, body: { serverShells: 'admins' } });
+    assert.equal(started.killed, true);
+    assert.equal((await s.call('GET', '/api/web/shells', { cookie: anaWeb })).json.shells.length, 0);
+
+    const log = (await s.call('GET', '/api/admin/audit', { cookie: admin })).json.entries;
+    assert.ok(log.some((e) => e.action === 'shell.started'));
+    assert.ok(log.some((e) => e.action === 'shell.ended'));
+  } finally {
+    for (const o of open) try { o.ws.close(); } catch {}
+    s.server.closeAllConnections?.();
+    await s.close();
+  }
+});
+
+test('no shells without the operator\'s command, whatever the setting says', async () => {
+  const s = await boot();
+  try {
+    const admin = await s.webLogin();
+    await s.call('PUT', '/api/admin/settings', { cookie: admin, body: { serverShells: 'everyone' } });
+    assert.equal((await s.call('GET', '/api/web/shells', { cookie: admin })).json.allowed, false);
+    assert.equal((await s.call('POST', '/api/web/shells', { cookie: admin, body: {} })).status, 403);
+    const settings = (await s.call('GET', '/api/admin/settings', { cookie: admin })).json;
+    assert.equal(settings.shellsAvailable, false);
+    assert.match(settings.shellsWhy, /ORG_SHELL_COMMAND/);
+  } finally { await s.close(); }
+});
+
+test('a shell command is split like a shell would, quotes kept together', () => {
+  const { splitCommand } = require('../src/shells');
+  assert.deepEqual(splitCommand('docker run -v "home {user}:/home/dev" \'img x\''), ['docker', 'run', '-v', 'home {user}:/home/dev', 'img x']);
+  assert.deepEqual(splitCommand(''), []);
 });
