@@ -201,6 +201,53 @@ test('the relay offers what is open, opens it for the browser, and types what co
   relay.stop();
 });
 
+test('a phone takes the session at its own width, and gives the app its size back when it closes', async () => {
+  const { FakeWs, made } = fakeSockets();
+  const sized = [];
+  const relay = new OrgRelay({
+    WebSocketImpl: FakeWs,
+    sessions: () => [{ id: 's1', title: 'API', kind: 'claude', cwd: '/w/api' }],
+    attach: () => ({ ptyId: 'p1', cols: 100, rows: 30, kind: 'claude', title: 'API', replay: '' }),
+    write: () => {},
+    resize: (ptyId, cols, rows) => sized.push([ptyId, cols, rows]),
+  });
+  relay.start('https://org.acme.com', 't');
+  await new Promise((r) => setImmediate(r));
+  const ws = made[0];
+  ws.say({ t: 'welcome' });
+  ws.say({ t: 'open', ch: 'phone', session: 's1', from: 'Safari on iOS' });
+  ws.say({ t: 'open', ch: 'laptop', session: 's1', from: 'Chrome on macOS' });
+
+  ws.say({ t: 'resize', ch: 'phone', cols: 46, rows: 25 });
+  assert.deepEqual(sized.at(-1), ['p1', 46, 25]);
+  assert.equal(relay.drives('p1'), true);
+  assert.deepEqual(ws.sent.at(-1), { t: 'size', ch: 'laptop', cols: 46, rows: 25 }, 'the other browser follows');
+
+  // The app resizes meanwhile: kept for later, not applied, not sent.
+  const before = ws.sent.length;
+  relay.resized('p1', 110, 32);
+  assert.equal(ws.sent.length, before);
+
+  ws.say({ t: 'close', ch: 'phone' });
+  assert.deepEqual(sized.at(-1), ['p1', 110, 32], 'back to the app\'s latest size');
+  assert.equal(relay.drives('p1'), false);
+  assert.deepEqual(ws.sent.at(-1), { t: 'size', ch: 'laptop', cols: 110, rows: 32 });
+
+  // Giving it back by asking, and only the browser that has it can.
+  ws.say({ t: 'resize', ch: 'laptop', cols: 60, rows: 20 });
+  ws.say({ t: 'open', ch: 'other', session: 's1', from: 'Firefox on Linux' });
+  ws.say({ t: 'resize', ch: 'other', release: true });
+  assert.equal(relay.drives('p1'), true);
+  ws.say({ t: 'resize', ch: 'laptop', release: true });
+  assert.deepEqual(sized.at(-1), ['p1', 110, 32]);
+
+  // Lost connection: nobody is left holding it.
+  ws.say({ t: 'resize', ch: 'laptop', cols: 60, rows: 20 });
+  ws.close(1006);
+  assert.deepEqual(sized.at(-1), ['p1', 110, 32]);
+  relay.stop();
+});
+
 test('a relay the server refuses as signed out stops trying; one cut off tries again', async () => {
   const { FakeWs, made } = fakeSockets();
   const relay = new OrgRelay({ WebSocketImpl: FakeWs, sessions: () => [], attach: () => null, write: () => {} });

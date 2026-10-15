@@ -384,12 +384,17 @@ function createOrgRelay() {
       noteTyping(sessionByPty.get(ptyId));
       ptys.write(ptyId, data);
     },
+    resize: (ptyId, cols, rows) => ptys.resize(ptyId, cols, rows),
     // One row shorter and back: the program is told the size changed, and draws everything again.
     redraw: (ptyId) => {
       const size = ptys.size(ptyId);
       if (!size || size.rows < 3) return;
       ptys.resize(ptyId, size.cols, size.rows - 1);
-      setTimeout(() => ptys.resize(ptyId, size.cols, size.rows), 80);
+      // Only if nothing else sized it meanwhile, such as a phone taking it at its own width.
+      setTimeout(() => {
+        const now = ptys.size(ptyId);
+        if (now && now.cols === size.cols && now.rows === size.rows - 1) ptys.resize(ptyId, size.cols, size.rows);
+      }, 80);
     },
     isPrivate: (cwd) => isPrivate(cwd, orgService?.state.privateFolders ?? []),
     notify: (title, body) => {
@@ -940,7 +945,8 @@ function registerIpc() {
     ptys.write(id, data);
   });
   ipcMain.on('pty:resize', (_e, { id, cols, rows }) => {
-    ptys.resize(id, cols, rows);
+    // A phone showing this session has it at its own width until it closes; the app's size is kept for then.
+    if (!orgRelay?.drives(id)) ptys.resize(id, cols, rows);
     orgRelay?.resized(id, cols, rows);
   });
   ipcMain.on('pty:kill', (_e, { id }) => {

@@ -515,6 +515,11 @@ test('the browser reaches its owner\'s session through the device, and nobody el
     device.send({ t: 'out', ch: asked.ch, data: 'README.md\r\n' });
     assert.deepEqual(await browser.next(), { t: 'out', data: 'README.md\r\n' });
 
+    browser.send({ t: 'resize', cols: 46, rows: 25 });
+    assert.deepEqual(await device.next(), { t: 'resize', ch: asked.ch, cols: 46, rows: 25 });
+    browser.send({ t: 'resize', release: true });
+    assert.deepEqual(await device.next(), { t: 'resize', ch: asked.ch, release: true });
+
     browser.ws.close();
     assert.deepEqual(await device.next(), { t: 'close', ch: asked.ch });
     const log = (await s.call('GET', '/api/admin/audit', { cookie: admin })).json.entries;

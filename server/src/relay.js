@@ -15,9 +15,10 @@
  *   → sessions {list}
  *   ← open {ch, session, from}              → opened {ch, cols, rows, title, replay} | refused {ch, error}
  *   ← in {ch, data}                         → out {ch, data}, size {ch, cols, rows}, ended {ch, reason}
+ *   ← resize {ch, cols, rows} | {ch, release}
  *   ← close {ch}
  * Browser ↔ server, for one session:
- *   ← opened / out / size / ended / error   → in {data}
+ *   ← opened / out / size / ended / error   → in {data}, resize {cols, rows} | {release}
  */
 
 const crypto = require('node:crypto');
@@ -138,9 +139,15 @@ function createRelay({ store, enabled, webUser, sameOrigin, log = () => {} }) {
     json(d.conn, { t: 'open', ch, session: session.id, from: browserName(req.headers['user-agent']) });
     conn.on('message', (text) => {
       const m = parse(text);
-      if (m?.t !== 'in' || !channels.has(ch)) return;
-      const data = String(m.data ?? '');
-      if (data && data.length <= MAX_INPUT) json(devices.get(channels.get(ch).deviceId)?.conn, { t: 'in', ch, data });
+      if (!m || !channels.has(ch)) return;
+      const to = devices.get(channels.get(ch).deviceId)?.conn;
+      if (m.t === 'in') {
+        const data = String(m.data ?? '');
+        if (data && data.length <= MAX_INPUT) json(to, { t: 'in', ch, data });
+      } else if (m.t === 'resize') {
+        // A phone asking for its own width; the app bounds it, and gives it back when it is done.
+        json(to, m.release ? { t: 'resize', ch, release: true } : { t: 'resize', ch, cols: Number(m.cols) | 0, rows: Number(m.rows) | 0 });
+      }
     });
     conn.on('close', () => endChannel(ch, '', { tellBrowser: false }));
   }

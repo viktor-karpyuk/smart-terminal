@@ -10,6 +10,8 @@
  *
  * Shells on the server are the other way round: nobody else is showing them,
  * so they take the size of the window, and tell the server when it changes.
+ * On a phone a session does the same, so its text is readable there; it goes
+ * back to the app's size when the phone closes it.
  */
 
 const $ = (id) => document.getElementById(id);
@@ -31,7 +33,8 @@ const THEME = {
   brightBlack: '#5b6378', brightRed: '#ff9aa2', brightGreen: '#6fe0cf', brightYellow: '#f2c36f', brightBlue: '#aeb9ff', brightMagenta: '#ddb3f5', brightCyan: '#8fe6f3', brightWhite: '#ffffff',
 };
 const FONT = 'ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, monospace';
-const SHELL_FONT = matchMedia('(max-width: 720px)').matches ? 12 : 13.5;
+const NARROW = matchMedia('(max-width: 720px)');
+const SHELL_FONT = NARROW.matches ? 12 : 13.5;
 
 let devices = [];
 let enabled = true;
@@ -166,6 +169,7 @@ function openSession(device, session) {
     title: session.title || session.folder || 'Session',
     path: `/api/web/terminal?device=${encodeURIComponent(device.id)}&session=${encodeURIComponent(session.id)}`,
     follows: false,
+    kind: session.kind,
   });
 }
 
@@ -176,9 +180,10 @@ function openShell(sh) {
 /**
  * One terminal in a tab. `follows`: the terminal takes the window's size and
  * tells the other end (a shell on the server); otherwise it keeps the other
- * end's size and fits its font to the window (a session in the app).
+ * end's size and fits its font to the window (a session in the app), except
+ * on a narrow screen, where it `drives` the session's size too.
  */
-function openTerm({ key, title, path, follows }) {
+function openTerm({ key, title, path, follows, kind = 'shell' }) {
   if (open.has(key)) return show(key);
   if ($('stage').querySelector('.term-empty')) $('stage').replaceChildren();
 
@@ -188,11 +193,11 @@ function openTerm({ key, title, path, follows }) {
     fontFamily: FONT, fontSize: follows ? SHELL_FONT : 13, lineHeight: 1, theme: THEME, cursorBlink: true, scrollback: 5000,
     allowProposedApi: false, macOptionIsMeta: true, convertEol: false,
   });
-  const fitter = follows ? new FitAddon.FitAddon() : null;
-  if (fitter) term.loadAddon(fitter);
+  const fitter = new FitAddon.FitAddon();
+  term.loadAddon(fitter);
   term.open(pane);
   pane.classList.toggle('is-follows', follows);
-  const entry = { key, title, term, pane, fitter, follows, cols: 80, rows: 24, state: 'connecting' };
+  const entry = { key, title, term, pane, fitter, follows, kind, drives: false, cols: 80, rows: 24, state: 'connecting' };
   entry.tab = el('div', { class: 'term-tab', role: 'tab' },
     el('button', { class: 'term-tab-name', onclick: () => show(key) }, entry.title),
     el('button', { class: 'term-tab-close', 'aria-label': `Close ${entry.title} here`, title: 'Close here. The session keeps running.', onclick: () => closeSession(key) }, '×'));
@@ -211,17 +216,22 @@ function openTerm({ key, title, path, follows }) {
       if (m.title) entry.title = m.title;
       term.resize(m.cols, m.rows);
       if (m.replay) term.write(m.replay);
-      // A shell takes this window's size; the server is told of each change, starting now.
-      if (follows) term.onResize(({ cols, rows }) => {
+      // A shell, or a session on a phone, takes this window's size; the other end is told of each change.
+      // Sent once it settles: a size that changes twice in a row makes a full-screen program draw twice.
+      term.onResize(({ cols, rows }) => {
+        if (!entry.follows && !entry.drives) return;
         entry.cols = cols; entry.rows = rows;
-        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'resize', cols, rows }));
+        clearTimeout(entry.sizeTimer);
+        entry.sizeTimer = setTimeout(() => {
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'resize', cols: entry.cols, rows: entry.rows }));
+        }, 150);
         if (current === key) status(describe(entry));
       });
       fit(entry);
       if (current === key) { status(describe(entry)); term.focus(); }
     } else if (m.t === 'out') {
       term.write(m.data);
-    } else if (m.t === 'size' && !follows) {
+    } else if (m.t === 'size' && !follows && !entry.drives) {
       entry.cols = m.cols; entry.rows = m.rows;
       term.resize(m.cols, m.rows);
       fit(entry);
@@ -248,7 +258,10 @@ function openTerm({ key, title, path, follows }) {
 }
 
 function describe(e) {
-  return `${e.title} · ${e.cols}×${e.rows} · ${e.follows ? 'running on the server; it keeps running when you close this tab' : 'what you type goes to the session on your computer'}`;
+  const what = e.follows ? 'running on the server; it keeps running when you close this tab'
+    : e.drives ? 'sized to this screen; it goes back to your computer\'s size when you close it'
+      : 'what you type goes to the session on your computer';
+  return `${e.title} · ${e.cols}×${e.rows} · ${what}`;
 }
 
 function show(key) {
@@ -287,9 +300,38 @@ function closeSession(key) {
  */
 function fit(e) {
   if (e.pane.hidden) return;
-  if (e.fitter) {
+  if (e.follows) {
     try { e.fitter.fit(); } catch { /* not laid out yet */ }
     return;
+  }
+  // On a phone the session takes this screen's width instead, while it is open here.
+  if (NARROW.matches && e.state === 'open') {
+    const first = !e.drives;
+    if (!first) {
+      try { e.fitter.fit(); } catch { /* not laid out yet */ }
+      return;
+    }
+    e.drives = true;
+    e.pane.classList.add('is-follows');
+    e.term.options.fontSize = SHELL_FONT;
+    // Claude draws its whole screen again at the new size; what it drew at the old one would only wrap into a mess.
+    if (e.kind === 'claude') e.term.reset();
+    // Measured after the new font has been laid out, then asked for once, even when it happens to match,
+    // so the computer knows who has it.
+    requestAnimationFrame(() => {
+      try { e.fitter.fit(); } catch { /* not laid out yet */ }
+      clearTimeout(e.sizeTimer);
+      e.cols = e.term.cols; e.rows = e.term.rows;
+      if (e.ws.readyState === WebSocket.OPEN) e.ws.send(JSON.stringify({ t: 'resize', cols: e.cols, rows: e.rows }));
+      if (current === e.key) status(describe(e));
+    });
+    return;
+  }
+  if (e.drives) {
+    // Wide again: the session goes back to the computer's size, which arrives as a size message.
+    e.drives = false;
+    e.pane.classList.remove('is-follows');
+    if (e.ws.readyState === WebSocket.OPEN) e.ws.send(JSON.stringify({ t: 'resize', release: true }));
   }
   const box = $('stage').getBoundingClientRect();
   const width = box.width - 24;

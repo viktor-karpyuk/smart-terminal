@@ -12,6 +12,10 @@
  * The server only lets the person signed in on this device ask; even so, a
  * session in a never-shared folder is not offered, and every time one is
  * opened the app says so, and can close it.
+ *
+ * A browser on a phone may ask the session to take its width, so the text is
+ * readable there. While it has it open, that size is the session's; when it
+ * closes, or gives it back, the session returns to the size the app gave it.
  */
 
 const RETRY_MIN_MS = 2000;
@@ -25,9 +29,10 @@ class OrgRelay {
    * @param write     (ptyId, data) => void
    * @param isPrivate (cwd) => boolean
    * @param notify    (title, body) => void
+   * @param resize    (ptyId, cols, rows) => void — sets the session's size, without the app asking
    */
-  constructor({ WebSocketImpl = globalThis.WebSocket, sessions, attach, write, redraw = () => {}, isPrivate = () => false, notify = () => {}, changed = () => {}, log = () => {}, now = Date.now }) {
-    Object.assign(this, { WebSocketImpl, sessions, attach, write, redraw, isPrivate, notify, changed, log, now });
+  constructor({ WebSocketImpl = globalThis.WebSocket, sessions, attach, write, redraw = () => {}, resize = () => {}, isPrivate = () => false, notify = () => {}, changed = () => {}, log = () => {}, now = Date.now }) {
+    Object.assign(this, { WebSocketImpl, sessions, attach, write, redraw, resize, isPrivate, notify, changed, log, now });
     this.ws = null;
     this.target = null;
     this.connected = false;
@@ -38,6 +43,15 @@ class OrgRelay {
     this.lastList = '';
     /** ch → { ch, sessionId, ptyId, title, from, at } */
     this.channels = new Map();
+    /** ptyId → { cols, rows }: the size the app gave it, to go back to. */
+    this.appSizes = new Map();
+    /** ptyId → ch: the browser whose size the session has now. */
+    this.driven = new Map();
+  }
+
+  /** Whether a browser has this session at its own size; the app's resizes then wait. */
+  drives(ptyId) {
+    return this.driven.has(ptyId);
   }
 
   /** Connect to this server as this device, or stay connected if already. */
@@ -79,7 +93,7 @@ class OrgRelay {
     for (const c of [...this.channels.values()]) {
       if (ch && c.ch !== ch) continue;
       this.#send({ t: 'ended', ch: c.ch, reason: 'Closed from Smart Terminal.' });
-      this.channels.delete(c.ch);
+      this.#remove(c);
     }
     this.changed();
   }
@@ -89,7 +103,10 @@ class OrgRelay {
     for (const c of this.channels.values()) if (c.ptyId === ptyId) this.#send({ t: 'out', ch: c.ch, data });
   }
 
+  /** The app gave the session a size. While a browser drives it, it is kept for later. */
   resized(ptyId, cols, rows) {
+    this.appSizes.set(ptyId, { cols, rows });
+    if (this.driven.has(ptyId)) return;
     for (const c of this.channels.values()) if (c.ptyId === ptyId) this.#send({ t: 'size', ch: c.ch, cols, rows });
   }
 
@@ -101,6 +118,8 @@ class OrgRelay {
       this.channels.delete(c.ch);
       any = true;
     }
+    this.driven.delete(ptyId);
+    this.appSizes.delete(ptyId);
     if (any) this.changed();
     this.#sendList();
   }
@@ -174,8 +193,11 @@ class OrgRelay {
     const c = this.channels.get(String(m.ch ?? ''));
     if (m.t === 'in' && c) {
       this.write(c.ptyId, String(m.data ?? ''));
+    } else if (m.t === 'resize' && c) {
+      if (m.release) this.#giveBack(c);
+      else this.#take(c, m.cols, m.rows);
     } else if (m.t === 'close' && c) {
-      this.channels.delete(c.ch);
+      this.#remove(c);
       this.changed();
     }
   }
@@ -188,6 +210,7 @@ class OrgRelay {
       return;
     }
     const title = found.title || offered.title || 'A session';
+    if (!this.driven.has(found.ptyId)) this.appSizes.set(found.ptyId, { cols: found.cols, rows: found.rows });
     this.channels.set(ch, { ch, sessionId: session, ptyId: found.ptyId, title, from: String(from ?? 'A browser'), at: this.now() });
     this.#send({ t: 'opened', ch, cols: found.cols, rows: found.rows, title, replay: found.replay ?? '' });
     // A full-screen program draws itself again when asked; the replay alone can leave it half drawn.
@@ -216,9 +239,32 @@ class OrgRelay {
     this.#send({ t: 'sessions', list });
   }
 
+  /** A browser's size for the session: readable on a phone. */
+  #take(c, cols, rows) {
+    const size = { cols: Math.max(20, Math.min(400, Number(cols) | 0)), rows: Math.max(5, Math.min(200, Number(rows) | 0)) };
+    this.driven.set(c.ptyId, c.ch);
+    this.resize(c.ptyId, size.cols, size.rows);
+    for (const o of this.channels.values()) if (o.ptyId === c.ptyId && o.ch !== c.ch) this.#send({ t: 'size', ch: o.ch, ...size });
+  }
+
+  /** Back to the app's size, if this browser was the one that changed it. */
+  #giveBack(c) {
+    if (this.driven.get(c.ptyId) !== c.ch) return;
+    this.driven.delete(c.ptyId);
+    const size = this.appSizes.get(c.ptyId);
+    if (!size) return;
+    this.resize(c.ptyId, size.cols, size.rows);
+    for (const o of this.channels.values()) if (o.ptyId === c.ptyId) this.#send({ t: 'size', ch: o.ch, ...size });
+  }
+
+  #remove(c) {
+    this.channels.delete(c.ch);
+    this.#giveBack(c);
+  }
+
   #dropChannels() {
     if (!this.channels.size) return;
-    this.channels.clear();
+    for (const c of [...this.channels.values()]) this.#remove(c);
     this.changed();
   }
 

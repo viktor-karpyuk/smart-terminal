@@ -372,6 +372,8 @@ td.muted, th { white-space: nowrap; }
 .term-pane.is-follows { align-items: stretch; justify-content: stretch; }
 .term-pane.is-follows .xterm { width: 100%; height: 100%; }
 .term-pane.is-follows .xterm-viewport { overflow-x: hidden; }
+/* Below the last whole row the viewport shows; xterm paints it black, not the theme's background. */
+.term-pane .xterm .xterm-viewport { background-color: transparent !important; }
 
 .term-main { display: grid; grid-template-rows: auto 1fr auto auto; min-width: 0; min-height: 0; background: #0f121a; }
 .term-tabs { display: flex; gap: 2px; padding: 6px 8px 0; background: #0b0d13; overflow-x: auto; min-height: 8px; }
@@ -382,8 +384,8 @@ td.muted, th { white-space: nowrap; }
 .term-tab .term-tab-close { padding: 4px 8px; margin-right: 4px; border-radius: 4px; font-size: 15px; line-height: 1; color: #7f879d; }
 .term-tab .term-tab-close:hover { background: #222838; color: #e7eaf3; }
 .term-tab button:focus-visible { outline: 2px solid #8c9cff; outline-offset: -2px; }
-.term-stage { position: relative; min-height: 0; min-width: 0; overflow: hidden; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; padding: 12px; }
-.term-pane { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+.term-stage { position: relative; min-height: 0; min-width: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; padding: 12px; }
+.term-pane { display: flex; align-items: center; justify-content: center; flex: 1 1 0; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
 .term-pane[hidden] { display: none !important; }
 .term-empty { display: grid; gap: 6px; text-align: center; color: #9aa2b8; max-width: 380px; font-size: 14px; line-height: 1.5; }
 .term-empty strong { color: #e7eaf3; font-size: 16px; }
