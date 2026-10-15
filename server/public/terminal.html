@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+<title>Terminal · Smart Terminal</title>
+<link rel="stylesheet" href="/assets/app.css">
+<link rel="stylesheet" href="/assets/xterm.css">
+</head>
+<body class="term-body">
+<div class="term-shell">
+  <aside class="term-rail" id="rail" aria-label="Your sessions">
+    <div class="term-rail-head">
+      <a class="term-back" href="/" aria-label="Back to the dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+        <span id="org">Smart Terminal</span>
+      </a>
+    </div>
+    <div class="term-devices" id="devices"></div>
+  </aside>
+  <main class="term-main">
+    <div class="term-tabs" id="tabs" role="tablist" aria-label="Open in this browser"></div>
+    <div class="term-stage" id="stage"></div>
+    <div class="term-keys" id="keys" aria-label="Keys a phone keyboard does not have"></div>
+    <div class="term-status" id="status" role="status" aria-live="polite"></div>
+  </main>
+</div>
+<script src="/assets/xterm.js"></script>
+<script src="/assets/addon-fit.js"></script>
+<script src="/assets/terminal.js"></script>
+</body>
+</html>

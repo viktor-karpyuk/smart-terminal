@@ -1212,7 +1212,7 @@ function LauncherButton({ viewId, title, icon }: { viewId: string; title: string
       aria-pressed={showing}
       onClick={() => useStore.getState().launchExtensionView(viewId)}
     >
-      {icon === 'review' ? <ReviewIcon /> : icon === 'teams' ? <TeamsIcon /> : icon === 'send' ? <SendIcon /> : <ExtensionsIcon />}
+      {icon === 'review' ? <ReviewIcon /> : icon === 'teams' ? <TeamsIcon /> : icon === 'send' ? <SendIcon /> : icon === 'org' ? <OrgIcon /> : <ExtensionsIcon />}
     </button>
   );
 }
@@ -1236,6 +1236,16 @@ function TeamsIcon() {
       <path fillRule="evenodd" d="M11.5 4h8a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5h-8a2.5 2.5 0 0 1-2.5-2.5v-11a2.5 2.5 0 0 1 2.5-2.5zM12.3 7.5h6.4v1.8h-2.3v7.2h-1.8v-7.2h-2.3z" />
       <circle cx="5.7" cy="5.9" r="3.1" />
       <path d="M1.1 18.9v-3a4.7 4.7 0 0 1 4.7-4.7h3.2v7.7z" />
+    </svg>
+  );
+}
+
+/** A building: the company this machine is signed in to. */
+function OrgIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round">
+      <path d="M2.2 12.4V2.6h5.6v9.8M7.8 5.4h4v7" />
+      <path d="M1.2 12.4h11.6M4 4.6h1.6M4 6.8h1.6M4 9h1.6M9.6 7.4h.4M9.6 9.4h.4" />
     </svg>
   );
 }

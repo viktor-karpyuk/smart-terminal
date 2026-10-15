@@ -255,7 +255,16 @@ const KUBE_VERBS = new Map<string, Channel>([
   ...KUBE_APP.map((name) => [name, 'app'] as [string, Channel]),
 ]);
 
-export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review' | 'teams';
+/**
+ * The Organization panel: signing in to the company's server and what is shared
+ * with it. Only the panel that ships with the app reaches it — no permission a
+ * downloaded extension can ask for names this channel.
+ */
+const ORG_VERBS = new Map<string, Channel>(
+  ['overview', 'providers', 'loginPassword', 'loginProvider', 'cancelSignIn', 'logout', 'pause', 'sendNow', 'stats', 'openWeb', 'addPrivateFolder', 'removePrivateFolder', 'allowWeb', 'disconnectWeb'].map((name) => [name, 'org'] as [string, Channel]),
+);
+
+export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review' | 'teams' | 'org';
 
 /**
  * Which door a call goes through, or none.
@@ -274,6 +283,7 @@ export function route(name: string): Channel | null {
   if (name.startsWith('build.')) return BUILD_VERBS.get(name.slice(6)) ?? null;
   if (name.startsWith('review.')) return REVIEW_VERBS.get(name.slice(7)) ?? null;
   if (name.startsWith('teams.')) return TEAMS_VERBS.get(name.slice(6)) ?? null;
+  if (name.startsWith('org.')) return ORG_VERBS.get(name.slice(4)) ?? null;
   return null;
 }
 

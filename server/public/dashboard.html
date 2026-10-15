@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Terminal</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <div class="brand">
+      <span class="brand-mark" id="mark">ST</span>
+      <div><strong id="org">Smart Terminal</strong><small>Smart Terminal</small></div>
+    </div>
+    <nav class="nav" id="nav" aria-label="Sections"></nav>
+    <div class="rail-foot">
+      <span class="who" id="me"></span>
+      <button class="quiet" id="logout">Sign out</button>
+    </div>
+  </aside>
+  <main class="page" id="page" tabindex="-1"></main>
+</div>
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+<script src="/assets/dashboard.js"></script>
+</body>
+</html>

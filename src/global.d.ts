@@ -1058,6 +1058,10 @@ declare global {
         onState(handler: (payload: SpringRun) => void): () => void;
       };
       /** Code Reviewer: every verb through one call; progress and changes through one event. */
+      org: {
+        /** The Organization panel's calls: signing in to a company server, and what is shared with it. */
+        call(name: string, args?: unknown): Promise<{ ok: boolean; error?: string } & Record<string, unknown>>;
+      };
       teams: {
         /** The Teams panel's own calls. Delivering is asked of the app, never of this. */
         call(name: string, args?: unknown): Promise<{ ok: boolean; error?: string } & Record<string, unknown>>;

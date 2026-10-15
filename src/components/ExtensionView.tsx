@@ -466,6 +466,9 @@ function Frame({
           // was configured with, named by id, and resolved on the other side.
           return reply(true, await window.api.review.call(name.slice(7), args), undefined);
         }
+        if (channel === 'org') {
+          return reply(true, await window.api.org.call(name.slice(4), args), undefined);
+        }
         if (channel === 'teams') {
           // Nothing of a folder's here either: the subjects are people, and the
           // credentials never leave the main process.

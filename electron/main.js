@@ -8,6 +8,8 @@ const { DatabaseSync } = require('node:sqlite');
 const { createHash, randomUUID } = require('node:crypto');
 
 const { PtyManager, claudeLaunchLine, quoteArg } = require('./pty-manager');
+const { OrgRelay, RecentOutput } = require('./org-relay');
+const { isPrivate } = require('./org-report');
 const { readUsage } = require('./usage');
 const { ProfileStore, discoverAccountDirs } = require('./profiles');
 const { accountsRoot, authStatus, ensureConfigDir, invalidateAuthCache, suggestConfigDirs } = require('./auth');
@@ -54,6 +56,7 @@ const {
   readFilenamesPlist,
 } = require('./files');
 const git = require('./git');
+const { OrgService } = require('./org-service');
 const { LocalConflicts } = require('./git-conflicts');
 const { layout: layoutGraph } = require('./git-graph');
 const kube = require('./kube');
@@ -217,6 +220,11 @@ let db = null;
  */
 let reviewService = null;
 let teamsService = null;
+/** Signed in to a company's Smart Terminal server, and reporting to it. */
+let orgService = null;
+let orgRelay = null;
+/** What each session printed lately, kept only while the browser may open sessions. */
+const recentOutput = new RecentOutput();
 /** The Code Reviewer's bot: reads what Teams said from the Azure queue, and answers as the bot. */
 let teamsBot = null;
 /** Where the bus's MCP server lives and the socket it talks to, once messaging has opened it. */
@@ -306,6 +314,147 @@ const TEAMS_VERBS = {
   saveBot: (service, args) => {
     if (!service.bot) throw new Error('The bot needs both Teams and the Code Reviewer running.');
     return { ok: true, bot: service.bot.save(args.bot ?? {}) };
+  },
+};
+
+/**
+ * What the company server is told comes from here: the sessions running in this
+ * app, what git says about the folder each is in, and each account's usage.
+ */
+async function gatherForOrg() {
+  const rows = roster();
+  const sessions = rows.map((row) => {
+    const full = db.getSession(row.id);
+    return {
+      kind: row.kind,
+      title: row.title,
+      cwd: row.cwd,
+      profileName: row.profileName,
+      lastWorkedAt: full?.lastWorkedAt ?? null,
+      lastOutputAt: lastOutputBySession.get(row.id) ?? null,
+    };
+  });
+  const repos = new Map();
+  for (const cwd of new Set(sessions.map((s) => s.cwd).filter(Boolean))) {
+    const root = await git.repoRoot(cwd).catch(() => null);
+    if (!root) continue;
+    const ask = async (args) => {
+      const out = await git.run(root, args).catch(() => null);
+      return out?.ok ? out.stdout.trim() : '';
+    };
+    repos.set(cwd, {
+      root,
+      remote: await ask(['remote', 'get-url', 'origin']),
+      branch: await ask(['rev-parse', '--abbrev-ref', 'HEAD']),
+      subject: await ask(['log', '-1', '--format=%s']),
+    });
+  }
+  // Every account with a session open, read no more often than the usage cache allows.
+  const accounts = [];
+  const used = new Set(rows.map((row) => row.profileId));
+  for (const profile of profiles.list().filter((p) => used.has(p.id))) {
+    let usage = usageCache.get(profile.id);
+    if (!usage || Date.now() - usage.readAt > USAGE_TTL) {
+      usage = await readUsage(profile).then((r) => ({ ...r, readAt: Date.now() })).catch(() => null);
+      if (usage?.ok) usageCache.set(profile.id, usage);
+    }
+    const auth = await authStatus(profile).catch(() => null);
+    accounts.push({ name: profile.name, email: auth?.email ?? '', plan: auth?.subscriptionType ?? '', usage: usage?.ok ? usage : null });
+  }
+  return { sessions, repos, accounts };
+}
+
+/** The pty a session runs in now, or null. */
+function ptyOfSession(sessionId) {
+  for (const [ptyId, owner] of sessionByPty) if (owner === sessionId) return ptyId;
+  return null;
+}
+
+function createOrgRelay() {
+  return new OrgRelay({
+    sessions: () => roster().filter((row) => ptyOfSession(row.id)).map((row) => ({ id: row.id, title: row.title, kind: row.kind, cwd: row.cwd })),
+    attach: (sessionId) => {
+      const ptyId = ptyOfSession(sessionId);
+      const size = ptyId ? ptys.size(ptyId) : null;
+      if (!size) return null;
+      return { ptyId, cols: size.cols, rows: size.rows, kind: size.kind, title: db.getSession(sessionId)?.title ?? '', replay: recentOutput.get(ptyId) };
+    },
+    write: (ptyId, data) => {
+      cwdWatcher?.wake();
+      noteTyping(sessionByPty.get(ptyId));
+      ptys.write(ptyId, data);
+    },
+    resize: (ptyId, cols, rows) => ptys.resize(ptyId, cols, rows),
+    // One row shorter and back: the program is told the size changed, and draws everything again.
+    redraw: (ptyId) => {
+      const size = ptys.size(ptyId);
+      if (!size || size.rows < 3) return;
+      ptys.resize(ptyId, size.cols, size.rows - 1);
+      // Only if nothing else sized it meanwhile, such as a phone taking it at its own width.
+      setTimeout(() => {
+        const now = ptys.size(ptyId);
+        if (now && now.cols === size.cols && now.rows === size.rows - 1) ptys.resize(ptyId, size.cols, size.rows);
+      }, 80);
+    },
+    isPrivate: (cwd) => isPrivate(cwd, orgService?.state.privateFolders ?? []),
+    notify: (title, body) => {
+      if (Notification.isSupported()) new Notification({ title, body }).show();
+    },
+    changed: () => send('org:changed', orgService?.overview()),
+    log: (line) => console.log(`[org] ${line}`),
+  });
+}
+
+function createOrgService() {
+  try {
+    orgRelay = createOrgRelay();
+    return new OrgService({
+      relay: orgRelay,
+      file: path.join(app.getPath('userData'), 'organization.json'),
+      secrets: {
+        encrypt: (text) => {
+          if (!safeStorage.isEncryptionAvailable()) throw new Error('This system offers no encrypted storage, so the sign-in cannot be kept safely.');
+          return safeStorage.encryptString(text).toString('base64');
+        },
+        decrypt: (cipher) => safeStorage.decryptString(Buffer.from(cipher, 'base64')),
+      },
+      fetch: (url, init) => net.fetch(url, init),
+      openExternal: (url) => shell.openExternal(url),
+      gather: gatherForOrg,
+      appVersion: app.getVersion(),
+      changed: () => send('org:changed', orgService?.overview()),
+      log: (line) => console.log(`[org] ${line}`),
+    });
+  } catch (error) {
+    console.error('[org] could not start:', error);
+    return null;
+  }
+}
+
+const ORG_VERBS = {
+  overview: (s) => ({ ok: true, ...s.overview() }),
+  providers: (s, args) => s.providers({ server: args.server }),
+  loginPassword: (s, args) => s.loginWithPassword({ server: args.server, email: String(args.email ?? ''), password: String(args.password ?? '') }),
+  loginProvider: (s, args) => s.loginWithProvider({ server: args.server, provider: String(args.provider ?? '') }),
+  cancelSignIn: (s) => s.cancelSignIn(),
+  stats: (s, args) => s.stats({ days: Number(args.days) }),
+  openWeb: (s, args) => s.openWeb(String(args.page ?? 'mine')),
+  logout: (s) => s.logout(),
+  pause: (s, args) => s.setPaused(args.paused !== false),
+  allowWeb: (s, args) => s.setAllowWeb(args.allow === true),
+  disconnectWeb: (s, args) => {
+    orgRelay?.disconnect(args.ch ? String(args.ch) : null);
+    return { ok: true, ...s.overview() };
+  },
+  addPrivateFolder: async (s) => {
+    const picked = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow() ?? undefined, { title: 'Never share this folder', buttonLabel: 'Never share', properties: ['openDirectory'] });
+    if (picked.canceled || !picked.filePaths[0]) return { ok: true, ...s.overview() };
+    return s.setPrivateFolders([...(s.overview().privateFolders ?? []), picked.filePaths[0]]);
+  },
+  removePrivateFolder: (s, args) => s.setPrivateFolders((s.overview().privateFolders ?? []).filter((f) => f !== String(args.folder ?? ''))),
+  sendNow: async (s) => {
+    await s.sendNow();
+    return { ok: true, ...s.overview() };
   },
 };
 
@@ -805,7 +954,11 @@ function registerIpc() {
     noteTyping(sessionByPty.get(id));
     ptys.write(id, data);
   });
-  ipcMain.on('pty:resize', (_e, { id, cols, rows }) => ptys.resize(id, cols, rows));
+  ipcMain.on('pty:resize', (_e, { id, cols, rows }) => {
+    // A phone showing this session has it at its own width until it closes; the app's size is kept for then.
+    if (!orgRelay?.drives(id)) ptys.resize(id, cols, rows);
+    orgRelay?.resized(id, cols, rows);
+  });
   ipcMain.on('pty:kill', (_e, { id }) => {
     cwdWatcher.forget(id);
     ptys.kill(id);
@@ -1927,6 +2080,17 @@ function registerIpc() {
    * reach it through the app rather than through this channel — a panel cannot
    * name another extension's service, and should not be able to.
    */
+  ipcMain.handle('org:call', async (_e, { name, args } = {}) => {
+    if (!orgService) return { ok: false, error: 'The organization service is not running.' };
+    const handler = Object.prototype.hasOwnProperty.call(ORG_VERBS, String(name)) ? ORG_VERBS[name] : null;
+    if (!handler) return { ok: false, error: `No such organization action: ${name}` };
+    try {
+      return await handler(orgService, args ?? {});
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  });
+
   ipcMain.handle('teams:call', async (_e, { name, args } = {}) => {
     if (!teamsService) return { ok: false, error: 'Teams is not running.' };
     try {
@@ -2319,6 +2483,9 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   // restart, not history — and history is the only thing the prune is for.
   db.prune({ keep: crashed });
   teamsService = createTeamsService();
+  orgService = createOrgService();
+  // Only once signed in: a machine that never joined a company says nothing to anybody.
+  orgService?.start();
   // What the hours held back is looked at again on a clock of its own: the
   // delivery extension promises the morning, and something has to bring it.
   teamsService?.start();
@@ -2349,6 +2516,12 @@ if (isPrimaryInstance) app.whenReady().then(() => {
         autopilot.noteOutput(owner);
         lastOutputBySession.set(owner, Date.now());
       }
+      if (orgRelay?.target) {
+        recentOutput.add(payload.id, payload.data);
+        orgRelay.output(payload.id, payload.data);
+      } else if (recentOutput.byPty.size) {
+        recentOutput.clear();
+      }
     }
     sendToPtyOwner(channel, payload);
     /*
@@ -2365,7 +2538,11 @@ if (isPrimaryInstance) app.whenReady().then(() => {
      * `foregroundByPty` was frozen too, because the watcher only ever polls
      * living ptys — so "is Claude up" answered for a process that had exited.
      */
-    if (channel === 'pty:exit') forgetPty(payload.id);
+    if (channel === 'pty:exit') {
+      forgetPty(payload.id);
+      recentOutput.forget(payload.id);
+      orgRelay?.exited(payload.id);
+    }
   });
 
   autopilot = new Autopilot({
@@ -3122,6 +3299,7 @@ app.on('will-quit', () => {
   kubeForwards.stopAll();
   // A `claude -p` nobody can see would go on spending on the person's account.
   reviewService?.stop();
+  orgService?.stop();
   teamsBot?.stop();
   // A Gradle client asked for a task list is a JVM that would otherwise
   // outlive the app by up to three minutes.
