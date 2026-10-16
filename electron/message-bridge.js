@@ -22,6 +22,8 @@
 
 const fs = require('node:fs');
 const net = require('node:net');
+const path = require('node:path');
+const { tightenDir, lockSocket } = require('./socket-guard');
 const { audienceFor, normalizeReach, resolveRecipient, formatMessage, formatNote } = require('./messaging');
 
 /**
@@ -33,6 +35,9 @@ const { audienceFor, normalizeReach, resolveRecipient, formatMessage, formatNote
  * collide with it, because session ids are UUIDs.
  */
 const APP_SENDER = 'smart-terminal';
+
+/** The longest request the channel will wait for the end of. */
+const MAX_REQUEST = 2_000_000;
 
 /** How often the queue is retried against sessions that were busy. */
 const SWEEP_MS = 4000;
@@ -54,7 +59,7 @@ class MessageBridge {
    * @param {(id: string) => boolean} deps.isFree   idle at a Claude prompt, no dialog up
    * @param {object} deps.store               the queue: queue/pending/markDelivered/markRead
    */
-  constructor({ socketPath, reach, roster, write, isFree, store, health = null, lookup = null, onHook = null, onBus = null }) {
+  constructor({ socketPath, reach, roster, write, isFree, store, health = null, lookup = null, onHook = null, onBus = null, onJenkins = null, verifySession = null }) {
     this.socketPath = socketPath;
     this.reach = reach;
     this.roster = roster;
@@ -72,6 +77,13 @@ class MessageBridge {
     this.onHook = onHook;
     /** The Code Reviewer's bus. Optional: without it the channel carries messages and nothing else. */
     this.onBus = onBus;
+    /** Jenkins, read-only, for any session. Optional: without it the tools are simply not offered. */
+    this.onJenkins = onJenkins;
+    /**
+     * Whether a session can prove it is the session it says it is: `(id, secret) => boolean`. Optional, and asked only
+     * for what must not be done in another session's name; without it the id alone is believed, as it always was.
+     */
+    this.verifySession = verifySession;
     this.server = null;
     this.sweep = null;
   }
@@ -88,7 +100,29 @@ class MessageBridge {
     this.server.on('error', (error) => {
       console.log(`[messages] the channel could not open: ${error.message}`);
     });
-    this.server.listen(this.socketPath);
+    // The directory is the app's own and is made private; the socket is locked as soon as it exists, whatever the umask said.
+    try {
+      fs.mkdirSync(path.dirname(this.socketPath), { recursive: true, mode: 0o700 });
+    } catch {
+      /* it is there already, or it cannot be made and listen will say so */
+    }
+    tightenDir(path.dirname(this.socketPath));
+    /*
+     * Made with a umask that leaves it to its owner, so there is no moment when it exists and anybody can open it: the bind
+     * is synchronous, and the umask is put back straight after. The lock below is for the platform where that does not hold.
+     */
+    const before = process.platform === 'win32' ? null : process.umask(0o177);
+    try {
+      this.server.listen(this.socketPath, () => {
+        try {
+          lockSocket(this.socketPath);
+        } catch (error) {
+          console.log(`[messages] could not lock the channel to its owner: ${error.message}`);
+        }
+      });
+    } finally {
+      if (before !== null) process.umask(before);
+    }
     this.sweep = setInterval(() => this.flush(), SWEEP_MS);
     this.sweep.unref?.();
   }
@@ -114,7 +148,11 @@ class MessageBridge {
     socket.on('data', async (chunk) => {
       buffer += chunk.toString('utf8');
       const cut = buffer.indexOf('\n');
-      if (cut === -1) return;
+      // A request is a line, and the longest is a few kilobytes: a peer that never ends one is not the app's own, and is cut off.
+      if (cut === -1) {
+        if (buffer.length > MAX_REQUEST) socket.destroy();
+        return;
+      }
       const line = buffer.slice(0, cut);
       buffer = '';
       let request;
@@ -245,6 +283,23 @@ class MessageBridge {
     const roster = this.roster();
     const me = roster.find((entry) => entry.id === from);
     if (!me) return { ok: false, error: 'Smart Terminal does not have this session as running.' };
+
+    /*
+      Jenkins is a window onto the CI servers the app is connected to, not a
+      conversation, so reach — who may talk to whom — does not apply. What does
+      is knowing who is asking, which the roster check above just did: a call
+      from something that is not a running session never gets here.
+    */
+    if (op === 'jenkins') {
+      if (!this.onJenkins) return { ok: false, error: 'Jenkins is not available.' };
+      // The id is in every roster; the secret is in no one's. Only a session that has it is that session.
+      if (this.verifySession && !this.verifySession(me.id, request.secret)) {
+        return { ok: false, error: 'This session could not prove who it is, so Smart Terminal will not act on its behalf.' };
+      }
+      const { secret, ...rest } = request;
+      void secret;
+      return this.onJenkins({ ...rest, session: { id: me.id, name: me.name } });
+    }
     const audience = audienceFor(from, roster, reach);
 
     if (op === 'roster') {

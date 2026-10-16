@@ -500,6 +500,12 @@ export interface Settings {
    */
   sidebarShowReviewer: boolean;
   /**
+   * Jenkins' own menu — the tree of folders and jobs, and the views — when the
+   * Jenkins extension is installed. While it is on the sidebar the panel drops
+   * its own copy of it and keeps the room, like the reviewer's.
+   */
+  sidebarShowJenkins: boolean;
+  /**
    * Folded away rather than closed. Two different acts: collapsing keeps the
    * heading, so you can see the count and open it again without remembering it
    * was ever there; closing takes the whole thing off the sidebar.
@@ -509,10 +515,17 @@ export interface Settings {
   sidebarMonitorCollapsed: boolean;
   sidebarClustersCollapsed: boolean;
   sidebarReviewerCollapsed: boolean;
+  sidebarJenkinsCollapsed: boolean;
   /** Which lines of the reviewer's menu are unfolded: `dash`, `repos`, `repo:<id>`. Missing means the default. */
   sidebarReviewerOpen?: Record<string, boolean>;
+  /** Which lines of Jenkins' tree are unfolded: `t:<folder path>`, `j:<job path>`, `v:<view path>`, `g:smart`, `g:views`. */
+  sidebarJenkinsOpen?: Record<string, boolean>;
+  /** Folders and jobs, or views — the switch at the top of the Jenkins list. */
+  sidebarJenkinsMode?: 'tree' | 'views';
+  /** Which Jenkins server the list shows, when more than one is set up. */
+  sidebarJenkinsServer?: string | null;
   /** Which of the sidebar's lists comes first. Dragging a heading changes it. */
-  sidebarOrder: Array<'sessions' | 'folders' | 'monitor' | 'clusters' | 'reviewer'>;
+  sidebarOrder: Array<'sessions' | 'folders' | 'monitor' | 'clusters' | 'reviewer' | 'jenkins'>;
   /**
    * The height somebody has *chosen* for a list, in pixels.
    *
@@ -621,4 +634,20 @@ export interface SessionAnalysis {
   worst: 'high' | 'medium' | 'low' | null;
   readAt: number;
   size: number;
+}
+
+/**
+ * Where in Jenkins the sidebar can send somebody. A page of the panel, on one
+ * of the servers: the panel switches server if it has to and shows the page.
+ */
+export interface JenkinsPlace {
+  server?: string | null;
+  page: {
+    type: 'home' | 'dashboard' | 'queue' | 'setup' | 'job' | 'build' | 'folder' | 'view';
+    path?: string;
+    number?: number;
+    /** With `view`: one the app works out (`smart`) or one Jenkins keeps (`jenkins`). */
+    kind?: 'smart' | 'jenkins';
+    name?: string;
+  };
 }

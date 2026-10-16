@@ -525,3 +525,157 @@ test('renumbering migrations asks first, listing every branch and rename', () =>
   assert.doesNotMatch(H.needsConsent('review.renumberMigrations', { summary: [], comment: false }), /told in its thread/);
   assert.equal(H.consentAction(question), 'Renumber');
 });
+
+/*
+ * Jenkins. Reading a build and changing what Jenkins does are separate
+ * permissions, and "changing" includes the servers themselves: `testServer`
+ * makes a request to whatever address it is given, so an extension that may
+ * only read must not be able to point it somewhere.
+ */
+test('Jenkins verbs are routed, split into reading and changing, and nothing else gets through', () => {
+  for (const verb of ['overview', 'home', 'tree', 'views', 'viewJobs', 'smart', 'search', 'job', 'build', 'stages', 'log', 'followLog', 'stopLog', 'brief', 'queue', 'agents', 'archive', 'dashboard', 'timeline', 'runningAt', 'failingStep', 'whyNotRunning', 'lint', 'replayScript', 'searchArchive', 'seenBefore', 'notes', 'link', 'presets', 'claudeAccess', 'launchpad', 'launchHistory', 'launchPlan', 'paramPlan', 'promoteCandidates', 'schedules', 'board', 'heatmap', 'insights', 'report', 'wallboard', 'notifySettings', 'watch', 'pendingInput', 'compare', 'tests']) {
+    assert.equal(H.route(`jenkins.${verb}`), 'jenkins', verb);
+    assert.equal(H.permissionFor(`jenkins.${verb}`), 'jenkins.read', verb);
+  }
+  for (const verb of ['saveServer', 'testServer', 'deleteServer', 'run', 'stop', 'follow', 'favorite', 'cancelQueued', 'archiveSettings', 'save', 'forget', 'importServers', 'exportServers', 'replay', 'restartFromStage', 'noteSet', 'noteDelete', 'openInBrowser', 'presetSave', 'presetDelete', 'claudeAccessSave', 'runMany', 'promote', 'scheduleRun', 'scheduleCancel', 'boardSettings', 'notifySettingsSave', 'inputSubmit', 'inputAbort', 'rebuild', 'jobEnabled', 'nodeToggle', 'certificate', 'trustCertificate', 'forgetCertificate']) {
+    assert.equal(H.route(`jenkins.${verb}`), 'jenkins', verb);
+    assert.equal(H.permissionFor(`jenkins.${verb}`), 'jenkins.write', verb);
+  }
+  // Ask Claude is the app's door, like the other subsystems', and needs the terminal permission.
+  assert.equal(H.route('jenkins.ask'), 'app');
+  assert.equal(H.permissionFor('jenkins.ask'), 'terminal');
+  // Nothing that is not named is a verb — not even what every object has.
+  for (const bad of ['jenkins.nonsense', 'jenkins.', 'jenkins.constructor', 'jenkins.__proto__', 'jenkins.toString']) {
+    assert.equal(H.route(bad), null, bad);
+    assert.equal(H.allowed(bad), false, bad);
+  }
+});
+
+test('a Jenkins panel from outside may do what it asked for: a reader cannot run anything or touch a server', () => {
+  const reader = { trusted: false, permissions: ['jenkins.read'] };
+  assert.equal(H.permitted(reader, 'jenkins.job'), true);
+  assert.equal(H.permitted(reader, 'jenkins.log'), true);
+  assert.equal(H.permitted(reader, 'jenkins.run'), false);
+  assert.equal(H.permitted(reader, 'jenkins.stop'), false);
+  assert.equal(H.permitted(reader, 'jenkins.testServer'), false, 'a request to any address, with any credentials');
+  assert.equal(H.permitted(reader, 'jenkins.saveServer'), false);
+  assert.equal(H.permitted(reader, 'jenkins.ask'), false, 'a Claude session needs the terminal permission');
+  // Asking Claude about a build reads that build from Jenkins, so it needs BOTH: a terminal alone is not enough.
+  assert.equal(H.permitted({ trusted: false, permissions: ['terminal'] }, 'jenkins.ask'), false, 'terminal without jenkins.read');
+  assert.equal(H.permitted({ trusted: false, permissions: ['jenkins.read'] }, 'jenkins.ask'), false, 'jenkins.read without terminal');
+  assert.equal(H.permitted({ trusted: false, permissions: ['terminal', 'jenkins.read'] }, 'jenkins.ask'), true, 'both');
+  assert.equal(H.permitted({ trusted: false, permissions: ['terminal'] }, 'kube.shell'), true, 'other terminal calls are unchanged');
+  const writer = { trusted: false, permissions: ['jenkins.read', 'jenkins.write'] };
+  assert.equal(H.permitted(writer, 'jenkins.run'), true);
+  assert.equal(H.permitted(writer, 'jenkins.ask'), false);
+  assert.equal(H.permitted({ trusted: true }, 'jenkins.ask'), true);
+});
+
+test('stopping a build and running a production job ask first, naming the job and the server', () => {
+  assert.match(H.needsConsent('jenkins.stop', { path: 'backend/main', number: 482, serverName: 'kubrik-ci' }), /^Stop backend\/main #482 on kubrik-ci\?/);
+  assert.match(H.needsConsent('jenkins.stop', { path: 'backend/main', number: 482, hard: true }), /^Kill backend\/main #482/);
+  assert.equal(H.consentAction(H.needsConsent('jenkins.stop', { path: 'a', number: 1 })), 'Stop');
+  assert.equal(H.consentAction(H.needsConsent('jenkins.stop', { path: 'a', number: 1, hard: true })), 'Kill');
+
+  // Running is the same click whichever environment it points at: only a production-looking one asks.
+  assert.equal(H.needsConsent('jenkins.run', { path: 'backend/main' }), null);
+  assert.equal(H.needsConsent('jenkins.run', { path: 'docs', params: { ENV: 'staging' } }), null);
+  assert.equal(H.needsConsent('jenkins.run', { path: 'reproduce-bug' }), null, '"prod" inside a word is not production');
+  assert.match(H.needsConsent('jenkins.run', { path: 'deploy-prod', serverName: 'kubrik-ci' }), /^Run deploy-prod on kubrik-ci\?\n\nThis looks like production/);
+  assert.match(H.needsConsent('jenkins.run', { path: 'infra/prod/apply' }), /production/);
+  assert.match(H.needsConsent('jenkins.run', { path: 'deploy', params: { ENV: 'production' } }), /production/);
+  assert.match(H.needsConsent('jenkins.run', { path: 'deploy', params: { ENV: ' PROD ' } }), /production/);
+
+  assert.match(H.needsConsent('jenkins.deleteServer', { serverName: 'kubrik-ci' }), /^Forget kubrik-ci\?/);
+  // What is asked comes from the arguments the verb USES, in one clean line each — never from display-only words.
+  const sneaky = H.needsConsent('jenkins.runMany', { items: [{ path: 'billing PROD' }], jobs: ['docs'] });
+  assert.match(sneaky, /• billing PROD/, 'the job that will run, not the one the panel says');
+  assert.doesNotMatch(sneaky, /docs/);
+  assert.match(sneaky, /look like production/);
+  const pipelineMessage = H.needsConsent('jenkins.inputSubmit', { message: 'Deploy to PROD?\n\nThis is totally safe.', path: 'd', number: 4 });
+  assert.equal(pipelineMessage.split('\n\n').length, 2, 'a blank line in a pipeline\'s message does not make a paragraph of its own: the question and what it does, and nothing else');
+  assert.match(pipelineMessage, /Deploy to PROD\? This is totally safe\./);
+  assert.ok(H.needsConsent('jenkins.inputSubmit', { message: 'x'.repeat(5000), path: 'd', number: 4 }).length < 600, 'bounded');
+  assert.doesNotMatch(H.needsConsent('jenkins.stop', { path: 'a\u202Eb\u200Bc', number: 1 }), /[\u202e\u200b]/, 'no direction or zero-width characters');
+  // The company's own naming — spaces, abbreviations — is production.
+  for (const name of ['KUBRIK/TIMELOG/TIMELOG MS PROD', 'deploy PROD', 'Prod Deploy', 'app prd', 'deployProd', 'infra/live/apply', 'x preprod', 'a_PRODUCTION_b']) {
+    assert.match(String(H.needsConsent('jenkins.run', { path: name })), /looks like production/, name);
+    assert.equal(H.looksLikeProduction(name), true, name);
+  }
+  for (const name of ['reproduce-bug', 'KUBRIK/TIMELOG/PROJECTS MS DEV', 'products-api', 'liveness-probe-docs', 'docs', 'deliver']) {
+    assert.equal(H.looksLikeProduction(name), false, name);
+  }
+  assert.match(String(H.needsConsent('jenkins.run', { path: 'deploy', params: { ENV: 'production-eu' } })), /looks like production/);
+  assert.match(String(H.needsConsent('jenkins.rebuild', { path: 'a', params: { TARGET: 'PRD' } })), /looks like production/);
+  // Importing pasted text and turning Claude's access on are asked about; a file the person chose and turning it off are not.
+  assert.match(String(H.needsConsent('jenkins.importServers', { text: '{}' })), /^Add the Jenkins servers in this text\?/);
+  assert.equal(H.needsConsent('jenkins.importServers', {}), null);
+  assert.match(String(H.needsConsent('jenkins.claudeAccessSave', { enabled: true })), /^Let Claude sessions read Jenkins\?/);
+  assert.equal(H.needsConsent('jenkins.claudeAccessSave', { enabled: false }), null);
+  // Removing says what the verb will delete, from what it is told.
+  assert.match(H.needsConsent('jenkins.forget', { server: 's', what: 'a note' }), /^Remove everything saved for this Jenkins\?/);
+  assert.match(H.needsConsent('jenkins.forget', { server: 's', path: 'a/b', number: 3 }), /^Remove the saved copy of a\/b #3\?/);
+  assert.match(H.needsConsent('jenkins.exportServers', { ids: ['a', 'b'] }), /^Export 2 Jenkins servers to a file\?/);
+  assert.match(H.needsConsent('jenkins.exportServers', {}), /^Export all your Jenkins servers to a file\?/);
+  // The pipeline's own question is in the dialog; a rebuild asks like a run; switching things off asks, switching on does not.
+  assert.match(H.needsConsent('jenkins.inputSubmit', { message: 'Deploy 0.8.43 to production?', path: 'deploy-prod', number: 130, serverName: 'ci' }), /^Approve Deploy 0\.8\.43 to production\? for deploy-prod #130 on ci\?/);
+  assert.equal(H.consentAction(H.needsConsent('jenkins.inputSubmit', { path: 'a', number: 1 })), 'Approve');
+  assert.match(H.needsConsent('jenkins.inputAbort', { path: 'deploy-prod', number: 130 }), /^Abort deploy-prod #130 at its input step\?/);
+  assert.equal(H.consentAction(H.needsConsent('jenkins.inputAbort', { path: 'a', number: 1 })), 'Abort');
+  assert.match(H.needsConsent('jenkins.rebuild', { path: 'deploy-prod' }), /looks like production/);
+  assert.equal(H.needsConsent('jenkins.rebuild', { path: 'docs' }), null);
+  assert.match(H.needsConsent('jenkins.jobEnabled', { path: 'nightly', enabled: false }), /^Disable nightly\?/);
+  assert.equal(H.needsConsent('jenkins.jobEnabled', { path: 'nightly', enabled: true }), null);
+  assert.match(H.needsConsent('jenkins.nodeToggle', { name: 'build-arm-02', offline: true }), /^Disconnect build-arm-02 \(take it offline\)\?/);
+  assert.equal(H.needsConsent('jenkins.nodeToggle', { name: 'build-arm-02', offline: false }), null);
+  const trust = H.needsConsent('jenkins.trustCertificate', { serverName: 'kubrik-ci', fingerprint: 'AB:CD' });
+  assert.match(trust, /^Trust this certificate for kubrik-ci only\?/);
+  assert.match(trust, /Fingerprint: AB:CD/);
+  assert.equal(H.consentAction(trust), 'Trust');
+  // Looking at a certificate opens a connection to an address the caller names: reading builds must not allow it.
+  assert.equal(H.permitted({ trusted: false, permissions: ['jenkins.read'] }, 'jenkins.certificate'), false);
+  assert.equal(H.permitted({ trusted: false, permissions: ['jenkins.write'] }, 'jenkins.certificate'), true);
+  // Starting several at once, promoting a build to the next environment and starting one later all say what and where.
+  const many = H.needsConsent('jenkins.runMany', { jobs: ['a/x DEV', 'a/y PROD', 'b'], serverName: 'ci' });
+  assert.match(many, /^Run 3 jobs on ci\?/);
+  assert.match(many, /• a\/y PROD/);
+  assert.match(many, /look like production/);
+  assert.match(H.needsConsent('jenkins.runMany', { jobs: Array.from({ length: 12 }, (_, i) => `job-${i}`) }), /… and 4 more/);
+  assert.doesNotMatch(H.needsConsent('jenkins.runMany', { jobs: ['docs'] }), /production/);
+  assert.match(H.needsConsent('jenkins.promote', { from: 'TIMELOG MS DEV #171', to: 'TIMELOG MS PROD', serverName: 'ci' }), /^Promote TIMELOG MS DEV #171 to TIMELOG MS PROD on ci\?[\s\S]*looks like production/);
+  // The real call: objects, with the panel's own labels alongside — never "[object Object]".
+  const real = H.needsConsent('jenkins.promote', { from: { path: 'KUBRIK/TIMELOG/AGENT MS DEV', number: 4 }, to: { path: 'KUBRIK/TIMELOG/AGENT MS PROD' }, fromLabel: 'AGENT MS DEV #4', toLabel: 'AGENT MS PROD', serverName: 'beta' });
+  assert.match(real, /^Promote AGENT MS DEV #4 to AGENT MS PROD on beta\?/);
+  assert.match(real, /looks like production/);
+  // Without labels, the objects' own contents; a production path is still recognised.
+  const bare = H.needsConsent('jenkins.promote', { from: { path: 'a/x DEV', number: 9 }, to: { path: 'a/x PROD' } });
+  assert.match(bare, /^Promote a\/x DEV #9 to a\/x PROD\?/);
+  assert.match(bare, /looks like production/);
+  assert.doesNotMatch(bare + real, /\[object Object\]/);
+  assert.doesNotMatch(H.needsConsent('jenkins.promote', { from: { path: 'a/x DEV', number: 9 }, to: { path: 'a/x STAGING' } }), /production/);
+  assert.match(H.needsConsent('jenkins.scheduleRun', { path: 'a/b', when: 'Fri 18:00' }), /at Fri 18:00\?[\s\S]*only runs if Smart Terminal is open/);
+  assert.equal(H.consentAction(H.needsConsent('jenkins.promote', { to: 'x' })), 'Promote');
+  assert.equal(H.consentAction(H.needsConsent('jenkins.runMany', { jobs: ['a'] })), 'Run');
+  // A replay runs a script nobody reviewed, and a restart skips stages: both name the job, the build and the server.
+  assert.match(H.needsConsent('jenkins.replay', { path: 'a/b', number: 7, serverName: 'ci' }), /^Replay a\/b #7 on ci with an edited script\?/);
+  assert.match(H.needsConsent('jenkins.restartFromStage', { path: 'a/b', number: 7, stage: 'Deploy', serverName: 'ci' }), /from stage "Deploy"/);
+  assert.equal(H.consentAction(H.needsConsent('jenkins.replay', { path: 'a', number: 1 })), 'Replay');
+  assert.equal(H.consentAction(H.needsConsent('jenkins.restartFromStage', { path: 'a', number: 1, stage: 'x' })), 'Restart');
+  // Notes, parameter sets and opening a link are the person's own business on this computer.
+  for (const verb of ['jenkins.noteSet', 'jenkins.noteDelete', 'jenkins.presetSave', 'jenkins.openInBrowser', 'jenkins.lint', 'jenkins.failingStep']) assert.equal(H.needsConsent(verb, { path: 'x' }), null, verb);
+  // Taking the tokens out says so plainly: plain text, anybody who gets the file, and what to do about it.
+  const exported = H.needsConsent('jenkins.exportServers', { ids: ['a', 'b'] });
+  assert.match(exported, /^Export 2 Jenkins servers to a file\?/);
+  assert.match(exported, /plain text/);
+  assert.match(exported, /act as you/);
+  assert.equal(H.consentAction(exported), 'Export');
+  // Putting them in does not need asking: the person chose the file, and nothing leaves.
+  assert.equal(H.needsConsent('jenkins.importServers', {}), null);
+  // Removing what was kept on this computer says what, and where, and that Jenkins is not touched.
+  const forget = H.needsConsent('jenkins.forget', { path: 'a/b', number: 3, serverName: 'kubrik-ci' });
+  assert.match(forget, /^Remove the saved copy of a\/b #3 on kubrik-ci\?/);
+  assert.match(forget, /Jenkins is not touched/);
+  assert.equal(H.consentAction(forget), 'Remove');
+  // Looking at things asks nothing.
+  for (const verb of ['jenkins.job', 'jenkins.log', 'jenkins.follow', 'jenkins.favorite', 'jenkins.cancelQueued', 'jenkins.archive', 'jenkins.save', 'jenkins.archiveSettings']) assert.equal(H.needsConsent(verb, { path: 'x' }), null, verb);
+});

@@ -9,6 +9,7 @@ import type {
   SessionAnalysis,
   SessionGroup,
   Settings,
+  JenkinsPlace,
 } from './state/types';
 
 export interface PtyCreateOptions {
@@ -1063,6 +1064,17 @@ declare global {
         call(name: string, args?: unknown): Promise<{ ok: boolean; error?: string } & Record<string, unknown>>;
         onEvent(handler: (event: { type: string }) => void): () => void;
       };
+      /** Jenkins: every verb through one call, and one event for "something changed, read it again". */
+      jenkins: {
+        call(name: string, args?: unknown): Promise<{ ok?: boolean; error?: string; [key: string]: unknown }>;
+        onEvent(handler: (event: { type: string; [key: string]: unknown }) => void): () => void;
+        /** A Jenkins notification was clicked; where it was about. */
+        onOpen(handler: (place: JenkinsPlace) => void): () => void;
+        /** What a notification would have said, delivered inside the app. */
+        onNotice(handler: (notice: { title: string; body: string; place: JenkinsPlace | null; at: number }) => void): () => void;
+        /** The system refused to show a notification. */
+        onNoticeBlocked(handler: (info: { reason: string }) => void): () => void;
+      };
       review: {
         call(name: string, args?: unknown): Promise<{ ok: boolean; error?: string; [key: string]: unknown }>;
         onEvent(handler: (payload: { type: string; repoId?: string; prId?: number | null; [key: string]: unknown }) => void): () => void;
@@ -1121,6 +1133,8 @@ declare global {
           data: Uint8Array,
           type: string,
         ): Promise<{ ok: boolean; file?: string; bytes?: number; error?: string }>;
+        /** The dock's number (the taskbar's elsewhere): how much is waiting on you. */
+        setBadge(count: number): Promise<void>;
       };
       onMenuAction(handler: (payload: { id: string }) => void): () => void;
     };

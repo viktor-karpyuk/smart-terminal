@@ -1,11 +1,12 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { startDrag } from '../lib/resize';
 import { useShallow } from 'zustand/react/shallow';
-import { asFilePanel, REVIEWER_VIEW, useStore, type ReviewerPlace } from '../state/store';
+import { asFilePanel, JENKINS_VIEW, REVIEWER_VIEW, useStore, type JenkinsPlace, type ReviewerPlace } from '../state/store';
 import { allLeaves, allTabs, findLeaf, leafOfTab } from '../state/layout';
 import { SESSION_MIME } from '../lib/drag';
 import { sessionLabel, cutName, nameTip } from '../lib/labels';
 import { shortContext } from '../lib/extensionHost';
+import { agoShort, ancestorsOf, jenkinsDot, jenkinsHere } from '../lib/jenkinsTree';
 import { compactPath } from '../lib/labels';
 import { PathLabel } from './PathLabel';
 import { Popover } from './Popover';
@@ -20,8 +21,8 @@ import { useNameMax } from '../lib/useNameMax';
 export const SIDEBAR_MIN = 150;
 
 /** The lists the sidebar can show, in the order they arrive with. */
-type SidebarList = 'sessions' | 'folders' | 'monitor' | 'clusters' | 'reviewer';
-const DEFAULT_ORDER: SidebarList[] = ['sessions', 'folders', 'monitor', 'clusters', 'reviewer'];
+type SidebarList = 'sessions' | 'folders' | 'monitor' | 'clusters' | 'reviewer' | 'jenkins';
+const DEFAULT_ORDER: SidebarList[] = ['sessions', 'folders', 'monitor', 'clusters', 'reviewer', 'jenkins'];
 
 /**
  * One list: a heading that stays, and a body that scrolls on its own.
@@ -403,6 +404,7 @@ export function Sidebar() {
   // business re-rendering because a pod somewhere restarted.
   const hasClusters = useStore((s) => s.extensions.panels.some((panel) => panel.needs === 'kubernetes'));
   const hasReviewer = useStore((s) => s.extensions.panels.some((panel) => panel.id === REVIEWER_VIEW && !panel.error));
+  const hasJenkins = useStore((s) => s.extensions.panels.some((panel) => panel.id === JENKINS_VIEW && !panel.error));
   const authByProfile = useStore((s) => s.authByProfile);
   const updateSettings = useStore((s) => s.updateSettings);
 
@@ -422,7 +424,8 @@ export function Sidebar() {
     settings.sidebarShowFolders ||
     settings.sidebarShowMonitor ||
     (settings.sidebarShowClusters && hasClusters) ||
-    (settings.sidebarShowReviewer && hasReviewer);
+    (settings.sidebarShowReviewer && hasReviewer) ||
+    (settings.sidebarShowJenkins && hasJenkins);
   // Any list the order does not mention yet — the monitor, for a workspace saved
   // before it existed — goes on the end rather than disappearing.
   const ordered = [
@@ -437,6 +440,8 @@ export function Sidebar() {
     // somebody who does not run Kubernetes is a permanent empty box.
     clusters: settings.sidebarShowClusters && hasClusters,
     reviewer: settings.sidebarShowReviewer && hasReviewer,
+    // Only when the extension is there, like the reviewer's.
+    jenkins: settings.sidebarShowJenkins && hasJenkins,
   };
   const open = ordered.filter((which) => shown[which]);
   /*
@@ -450,6 +455,7 @@ export function Sidebar() {
     monitor: settings.sidebarMonitorCollapsed,
     clusters: settings.sidebarClustersCollapsed,
     reviewer: settings.sidebarReviewerCollapsed,
+    jenkins: settings.sidebarJenkinsCollapsed,
   };
 
   const grouped = useMemo(() => {
@@ -521,6 +527,8 @@ export function Sidebar() {
               <ClustersList />
             ) : which === 'reviewer' ? (
               <ReviewerList />
+            ) : which === 'jenkins' ? (
+              <JenkinsList />
             ) : (
               <MonitorList />
             )}
@@ -737,6 +745,578 @@ function ReviewerList() {
   );
 }
 
+/** A job or a folder, as Jenkins' service shapes it for a table or a tree. */
+interface JkRow {
+  kind: 'folder' | 'job';
+  name: string;
+  path: string;
+  status: string;
+  running: boolean;
+  count: number | null;
+  last: { number: number; status: string; timestamp: number | null; duration: number } | null;
+}
+interface JkBuild {
+  number: number;
+  status: string;
+  running: boolean;
+  timestamp: number | null;
+}
+interface JkView {
+  name: string;
+  path: string;
+  nested: boolean;
+  description?: string;
+  views: JkView[];
+}
+interface JkServer {
+  id: string;
+  name: string;
+  health: { ok: boolean; error: string | null } | null;
+}
+
+/** The views the app works out itself, in the order they are listed. */
+const JENKINS_SMART = [
+  { name: 'failing', label: 'Failing', tip: 'Jobs whose last build failed or is unstable' },
+  { name: 'running', label: 'Running', tip: 'Jobs with a build going right now' },
+  { name: 'unstable', label: 'Unstable', tip: 'Jobs whose last build finished unstable' },
+  { name: 'stale', label: 'Stale · 30 d+', tip: 'Jobs nobody has built in thirty days' },
+  { name: 'disabled', label: 'Disabled', tip: 'Jobs switched off in Jenkins' },
+] as const;
+
+/** One call to Jenkins' service. A refusal is an error here, like it is in the panel. */
+async function jenkinsCall<T = Record<string, unknown>>(name: string, args: Record<string, unknown> = {}): Promise<T> {
+  const reply = await window.api.jenkins.call(name, args);
+  if (reply && reply.ok === false) throw new Error(String(reply.error ?? 'Jenkins did not answer'));
+  return reply as unknown as T;
+}
+
+/** Longest list drawn under one line; a folder of two thousand jobs is for the panel's table, not a sidebar. */
+const JENKINS_ROWS_MAX = 200;
+
+/**
+ * Jenkins' menu, as a list beside the others.
+ *
+ * What Jenkins makes you click through folder by folder is one tree here, with
+ * what is wrong on its face: a folder says how many of its jobs are failing, a
+ * job a coloured dot, and a job unfolds onto its last builds. A switch above
+ * it turns the same space into the views — the ones the app works out, and the
+ * ones Jenkins keeps. Clicking a line shows the panel at that place, opening it
+ * if it is not open; the panel itself drops its own copy of all this.
+ *
+ * Nothing here polls. The service tells the app when a build starts or ends,
+ * and the lines that are open read again then.
+ */
+function JenkinsList() {
+  const collapsed = useStore((s) => s.settings.sidebarJenkinsCollapsed);
+  const mode = useStore((s) => s.settings.sidebarJenkinsMode ?? 'tree');
+  const savedServer = useStore((s) => s.settings.sidebarJenkinsServer ?? null);
+  const unfolded = useStore((s) => s.settings.sidebarJenkinsOpen);
+  const updateSettings = useStore((s) => s.updateSettings);
+  const openJenkinsAt = useStore((s) => s.openJenkinsAt);
+  const here = useStore(
+    useShallow((s) => {
+      const panel = Object.values(s.panels).find((one) => one.kind === 'extension' && one.viewId === JENKINS_VIEW && one.root === null);
+      return jenkinsHere(panel && panel.kind === 'extension' ? panel.resume : null);
+    }),
+  );
+
+  const [servers, setServers] = useState<JkServer[] | null>(null);
+  const [rows, setRows] = useState<Record<string, JkRow[]>>({});
+  const [builds, setBuilds] = useState<Record<string, JkBuild[]>>({});
+  const [views, setViews] = useState<JkView[] | null>(null);
+  const [smart, setSmart] = useState<Record<string, JkRow[]>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [found, setFound] = useState<JkRow[] | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // The server the panel is on wins: switching it there switches the list here, and an import that lands on a new one follows too.
+  const panelServer = servers?.find((one) => one.id === here.server)?.id ?? null;
+  const server = panelServer ?? servers?.find((one) => one.id === savedServer)?.id ?? servers?.[0]?.id ?? null;
+  useEffect(() => {
+    if (panelServer && panelServer !== savedServer) updateSettings({ sidebarJenkinsServer: panelServer });
+  }, [panelServer, savedServer, updateSettings]);
+  const serverRow = servers?.find((one) => one.id === server) ?? null;
+
+  // The latest of what the loaders need, for the callbacks that outlive a render.
+  const live = useRef({ server, rows, builds, smart, mode });
+  live.current = { server, rows, builds, smart, mode };
+
+  // What is unfolded belongs to one server: `a/b` open on one Jenkins is not a folder on another, and reading it there would be an error line.
+  const scoped = (key: string) => `${server ?? ''}|${key}`;
+  const isOpen = (key: string, fallback = false) => unfolded?.[scoped(key)] ?? fallback;
+  const setOpen = (key: string, on: boolean) => updateSettings({ sidebarJenkinsOpen: { ...(unfolded ?? {}), [scoped(key)]: on } });
+
+  const fail = (reason: unknown) => setError(String((reason as Error)?.message ?? reason));
+
+  /** The servers this app knows, and whether each answers. */
+  const readServers = useCallback(async () => {
+    try {
+      const reply = await jenkinsCall<{ servers: JkServer[] }>('overview');
+      setServers(reply.servers ?? []);
+    } catch (reason) {
+      fail(reason);
+      setServers([]);
+    }
+  }, []);
+
+  const loadRows = useCallback(async (key: string, verb: string, args: Record<string, unknown>, into: 'rows' | 'smart' = 'rows') => {
+    const id = live.current.server;
+    if (!id) return;
+    try {
+      const reply = await jenkinsCall<{ rows: JkRow[] }>(verb, { server: id, ...args });
+      if (live.current.server !== id) return;
+      (into === 'rows' ? setRows : setSmart)((before) => ({ ...before, [key]: reply.rows ?? [] }));
+      setError(null);
+    } catch (reason) {
+      fail(reason);
+    }
+  }, []);
+
+  const loadBuilds = useCallback(async (path: string) => {
+    const id = live.current.server;
+    if (!id) return;
+    try {
+      const reply = await jenkinsCall<{ builds?: JkBuild[] }>('job', { server: id, path });
+      if (live.current.server !== id) return;
+      setBuilds((before) => ({ ...before, [path]: (reply.builds ?? []).slice(0, 8) }));
+    } catch {
+      // A job that cannot be read shows no builds; the panel says why when it is opened.
+    }
+  }, []);
+
+  const loadViews = useCallback(async () => {
+    const id = live.current.server;
+    if (!id) return;
+    try {
+      const reply = await jenkinsCall<{ views: JkView[] }>('views', { server: id });
+      if (live.current.server !== id) return;
+      setViews(reply.views ?? []);
+      setError(null);
+    } catch (reason) {
+      fail(reason);
+    }
+  }, []);
+
+  /** What is wrong, counted: the smart views' sizes, and the failing jobs the folders add up. */
+  const loadSmart = useCallback(async () => {
+    const id = live.current.server;
+    if (!id) return;
+    const kinds = JENKINS_SMART.map((one) => one.name);
+    const answers = await Promise.all(kinds.map((kind) => jenkinsCall<{ rows: JkRow[] }>('smart', { server: id, kind }).catch(() => null)));
+    if (live.current.server !== id) return;
+    setSmart((before) => {
+      const next = { ...before };
+      kinds.forEach((kind, at) => {
+        if (answers[at]) next[kind] = answers[at]!.rows ?? [];
+      });
+      return next;
+    });
+  }, []);
+
+  /** Every line that is open, read again: a build began or ended somewhere. `changed` names the jobs that did, so their folders go first. */
+  const refresh = useCallback(async (changed: string[] = []) => {
+    const { rows: shown, builds: opened, mode: current } = live.current;
+    setRefreshing(true);
+    const jobs: Promise<unknown>[] = [loadSmart()];
+    const parents = new Set(changed.flatMap((path) => [path.split('/').slice(0, -1).join('/'), path]));
+    // The folders that hold what changed come first; capped, because forty open folders is not forty requests per build that ends.
+    const keys = Object.keys(shown).sort((a, b) => Number(parents.has(b.slice(b.indexOf(':') + 1))) - Number(parents.has(a.slice(a.indexOf(':') + 1))));
+    for (const key of keys.slice(0, 40)) {
+      if (key.startsWith('tree:')) jobs.push(loadRows(key, 'tree', { path: key.slice(5) }));
+      else if (key.startsWith('view:')) jobs.push(loadRows(key, 'viewJobs', { path: key.slice(5) }));
+    }
+    const openBuilds = Object.keys(opened).sort((a, b) => Number(parents.has(b)) - Number(parents.has(a)));
+    for (const path of openBuilds.slice(0, 20)) jobs.push(loadBuilds(path));
+    if (current === 'views') jobs.push(loadViews());
+    await Promise.allSettled(jobs);
+    setRefreshing(false);
+  }, [loadBuilds, loadRows, loadSmart, loadViews]);
+
+  useEffect(() => {
+    void readServers();
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let changedPaths: string[] = [];
+    const stop = window.api.jenkins.onEvent((event) => {
+      // The list of servers itself, or one's health: re-read who is there.
+      if (event.type === 'health' || event.type === 'servers') {
+        void readServers();
+        return;
+      }
+      // Only what changes the tree. A followed console says a line a second and a build's stage, the dashboard's numbers and Claude's calls say theirs: none of them moves a row, and each would restart the wait below for ever.
+      if (event.type !== 'changed' && event.type !== 'followed' && event.type !== 'recreated') return;
+      for (const list of [event.started, event.finished]) {
+        if (Array.isArray(list)) for (const one of list) if (one && typeof (one as { path?: unknown }).path === 'string') changedPaths.push((one as { path: string }).path);
+      }
+      if (typeof event.path === 'string') changedPaths.push(event.path);
+      // Gathered: a busy server says it many times a second.
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        const paths = changedPaths.slice(-200);
+        changedPaths = [];
+        void refresh(paths);
+      }, 800);
+    });
+    return () => {
+      if (timer) clearTimeout(timer);
+      stop();
+    };
+  }, [readServers, refresh]);
+
+  // A different server is a different tree: nothing of the last one stays.
+  useEffect(() => {
+    setRows({});
+    setBuilds({});
+    setViews(null);
+    setSmart({});
+    setFound(null);
+    setQuery('');
+    setError(null);
+    if (!server) return;
+    void loadRows('tree:', 'tree', { path: '' });
+    void loadSmart();
+    // Whatever was left open under the root is read again, so the tree comes back as it was.
+    const mine = `${server}|`;
+    for (const full of Object.keys(unfolded ?? {})) {
+      if (!unfolded?.[full] || !full.startsWith(mine)) continue;
+      const key = full.slice(mine.length);
+      if (key.startsWith('t:')) void loadRows(`tree:${key.slice(2)}`, 'tree', { path: key.slice(2) });
+      else if (key.startsWith('j:')) void loadBuilds(key.slice(2));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [server]);
+
+  useEffect(() => {
+    if (server && mode === 'views' && views === null) void loadViews();
+  }, [server, mode, views, loadViews]);
+
+  // The search box: asked for once typing has paused, and gone when it is empty.
+  useEffect(() => {
+    const text = query.trim();
+    if (!server || !text) {
+      setFound(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      void jenkinsCall<{ rows: JkRow[] }>('search', { server, q: text }).then(
+        (reply) => setFound(reply.rows ?? []),
+        (reason) => fail(reason),
+      );
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [query, server]);
+
+  /** The failing jobs, added up under each folder above them. */
+  const failingBelow = useMemo(() => {
+    const total: Record<string, number> = {};
+    for (const row of smart.failing ?? []) for (const folder of ancestorsOf(row.path)) total[folder] = (total[folder] ?? 0) + 1;
+    return total;
+  }, [smart.failing]);
+  const failingAll = smart.failing?.length ?? 0;
+
+  const open = (page: JenkinsPlace['page']) => openJenkinsAt({ server, page });
+
+  const toggleFolder = (path: string) => {
+    const on = !isOpen(`t:${path}`);
+    setOpen(`t:${path}`, on);
+    if (on && !rows[`tree:${path}`]) void loadRows(`tree:${path}`, 'tree', { path });
+  };
+  const toggleJob = (path: string) => {
+    const on = !isOpen(`j:${path}`);
+    setOpen(`j:${path}`, on);
+    if (on) void loadBuilds(path);
+  };
+
+  const jobTitle = (row: JkRow) =>
+    `${row.path}${row.last ? `\n#${row.last.number} · ${row.running ? 'running' : row.last.status}${row.last.timestamp ? ` · ${agoShort(row.last.timestamp)} ago` : ''}` : '\nNever built'}`;
+
+  /** A job: a dot, a name, and its last builds under it. */
+  const jobLine = (row: JkRow, depth: number, scope: string) => (
+    <Fragment key={`${scope}${row.path}`}>
+      <ReviewerRow
+        label={row.name}
+        depth={depth}
+        dot={jenkinsDot(row)}
+        // On a build's page the job lights too, unless its builds are unfolded and the build has a line of its own.
+        on={(here.type === 'job' || (here.type === 'build' && !isOpen(`j:${row.path}`))) && here.path === row.path}
+        count={0}
+        note={row.last ? `#${row.last.number}` : null}
+        title={jobTitle(row)}
+        expanded={isOpen(`j:${row.path}`)}
+        onExpand={() => toggleJob(row.path)}
+        onOpen={() => open({ type: 'job', path: row.path })}
+      />
+      {isOpen(`j:${row.path}`) &&
+        (builds[row.path] ?? []).map((build) => (
+          <ReviewerRow
+            key={`${scope}${row.path}#${build.number}`}
+            label={`#${build.number}`}
+            depth={depth + 1}
+            dot={jenkinsDot(build)}
+            on={here.type === 'build' && here.path === row.path && here.number === build.number}
+            count={0}
+            note={build.running ? 'running' : agoShort(build.timestamp)}
+            title={`${row.path} #${build.number}`}
+            onOpen={() => open({ type: 'build', path: row.path, number: build.number })}
+          />
+        ))}
+    </Fragment>
+  );
+
+  /** A folder: the failing jobs under it as a number, and its children when it is unfolded. */
+  const folderLine = (row: JkRow, depth: number): React.ReactNode => {
+    const below = failingBelow[row.path] ?? 0;
+    const children = rows[`tree:${row.path}`];
+    return (
+      <Fragment key={`tree:${row.path}`}>
+        <ReviewerRow
+          label={row.name}
+          depth={depth}
+          on={here.type === 'folder' && here.path === row.path}
+          count={below}
+          countTone="bad"
+          countTitle={`${below} failing under ${row.path}`}
+          note={below ? null : row.count !== null ? String(row.count) : null}
+          title={`${row.path}${row.count !== null ? ` — ${row.count} inside` : ''}`}
+          expanded={isOpen(`t:${row.path}`)}
+          onExpand={() => toggleFolder(row.path)}
+          onOpen={() => {
+            if (!isOpen(`t:${row.path}`)) toggleFolder(row.path);
+            open({ type: 'folder', path: row.path });
+          }}
+        />
+        {isOpen(`t:${row.path}`) && !children && <p className="sidebar-empty reviewer-nested" style={{ paddingLeft: 38 + depth * 14 }}>Reading…</p>}
+        {isOpen(`t:${row.path}`) && children && !children.length && (
+          <p className="sidebar-empty reviewer-nested" style={{ paddingLeft: 38 + depth * 14 }}>Nothing inside.</p>
+        )}
+        {isOpen(`t:${row.path}`) && children && rowsOf(children, depth + 1)}
+      </Fragment>
+    );
+  };
+
+  /** Folders first, then jobs, both as Jenkins named them; the long ones cut with a line saying so. */
+  const rowsOf = (list: JkRow[], depth: number): React.ReactNode => {
+    const ordered = [...list.filter((row) => row.kind === 'folder'), ...list.filter((row) => row.kind === 'job')];
+    return (
+      <>
+        {ordered.slice(0, JENKINS_ROWS_MAX).map((row) => (row.kind === 'folder' ? folderLine(row, depth) : jobLine(row, depth, 'tree:')))}
+        {ordered.length > JENKINS_ROWS_MAX && (
+          <p className="sidebar-empty" style={{ paddingLeft: 24 + depth * 14 }}>
+            {ordered.length - JENKINS_ROWS_MAX} more — search, or open the folder
+          </p>
+        )}
+      </>
+    );
+  };
+
+  /** A view Jenkins keeps: its nested views, and the jobs in it when it is unfolded. */
+  const viewLine = (view: JkView, depth: number): React.ReactNode => {
+    const key = `v:${view.path}`;
+    const jobs = rows[`view:${view.path}`];
+    const inside = view.views.length > 0;
+    return (
+      <Fragment key={key}>
+        <ReviewerRow
+          label={view.name}
+          depth={depth}
+          on={here.type === 'view' && here.kind === 'jenkins' && here.path === view.path}
+          count={0}
+          note={view.nested ? `${view.views.length} views` : jobs ? String(jobs.length) : null}
+          title={`${view.path}${view.description ? `\n${view.description}` : ''}\nA view Jenkins keeps — change it in Jenkins`}
+          expanded={isOpen(key)}
+          onExpand={() => {
+            const on = !isOpen(key);
+            setOpen(key, on);
+            if (on && !view.nested && !jobs) void loadRows(`view:${view.path}`, 'viewJobs', { path: view.path });
+          }}
+          onOpen={() => open({ type: 'view', kind: 'jenkins', path: view.path, name: view.name })}
+        />
+        {isOpen(key) && inside && view.views.map((child) => viewLine(child, depth + 1))}
+        {isOpen(key) && !view.nested && !jobs && <p className="sidebar-empty reviewer-nested" style={{ paddingLeft: 38 + depth * 14 }}>Reading…</p>}
+        {isOpen(key) && jobs && jobs.slice(0, JENKINS_ROWS_MAX).map((row) => (row.kind === 'job' ? jobLine(row, depth + 1, `${key}:`) : null))}
+      </Fragment>
+    );
+  };
+
+  const treeRoot = rows['tree:'];
+
+  return (
+    <List
+      id="jenkins"
+      collapsed={collapsed}
+      header={
+        <SectionHeader
+          id="jenkins"
+          label="Jenkins"
+          count={failingAll}
+          collapsed={collapsed}
+          onToggle={() => updateSettings({ sidebarJenkinsCollapsed: !collapsed })}
+          onClose={() => updateSettings({ sidebarShowJenkins: false })}
+          extra={
+            <>
+              <button
+                className="section-open"
+                title="Open the dashboard: what is failing, what is running, and what happened"
+                aria-label="Open the Jenkins dashboard"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  open({ type: 'dashboard' });
+                }}
+              >
+                <OpenInSectionIcon />
+              </button>
+              <button
+                className="section-open"
+                title={refreshing ? 'Reading Jenkins…' : 'Read Jenkins again'}
+                aria-label="Refresh Jenkins"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (!refreshing) void refresh();
+                }}
+              >
+                <RefreshIcon spinning={refreshing} />
+              </button>
+            </>
+          }
+        />
+      }
+    >
+      {servers && !servers.length && (
+        <>
+          <p className="sidebar-empty">No Jenkins connected.</p>
+          <button className="sidebar-item reviewer-row" onClick={() => openJenkinsAt({ page: { type: 'setup' } })}>
+            <span className="sidebar-item-title">Connect Jenkins…</span>
+          </button>
+        </>
+      )}
+
+      {server && (
+        <>
+          {servers && servers.length > 1 && (
+            <select
+              className="jenkins-server"
+              aria-label="Jenkins server"
+              value={server}
+              onChange={(event) => {
+                updateSettings({ sidebarJenkinsServer: event.target.value });
+                // The panel moves with it, when there is one to move: it would otherwise go on showing the other server.
+                if (here.server) openJenkinsAt({ server: event.target.value, page: { type: 'dashboard' } });
+              }}
+            >
+              {servers.map((one) => (
+                <option key={one.id} value={one.id}>
+                  {one.name}
+                  {one.health && !one.health.ok ? ' (not answering)' : ''}
+                </option>
+              ))}
+            </select>
+          )}
+          <input
+            className="jenkins-search"
+            placeholder="Find a job…"
+            value={query}
+            aria-label="Find a job"
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') setQuery('');
+            }}
+          />
+          {!query.trim() && (
+            <div className="jenkins-seg" role="tablist" aria-label="Show Jenkins as">
+              {(['tree', 'views'] as const).map((one) => (
+                <button
+                  key={one}
+                  role="tab"
+                  aria-selected={mode === one}
+                  className={mode === one ? 'is-on' : ''}
+                  onClick={() => updateSettings({ sidebarJenkinsMode: one })}
+                >
+                  {one === 'tree' ? 'Tree' : 'Views'}
+                </button>
+              ))}
+            </div>
+          )}
+          {serverRow?.health && !serverRow.health.ok && (
+            <p className="sidebar-empty jenkins-down" title={serverRow.health.error ?? ''}>
+              {serverRow.name} is not answering.
+            </p>
+          )}
+          {error && !(serverRow?.health && !serverRow.health.ok) && <p className="sidebar-empty">{error}</p>}
+
+          {/* What is running, what happened, and what was running at any moment: the page the list's totals add up to. */}
+          {!query.trim() && (
+            <ReviewerRow
+              label="Dashboard"
+              on={here.type === 'dashboard'}
+              dot={smart.running?.length ? 'run' : undefined}
+              count={0}
+              note={smart.running?.length ? `${smart.running.length} running` : null}
+              title="Everything running now, what happened over the last day or week, and what was running at any moment"
+              onOpen={() => open({ type: 'dashboard' })}
+            />
+          )}
+          {query.trim() ? (
+            <>
+              {found === null && <p className="sidebar-empty">Searching…</p>}
+              {found && !found.length && <p className="sidebar-empty">Nothing called that.</p>}
+              {found?.map((row) => (
+                <ReviewerRow
+                  key={`found:${row.path}`}
+                  label={row.name}
+                  dot={row.kind === 'job' ? jenkinsDot(row) : undefined}
+                  on={(here.type === 'job' || here.type === 'folder') && here.path === row.path}
+                  count={0}
+                  note={row.path.includes('/') ? row.path.slice(0, row.path.lastIndexOf('/')) : null}
+                  title={row.path}
+                  onOpen={() => open({ type: row.kind === 'folder' ? 'folder' : 'job', path: row.path })}
+                />
+              ))}
+            </>
+          ) : mode === 'tree' ? (
+            <>
+              {!treeRoot && !error && <p className="sidebar-empty">Reading…</p>}
+              {treeRoot && !treeRoot.length && <p className="sidebar-empty">Nothing here yet.</p>}
+              {treeRoot && rowsOf(treeRoot, 0)}
+            </>
+          ) : (
+            <>
+              <p className="jenkins-subhead">Live</p>
+              {JENKINS_SMART.map((one) => {
+                const jobs = smart[one.name];
+                const key = `g:${one.name}`;
+                return (
+                  <Fragment key={one.name}>
+                    <ReviewerRow
+                      label={one.label}
+                      on={here.type === 'view' && here.kind === 'smart' && here.name === one.name}
+                      dot={one.name === 'failing' ? 'bad' : one.name === 'running' ? 'run' : one.name === 'unstable' ? 'warn' : 'none'}
+                      count={one.name === 'failing' ? (jobs?.length ?? 0) : 0}
+                      countTone="bad"
+                      countTitle="Failing"
+                      note={one.name === 'failing' ? null : jobs ? String(jobs.length) : null}
+                      title={one.tip}
+                      expanded={isOpen(key)}
+                      onExpand={() => setOpen(key, !isOpen(key))}
+                      onOpen={() => open({ type: 'view', kind: 'smart', name: one.name })}
+                    />
+                    {isOpen(key) && !jobs && <p className="sidebar-empty reviewer-nested">Reading…</p>}
+                    {isOpen(key) && jobs && !jobs.length && <p className="sidebar-empty reviewer-nested">None.</p>}
+                    {isOpen(key) && jobs?.slice(0, JENKINS_ROWS_MAX).map((row) => jobLine(row, 1, `${key}:`))}
+                  </Fragment>
+                );
+              })}
+              <p className="jenkins-subhead">From Jenkins · read only</p>
+              {views === null && !error && <p className="sidebar-empty">Reading…</p>}
+              {views && !views.length && <p className="sidebar-empty">Jenkins has no views.</p>}
+              {views?.map((view) => viewLine(view, 0))}
+            </>
+          )}
+        </>
+      )}
+    </List>
+  );
+}
+
 /** One line of the reviewer's list, drawn like every other line in the sidebar. */
 function ReviewerRow({
   label,
@@ -749,12 +1329,18 @@ function ReviewerRow({
   onExpand,
   title,
   onOpen,
+  countTitle = 'Waiting on you',
+  countTone,
 }: {
   label: string;
   on: boolean;
   count: number;
+  /** What the number means, when it is not "waiting on you". */
+  countTitle?: string;
+  /** `bad` for a number that is a count of what is broken. */
+  countTone?: 'bad';
   note?: string | null;
-  dot?: 'ok' | 'warn' | 'bad' | 'none';
+  dot?: 'ok' | 'warn' | 'bad' | 'run' | 'none';
   /** How far into the tree: 0 for the menu itself, 1 under it, 2 under that. */
   depth?: number;
   /** Set on a line that folds: whether it is open, and what opens or closes it. */
@@ -769,6 +1355,18 @@ function ReviewerRow({
       style={{ paddingLeft: 6 + depth * 14 }}
       title={title}
       onClick={onOpen}
+      // The chevron is a mouse target; this is the same thing from the keyboard: → unfolds a line that folds, ← folds it.
+      onKeyDown={
+        onExpand
+          ? (event) => {
+              if ((event.key === 'ArrowRight' && !expanded) || (event.key === 'ArrowLeft' && expanded)) {
+                event.preventDefault();
+                onExpand();
+              }
+            }
+          : undefined
+      }
+      aria-expanded={onExpand ? expanded : undefined}
     >
       {/* Every line keeps the chevron's room, so each level reads as one column. */}
       <span
@@ -795,7 +1393,7 @@ function ReviewerRow({
       <span className="sidebar-item-title">{label}</span>
       {note && <span className="reviewer-note">{note}</span>}
       {count > 0 && (
-        <span className="reviewer-count" title="Waiting on you">
+        <span className={`reviewer-count${countTone ? ` is-${countTone}` : ''}`} title={countTitle}>
           {count}
         </span>
       )}
@@ -1212,7 +1810,7 @@ function LauncherButton({ viewId, title, icon }: { viewId: string; title: string
       aria-pressed={showing}
       onClick={() => useStore.getState().launchExtensionView(viewId)}
     >
-      {icon === 'review' ? <ReviewIcon /> : icon === 'teams' ? <TeamsIcon /> : icon === 'send' ? <SendIcon /> : <ExtensionsIcon />}
+      {icon === 'review' ? <ReviewIcon /> : icon === 'teams' ? <TeamsIcon /> : icon === 'send' ? <SendIcon /> : icon === 'jenkins' ? <JenkinsIcon /> : <ExtensionsIcon />}
     </button>
   );
 }
@@ -1236,6 +1834,24 @@ function TeamsIcon() {
       <path fillRule="evenodd" d="M11.5 4h8a2.5 2.5 0 0 1 2.5 2.5v11a2.5 2.5 0 0 1-2.5 2.5h-8a2.5 2.5 0 0 1-2.5-2.5v-11a2.5 2.5 0 0 1 2.5-2.5zM12.3 7.5h6.4v1.8h-2.3v7.2h-1.8v-7.2h-2.3z" />
       <circle cx="5.7" cy="5.9" r="3.1" />
       <path d="M1.1 18.9v-3a4.7 4.7 0 0 1 4.7-4.7h3.2v7.7z" />
+    </svg>
+  );
+}
+
+/**
+ * Jenkins, as Jenkins draws itself: the butler.
+ *
+ * The mark is from Simple Icons (CC0), in one colour so it takes the rest of
+ * the activity bar's text colour and lights with every other icon. The logo
+ * itself is the Jenkins project's, and is used here to say which tool this is.
+ */
+const JENKINS_MARK =
+  'M2.872 24h-.975a3.866 3.866 0 01-.07-.197c-.215-.666-.594-1.49-.692-2.154-.146-.984.78-1.039 1.374-1.465.915-.66 1.635-1.025 2.627-1.62.295-.179 1.182-.624 1.281-.829.201-.408-.345-.982-.49-1.3-.225-.507-.345-.937-.376-1.435-.824-.13-1.455-.627-1.844-1.185-.63-.925-1.066-2.635-.525-3.936.045-.103.254-.305.285-.463.06-.308-.105-.72-.12-1.048-.06-1.692.284-3.15 1.425-3.66.463-1.84 2.113-2.453 3.673-3.367.58-.342 1.224-.562 1.89-.807 2.372-.877 6.027-.712 7.994.783.836.633 2.176 1.97 2.656 2.939 1.262 2.555 1.17 6.825.287 9.934-.12.421-.29 1.032-.533 1.533-.168.35-.689 1.05-.625 1.36.064.314 1.19 1.17 1.432 1.395.434.422 1.26.975 1.324 1.5.07.557-.248 1.336-.41 1.875-.217.721-.436 1.441-.654 2.131H2.87zm11.104-3.54c-.545-.3-1.361-.622-2.065-.757-.87-.164-.78 1.188-.75 1.994.03.643.36 1.316.51 1.744.076.197.09.41.256.449.3.068 1.29-.326 1.575-.479.6-.328 1.064-.844 1.574-1.189.016-.17.016-.34.03-.508a2.648 2.648 0 00-1.095-.277c.314-.15.75-.15 1.035-.332l.016-.193c-.496-.03-.69-.254-1.021-.436zm7.454 2.935a17.78 17.78 0 00.465-1.752c.06-.287.215-.918.178-1.176-.059-.459-.684-.799-1.004-1.086-.584-.525-.95-.975-1.56-1.469-.249.375-.78.615-.983.914 1.447-.689 1.71 2.625 1.141 3.69.09.329.391.45.514.735l-.086.166h1.29c.013 0 .03 0 .044.014zm-6.634-.012c-.05-.074-.1-.135-.15-.209l-.301.195h.45zm2.77 0c.008-.209.018-.404.03-.598-.53.029-.825-.48-1.196-.527-.324-.045-.6.361-1.02.195-.095.105-.183.227-.284.316.154.18.295.375.424.584h.815c.014-.164.135-.285.3-.285.165 0 .284.121.284.27h.66zm2.116 0c-.314-.479-.947-.898-1.68-.555l-.03.541h1.71zm-8.51 0l-.104-.344c-.225-.72-.36-1.26-.405-1.68-.914-.436-1.875-.87-2.654-1.426-.15-.105-1.109-1.35-1.23-1.305-1.739.676-3.359 1.86-4.814 2.984.256.557.48 1.141.69 1.74h8.505zm8.265-2.113c-.029-.512-.164-1.56-.48-1.74-.66-.39-1.846.78-2.34.943.045.15.135.271.15.48.285-.074.645-.029.898.092-.299.03-.629.03-.824.164-.074.195.016.48-.029.764.69.197 1.5.303 2.385.332.164-.227.225-.645.211-1.082zm-4.08-.36c-.044.375.046.51.12.943 1.26.391 1.034-1.74-.135-.959zM8.76 19.5c-.45.457 1.27 1.082 1.814 1.115 0-.29.165-.564.135-.77-.65-.118-1.502-.042-1.945-.347zm5.565.215c0 .043-.061.03-.068.064.58.451 1.014.545 1.802.51.354-.262.67-.563 1.043-.807-.855.074-1.931.607-2.774.23zm3.42-17.726c-1.606-.906-4.35-1.591-6.076-.731-1.38.692-3.27 1.84-3.899 3.292.6 1.402-.166 2.686-.226 4.109-.018.757.36 1.42.391 2.242-.2.338-.825.38-1.26.356-.146-.729-.4-1.549-1.155-1.63-1.064-.116-1.845.764-1.89 1.683-.06 1.08.833 2.864 2.085 2.745.488-.046.608-.54 1.139-.54.285.57-.445.75-.523 1.154-.016.105.06.511.104.705.233.944.744 2.16 1.245 2.88.635.9 1.884 1.051 3.229 1.141.24-.525 1.125-.48 1.706-.346-.691-.27-1.336-.945-1.875-1.529-.615-.676-1.23-1.41-1.261-2.28 1.155 1.604 2.1 3 4.2 3.704 1.59.525 3.45-.254 4.664-1.109.51-.359.811-.93 1.17-1.439 1.35-1.936 1.98-4.71 1.846-7.394-.06-1.111-.06-2.221-.436-2.955-.389-.781-1.695-1.471-2.475-.781-.15-.764.63-1.23 1.545-.96-.66-.854-1.336-1.858-2.266-2.384zM13.58 14.896c.615 1.544 2.724 1.363 4.505 1.323-.084.194-.256.435-.465.515-.57.232-2.145.408-2.937-.012-.506-.27-.824-.873-1.102-1.227-.137-.172-.795-.608-.012-.609zm.164-.87c.893.464 2.52.517 3.731.48.066.267.066.593.068.913-1.55.08-3.386-.304-3.794-1.395h-.005zm6.675-.586c-.473.9-1.145 1.897-2.539 1.928-.023-.284-.045-.735 0-.904 1.064-.103 1.727-.646 2.543-1.017zm-.649-.667c-1.02.66-2.154 1.375-3.824 1.21-.351-.31-.485-1-.14-1.458.181.313.06.885.57.97.944.165 2.038-.579 2.73-.84.42-.713-.046-.976-.42-1.433-.782-.93-1.83-2.1-1.802-3.51.314-.224.346.346.391.45.404.96 1.424 2.175 2.174 3 .18.21.48.39.51.524.092.39-.254.854-.209 1.11zm-13.439-.675c-.314-.184-.393-.99-.768-1.01-.535-.03-.438 1.05-.436 1.68-.37-.33-.435-1.365-.164-1.89-.308-.15-.445.164-.618.284.22-1.59 2.34-.734 1.99.96zM4.713 5.995c-.685.756-.54 2.174-.459 3.188 1.244-.785 2.898.06 2.883 1.394.595-.016.223-.744.115-1.215-.353-1.528.592-3.187.041-4.59-1.064.084-1.939.52-2.578 1.215zm9.12 1.113c.307.562.404 1.148.84 1.57.195.19.574.424.387.95-.045.121-.365.391-.551.45-.674.195-2.254.03-1.721-.81.563.015 1.314.36 1.732-.045-.314-.524-.885-1.53-.674-2.13zm6.198-.013h.068c.33.668.6 1.375 1.004 1.965-.27.628-2.053 1.19-2.023.057.39-.17 1.05-.035 1.395-.25-.193-.556-.48-1.006-.434-1.771zm-6.927-1.617c-1.422-.33-2.131.592-2.56 1.553-.384-.094-.231-.615-.135-.883.255-.701 1.28-1.633 2.119-1.506.359.057.848.386.576.834zM9.642 1.593c-1.56.44-3.56 1.574-4.2 2.974.495-.07.84-.321 1.33-.351.186-.016.428.074.641.015.424-.104.78-1.065 1.102-1.41.31-.345.685-.496.94-.81.167-.09.409-.074.42-.33-.073-.075-.15-.135-.232-.105v.017z';
+
+function JenkinsIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d={JENKINS_MARK} />
     </svg>
   );
 }
@@ -1286,10 +1902,11 @@ function ActivityBar() {
    * Compared by id, so a new array with the same views is not a new render.
    */
   const launchers = useStore(
-    useShallow((s) => s.extensions.panels.filter((view) => view.launcher && !view.error && view.id !== REVIEWER_VIEW)),
+    useShallow((s) => s.extensions.panels.filter((view) => view.launcher && !view.error && view.id !== REVIEWER_VIEW && view.id !== JENKINS_VIEW)),
   );
   // The reviewer has a list of its own now, so its button shows the list rather than opening the panel.
   const hasReviewer = useStore((s) => s.extensions.panels.some((panel) => panel.id === REVIEWER_VIEW && !panel.error));
+  const hasJenkins = useStore((s) => s.extensions.panels.some((panel) => panel.id === JENKINS_VIEW && !panel.error));
   const setProfileEditorOpen = useStore((s) => s.setProfileEditorOpen);
   const setUsagePanelOpen = useStore((s) => s.setUsagePanelOpen);
   const setHistoryOpen = useStore((s) => s.setHistoryOpen);
@@ -1357,6 +1974,18 @@ function ActivityBar() {
           onClick={() => updateSettings({ sidebarShowReviewer: !settings.sidebarShowReviewer })}
         >
           <ReviewIcon />
+        </button>
+      )}
+
+      {hasJenkins && (
+        <button
+          className={`activity${settings.sidebarShowJenkins ? ' is-on' : ''}`}
+          data-tip="Jenkins"
+          aria-label="Jenkins"
+          aria-pressed={settings.sidebarShowJenkins}
+          onClick={() => updateSettings({ sidebarShowJenkins: !settings.sidebarShowJenkins })}
+        >
+          <JenkinsIcon />
         </button>
       )}
 

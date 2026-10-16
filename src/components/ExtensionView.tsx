@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { claudeForPanel, streamsFor, whereEachPanelWas } from '../lib/panelHolds';
 import { attachFrame, parkFrame } from '../lib/frameKeeper';
-import { REVIEWER_VIEW, useStore } from '../state/store';
+import { JENKINS_VIEW, REVIEWER_VIEW, useStore } from '../state/store';
 import { leafOfTab, parentOf } from '../state/layout';
 import type { ExtensionPanelView } from '../global';
 import {
@@ -410,7 +410,8 @@ function Frame({
        * batch are let through for a minute — not for ever, and never for a
        * batch nobody said yes to.
        */
-      const batch = typeof args.batch === 'string' ? args.batch : '';
+      // Not for Jenkins: its `kind` is always empty, so one "yes" to stopping a build would cover any number of other stops, approvals or runs. A batch there is one verb (`runMany`) that asks once, listing every job.
+      const batch = typeof args.batch === 'string' && !name.startsWith('jenkins.') ? args.batch : '';
       const covered = batch ? approvedBatches.current.get(batch) : undefined;
       // Only the rest of what was asked about: the same verb, the same kind, and no more of them than were counted.
       if (question && covered && covered.verb === name && covered.kind === String(args.kind ?? '') && covered.left > 0) {
@@ -470,6 +471,10 @@ function Frame({
           // Nothing of a folder's here either: the subjects are people, and the
           // credentials never leave the main process.
           return reply(true, await window.api.teams.call(name.slice(6), args), undefined);
+        }
+        if (channel === 'jenkins') {
+          // Servers and their tokens are the main process's: nothing here names an address or holds a credential.
+          return reply(true, await window.api.jenkins.call(name.slice(8), args), undefined);
         }
         if (channel === 'kube-stream') {
           return reply(true, await stream(name.slice(5), args), undefined);
@@ -680,6 +685,17 @@ function Frame({
         return { ok: true, sessionId, command: line };
       }
 
+      // A build that failed: the app reads the build, what changed and the end of the console, and hands it over.
+      if (name === 'jenkins.ask') {
+        const found = await window.api.jenkins.call('brief', { server: args.server, path: args.path, number: args.number });
+        if (found.ok === false) return found;
+        const sessionId = await claudeFor(panelId, { title: `ask ${String(found.title ?? 'build')}` });
+        if (!sessionId) return { ok: false, error: 'the app could not open a session' };
+        store.focusSession(sessionId);
+        const handed = await window.api.analysis.handOver(sessionId, String(found.text ?? ''));
+        return { ok: true, sessionId, delivered: handed.delivered ?? false };
+      }
+
       // Ask Claude. The evidence is gathered by the app, in the app's words.
       const brief = await window.api.kube.call('brief', {
         ...where,
@@ -878,6 +894,13 @@ function Frame({
     return window.api.teams.onEvent((payload) => tell('teams', payload));
   }, [view.listens]);
 
+  // Jenkins has no push channel, so the app makes one: a build began or ended, a
+  // followed console grew, the server stopped answering. The panel reads again.
+  useEffect(() => {
+    if (!view.listens?.includes('jenkins')) return;
+    return window.api.jenkins.onEvent((payload) => tell('jenkins', payload));
+  }, [view.listens]);
+
   // The working tree moved: the panel is told, and decides for itself what of
   // its picture is now wrong. The app does not guess on its behalf.
   useEffect(() => {
@@ -916,9 +939,13 @@ function Frame({
    */
   const navInSidebar = useStore(
     (s) =>
-      view.id === REVIEWER_VIEW &&
-      s.settings.sidebarShowReviewer &&
-      s.extensions.panels.some((panel) => panel.id === REVIEWER_VIEW && !panel.error),
+      (view.id === REVIEWER_VIEW &&
+        s.settings.sidebarShowReviewer &&
+        s.extensions.panels.some((panel) => panel.id === REVIEWER_VIEW && !panel.error)) ||
+      // Jenkins' tree and views, the same way: the sidebar shows them, the panel keeps the room.
+      (view.id === JENKINS_VIEW &&
+        s.settings.sidebarShowJenkins &&
+        s.extensions.panels.some((panel) => panel.id === JENKINS_VIEW && !panel.error)),
   );
   const navInSidebarRef = useRef(navInSidebar);
   useEffect(() => {

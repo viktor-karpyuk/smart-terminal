@@ -241,6 +241,60 @@ const TEAMS_VERBS = new Map<string, Channel>(
   [...TEAMS_READ, ...TEAMS_WRITE].map((name) => [name, 'teams'] as [string, Channel]),
 );
 
+/**
+ * Jenkins. Reading is separate from changing, and "changing" includes the
+ * servers themselves: `testServer` makes a request to whatever address it is
+ * given, with whatever credentials it is given, so an extension that may only
+ * read builds must not be able to point it somewhere else.
+ */
+const JENKINS_READ = [
+  'overview', 'home', 'tree', 'views', 'viewJobs', 'smart', 'search', 'job', 'build', 'stages', 'log',
+  'followLog', 'stopLog', 'brief', 'queue', 'agents', 'archive',
+  // The dashboard: what is running, what happened over a range, and what was running at one moment.
+  'dashboard', 'timeline', 'runningAt',
+  // Why a build failed and why one does not start; checking a Jenkinsfile; what the local archive remembers.
+  'failingStep', 'whyNotRunning', 'lint', 'replayScript', 'searchArchive', 'seenBefore', 'notes', 'link', 'presets',
+  // Whether Claude sessions may look at Jenkins, and what they looked at.
+  'claudeAccess',
+  // Launching: what to launch next and with what, what was launched before, the services-by-environment board, and the dashboard's richer views.
+  'launchpad', 'launchHistory', 'launchPlan', 'paramPlan', 'promoteCandidates', 'schedules', 'board', 'heatmap', 'insights', 'report', 'wallboard',
+  // What the person is told about, per server — and a panel saying it is looking, so the server is read often while it is.
+  'notifySettings', 'watch',
+  // Waiting for an approval, what changed since the last green build, and the test results.
+  'pendingInput', 'compare', 'tests',
+] as const;
+const JENKINS_WRITE = [
+  'saveServer', 'testServer', 'deleteServer', 'run', 'stop', 'follow', 'favorite', 'cancelQueued',
+  // What finished builds leave on this computer: how much, for how long, and getting rid of it.
+  'archiveSettings', 'save', 'forget',
+  // Servers from a JSON file the person picks: it adds credentials, so it is the servers' own permission.
+  'importServers',
+  // The same file the other way: it writes the tokens in the clear, so it is a change and asks first.
+  'exportServers',
+  // Starting builds in new ways, and what is kept only on this computer (notes, parameter sets).
+  'replay', 'restartFromStage', 'noteSet', 'noteDelete', 'openInBrowser', 'presetSave', 'presetDelete',
+  'claudeAccessSave',
+  // Starting several builds, promoting one environment's build to the next, and starting one later.
+  'runMany', 'promote', 'scheduleRun', 'scheduleCancel', 'boardSettings',
+  'notifySettingsSave',
+  // Answering a pipeline's question, starting a build again, switching a job or an agent on and off.
+  'inputSubmit', 'inputAbort', 'rebuild', 'jobEnabled', 'nodeToggle',
+  /*
+   * Certificates. Looking at one is a WRITE on purpose: `certificate` opens a
+   * connection to whatever address it is given, so an extension that may only
+   * read builds must not be able to probe addresses with it — the same reason
+   * `testServer` is here.
+   */
+  'certificate', 'trustCertificate', 'forgetCertificate',
+] as const;
+/** A Claude session handed what the app gathered about a build. */
+const JENKINS_APP = ['ask'] as const;
+const JENKINS_VERBS = new Map<string, Channel>([
+  ...JENKINS_READ.map((name) => [name, 'jenkins'] as [string, Channel]),
+  ...JENKINS_WRITE.map((name) => [name, 'jenkins'] as [string, Channel]),
+  ...JENKINS_APP.map((name) => [name, 'app'] as [string, Channel]),
+]);
+
 const REVIEW_VERBS = new Map<string, Channel>([
   ...REVIEW_READ.map((name) => [name, 'review'] as [string, Channel]),
   ...REVIEW_WRITE.map((name) => [name, 'review'] as [string, Channel]),
@@ -255,7 +309,7 @@ const KUBE_VERBS = new Map<string, Channel>([
   ...KUBE_APP.map((name) => [name, 'app'] as [string, Channel]),
 ]);
 
-export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review' | 'teams';
+export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review' | 'teams' | 'jenkins';
 
 /**
  * Which door a call goes through, or none.
@@ -274,6 +328,7 @@ export function route(name: string): Channel | null {
   if (name.startsWith('build.')) return BUILD_VERBS.get(name.slice(6)) ?? null;
   if (name.startsWith('review.')) return REVIEW_VERBS.get(name.slice(7)) ?? null;
   if (name.startsWith('teams.')) return TEAMS_VERBS.get(name.slice(6)) ?? null;
+  if (name.startsWith('jenkins.')) return JENKINS_VERBS.get(name.slice(8)) ?? null;
   return null;
 }
 
@@ -294,6 +349,8 @@ export const PERMISSIONS: Record<string, string> = {
   review: 'Use the Code Reviewer: pull requests, findings, comments, merges',
   teams: "Change the Teams connection's settings",
   deliver: 'Send messages to people in Teams, in its own name',
+  'jenkins.read': 'Read your Jenkins servers: jobs, builds, logs, queue and agents',
+  'jenkins.write': 'Change what Jenkins does: run and stop builds, and the servers this app knows',
   terminal: 'Open terminals and Claude sessions about what it shows',
 };
 
@@ -314,6 +371,7 @@ export function permissionFor(name: string): string | null {
   if (channel === 'kube') return (KUBE_READ as readonly string[]).includes(name.slice(5)) ? 'kube.read' : 'kube.write';
   if (channel === 'kube-stream') return KUBE_READ_STREAMS.has(name.slice(5)) ? 'kube.read' : 'kube.write';
   if (channel === 'helm') return (HELM_READ as readonly string[]).includes(name.slice(5)) ? 'helm.read' : 'helm.write';
+  if (channel === 'jenkins') return (JENKINS_READ as readonly string[]).includes(name.slice(8)) ? 'jenkins.read' : 'jenkins.write';
   return channel;
 }
 
@@ -339,8 +397,21 @@ export function permitted(view: { trusted?: boolean; permissions?: string[] }, n
   if (view.trusted) return true;
   if (SHIPPED_ONLY.has(name)) return false;
   const needed = permissionFor(name);
-  return needed !== null && (view.permissions ?? []).includes(needed);
+  const granted = view.permissions ?? [];
+  if (needed === null || !granted.includes(needed)) return false;
+  // Some calls reach further than their own door: asking Claude about a build reads that build's console.
+  return (ALSO_NEEDS[name] ?? []).every((extra) => granted.includes(extra));
 }
+
+/**
+ * What a call needs on top of the permission its door names.
+ *
+ * `jenkins.ask` is the app's door to a Claude session, so it needs `terminal`
+ * — but it also reads a build and its console out of Jenkins to write the
+ * briefing, which an extension with no word about Jenkins must not be able to
+ * do by asking for a terminal.
+ */
+const ALSO_NEEDS: Record<string, string[]> = { 'jenkins.ask': ['jenkins.read'] };
 
 export function allowed(name: string): boolean {
   return route(name) !== null;
@@ -355,6 +426,158 @@ export function allowed(name: string): boolean {
  * branch git itself would have refused to delete. In a cluster it is anything
  * that takes a running thing away.
  */
+/**
+ * Jenkins. A build is not a pod: stopping one throws away what it had done,
+ * and running a deploy job is the same click whichever environment it points
+ * at. So the question names the job and the server, and a job that looks like
+ * production says so — the same reason the Kubernetes ones name the namespace.
+ */
+function jenkinsConsent(name: string, args: Record<string, unknown>): string | null {
+  const where = args.serverName ? ` on ${shown(args.serverName, 60)}` : '';
+  const job = shown(args.path ?? 'this job');
+  const number = shown(args.number ?? '', 12);
+  if (name === 'jenkins.stop') {
+    return args.hard
+      ? `Kill ${job} #${number}${where}?\n\nIt is stopped without being asked to clean up.`
+      : `Stop ${job} #${number}${where}?\n\nWhat it has done so far is thrown away.`;
+  }
+  if (name === 'jenkins.inputSubmit') {
+    // The pipeline's own question, in its own words — one line of it: approving without reading it is the click that goes wrong.
+    return `Approve ${shown(args.message ?? 'this input', 200)} for ${job} #${number}${where}?\n\nThe build goes on past this point.`;
+  }
+  if (name === 'jenkins.inputAbort') {
+    return `Abort ${job} #${number}${where} at its input step?\n\nThe build ends as aborted.`;
+  }
+  if (name === 'jenkins.jobEnabled') {
+    return args.enabled === false ? `Disable ${job}${where}?\n\nIt is not built again until somebody enables it.` : null;
+  }
+  if (name === 'jenkins.nodeToggle') {
+    // "Disconnect" leads, because the button says the question's first word.
+    return args.offline === true
+      ? `Disconnect ${shown(args.name ?? 'this agent', 80)}${where} (take it offline)?\n\nBuilds waiting for it do not start until it is back.`
+      : null;
+  }
+  if (name === 'jenkins.trustCertificate') {
+    const print = args.fingerprint ? `\n\nFingerprint: ${shown(args.fingerprint, 120)}` : '';
+    return `Trust this certificate for ${shown(args.serverName ?? 'this Jenkins', 60)} only?\n\nConnections to that server will accept it from now on. Nothing else is trusted.${print}`;
+  }
+  if (name === 'jenkins.run' || name === 'jenkins.rebuild') {
+    const values = args.params && typeof args.params === 'object' ? Object.values(args.params as Record<string, unknown>).map((value) => String(value ?? '')) : [];
+    return looksLikeProduction(String(args.path ?? '')) || values.some(looksLikeProduction)
+      ? `Run ${job}${where}?\n\nThis looks like production.`
+      : null;
+  }
+  if (name === 'jenkins.runMany') {
+    // Several at once is the click that is easy to get wrong: the count and the names are the whole question, and they are the ones the verb will run.
+    const items = Array.isArray(args.items)
+      ? (args.items as Array<{ path?: unknown }>).map((one) => String(one?.path ?? ''))
+      : (Array.isArray(args.jobs) ? args.jobs : []).map(String);
+    const list = items.slice(0, 8).map((one) => `• ${shown(one)}`).join('\n');
+    const more = items.length > 8 ? `\n… and ${items.length - 8} more` : '';
+    const production = items.some(looksLikeProduction);
+    return `Run ${items.length || 'these'} job${items.length === 1 ? '' : 's'}${where}?\n\n${list}${more}${production ? '\n\nOne or more of these look like production.' : ''}`;
+  }
+  if (name === 'jenkins.promote') {
+    /*
+     * The verb takes `from` as { path, number } and `to` as { path }, so the
+     * question names those — never the objects themselves, which read as
+     * "[object Object]" — and the panel's own shorter words only when they are
+     * the end of what it will really use.
+     */
+    const named = (value: unknown): string => {
+      if (value && typeof value === 'object') {
+        const one = value as { path?: unknown; number?: unknown };
+        const path = String(one.path ?? '');
+        return one.number !== undefined && one.number !== null ? `${path} #${String(one.number)}` : path;
+      }
+      return String(value ?? '');
+    };
+    const real = (value: unknown, label: unknown, fallback: string): string => {
+      const full = named(value);
+      const short = String(label ?? '');
+      return shown(short && full.endsWith(short) ? short : full || fallback, 120);
+    };
+    const to = real(args.to, args.toLabel, 'the next environment');
+    const production = looksLikeProduction(named(args.to) || to);
+    return `Promote ${real(args.from, args.fromLabel, 'this build')} to ${to}${where}?\n\nIt starts ${to} with the parameters of that build.${production ? '\n\nThis looks like production.' : ''}`;
+  }
+  if (name === 'jenkins.scheduleRun') {
+    // The time the verb will use, written by the host, not a string the panel chose.
+    const at = Number(args.at);
+    const when = Number.isFinite(at) && at > 0 ? new Date(at).toLocaleString() : shown(args.when ?? 'the time you chose', 60);
+    return `Run ${job}${where} at ${when}?\n\nIt only runs if Smart Terminal is open then; nothing runs on its own after that.`;
+  }
+  if (name === 'jenkins.replay') {
+    // A replay is a build with a script nobody reviewed: it runs with everything the job may touch.
+    return `Replay ${job} #${number}${where} with an edited script?\n\nThe edited script runs in Jenkins with whatever access the job has.`;
+  }
+  if (name === 'jenkins.restartFromStage') {
+    return `Restart ${job} #${number}${where} from stage "${shown(args.stage ?? '', 80)}"?\n\nIt starts a new build that skips the stages before it.`;
+  }
+  if (name === 'jenkins.exportServers') {
+    // What the verb will write: the servers it was told, or all of them.
+    const count = Array.isArray(args.ids) ? args.ids.length : null;
+    const what = count === null ? 'all your Jenkins servers' : `${count} Jenkins server${count === 1 ? '' : 's'}`;
+    return `Export ${what} to a file?\n\nThe file will hold the API tokens in plain text: anybody who gets it can act as you in Jenkins. Keep it somewhere safe, and delete it when you are done.`;
+  }
+  if (name === 'jenkins.importServers') {
+    // From a file, the system's own dialog is the person's consent. From text the panel hands over, nothing was chosen: ask.
+    return typeof args.text === 'string'
+      ? 'Add the Jenkins servers in this text?\n\nTheir tokens are stored in this app, and a server that already exists has its token replaced.'
+      : null;
+  }
+  if (name === 'jenkins.claudeAccessSave') {
+    return args.enabled === false
+      ? null
+      : 'Let Claude sessions read Jenkins?\n\nEvery Claude session in this app can then read builds, logs and the dashboard — with secrets masked first — and ask you to run a job. It can never run one without asking.';
+  }
+  if (name === 'jenkins.forget') {
+    // What it removes is on this computer only, and nothing brings back what Jenkins has already thrown away. Said from what the verb will delete.
+    const path = args.path ? shown(args.path) : '';
+    const what = path ? (args.number ? `the saved copy of ${path} #${shown(args.number, 12)}` : `everything saved for ${path}`) : 'everything saved for this Jenkins';
+    return `Remove ${what}${where}?\n\nIt is deleted from this computer. Jenkins is not touched — but if Jenkins has already discarded it, it is gone for good.`;
+  }
+  if (name === 'jenkins.deleteServer') {
+    return `Forget ${shown(args.serverName ?? 'this Jenkins', 60)}?\n\nIts token is removed from this app, along with the favorites and follows kept for it.`;
+  }
+  return null;
+}
+
+/**
+ * One line of something that came from outside, fit to sit in a question.
+ *
+ * Job names, pipeline messages and server labels are other people's words, and
+ * a blank line in one would read as a paragraph of the question itself:
+ * "Approve Deploy to PROD?\n\nThis is totally safe." — so line breaks, control
+ * and direction characters are flattened to spaces and the length is bounded.
+ */
+function shown(value: unknown, max = 120): string {
+  const text = String(value ?? '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩﻿]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text.length > max ? `${text.slice(0, Math.max(1, max - 1))}…` : text;
+}
+
+/**
+ * Whether a job's name, or a parameter's value, says it is production.
+ *
+ * A word on its own — separated by anything that is not a letter or digit, so
+ * `TIMELOG MS PROD`, `deploy-prod`, `app/prod/apply` and `ENV=production-eu`
+ * all count and `reproduce-bug` does not — plus `prd`, `live`, `preprod`, and
+ * the camel-case `deployProd`. Anything that reads as production asks; being
+ * asked once too often is cheaper than a deploy nobody was asked about.
+ */
+export function looksLikeProduction(text: string): boolean {
+  const value = String(text ?? '');
+  return (
+    /(^|[^A-Za-z0-9])(prod(uction)?|prd|live)([^A-Za-z0-9]|$)/i.test(value) ||
+    /pre-?prod/i.test(value) ||
+    /[a-z]Prod(uction)?(?![a-z])/.test(value)
+  );
+}
+
 export function needsConsent(name: string, args: Record<string, unknown>): string | null {
   if (name === 'push' && args?.force) {
     return 'Force-push, overwriting what is on the remote?';
@@ -386,6 +609,8 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
    * difference between the two, and a dialog that omits them is a dialog people
    * learn to click through.
    */
+  if (name.startsWith('jenkins.')) return jenkinsConsent(name, args);
+
   if (name.startsWith('kube.')) {
     const where = whereItIs(args);
     const what = `${String(args.kind ?? 'resource')} ${String(args.name ?? '')}`.trim();
