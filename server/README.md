@@ -7,7 +7,8 @@ A company's own server for Smart Terminal. Developers sign in to it from the app
 - which **tickets** that work is on, found in branch names, session titles and commit subjects;
 - how much of each developer's **Claude usage** is left: the session and the week;
 - time per repository, ticket, **project** and **team**, over the last 7 or 30 days;
-- each developer's own numbers, which they see too (and only theirs).
+- each developer's own numbers, which they see too (and only theirs);
+- for a **team lead**, all of that for the teams they lead, and nobody else.
 
 No dependencies: Node 22.5 or newer (`node:sqlite`), one SQLite file.
 
@@ -62,7 +63,7 @@ The proxy in front has to pass WebSocket upgrades (`/api/app/relay`,
 ## Accounts
 
 In the backoffice, **Accounts → Add an account**: an e-mail, a name, a role
-(Developer or Administrator), and how they sign in:
+(Developer, Team lead or Administrator), and how they sign in:
 
 - **a password made for them**, shown once to the administrator;
 - **a password you type**;
@@ -72,6 +73,13 @@ Disabling an account signs out every device it is signed in on, at once.
 
 Give people a **team** (Add an account, or Edit on Accounts): Team can then show
 one team at a time, and time adds up by team.
+
+A **team lead** is a developer who leads one or more teams (*Leads* under Edit on
+Accounts, or Team lead when adding them). They see the Team and Where the time
+went pages for those teams only: who is working, how many sessions each person
+has open and on which tickets, their time, their Claude usage, and an export of
+it. Accounts, settings, the activity log and signing out devices stay with the
+administrators. Every change of who leads what is in the activity log.
 
 ## Projects and keeping data
 

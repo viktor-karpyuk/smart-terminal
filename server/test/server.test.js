@@ -144,7 +144,7 @@ test('members cannot reach the backoffice, and see only themselves', async () =>
     const mia = await s.webLogin('mia@acme.com', made.json.password);
     assert.equal((await s.call('GET', '/api/admin/users', { cookie: mia })).status, 403);
     assert.equal((await s.call('PUT', '/api/admin/settings', { cookie: mia, body: { orgName: 'x' } })).status, 403);
-    assert.equal((await s.call('GET', '/api/web/overview', { cookie: mia })).status, 403, 'the team view is the administrators\'');
+    assert.equal((await s.call('GET', '/api/web/overview', { cookie: mia })).status, 403, 'the team view is the administrators\' and the leads\'');
   } finally { await s.close(); }
 });
 
@@ -394,6 +394,74 @@ test('teams and projects: time is grouped by both, and the export says which', a
     const csv = (await s.call('GET', '/api/admin/export.csv', { cookie: admin })).text;
     assert.match(csv, /^date,name,email,team,what,key,project,minutes/);
     assert.match(csv, /Backend,repo,acme\/timelog-api,Timelog,2/);
+  } finally { await s.close(); }
+});
+
+test('a team lead sees the people in the teams they lead, and nobody else', async () => {
+  const s = await boot();
+  try {
+    const admin = await s.webLogin();
+    const made = {};
+    for (const [email, team] of [['ana@acme.com', 'Backend'], ['leo@acme.com', 'Frontend'], ['eva@acme.com', 'Backend'], ['max@acme.com', '']]) {
+      made[email] = (await s.call('POST', '/api/admin/users', { cookie: admin, body: { email, role: 'member', team } })).json;
+    }
+    // Eva leads Backend, made so from the start; Leo is made a lead of nothing, then of Frontend.
+    const eva = made['eva@acme.com'];
+    await s.call('PATCH', `/api/admin/users/${eva.user.id}`, { cookie: admin, body: { leads: 'Backend, Backend ,' } });
+    const evaCookie = await s.webLogin('eva@acme.com', eva.password);
+    const me = (await s.call('GET', '/api/web/me', { cookie: evaCookie })).json.user;
+    assert.deepEqual(me.leads, ['Backend']);
+
+    const report = async (email, sessions) => {
+      const token = (await s.call('POST', '/api/app/login', { body: { email, password: made[email].password } })).json.token;
+      await s.call('POST', '/api/app/report', { token, body: { sessions } });
+    };
+    await report('ana@acme.com', [
+      { kind: 'claude', title: 'login', repo: 'acme/api', branch: 'feature/KBK-12-login', tickets: ['KBK-12'], active: true },
+      { kind: 'shell', title: 'logs', repo: 'acme/api', tickets: [], active: false },
+    ]);
+    await report('leo@acme.com', [{ kind: 'claude', title: 'web', repo: 'acme/web', tickets: ['KBK-40'], active: true }]);
+
+    const view = (await s.call('GET', '/api/web/overview', { cookie: evaCookie })).json;
+    assert.deepEqual(view.people.map((p) => p.email).sort(), ['ana@acme.com', 'eva@acme.com']);
+    assert.deepEqual(view.scope, ['Backend']);
+    assert.deepEqual(view.teamNames, ['Backend']);
+    assert.deepEqual(view.tickets.map((t) => t.key), ['KBK-12'], 'Frontend\'s tickets are not counted in');
+    const ana = view.people.find((p) => p.email === 'ana@acme.com');
+    assert.equal(ana.sessionCount, 2);
+    assert.equal(ana.workingSessions, 1);
+    assert.equal(ana.claudeSessions, 1);
+    assert.deepEqual(ana.openTickets, ['KBK-12']);
+
+    // One of hers, yes; one of somebody else's, as if it did not exist.
+    assert.equal((await s.call('GET', `/api/admin/people/${made['ana@acme.com'].user.id}/stats`, { cookie: evaCookie })).status, 200);
+    assert.equal((await s.call('GET', `/api/admin/people/${made['leo@acme.com'].user.id}/stats`, { cookie: evaCookie })).status, 404);
+    const csv = (await s.call('GET', '/api/admin/export.csv', { cookie: evaCookie })).text;
+    assert.match(csv, /ana@acme\.com/);
+    assert.doesNotMatch(csv, /leo@acme\.com/);
+
+    // Leading a team is not administering: accounts, settings, the log and devices stay closed.
+    assert.equal((await s.call('GET', '/api/admin/users', { cookie: evaCookie })).status, 403);
+    assert.equal((await s.call('GET', '/api/admin/settings', { cookie: evaCookie })).status, 403);
+    assert.equal((await s.call('GET', '/api/admin/audit', { cookie: evaCookie })).status, 403);
+    assert.equal((await s.call('PATCH', `/api/admin/users/${eva.user.id}`, { cookie: evaCookie, body: { leads: ['Frontend'] } })).status, 403);
+
+    // A developer who leads nothing still sees only themselves.
+    const max = await s.webLogin('max@acme.com', made['max@acme.com'].password);
+    assert.equal((await s.call('GET', '/api/web/overview', { cookie: max })).status, 403);
+
+    // The administrator sees everyone, and the change of lead is in the log.
+    assert.equal((await s.call('GET', '/api/web/overview', { cookie: admin })).json.scope, null);
+    const log = (await s.call('GET', '/api/admin/audit', { cookie: admin })).json.entries;
+    assert.ok(log.some((e) => e.action === 'account.leads' && e.target === 'eva@acme.com' && e.detail === 'Backend'));
+
+    // Taking the lead away closes the view at once.
+    await s.call('PATCH', `/api/admin/users/${eva.user.id}`, { cookie: admin, body: { leads: [] } });
+    assert.equal((await s.call('GET', '/api/web/overview', { cookie: evaCookie })).status, 403);
+
+    // Made a lead when the account is made.
+    const zoe = (await s.call('POST', '/api/admin/users', { cookie: admin, body: { email: 'zoe@acme.com', role: 'member', team: 'Frontend', leads: ['Frontend'] } })).json;
+    assert.deepEqual(zoe.user.leads, ['Frontend']);
   } finally { await s.close(); }
 });
 

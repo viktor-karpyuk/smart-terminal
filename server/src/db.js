@@ -87,6 +87,8 @@ class Store {
     // Columns added after the first release, added to a database made before them.
     const userColumns = new Set(this.all('PRAGMA table_info(users)').map((c) => c.name));
     if (!userColumns.has('team')) this.db.exec("ALTER TABLE users ADD COLUMN team TEXT NOT NULL DEFAULT ''");
+    // The teams a person leads, as a JSON list of team names: a lead sees and looks after those teams' people.
+    if (!userColumns.has('leads')) this.db.exec("ALTER TABLE users ADD COLUMN leads TEXT NOT NULL DEFAULT '[]'");
     this.now = now;
   }
 
@@ -115,7 +117,8 @@ class Store {
     return this.user(id);
   }
   setPassword(userId, passHash) { this.run('UPDATE users SET pass_hash = ? WHERE id = ?', passHash, userId); }
-  updateUser(userId, { name, role, team }) {
+  updateUser(userId, { name, role, team, leads }) {
+    if (leads !== undefined) this.run('UPDATE users SET leads = ? WHERE id = ?', JSON.stringify(leads), userId);
     if (team !== undefined) this.run('UPDATE users SET team = ? WHERE id = ?', String(team).trim().slice(0, 60), userId);
     if (name !== undefined) this.run('UPDATE users SET name = ? WHERE id = ?', String(name).trim(), userId);
     if (role !== undefined) this.run('UPDATE users SET role = ? WHERE id = ?', role, userId);

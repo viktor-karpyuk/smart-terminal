@@ -193,6 +193,11 @@ function secretDialog({ title, body, secret }) {
 
 // ---------- pages ----------
 let me = null;
+const isAdmin = () => me?.role === 'admin';
+/** Administrators see everyone; a team lead sees the teams they lead. */
+const canSeeOthers = () => isAdmin() || Boolean(me?.leads?.length);
+/** "Backend and Frontend", for a lead's pages. */
+const listWords = (names) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`);
 let current = null;
 let ticketUrl = '';
 let teams = [];
@@ -243,7 +248,7 @@ const pages = {
         } }, 'Sign out')))))))
       : el('p', { class: 'faint' }, 'Not signed in on any device. In Smart Terminal, open the Organization extension and sign in.');
     return [
-      el('header', { class: 'page-head' }, el('div', {}, el('h1', {}, 'Your account'), el('p', { class: 'lede' }, `${a.user.name ? `${a.user.name}, ` : ''}${a.user.email}. ${a.user.role === 'admin' ? 'Administrator.' : 'Developer.'}`))),
+      el('header', { class: 'page-head' }, el('div', {}, el('h1', {}, 'Your account'), el('p', { class: 'lede' }, `${a.user.name ? `${a.user.name}, ` : ''}${a.user.email}. ${roleWords(a.user)}.`))),
       section('Password', 'Used to sign in here and in Smart Terminal.', form),
       section('Devices', 'Where Smart Terminal is signed in as you and reporting.', devices),
     ];
@@ -266,18 +271,18 @@ const pages = {
         panel('Tickets', ranked(s.tickets, 'No tickets yet. They are read from branch names, session titles and commit subjects.', { tickets: true }))),
       s.sessions.length ? panel('Open now', [sessionsTable(s.sessions), privateNote(s.hiddenSessions)]) : privateNote(s.hiddenSessions),
       el('p', { class: 'faint small', style: 'margin-top:20px' }, s.devices.length
-        ? `Signed in on ${s.devices.map((d) => d.label).join(', ')}. Only you and ${s.orgName}'s administrators see this page.`
+        ? `Signed in on ${s.devices.map((d) => d.label).join(', ')}. Only you, your team's leads and ${s.orgName}'s administrators see this page.`
         : 'You are not signed in on any device yet. In Smart Terminal, open the Organization extension and sign in.'),
     ];
   } },
 
-  team: { label: 'Team', icon: ICONS.team, admin: true, async draw() {
+  team: { label: 'Team', icon: ICONS.team, viewer: true, async draw() {
     const data = await api('GET', `/api/web/overview?days=${period}`);
     ticketUrl = data.ticketUrl || '';
     const people = data.people.map((p) => ({ ...p, state: personState(p), low: lowOn(p) }));
     const low = people.filter((p) => p.low);
     const working = people.filter((p) => p.state.key === 'working').length;
-    const sessions = people.reduce((n, p) => n + (p.online ? p.sessions.length : 0), 0);
+    const sessions = people.reduce((n, p) => n + (p.online ? p.sessionCount : 0), 0);
     const tickets = new Set(people.flatMap((p) => (p.online ? p.sessions.flatMap((s) => s.tickets) : [])));
     const shown = people.filter((p) => {
       const q = filters.query.toLowerCase();
@@ -296,11 +301,11 @@ const pages = {
       el('button', { 'aria-pressed': String(filters.show === k), onclick: () => { filters.show = k; redraw(); } }, t)));
 
     if (filters.team && !data.teamNames.includes(filters.team)) filters.team = '';
-    const teamPick = data.teamNames.length ? el('select', { 'aria-label': 'Team', onchange: (e) => { filters.team = e.target.value; redraw(); } },
+    const teamPick = data.teamNames.length > 1 ? el('select', { 'aria-label': 'Team', onchange: (e) => { filters.team = e.target.value; redraw(); } },
       el('option', { value: '' }, 'Every team'), data.teamNames.map((t) => el('option', { value: t, selected: filters.team === t }, t))) : null;
 
     return [
-      el('header', { class: 'page-head' }, el('div', {}, el('h1', {}, 'Team'),
+      el('header', { class: 'page-head' }, el('div', {}, el('h1', {}, data.scope ? listWords(data.scope) : 'Team'),
         el('p', { class: 'lede summary' },
           el('strong', {}, `${working} of ${people.length}`), people.length === 1 ? ' person is working now' : ' people are working now',
           sessions ? [', in ', el('strong', {}, plural(sessions, 'session', 'sessions')), tickets.size ? [' on ', el('strong', {}, plural(tickets.size, 'ticket', 'tickets'))] : null] : null, '.'))),
@@ -308,27 +313,31 @@ const pages = {
         el('span', {}, ' ', low.map((p) => `${p.name || p.email}: ${p.low}`).join('; '), '.')) : null,
       el('div', { class: 'toolbar' }, search, seg, teamPick, el('span', { style: 'margin-left:auto' }, periodPicker())),
       shown.length ? el('div', { class: 'roster' }, shown.map(personRow)) : el('div', { class: 'roster' }, el('div', { class: 'empty' },
-        people.length <= 1 ? [el('strong', {}, 'Nobody to show yet'), el('span', {}, 'Add your developers under Accounts. They appear here once they sign in from Smart Terminal.')] : el('span', {}, 'Nobody matches that.'))),
+        people.length <= 1 ? [el('strong', {}, 'Nobody to show yet'), el('span', {}, data.scope
+          ? `Nobody is in ${listWords(data.scope)} yet. An administrator puts people in a team under Accounts; they appear here once they sign in from Smart Terminal.`
+          : 'Add your developers under Accounts. They appear here once they sign in from Smart Terminal.')] : el('span', {}, 'Nobody matches that.'))),
     ];
   } },
 
-  work: { label: 'Where the time went', icon: ICONS.work, admin: true, async draw() {
+  work: { label: 'Where the time went', icon: ICONS.work, viewer: true, async draw() {
     const data = await api('GET', `/api/web/overview?days=${period}`);
     ticketUrl = data.ticketUrl || '';
     const total = data.repos.reduce((n, r) => n + r.minutes, 0);
     return [
       el('header', { class: 'page-head' }, el('div', {}, el('h1', {}, 'Where the time went'),
-        el('p', { class: 'lede' }, `${periodWords()[0].toUpperCase()}${periodWords().slice(1)}, across everyone. Time is counted while a session is doing something; an open but idle session counts for nothing.`)),
+        el('p', { class: 'lede' }, `${periodWords()[0].toUpperCase()}${periodWords().slice(1)}, across ${data.scope ? listWords(data.scope) : 'everyone'}. Time is counted while a session is doing something; an open but idle session counts for nothing.`)),
         el('div', { class: 'actions' }, periodPicker(),
           el('a', { class: 'button', href: `/api/admin/export.csv?days=${period}`, download: '' }, icon(ICONS.download), 'Export CSV'))),
       el('div', { class: 'split' },
         panel('Repositories', ranked(data.repos, 'No time counted yet.'), total ? duration(total) : null),
-        panel('Tickets', ranked(data.tickets, 'No tickets yet. Set how tickets look under Settings.', { tickets: true }))),
+        panel('Tickets', ranked(data.tickets, isAdmin() ? 'No tickets yet. Set how tickets look under Settings.' : 'No tickets yet.', { tickets: true }))),
       el('div', { class: 'split' },
         panel('By project', data.projects.length ? ranked(data.projects, 'No time counted yet.')
-          : el('p', { class: 'faint' }, 'Group repositories into projects under ', el('a', { href: '#settings', onclick: (e) => { e.preventDefault(); go('settings'); } }, 'Settings'), '.')),
+          : isAdmin() ? el('p', { class: 'faint' }, 'Group repositories into projects under ', el('a', { href: '#settings', onclick: (e) => { e.preventDefault(); go('settings'); } }, 'Settings'), '.')
+            : el('p', { class: 'faint' }, 'No projects set up yet.')),
         panel('By team', data.teams.length ? ranked(data.teams, 'No time counted yet.')
-          : el('p', { class: 'faint' }, 'Give people a team under ', el('a', { href: '#users', onclick: (e) => { e.preventDefault(); go('users'); } }, 'Accounts'), '.'))),
+          : isAdmin() ? el('p', { class: 'faint' }, 'Give people a team under ', el('a', { href: '#users', onclick: (e) => { e.preventDefault(); go('users'); } }, 'Accounts'), '.')
+            : el('p', { class: 'faint' }, 'No time counted yet.'))),
     ];
   } },
 
@@ -343,14 +352,14 @@ const pages = {
       el('header', { class: 'page-head' },
         el('div', {}, el('h1', {}, 'Accounts'), el('p', { class: 'lede' }, 'Who can sign in, from Smart Terminal and to this page.')),
         el('div', { class: 'actions' }, el('button', { class: 'primary', onclick: addAccount }, 'Add account'))),
-      el('div', { class: 'toolbar' }, search, el('span', { class: 'faint small', style: 'margin-left:auto' }, `${plural(all.length, 'account', 'accounts')}, ${all.filter((u) => u.role === 'admin').length} administrators`)),
+      el('div', { class: 'toolbar' }, search, el('span', { class: 'faint small', style: 'margin-left:auto' }, `${plural(all.length, 'account', 'accounts')}, ${all.filter((u) => u.role === 'admin').length} administrators, ${all.filter((u) => u.role !== 'admin' && u.leads?.length).length} team leads`)),
       el('div', { class: 'table-wrap' }, el('table', {},
         el('thead', {}, el('tr', {}, ['Person', 'Team', 'Role', 'Signs in with', 'Last seen', 'Devices', 'Status', ''].map((h) => el('th', {}, h)))),
         el('tbody', {}, users.map((u) => el('tr', {},
           el('td', {}, el('div', { class: 'who-cell' }, el('span', { class: 'avatar' }, initials(u)),
             el('div', {}, el('div', { class: 'name' }, u.name || u.email), u.name ? el('div', { class: 'faint small' }, u.email) : null))),
           el('td', { class: u.team ? '' : 'faint' }, u.team || '—'),
-          el('td', {}, u.role === 'admin' ? 'Administrator' : 'Developer'),
+          el('td', {}, roleWords(u)),
           el('td', { class: 'muted' }, u.hasPassword ? 'Password or SSO' : 'SSO only'),
           el('td', { class: 'muted' }, u.lastSeen ? ago(u.lastSeen) : 'Never'),
           el('td', { class: 'muted' }, String(u.devices ?? 0)),
@@ -365,7 +374,7 @@ const pages = {
     const words = {
       'signin.web': 'Signed in to this page', 'signin.app': 'Signed in from Smart Terminal', 'account.created': 'Added an account',
       'account.disabled': 'Disabled an account', 'account.enabled': 'Enabled an account', 'account.role': 'Changed a role',
-      'account.password_reset': 'Made a new password', 'account.team': 'Changed a team', 'password.changed': 'Changed their password', 'device.signed_out': 'Signed out a device',
+      'account.password_reset': 'Made a new password', 'account.team': 'Changed a team', 'account.leads': 'Changed the teams someone leads', 'password.changed': 'Changed their password', 'device.signed_out': 'Signed out a device',
       'settings.changed': 'Changed settings', 'terminal.opened': 'Opened a session in the browser', 'shell.started': 'Started a shell on the server', 'shell.ended': 'A shell on the server ended', export: 'Exported time',
     };
     return [
@@ -500,6 +509,12 @@ function usageHistory(h) {
 
 const privateNote = (n) => (n ? el('p', { class: 'faint small' }, `And ${plural(n, 'private session', 'private sessions')}, in folders never shared.`) : null);
 
+/** Administrator, Team lead of Backend, or Developer. */
+function roleWords(u) {
+  if (u.role === 'admin') return 'Administrator';
+  return u.leads?.length ? `Team lead of ${listWords(u.leads)}` : 'Developer';
+}
+
 function teamList(names) {
   return el('datalist', { id: 'team-names' }, (names ?? []).map((t) => el('option', { value: t })));
 }
@@ -537,7 +552,8 @@ function personRow(p) {
   el('span', { class: 'work-cell' }, lead
     ? [el('span', { class: 'work-line' }, el('span', { class: 'repo' }, lead.repo || lead.folder || lead.title || 'A session'), lead.tickets.map((t) => ticket(t))),
       el('span', { class: 'branch' }, lead.branch || (lead.repo ? '' : 'Not in a repository')),
-      others > 0 ? el('span', { class: 'more' }, `and ${plural(others, 'other session', 'other sessions')}`) : null]
+      el('span', { class: 'more' }, plural(p.sessionCount, 'session open', 'sessions open'), p.workingSessions ? `, ${p.workingSessions} working` : '', p.claudeSessions ? `, ${plural(p.claudeSessions, 'Claude session', 'Claude sessions')}` : '',
+        others > 0 && p.openTickets.length > lead.tickets.length ? [', also on ', p.openTickets.filter((t) => !lead.tickets.includes(t)).map((t) => [ticket(t), ' '])] : null)]
     : el('span', { class: 'faint' }, p.paused ? 'Not sharing what they work on' : 'Nothing open')),
   el('span', { class: 'gauges' }, best ? [gauge('Session', best.sessionUsed), gauge('Week', best.weekUsed)] : el('span', { class: 'faint small' }, 'No usage reported')),
   el('span', { class: 'chevron' }, icon(ICONS.chevron)));
@@ -561,7 +577,7 @@ function personDetail(p) {
       el('div', {}, el('h3', { style: 'margin-bottom:10px' }, `Repositories, ${periodWords().replace('the ', '')}`), ranked(p.repos, 'No time counted yet.')),
       el('div', {}, el('h3', { style: 'margin-bottom:10px' }, `Tickets, ${periodWords().replace('the ', '')}`), ranked(p.tickets, 'No tickets yet.', { tickets: true }))),
     p.devices.length ? el('div', { class: 'small muted' }, 'Signed in on ', p.devices.map((d, i) => [i ? ', ' : '', el('strong', {}, d.label), ` (${ago(d.lastSeen)}) `,
-      el('button', { class: 'quiet danger small', onclick: async (e) => {
+      !isAdmin() ? null : el('button', { class: 'quiet danger small', onclick: async (e) => {
         e.stopPropagation();
         if (!await confirmDialog({ title: `Sign out ${d.label}?`, body: `${p.name || p.email} will have to sign in again on that device before it reports anything.`, action: 'Sign out device', danger: true })) return;
         try { await api('DELETE', `/api/admin/devices/${d.id}`); toast(`${d.label} is signed out.`); redraw(); } catch (error) { toast(error.message, true); }
@@ -580,6 +596,11 @@ function addAccount() {
   const form = el('form', { class: 'sheet', role: 'dialog', 'aria-modal': 'true', onsubmit: async (event) => {
     event.preventDefault();
     const data = Object.fromEntries(new FormData(event.target));
+    if (data.role === 'lead') {
+      if (!data.team?.trim()) { toast('A team lead needs a team to lead. Fill in Team.', true); return; }
+      data.role = 'member';
+      data.leads = [data.team];
+    }
     if (data.how === 'sso') data.password = 'sso-only';
     else if (data.how === 'generate') delete data.password;
     delete data.how;
@@ -597,7 +618,10 @@ function addAccount() {
     el('label', { class: 'field' }, el('span', {}, 'Name'), el('input', { name: 'name', autocomplete: 'off' })),
     el('label', { class: 'field' }, el('span', {}, 'Team'), el('input', { name: 'team', autocomplete: 'off', list: 'team-names', placeholder: 'Optional' }))),
   teamList(teams),
-  el('label', { class: 'field' }, el('span', {}, 'Role'), el('select', { name: 'role' }, el('option', { value: 'member' }, 'Developer, sees only their own numbers'), el('option', { value: 'admin' }, 'Administrator, sees everyone and manages accounts'))),
+  el('label', { class: 'field' }, el('span', {}, 'Role'), el('select', { name: 'role' },
+    el('option', { value: 'member' }, 'Developer, sees only their own numbers'),
+    el('option', { value: 'lead' }, 'Team lead, sees the people in the team above'),
+    el('option', { value: 'admin' }, 'Administrator, sees everyone and manages accounts'))),
   el('label', { class: 'field' }, el('span', {}, 'Signs in with'), how),
   pw,
   el('div', { class: 'sheet-actions' }, el('button', { type: 'button', onclick: () => close() }, 'Cancel'), el('button', { class: 'primary', type: 'submit' }, 'Add account')));
@@ -609,7 +633,7 @@ function editAccount(u) {
     event.preventDefault();
     const f = event.target;
     try {
-      await api('PATCH', `/api/admin/users/${u.id}`, { name: f.name.value, team: f.team.value });
+      await api('PATCH', `/api/admin/users/${u.id}`, { name: f.name.value, team: f.team.value, ...(u.role === 'admin' ? {} : { leads: f.leads.value }) });
       close();
       toast('Saved.');
       redraw();
@@ -620,6 +644,8 @@ function editAccount(u) {
   el('label', { class: 'field' }, el('span', {}, 'Name'), el('input', { name: 'name', value: u.name ?? '', autocomplete: 'off' })),
   el('label', { class: 'field' }, el('span', {}, 'Team'), el('input', { name: 'team', value: u.team ?? '', autocomplete: 'off', list: 'team-names', placeholder: 'No team' }),
     el('small', {}, 'Time adds up by team under Where the time went, and Team can show one team at a time.')),
+  u.role === 'admin' ? null : el('label', { class: 'field' }, el('span', {}, 'Leads'), el('input', { name: 'leads', value: (u.leads ?? []).join(', '), autocomplete: 'off', placeholder: 'No team', list: 'team-names' }),
+    el('small', {}, 'Teams this person leads, separated by commas. A lead sees the people in those teams: what they work on, their time and their Claude usage.')),
   teamList(teams),
   el('div', { class: 'sheet-actions' }, el('button', { type: 'button', onclick: () => close() }, 'Cancel'), el('button', { class: 'primary', type: 'submit' }, 'Save')),
   u.id === me.id ? null : el('div', { class: 'sheet-more' },
@@ -654,7 +680,7 @@ async function toggleDisabled(u) {
 
 // ---------- the frame ----------
 function nav() {
-  $('nav').replaceChildren(...Object.entries(pages).filter(([, p]) => !p.hidden && (!p.admin || me.role === 'admin')).map(([key, p]) =>
+  $('nav').replaceChildren(...Object.entries(pages).filter(([, p]) => !p.hidden && (!p.admin || isAdmin()) && (!p.viewer || canSeeOthers())).map(([key, p]) =>
     el('button', { 'aria-current': key === current ? 'page' : null, onclick: () => go(key) }, icon(p.icon), key === 'mine' ? 'My week' : p.label)),
     // Its own page: a terminal wants the whole window.
     el('a', { class: 'button nav-link', href: '/terminal' }, icon(ICONS.terminal), 'Terminal'));
@@ -677,7 +703,7 @@ async function redraw({ keepFocus = false } = {}) {
 }
 
 function go(key) {
-  if (!pages[key] || (pages[key].admin && me.role !== 'admin')) key = me.role === 'admin' ? 'team' : 'mine';
+  if (!pages[key] || (pages[key].admin && !isAdmin()) || (pages[key].viewer && !canSeeOthers())) key = canSeeOthers() ? 'team' : 'mine';
   current = key;
   history.replaceState(null, '', `#${key}`);
   nav();
@@ -695,7 +721,7 @@ function go(key) {
   $('me').replaceChildren(el('button', { class: 'quiet', style: 'padding-left:0', onclick: () => go('account') }, icon(ICONS.account), me.name || me.email));
   $('me').title = me.email;
   $('logout').addEventListener('click', async () => { await api('POST', '/api/web/logout', {}); location.href = '/login'; });
-  go(location.hash.slice(1) || (me.role === 'admin' ? 'team' : 'mine'));
+  go(location.hash.slice(1) || (canSeeOthers() ? 'team' : 'mine'));
   // The live pages are what is on screen most of the day; keep them current without moving anything under the reader.
   setInterval(() => {
     if (['team', 'work', 'mine'].includes(current) && !document.querySelector('.scrim') && document.activeElement?.type !== 'search') redraw();

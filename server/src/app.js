@@ -78,6 +78,19 @@ function projectOf(repo, projects) {
   return null;
 }
 
+/** The teams a person leads, from the JSON kept in their row. */
+function leadsOf(user) {
+  try {
+    const list = JSON.parse(user?.leads ?? '[]');
+    return Array.isArray(list) ? list.filter((t) => typeof t === 'string' && t) : [];
+  } catch {
+    return [];
+  }
+}
+/** Team names as given: trimmed, each once, a handful at most. */
+const teamNames = (list) => [...new Set((Array.isArray(list) ? list : String(list ?? '').split(','))
+  .map((t) => String(t).trim().slice(0, 60)).filter(Boolean))].slice(0, 20);
+
 const emailOk = (email) => /^[^\s@]{1,64}@[^\s@]{1,190}\.[^\s@]{1,63}$/.test(String(email ?? '').trim());
 const day = (at) => new Date(at).toISOString().slice(0, 10);
 
@@ -96,7 +109,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
   const publicProviders = () => settings().providers.filter((p) => p.enabled !== false && p.clientId)
     .map((p) => ({ id: p.id, label: p.label || (p.type === 'microsoft' ? 'Microsoft' : p.type === 'google' ? 'Google' : 'Single sign-on'), type: p.type }));
   const provider = (id) => settings().providers.find((p) => p.id === id && p.enabled !== false && p.clientId) ?? null;
-  const publicUser = (u) => ({ id: u.id, email: u.email, name: u.name, role: u.role, team: u.team ?? '', disabled: Boolean(u.disabled_at), hasPassword: Boolean(u.pass_hash) });
+  const publicUser = (u) => ({ id: u.id, email: u.email, name: u.name, role: u.role, team: u.team ?? '', leads: leadsOf(u), disabled: Boolean(u.disabled_at), hasPassword: Boolean(u.pass_hash) });
 
   /** Retention, applied when the server starts and once a day after. */
   function applyRetention() {
@@ -201,6 +214,18 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
     if (role && who.user.role !== role) throw new HttpError(403, 'Only an administrator can do that.');
     return who;
   }
+  /**
+   * Who may look at other people's work, and whose: an administrator sees
+   * everyone (scope null), a team lead the people in the teams they lead.
+   */
+  function needViewer(req) {
+    const who = needWeb(req);
+    if (who.user.role === 'admin') return { ...who, scope: null };
+    const leads = leadsOf(who.user);
+    if (!leads.length) throw new HttpError(403, 'Only an administrator or a team lead can see that.');
+    return { ...who, scope: new Set(leads) };
+  }
+  const inScope = (scope, user) => !scope || scope.has(user?.team || '');
   function needDevice(req) {
     const header = String(req.headers.authorization ?? '');
     const who = header.startsWith('Bearer ') ? store.resolveToken(header.slice(7), 'device') : null;
@@ -240,12 +265,13 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
   }
 
   // --- the dashboard's numbers -------------------------------------------------
-  function overview(period = 7) {
+  function overview(period = 7, scope = null) {
     const t = now();
-    const users = store.users();
-    const snaps = store.snapshots();
+    const users = store.users().filter((u) => inScope(scope, u));
+    const ids = new Set(users.map((u) => u.id));
+    const snaps = store.snapshots().filter((s) => ids.has(s.user_id));
     const since = day(t - (period - 1) * 86_400_000);
-    const activity = store.activitySince(since);
+    const activity = store.activitySince(since).filter((a) => ids.has(a.user_id));
     const usage = new Map(store.usageSince(since).map((u) => [u.user_id, u]));
     const projects = settings().projects;
     const people = users.map((u) => {
@@ -253,6 +279,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       const latest = mine.sort((a, b) => b.at - a.at)[0] ?? null;
       const devices = store.tokensOf(u.id).filter((tk) => tk.kind === 'device');
       const sessions = mine.filter((s) => t - s.at < ONLINE_MS).flatMap((s) => s.payload.sessions.map((x) => ({ ...x, device: s.label })));
+      const working = sessions.filter((s) => s.busy || s.active);
       const accounts = mine.flatMap((s) => s.payload.accounts.map((a) => ({ ...a, device: s.label, reportedAt: s.at })));
       const mineActivity = activity.filter((a) => a.user_id === u.id);
       const top = (kind) => mineActivity.filter((a) => a.kind === kind).sort((a, b) => b.minutes - a.minutes).slice(0, 8)
@@ -264,6 +291,11 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
         lastSeen: latest?.at ?? null,
         devices: devices.map((d) => ({ id: d.id, label: d.label, lastSeen: d.last_seen_at })),
         sessions,
+        // How many sessions are open, how many of them are doing something, and the tickets they name right now.
+        sessionCount: sessions.length,
+        workingSessions: working.length,
+        claudeSessions: sessions.filter((s) => s.kind === 'claude').length,
+        openTickets: [...new Set(sessions.flatMap((s) => s.tickets ?? []))],
         accounts,
         repos: top('repo'),
         tickets: top('ticket'),
@@ -289,6 +321,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       byProject.set(project, (byProject.get(project) ?? 0) + a.minutes);
     }
     for (const d of store.all('SELECT user_id, SUM(minutes) AS minutes FROM days WHERE day >= ? GROUP BY user_id', since)) {
+      if (!ids.has(d.user_id)) continue;
       const team = teamOf.get(d.user_id) || 'No team';
       byTeam.set(team, (byTeam.get(team) ?? 0) + d.minutes);
     }
@@ -299,6 +332,8 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       projects: projects.length ? ranked(byProject) : [],
       teams: users.some((u) => u.team) ? ranked(byTeam) : [],
       teamNames: [...new Set(users.map((u) => u.team).filter(Boolean))].sort(),
+      // Null for an administrator; the teams a lead is shown, including one nobody is in yet.
+      scope: scope ? [...scope].sort() : null,
     };
   }
 
@@ -510,9 +545,9 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       return send(res, 200, { ok: true, ...personalStats(user.id, periodOf(url)) });
     }
     if (method === 'GET' && p === '/api/web/overview') {
-      // Everybody's work is the administrators' view. A developer has their own: /api/web/stats.
-      needWeb(req, 'admin');
-      return send(res, 200, overview(periodOf(url)));
+      // Everybody's work is the administrators' view, and a lead's team is the lead's. A developer has their own: /api/web/stats.
+      const { scope } = needViewer(req);
+      return send(res, 200, overview(periodOf(url), scope));
     }
 
     // ----- your own account, whoever you are -----
@@ -551,8 +586,9 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
     // ----- administrators: one person, the log, an export -----
     const personMatch = /^\/api\/admin\/people\/([0-9a-f-]{36})\/stats$/.exec(p);
     if (method === 'GET' && personMatch) {
-      needWeb(req, 'admin');
-      if (!store.user(personMatch[1])) throw new HttpError(404, 'No such account.');
+      const { scope } = needViewer(req);
+      // Somebody outside a lead's teams is, to that lead, nobody.
+      if (!store.user(personMatch[1]) || !inScope(scope, store.user(personMatch[1]))) throw new HttpError(404, 'No such account.');
       return send(res, 200, { ok: true, ...personalStats(personMatch[1], periodOf(url)) });
     }
     if (method === 'GET' && p === '/api/admin/audit') {
@@ -560,17 +596,17 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       return send(res, 200, { ok: true, entries: store.auditLog(Number(url.searchParams.get('limit')) || 200) });
     }
     if (method === 'GET' && p === '/api/admin/export.csv') {
-      const { user } = needWeb(req, 'admin');
+      const { user, scope } = needViewer(req);
       const period = periodOf(url);
       const since = day(now() - (period - 1) * 86_400_000);
-      const teams = new Map(store.users().map((u) => [u.email, u.team ?? '']));
+      const teams = new Map(store.users().filter((u) => inScope(scope, u)).map((u) => [u.email, u.team ?? '']));
       const projects = settings().projects;
       const lines = [['date', 'name', 'email', 'team', 'what', 'key', 'project', 'minutes'].join(',')];
-      for (const r of store.dayRows(since)) lines.push([r.day, r.name, r.email, teams.get(r.email), 'worked', '', '', Math.round(r.minutes)].map(csvCell).join(','));
-      for (const r of store.activityRows(since)) {
+      for (const r of store.dayRows(since).filter((row) => teams.has(row.email))) lines.push([r.day, r.name, r.email, teams.get(r.email), 'worked', '', '', Math.round(r.minutes)].map(csvCell).join(','));
+      for (const r of store.activityRows(since).filter((row) => teams.has(row.email))) {
         lines.push([r.day, r.name, r.email, teams.get(r.email), r.kind, r.key, r.kind === 'repo' ? projectOf(r.key, projects) ?? '' : '', Math.round(r.minutes)].map(csvCell).join(','));
       }
-      store.log(user.id, 'export', `${period} days`);
+      store.log(user.id, 'export', `${period} days`, scope ? `teams ${[...scope].sort().join(', ')}` : '');
       res.writeHead(200, {
         'content-type': 'text/csv; charset=utf-8',
         'content-disposition': `attachment; filename="smart-terminal-${since}-${day(now())}.csv"`,
@@ -603,9 +639,10 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       }
       const user = store.createUser({ email, name: body.name ?? '', role, passHash: password ? await hashPassword(password) : null });
       if (body.team) store.updateUser(user.id, { team: String(body.team) });
+      if (body.leads !== undefined && teamNames(body.leads).length) store.updateUser(user.id, { leads: teamNames(body.leads) });
       store.log(webUser(req).user.id, 'account.created', email, `${role}${password ? '' : ', single sign-on only'}`);
       // The generated password is shown once, to the administrator who made it.
-      return send(res, 201, { ok: true, user: publicUser(user), password: body.password ? null : password });
+      return send(res, 201, { ok: true, user: publicUser(store.user(user.id)), password: body.password ? null : password });
     }
     const userMatch = /^\/api\/admin\/users\/([0-9a-f-]{36})$/.exec(p);
     if (method === 'PATCH' && userMatch) {
@@ -621,7 +658,11 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
         name: body.name === undefined ? undefined : String(body.name),
         role: body.role === undefined ? undefined : body.role === 'admin' ? 'admin' : 'member',
         team: body.team === undefined ? undefined : String(body.team),
+        leads: body.leads === undefined ? undefined : teamNames(body.leads),
       });
+      if (body.leads !== undefined && JSON.stringify(teamNames(body.leads)) !== JSON.stringify(leadsOf(target))) {
+        store.log(me.id, 'account.leads', target.email, teamNames(body.leads).join(', ') || 'no team');
+      }
       if (body.team !== undefined && String(body.team).trim() !== (target.team ?? '')) store.log(me.id, 'account.team', target.email, String(body.team).trim() || 'no team');
       if (body.disabled !== undefined) {
         store.setDisabled(target.id, body.disabled === true);

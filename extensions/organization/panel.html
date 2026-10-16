@@ -201,7 +201,7 @@
       }).join('') + '</ol>' : '<p class="dim small">' + empty + '</p>') + '</div>';
     };
     html += '<div class="cols">' + list('Repositories', s.repos, 'Nothing yet.') + list('Tickets', s.tickets, 'No tickets seen yet.') + '</div>';
-    return html + '<p class="faint small">Counted while a session of yours does something. Only you and your company\'s administrators see this.</p></div>';
+    return html + '<p class="faint small">Counted while a session of yours does something. Only you, your team\'s leads and your company\'s administrators see this.</p></div>';
   }
 
   function meter(label, used, resets) {
