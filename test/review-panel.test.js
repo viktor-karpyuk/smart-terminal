@@ -837,3 +837,9 @@ test('the commits list is read again when a review or a verdict changes what it 
   const handler = source.slice(source.indexOf('function loadPrView'), source.indexOf('function loadPrView') + 1800);
   assert.match(handler, /commitsStamp\(state\.pr\) !== commitsStamp\(r\)/);
 });
+
+test('a redraw keeps the file list where it was, not only the first column that scrolls', () => {
+  const draw = source.slice(source.indexOf('\n  function draw()'), source.indexOf('\n  function cssEscape('));
+  assert.match(draw, /querySelectorAll\('aside'\)[\s\S]*querySelectorAll\('aside'\)/, 'every aside is saved and restored');
+  assert.doesNotMatch(draw, /querySelector\('aside'\)/, 'the side column of a pull request is an aside too, and comes first');
+});

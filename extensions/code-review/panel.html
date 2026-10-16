@@ -1557,9 +1557,13 @@
     // In a pull request it is the body under the tabs that scrolls, and each tab keeps its own place.
     var body = $('prbody');
     if (body) state.bodyScroll[body.getAttribute('data-tab') || ''] = body.scrollTop;
-    // The file list is rebuilt with everything else and would come back at the top.
-    var aside = main.querySelector('aside');
-    var asideScroll = aside ? aside.scrollTop : 0;
+    /*
+     * The file list is rebuilt with everything else and would come back at the top.
+     * Every column that scrolls, by position: the pull request's side column is an
+     * aside too, and it comes first — keeping only the first one kept that and
+     * sent the file list to the top whenever a file was marked viewed.
+     */
+    var asideScrolls = Array.prototype.map.call(main.querySelectorAll('aside'), function (el) { return el.scrollTop; });
     var html;
     try {
       if (state.view === 'dashboard') html = drawDashboard();
@@ -1585,11 +1589,12 @@
       bodyNow.setAttribute('data-tab', state.prTab);
       bodyNow.scrollTop = state.bodyScroll[state.prTab] || 0;
     }
-    aside = main.querySelector('aside');
-    if (aside) {
-      aside.scrollTop = asideScroll;
+    var asides = main.querySelectorAll('aside');
+    for (var a = 0; a < asides.length; a++) if (asideScrolls[a] != null) asides[a].scrollTop = asideScrolls[a];
+    var list = main.querySelector('.split > aside');
+    if (list) {
       // The file in front stays in sight as Enter walks down the list; nothing moves if it already is.
-      var on = aside.querySelector('.item.on');
+      var on = list.querySelector('.item.on');
       if (on) on.scrollIntoView({ block: 'nearest' });
     }
     state.drawPending = false;
