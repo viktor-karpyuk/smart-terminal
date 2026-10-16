@@ -462,6 +462,37 @@ test('a team lead sees the people in the teams they lead, and nobody else', asyn
     // Made a lead when the account is made.
     const zoe = (await s.call('POST', '/api/admin/users', { cookie: admin, body: { email: 'zoe@acme.com', role: 'member', team: 'Frontend', leads: ['Frontend'] } })).json;
     assert.deepEqual(zoe.user.leads, ['Frontend']);
+
+    // A team typed in another case is the same team, and is saved the way its people have it.
+    await s.call('PATCH', `/api/admin/users/${eva.user.id}`, { cookie: admin, body: { leads: ' backend ' } });
+    assert.deepEqual((await s.call('GET', '/api/web/me', { cookie: evaCookie })).json.user.leads, ['Backend']);
+    assert.deepEqual((await s.call('GET', '/api/web/overview', { cookie: evaCookie })).json.people.map((p) => p.email).sort(), ['ana@acme.com', 'eva@acme.com']);
+  } finally { await s.close(); }
+});
+
+test('a developer shows as online from their first report, and as away once the app says it is closing', async () => {
+  const s = await boot();
+  try {
+    const admin = await s.webLogin();
+    const ana = (await s.call('POST', '/api/admin/users', { cookie: admin, body: { email: 'ana@acme.com', role: 'member' } })).json;
+    const person = async () => (await s.call('GET', '/api/web/overview', { cookie: admin })).json.people.find((p) => p.email === 'ana@acme.com');
+    assert.equal((await person()).online, false);
+
+    const token = (await s.call('POST', '/api/app/login', { body: { email: 'ana@acme.com', password: ana.password } })).json.token;
+    await s.call('POST', '/api/app/report', { token, body: { sessions: [{ kind: 'shell', title: 'api', repo: 'acme/api', tickets: [], active: false }] } });
+    assert.equal((await person()).online, true);
+    assert.equal((await person()).sessionCount, 1);
+
+    assert.equal((await s.call('POST', '/api/app/bye', { token, body: {} })).status, 200);
+    const gone = await person();
+    assert.equal(gone.online, false);
+    assert.equal(gone.sessionCount, 0, 'the sessions of a closed app are not shown as open');
+    assert.ok(gone.lastSeen, 'when they were last seen is kept');
+
+    // Opening the app again is online again.
+    await s.call('POST', '/api/app/report', { token, body: { sessions: [] } });
+    assert.equal((await person()).online, true);
+    assert.equal((await s.call('POST', '/api/app/bye', { body: {} })).status, 401, 'only a signed-in device says goodbye');
   } finally { await s.close(); }
 });
 

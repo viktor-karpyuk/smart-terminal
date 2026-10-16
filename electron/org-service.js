@@ -21,6 +21,8 @@ const crypto = require('node:crypto');
 const { buildReport } = require('./org-report');
 
 const SSO_TIMEOUT_MS = 5 * 60_000;
+// Long enough for the restored tabs to be running; short enough that opening the app is being seen online.
+const FIRST_REPORT_MS = 5_000;
 
 class OrgService {
   /**
@@ -269,7 +271,20 @@ class OrgService {
       await this.sendNow();
       this.timer = setTimeout(tick, this.everyMs());
     };
-    this.timer = setTimeout(tick, this.everyMs());
+    // The first report goes out as soon as the sessions are back, so whoever looks sees this person online
+    // when they open the app, not one interval later.
+    this.timer = setTimeout(tick, FIRST_REPORT_MS);
+  }
+
+  /**
+   * The app is quitting or the machine is going to sleep: tell the server, so this
+   * device shows as away now. Never holds a quit up for long, and never fails it.
+   */
+  async goodbye({ timeoutMs = 1500 } = {}) {
+    const token = this.token();
+    if (!token) return;
+    const route = this.call('POST', '/api/app/bye', { token, body: {} }).catch(() => {});
+    await Promise.race([route, new Promise((resolve) => setTimeout(resolve, timeoutMs))]);
   }
 
   stop() {

@@ -166,6 +166,8 @@ let adoptionSweep = null;
 let isQuitting = false;
 /** Set once the person has confirmed, so the question is asked exactly once. */
 let quitConfirmed = false;
+/** Set once the company server has been told this device is closing, so it is told once. */
+let orgToldBye = false;
 /** Windows allowed to close without asking again. */
 const closingWindows = new Set();
 /** Latest foreground reading per pty, so adoption can keep trying. */
@@ -2476,6 +2478,10 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   orgService = createOrgService();
   // Only once signed in: a machine that never joined a company says nothing to anybody.
   orgService?.start();
+  // Asleep is away: the company sees it now rather than minutes later, and sees the person back on waking.
+  const { powerMonitor } = require('electron');
+  powerMonitor.on('suspend', () => { void orgService?.goodbye(); });
+  powerMonitor.on('resume', () => { void orgService?.sendNow(); });
   // What the hours held back is looked at again on a clock of its own: the
   // delivery extension promises the morning, and something has to bring it.
   teamsService?.start();
@@ -3345,6 +3351,13 @@ app.on('before-quit', (event) => {
       springStopped = true;
       setImmediate(() => app.quit());
     });
+    return;
+  }
+  // The company server hears that this device is closing, so it shows as away now; a second and a half at most.
+  if (!orgToldBye && orgService?.token()) {
+    event.preventDefault();
+    orgToldBye = true;
+    orgService.goodbye().finally(() => setImmediate(() => app.quit()));
     return;
   }
   // A quit that is already under way: nothing here is done twice.

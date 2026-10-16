@@ -225,7 +225,14 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
     if (!leads.length) throw new HttpError(403, 'Only an administrator or a team lead can see that.');
     return { ...who, scope: new Set(leads) };
   }
-  const inScope = (scope, user) => !scope || scope.has(user?.team || '');
+  // Teams are typed by hand, so "plataforma" and "Plataforma " are the same team.
+  const teamKey = (name) => String(name ?? '').trim().toLowerCase();
+  const inScope = (scope, user) => !scope || [...scope].some((t) => teamKey(t) === teamKey(user?.team));
+  /** The teams someone is to lead, spelled the way the people in them have it. */
+  const ledTeams = (list) => {
+    const known = new Map(store.users().filter((u) => u.team).map((u) => [teamKey(u.team), u.team.trim()]));
+    return [...new Set(teamNames(list).map((t) => known.get(teamKey(t)) ?? t))];
+  };
   function needDevice(req) {
     const header = String(req.headers.authorization ?? '');
     const who = header.startsWith('Bearer ') ? store.resolveToken(header.slice(7), 'device') : null;
@@ -274,11 +281,13 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
     const activity = store.activitySince(since).filter((a) => ids.has(a.user_id));
     const usage = new Map(store.usageSince(since).map((u) => [u.user_id, u]));
     const projects = settings().projects;
+    // A device is online while it reports, until it goes quiet or says it is closing.
+    const live = (s) => t - s.at < ONLINE_MS && !s.payload.gone;
     const people = users.map((u) => {
       const mine = snaps.filter((s) => s.user_id === u.id);
       const latest = mine.sort((a, b) => b.at - a.at)[0] ?? null;
       const devices = store.tokensOf(u.id).filter((tk) => tk.kind === 'device');
-      const sessions = mine.filter((s) => t - s.at < ONLINE_MS).flatMap((s) => s.payload.sessions.map((x) => ({ ...x, device: s.label })));
+      const sessions = mine.filter(live).flatMap((s) => s.payload.sessions.map((x) => ({ ...x, device: s.label })));
       const working = sessions.filter((s) => s.busy || s.active);
       const accounts = mine.flatMap((s) => s.payload.accounts.map((a) => ({ ...a, device: s.label, reportedAt: s.at })));
       const mineActivity = activity.filter((a) => a.user_id === u.id);
@@ -286,7 +295,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
         .map((a) => ({ key: a.key, minutes: Math.round(a.minutes) }));
       return {
         ...publicUser(u),
-        online: Boolean(latest && t - latest.at < ONLINE_MS),
+        online: mine.some(live),
         paused: Boolean(latest?.payload.paused),
         lastSeen: latest?.at ?? null,
         devices: devices.map((d) => ({ id: d.id, label: d.label, lastSeen: d.last_seen_at })),
@@ -299,7 +308,7 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
         accounts,
         repos: top('repo'),
         tickets: top('ticket'),
-        hiddenSessions: mine.filter((s) => t - s.at < ONLINE_MS).reduce((n, s) => n + (Number(s.payload.hiddenSessions) || 0), 0),
+        hiddenSessions: mine.filter(live).reduce((n, s) => n + (Number(s.payload.hiddenSessions) || 0), 0),
         usageHistory: usage.has(u.id) ? {
           daysRanOut: Number(usage.get(u.id).days_ran_out) || 0,
           lowestWeekLeft: usage.get(u.id).lowest_week,
@@ -471,6 +480,12 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       const { user } = needDevice(req);
       return send(res, 200, { ok: true, ...personalStats(user.id, periodOf(url)) });
     }
+    if (method === 'POST' && p === '/api/app/bye') {
+      // The app is quitting or the machine is going to sleep: show the person as away straight away.
+      const { token } = needDevice(req);
+      store.markGone(token.id);
+      return send(res, 200, { ok: true });
+    }
     if (method === 'POST' && p === '/api/app/logout') {
       const { token } = needDevice(req);
       store.revokeToken(token.id);
@@ -639,8 +654,9 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       }
       const user = store.createUser({ email, name: body.name ?? '', role, passHash: password ? await hashPassword(password) : null });
       if (body.team) store.updateUser(user.id, { team: String(body.team) });
-      if (body.leads !== undefined && teamNames(body.leads).length) store.updateUser(user.id, { leads: teamNames(body.leads) });
-      store.log(webUser(req).user.id, 'account.created', email, `${role}${password ? '' : ', single sign-on only'}`);
+      const leads = body.leads === undefined ? [] : ledTeams(body.leads);
+      if (leads.length) store.updateUser(user.id, { leads });
+      store.log(webUser(req).user.id, 'account.created', email, `${role}${leads.length ? `, team lead of ${leads.join(', ')}` : ''}${password ? '' : ', single sign-on only'}`);
       // The generated password is shown once, to the administrator who made it.
       return send(res, 201, { ok: true, user: publicUser(store.user(user.id)), password: body.password ? null : password });
     }
@@ -654,14 +670,15 @@ function createServer({ dbFile, publicUrl, fetch = globalThis.fetch, now = Date.
       if (target.id === me.id && (body.disabled === true || body.role === 'member')) {
         throw new HttpError(400, 'You cannot disable yourself or take away your own administrator role.');
       }
+      const leads = body.leads === undefined ? undefined : ledTeams(body.leads);
       store.updateUser(target.id, {
         name: body.name === undefined ? undefined : String(body.name),
         role: body.role === undefined ? undefined : body.role === 'admin' ? 'admin' : 'member',
         team: body.team === undefined ? undefined : String(body.team),
-        leads: body.leads === undefined ? undefined : teamNames(body.leads),
+        leads,
       });
-      if (body.leads !== undefined && JSON.stringify(teamNames(body.leads)) !== JSON.stringify(leadsOf(target))) {
-        store.log(me.id, 'account.leads', target.email, teamNames(body.leads).join(', ') || 'no team');
+      if (leads !== undefined && JSON.stringify(leads) !== JSON.stringify(leadsOf(target))) {
+        store.log(me.id, 'account.leads', target.email, leads.join(', ') || 'no team');
       }
       if (body.team !== undefined && String(body.team).trim() !== (target.team ?? '')) store.log(me.id, 'account.team', target.email, String(body.team).trim() || 'no team');
       if (body.disabled !== undefined) {

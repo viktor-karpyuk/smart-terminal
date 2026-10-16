@@ -176,6 +176,10 @@ class Store {
     this.run('INSERT INTO snapshots (token_id, user_id, at, payload) VALUES (?, ?, ?, ?) ON CONFLICT(token_id) DO UPDATE SET at = excluded.at, payload = excluded.payload, user_id = excluded.user_id',
       tokenId, userId, this.now(), JSON.stringify(payload));
   }
+  /** The app on that device said it is closing: it stops counting as online now, not minutes later. */
+  markGone(tokenId) {
+    this.run("UPDATE snapshots SET payload = json_set(payload, '$.gone', json('true')) WHERE token_id = ?", tokenId);
+  }
   snapshots() {
     return this.all('SELECT s.*, t.label FROM snapshots s JOIN tokens t ON t.id = s.token_id WHERE t.revoked_at IS NULL')
       .map((row) => ({ ...row, payload: JSON.parse(row.payload) }));

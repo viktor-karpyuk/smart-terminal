@@ -109,6 +109,33 @@ test('a device the company signed out stops reporting and says so', async () => 
   assert.match(s.overview().lastError, /signed this device out/);
 });
 
+test('closing says goodbye to the server, and a server that does not answer never holds the quit up', async () => {
+  const { s, calls } = service({ answers: { '/api/app/bye': { status: 200, body: { ok: true } } } });
+  await s.goodbye();
+  assert.equal(calls.length, 0, 'a machine that never signed in says nothing');
+  s.save({ server: 'https://org.acme.com', token: 'enc:t', user: { email: 'a@acme.com' } });
+  await s.goodbye();
+  assert.equal(calls.at(-1).url, 'https://org.acme.com/api/app/bye');
+  assert.equal(calls.at(-1).init.headers.authorization, 'Bearer t');
+
+  s.fetch = () => new Promise(() => {});
+  const started = Date.now();
+  await s.goodbye({ timeoutMs: 50 });
+  assert.ok(Date.now() - started < 1000);
+});
+
+test('the first report goes out seconds after the app opens, not an interval later', async () => {
+  const { s, calls } = service({ answers: { '/api/app/report': { status: 200, body: { ok: true } } } });
+  s.save({ server: 'https://org.acme.com', token: 'enc:t', user: { email: 'a@acme.com' }, policy: { reportEveryMinutes: 2 } });
+  const delays = [];
+  const real = global.setTimeout;
+  global.setTimeout = (fn, ms) => { delays.push(ms); return real(() => {}, 0); };
+  try { s.start(); } finally { global.setTimeout = real; }
+  s.stop();
+  assert.ok(delays[0] <= 10_000, `first report after ${delays[0]} ms`);
+  assert.equal(calls.length, 0);
+});
+
 test('pausing sends at once, and sends nothing about the work', async () => {
   const bodies = [];
   const { s } = service({ answers: { '/api/app/report': (init) => { bodies.push(JSON.parse(init.body)); return { status: 200, body: { ok: true } }; } } });

@@ -722,8 +722,8 @@ function go(key) {
   $('me').title = me.email;
   $('logout').addEventListener('click', async () => { await api('POST', '/api/web/logout', {}); location.href = '/login'; });
   go(location.hash.slice(1) || (canSeeOthers() ? 'team' : 'mine'));
-  // The live pages are what is on screen most of the day; keep them current without moving anything under the reader.
+  // The live pages are what is on screen most of the day; keep them current, so someone who opens the app shows up within seconds, without moving anything under the reader.
   setInterval(() => {
     if (['team', 'work', 'mine'].includes(current) && !document.querySelector('.scrim') && document.activeElement?.type !== 'search') redraw();
-  }, 30_000);
+  }, 15_000);
 })();
