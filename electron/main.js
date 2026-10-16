@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const { fileURLToPath, pathToFileURL } = require('node:url');
 const os = require('node:os');
 const path = require('node:path');
-const { app, BrowserWindow, ipcMain, dialog, protocol, shell, net, Notification, safeStorage, clipboard, ClipboardItem } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, session, shell, net, Notification, safeStorage, clipboard, ClipboardItem } = require('electron');
 const { DatabaseSync } = require('node:sqlite');
 const { createHash, randomUUID } = require('node:crypto');
 
@@ -63,6 +63,10 @@ const buildTools = require('./build-tools');
 const { Updates, repoSlug } = require('./updates');
 const { ReviewService } = require('./review-service');
 const { TeamsService } = require('./teams-service');
+const { JenkinsService } = require('./jenkins-service');
+const { JenkinsMcp } = require('./jenkins-mcp');
+const { SessionSecrets } = require('./session-secrets');
+const { ensurePrivateDir } = require('./socket-guard');
 const { serveMedia } = require('./media');
 const { TeamsBot } = require('./teams-bot');
 const { resolvedPath } = require('./cli-env');
@@ -217,6 +221,15 @@ let db = null;
  */
 let reviewService = null;
 let teamsService = null;
+/** Jenkins: the credentials, the poller, and the verbs the panel may call. Its tables live in this app's own database. */
+let jenkinsService = null;
+/** What Claude sessions may ask of it: read-only, and a dialog for anything that starts a build. */
+let jenkinsMcp = null;
+/**
+ * What each session was told at its start that no other session knows. The roster gives every session every other's id, so
+ * an id proves nothing; the bridge asks for this where it matters (see session-secrets.js).
+ */
+const sessionSecrets = new SessionSecrets();
 /** The Code Reviewer's bot: reads what Teams said from the Azure queue, and answers as the bot. */
 let teamsBot = null;
 /** Where the bus's MCP server lives and the socket it talks to, once messaging has opened it. */
@@ -332,6 +345,198 @@ function createTeamsService() {
   } catch (error) {
     // Nothing else depends on it; an extension that cannot start says so and stays out of the way.
     console.error('[teams] could not start:', error);
+    return null;
+  }
+}
+
+/** Notifications from Jenkins that are on screen and can still be clicked. */
+const jenkinsNotes = new Set();
+/** A banner the system never closes would sit here for ever: past this many the oldest let go. */
+const JENKINS_NOTES_MAX = 50;
+
+/**
+ * The one window a notice is for: the one in front, or the first there is.
+ *
+ * Said to every window, each would show its own toast, a click would open a
+ * Jenkins tab in all of them, and the dock's number would be whichever window
+ * wrote last.
+ */
+function windowForNotice() {
+  const all = [...windows.values()].filter((one) => !one.isDestroyed());
+  return all.find((one) => one.isFocused()) ?? all[0] ?? null;
+}
+
+function createJenkinsService() {
+  const secrets = {
+    encrypt: (text) => {
+      // A token stored in the clear is worse than a token not stored: refuse, and say why.
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('This system offers no encrypted storage, so the token cannot be kept safely.');
+      return safeStorage.encryptString(text).toString('base64');
+    },
+    decrypt: (cipher) => safeStorage.decryptString(Buffer.from(cipher, 'base64')),
+  };
+  try {
+    /*
+     * What finished builds leave behind lives in a file of its own, not in the
+     * app's database: a console can be tens of megabytes, and this one can be
+     * deleted without touching anything else. Without it the archive is just
+     * not kept; Jenkins still works.
+     */
+    // Null, said plainly: the service then keeps its archive in memory and never in the app's own database.
+    let archiveDb = null;
+    try {
+      const { DatabaseSync } = require('node:sqlite');
+      archiveDb = new DatabaseSync(path.join(app.getPath('userData'), 'jenkins-archive.sqlite'));
+    } catch (error) {
+      console.error('[jenkins] no local archive:', error);
+    }
+    /*
+     * Jenkins gets a session of its own — and a new one whenever what the person
+     * trusts changes.
+     *
+     * A Jenkins behind a company's certificate authority, or a self-signed one,
+     * is refused by Chromium. The person can say "trust this certificate for this
+     * server": the service remembers a fingerprint per host and this is the one
+     * place that hears it. Chromium caches its verdict per session and nothing
+     * short of a new session makes it ask again (measured: re-setting the proc,
+     * closing connections and clearing every cache all leave the old answer in
+     * place), so trusting, forgetting or changing a server's host builds a fresh
+     * one. It is not persistent, which also gives Jenkins traffic a cookie jar of
+     * its own. `-3` hands every other host back to Chromium's verdict; `0` is only
+     * ever returned for a host and fingerprint the person approved.
+     */
+    let jenkinsSession = null;
+    let jenkinsSessions = 0;
+    const makeJenkinsSession = () => {
+      const previous = jenkinsSession;
+      // What was in flight on the old session is let finish; its idle connections are not kept for ever.
+      if (previous) setTimeout(() => { try { previous.closeAllConnections?.(); } catch { /* it was closed already */ } }, 60_000).unref?.();
+      jenkinsSession = session.fromPartition(`jenkins-${++jenkinsSessions}`);
+      jenkinsSession.setCertificateVerifyProc((request, callback) => {
+        let trusted = false;
+        try {
+          trusted = Boolean(jenkinsService?.isTrustedCertificate?.(request.hostname, request.certificate?.fingerprint));
+        } catch {
+          trusted = false;
+        }
+        callback(trusted ? 0 : -3);
+      });
+    };
+    makeJenkinsSession();
+    return new JenkinsService({
+      db: db.db,
+      archiveDb,
+      secrets,
+      certificatesChanged: makeJenkinsSession,
+      // Opening a build in the browser: the service builds the address from the server it knows and checks it; this only opens web addresses.
+      openExternal: (url) => {
+        if (/^https?:\/\//i.test(String(url))) return shell.openExternal(String(url));
+        throw new Error('Only web addresses can be opened.');
+      },
+      /*
+       * A JSON file of servers, chosen by the person in the system's own dialog.
+       * The panel cannot reach the disk and never names a path: it asks, and the
+       * person picks. Only the text comes back, and only up to a megabyte — this
+       * is a few lines of credentials, not a file worth reading whole.
+       */
+      pickFile: async () => {
+        const owner = BrowserWindow.getFocusedWindow() ?? undefined;
+        const picked = await dialog.showOpenDialog(owner, {
+          title: 'Import Jenkins servers',
+          properties: ['openFile'],
+          filters: [{ name: 'JSON', extensions: ['json'] }, { name: 'All files', extensions: ['*'] }],
+        });
+        if (picked.canceled || !picked.filePaths[0]) return null;
+        const file = picked.filePaths[0];
+        if (fs.statSync(file).size > 1_000_000) throw new Error('That file is too big to be a list of servers.');
+        return { name: path.basename(file), text: fs.readFileSync(file, 'utf8') };
+      },
+      /*
+       * The other way: a JSON file of servers, written where the person says.
+       *
+       * The place is asked for first and the text built after, so cancelling
+       * the dialog never decrypts a token. The file is the person's own, made
+       * readable by them alone — it holds API tokens in the clear, which is the
+       * whole point of it and the reason nothing but this process ever sees it.
+       */
+      saveFile: async ({ suggestedName, build }) => {
+        const owner = BrowserWindow.getFocusedWindow() ?? undefined;
+        const picked = await dialog.showSaveDialog(owner, {
+          title: 'Export Jenkins servers',
+          defaultPath: path.join(app.getPath('documents'), String(suggestedName || 'jenkins-servers.json')),
+          filters: [{ name: 'JSON', extensions: ['json'] }],
+        });
+        if (picked.canceled || !picked.filePath) return null;
+        const text = await build();
+        /*
+         * Written beside the target with its mode from the first byte and then
+         * moved into place: writing over a file that already existed would put
+         * the tokens in it under whatever mode it had, for as long as it took to
+         * chmod it.
+         */
+        const temp = `${picked.filePath}.${process.pid}.tmp`;
+        try {
+          fs.writeFileSync(temp, text, { mode: 0o600, flag: 'wx' });
+          fs.renameSync(temp, picked.filePath);
+        } catch (error) {
+          try { fs.rmSync(temp, { force: true }); } catch { /* it was never there */ }
+          throw error;
+        }
+        return { name: path.basename(picked.filePath) };
+      },
+      fetch: (url, init) => jenkinsSession.fetch(url, init),
+      notify: (title, body, place) => {
+        const supported = Notification.isSupported();
+        // The app in front is told in the app, and only then: a banner from the system on top of one the person is already looking at is noise.
+        const focused = [...windows.values()].some((one) => !one.isDestroyed() && one.isFocused());
+        // Said in the log too: a notification the system swallowed (permission, focus mode) leaves no other trace.
+        if (!app.isPackaged) console.log(`[jenkins] notify (${supported ? 'supported' : 'NOT supported'}${focused ? ', app in front' : ''}): ${title} | ${body}`);
+        // Always inside the app: it needs no permission from anybody, and it is what survives an unsigned build.
+        windowForNotice()?.webContents.send('jenkins:notice', { title, body, place: place ?? null, at: Date.now() });
+        if (focused) return;
+        // Out of sight, the dock says so: that works without any notification permission too.
+        if (process.platform === 'darwin') app.dock?.bounce('informational');
+        if (!supported) return;
+        const note = new Notification({ title, body });
+        /*
+         * Held until it is clicked or closed: a notification nobody references
+         * can be collected before the person gets to it, and then clicking it
+         * does nothing at all.
+         */
+        jenkinsNotes.add(note);
+        while (jenkinsNotes.size > JENKINS_NOTES_MAX) jenkinsNotes.delete(jenkinsNotes.values().next().value);
+        const done = () => jenkinsNotes.delete(note);
+        note.on('close', done);
+        note.on('failed', (_event, reason) => {
+          done();
+          /*
+           * The system refused it. On macOS an app that is not signed with a
+           * real Apple identity is refused every notification, silently, and
+           * this event is the only way to hear about it — so the app says so,
+           * once, in words, instead of leaving "my notifications don't arrive"
+           * to be a mystery.
+           */
+          console.log(`[jenkins] the system refused a notification: ${String(reason ?? 'no reason given')}`);
+          send('jenkins:notice-blocked', { reason: String(reason ?? '') });
+        });
+        note.on('click', () => {
+          done();
+          // Where it was about, when the service said: the build, the job, the server's home.
+          const win = windowForNotice();
+          if (win) {
+            if (win.isMinimized()) win.restore();
+            win.show();
+            win.focus();
+            if (place) win.webContents.send('jenkins:open', place);
+          }
+        });
+        note.show();
+      },
+      emit: (event) => send('jenkins:event', event),
+    });
+  } catch (error) {
+    // Nothing else depends on it; an extension that cannot start says so and stays out of the way.
+    console.error('[jenkins] could not start:', error);
     return null;
   }
 }
@@ -485,6 +690,9 @@ function releaseTreesOf(windowId) {
  * about a process that is not there.
  */
 function forgetPty(ptyId) {
+  // A secret ends with the process it was given to: nothing running can use it afterwards.
+  const owner = sessionByPty.get(ptyId);
+  if (owner) sessionSecrets.forget(owner);
   windowByPty.delete(ptyId);
   sessionByPty.delete(ptyId);
   foregroundByPty.delete(ptyId);
@@ -759,6 +967,8 @@ function registerIpc() {
       command: options.command || null,
       env: {
         SMART_TERMINAL_SESSION_ID: options.sessionId || '',
+        // Known to this session and to the app, and in no roster: how a session proves it is the one it says it is.
+        SMART_TERMINAL_SESSION_SECRET: options.sessionId ? sessionSecrets.issue(options.sessionId) : '',
         // How a hook finds its way home. The MCP server is told the same path
         // through its own config; a hook is a plain child of Claude, so the
         // only way it can be told is the environment the shell was given.
@@ -1939,6 +2149,12 @@ function registerIpc() {
     }
   });
 
+  /** Jenkins: a table of verbs on the other side of one door, like Teams. */
+  ipcMain.handle('jenkins:call', async (_e, { name, args } = {}) => {
+    if (!jenkinsService) return { ok: false, error: 'Jenkins is not running.' };
+    return jenkinsService.call(String(name ?? ''), args ?? {});
+  });
+
   ipcMain.handle('review:call', async (_e, { name, args } = {}) => {
     if (!reviewService) return { ok: false, error: 'The Code Reviewer is not running.' };
     return reviewService.call(String(name ?? ''), args ?? {});
@@ -2230,6 +2446,16 @@ function registerIpc() {
   ipcMain.on('updates:open-log', () => {
     if (updates) shell.openPath(updates.logPath());
   });
+  /*
+   * The dock's number: how many things are waiting on you, as the renderer counts them.
+   * It needs no permission from the system, which is why it is here beside the
+   * notifications that may be refused.
+   */
+  ipcMain.handle('app:set-badge', (_e, count) => {
+    const n = Math.max(0, Math.min(999, Math.floor(Number(count) || 0)));
+    if (process.platform === 'darwin') app.dock?.setBadge(n ? String(n) : '');
+    else app.setBadgeCount(n);
+  });
   ipcMain.handle('system:homedir', () => os.homedir());
   ipcMain.handle('system:paths', () => ({ home: os.homedir(), accountsRoot: accountsRoot() }));
   ipcMain.handle('system:pick-directory', async (event, startIn) => {
@@ -2323,6 +2549,9 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   // What the hours held back is looked at again on a clock of its own: the
   // delivery extension promises the morning, and something has to bring it.
   teamsService?.start();
+  // Builds that finish while no panel is open are noticed here, on a clock of its own.
+  jenkinsService = createJenkinsService();
+  jenkinsService?.start();
   reviewService = createReviewService();
   if (teamsService && reviewService) {
     teamsBot = new TeamsBot({
@@ -2571,6 +2800,8 @@ function startMessaging() {
   // The Code Reviewer's bus, beside the sessions' server and started the same way.
   const busScript = path.join(__dirname, 'review-bus-mcp.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
   reviewBusServer = { command: process.execPath, script: busScript, socketPath };
+  // Jenkins, read-only, for every session: a relay like the others, answered by `jenkinsMcp` below.
+  const jenkinsScript = path.join(__dirname, 'jenkins-mcp-stdio.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
 
   try {
     fs.writeFileSync(
@@ -2590,6 +2821,12 @@ function startMessaging() {
               args: [busScript],
               env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
             },
+            // Offers no tools until a Jenkins is connected; what it may do is decided in `JenkinsMcp`, never here.
+            jenkins: {
+              command: process.execPath,
+              args: [jenkinsScript],
+              env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
+            },
           },
         },
         null,
@@ -2600,6 +2837,50 @@ function startMessaging() {
     console.log(`[messages] could not write the MCP config: ${error.message}`);
     mcpConfigPath = null;
   }
+
+  /*
+   * What a session may ask of Jenkins. It can ask to run a job; a native
+   * dialog — not something a terminal or a model can answer — is where a
+   * person says yes or no, and nothing starts unless they do.
+   */
+  jenkinsMcp = new JenkinsMcp({
+    service: () => jenkinsService,
+    log: (line) => console.log(line),
+    // How long the person has to answer a request to run a job. Only for testing the dialog without waiting two minutes.
+    limits: process.env.SMART_TERMINAL_JENKINS_ASK_TIMEOUT_MS
+      ? { runTimeout: Math.min(300_000, Math.max(3000, Number(process.env.SMART_TERMINAL_JENKINS_ASK_TIMEOUT_MS) || 120_000)) }
+      : {},
+    confirm: async ({ title, message, detail, confirmLabel, timeoutMs }) => {
+      const owner = BrowserWindow.getFocusedWindow() ?? [...windows.values()].find((one) => !one.isDestroyed()) ?? undefined;
+      // No window to hang the question on: on macOS an unparented dialog ignores the abort signal and would wait for ever, and a
+      // question nobody can see is not one anybody answered. Say so, and nothing is started.
+      if (!owner) return 'unavailable';
+      const abort = new AbortController();
+      const timer = setTimeout(() => abort.abort(), timeoutMs);
+      try {
+        const answer = await dialog.showMessageBox(owner, {
+          type: 'question',
+          title,
+          message,
+          detail,
+          // Cancel is first and the default: a stray Enter must not start a build.
+          buttons: ['Cancel', confirmLabel || 'Run'],
+          defaultId: 0,
+          cancelId: 0,
+          noLink: true,
+          signal: abort.signal,
+        });
+        // Aborting resolves the dialog as if it were cancelled: nobody said no, nobody was there.
+        if (abort.signal.aborted) return 'timeout';
+        return answer.response === 1 ? 'yes' : 'no';
+      } catch (error) {
+        // The signal aborted the dialog, or it could not be shown: either way nobody said yes.
+        return abort.signal.aborted ? 'timeout' : 'no';
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  });
 
   messages = new MessageBridge({
     socketPath,
@@ -2616,6 +2897,8 @@ function startMessaging() {
     isFree: sessionIsFree,
     onHook: (request) => handleHook(request),
     onBus: (request) => (reviewService ? reviewService.bus.handle(request, liveRoster()) : { ok: false, error: 'The Code Reviewer is not running.' }),
+    onJenkins: (request) => jenkinsMcp.handle(request),
+    verifySession: (id, secret) => sessionSecrets.verify(id, secret),
     // Sessions the app knows but is not running. Without this, a message to a
     // session that has ended comes back as "no such session", which is false and
     // leaves the sender nothing to do but try again.
@@ -2658,11 +2941,27 @@ function startMessaging() {
 function socketPathFor(dir) {
   const preferred = path.join(dir, 'sessions.sock');
   if (Buffer.byteLength(preferred) <= 100) return preferred;
+  if (socketPaths.has(dir)) return socketPaths.get(dir);
   const key = createHash('sha1').update(dir).digest('hex').slice(0, 10);
-  const fallback = path.join(os.tmpdir(), `smart-terminal-${key}.sock`);
+  /*
+   * Somewhere short enough, and nobody else's. A fixed name in a shared /tmp can be taken by whoever gets there first, so the
+   * socket goes in a directory of its own that is checked to be ours and private; if that cannot be had, in one made fresh
+   * with a name nobody can guess. Kept for the life of the app: every session is told the path once, when it starts.
+   */
+  let place;
+  try {
+    place = ensurePrivateDir(path.join(os.tmpdir(), `smart-terminal-${process.getuid?.() ?? 'user'}`));
+  } catch (error) {
+    console.log(`[messages] ${error.message}; using a directory of its own`);
+    place = fs.mkdtempSync(path.join(os.tmpdir(), 'smart-terminal-'));
+  }
+  const fallback = path.join(place, `${key}.sock`);
   console.log(`[messages] ${preferred} is too long for a socket; using ${fallback}`);
+  socketPaths.set(dir, fallback);
   return fallback;
 }
+/** Where `socketPathFor` settled, so asking twice is the same answer. */
+const socketPaths = new Map();
 
 /** Every live session, as the thing on the other end of the channel sees it. */
 /**
@@ -3123,6 +3422,7 @@ app.on('will-quit', () => {
   kubeForwards.stopAll();
   // A `claude -p` nobody can see would go on spending on the person's account.
   reviewService?.stop();
+  jenkinsService?.stop();
   teamsBot?.stop();
   // A Gradle client asked for a task list is a JVM that would otherwise
   // outlive the app by up to three minutes.

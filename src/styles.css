@@ -3940,6 +3940,20 @@ button:focus-visible, [role='button']:focus-visible, .tab:focus-visible {
 .reviewer-dot.is-ok { background: var(--ok); }
 .reviewer-dot.is-warn { background: var(--git-new); }
 .reviewer-dot.is-bad { background: var(--danger); }
+.reviewer-dot.is-run { background: var(--accent); animation: jenkins-run 1.4s ease-in-out infinite; }
+@keyframes jenkins-run { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .reviewer-dot.is-run { animation: none; } }
+.reviewer-count.is-bad { color: var(--danger); }
+/* Jenkins' list in the sidebar: a search box, the Tree | Views switch, and lines like the reviewer's. */
+.jenkins-search, .jenkins-server { display: block; width: calc(100% - 16px); margin: 4px 8px; padding: 4px 8px; font: inherit; font-size: var(--fs-md); color: var(--text); background: var(--bg-input, var(--bg)); border: 1px solid var(--border); border-radius: 6px; }
+.jenkins-search:focus, .jenkins-server:focus { outline: none; border-color: var(--accent); }
+.jenkins-seg { display: flex; gap: 2px; margin: 4px 8px 6px; padding: 2px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; }
+.jenkins-seg button { flex: 1; font: inherit; font-size: var(--fs-sm); padding: 3px 0; color: var(--text-dim); background: none; border: 0; border-radius: 4px; cursor: pointer; }
+.jenkins-seg button:hover { color: var(--text); }
+.jenkins-seg button:focus-visible, .jenkins-server:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.jenkins-seg button.is-on { color: var(--text); background: var(--bg-active); }
+.jenkins-subhead { margin: 8px 10px 2px; font-size: var(--fs-xs, 10.5px); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-faint); }
+.jenkins-down { color: var(--danger); }
 .reviewer-note { font-size: var(--fs-xs, 10.5px); color: var(--text-faint); white-space: nowrap; }
 /* The same plain number the other lists use, in the accent because it is asking for you. */
 .reviewer-count { margin-left: auto; padding-left: 6px; flex: 0 0 auto; font-size: var(--fs-sm); color: var(--accent); font-variant-numeric: tabular-nums; }
@@ -4029,3 +4043,39 @@ button:focus-visible, [role='button']:focus-visible, .tab:focus-visible {
 .media-stage audio { width: min(520px, 100%); }
 .media-stage.is-pdf { padding: 0; display: flex; }
 .media-pdf { flex: 1; width: 100%; height: 100%; border: 0; background: var(--bg-panel); }
+
+/* What CI says, inside the app: cards in the corner for a few seconds, a bell in the title bar for after. */
+.ci-toasts { position: fixed; right: 14px; bottom: 14px; z-index: 900; display: flex; flex-direction: column; gap: 8px; width: min(380px, calc(100vw - 28px)); pointer-events: none; }
+.ci-toast { pointer-events: auto; display: flex; align-items: flex-start; gap: 6px; padding: 10px 10px 10px 12px; background: var(--bg-panel, var(--bg)); color: var(--text); border: 1px solid var(--border-strong, var(--border)); border-left-width: 3px; border-radius: 8px; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35); animation: ci-toast-in 0.16s ease-out; }
+.ci-toast.is-bad { border-left-color: var(--danger); }
+.ci-toast.is-ok { border-left-color: var(--ok); }
+.ci-toast.is-plain { border-left-color: var(--accent); }
+.ci-toast-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; text-align: left; font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: default; }
+button.ci-toast-main { cursor: pointer; }
+.ci-toast-main strong { font-weight: 600; font-size: var(--fs-md); overflow-wrap: anywhere; }
+.ci-toast-main span { font-size: var(--fs-sm); color: var(--text-dim); overflow-wrap: anywhere; }
+.ci-toast-close { flex: 0 0 auto; width: 20px; height: 20px; line-height: 18px; font: inherit; font-size: 16px; color: var(--text-faint); background: none; border: 0; border-radius: 4px; cursor: pointer; }
+.ci-toast-close:hover { color: var(--text); background: var(--bg-hover); }
+@keyframes ci-toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .ci-toast { animation: none; } }
+.ci-bell { position: relative; -webkit-app-region: no-drag; }
+.ci-bell.has-unread { color: var(--text); }
+.ci-bell-count { position: absolute; top: -3px; right: -4px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; font-size: 9.5px; line-height: 14px; text-align: center; font-weight: 600; color: var(--bg); background: var(--danger); }
+.ci-inbox { width: 360px; max-width: 92vw; max-height: 60vh; display: flex; flex-direction: column; }
+.ci-inbox-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); }
+.ci-inbox-actions { display: inline-flex; gap: 8px; text-transform: none; letter-spacing: 0; }
+.ci-inbox-actions button { font: inherit; font-size: var(--fs-sm); color: var(--text-dim); background: none; border: 0; cursor: pointer; padding: 0; }
+.ci-inbox-actions button:hover:not(:disabled) { color: var(--text); }
+.ci-inbox-actions button:disabled { opacity: 0.4; cursor: default; }
+.ci-inbox-list { overflow: auto; padding: 4px; }
+.ci-inbox-row { width: 100%; display: flex; align-items: flex-start; gap: 8px; padding: 7px 8px; text-align: left; font: inherit; color: var(--text); background: none; border: 0; border-radius: 6px; cursor: pointer; }
+.ci-inbox-row:hover { background: var(--bg-hover); }
+.ci-inbox-row.is-read { opacity: 0.6; }
+.ci-inbox-dot { flex: 0 0 auto; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--accent); }
+.ci-inbox-row.is-bad .ci-inbox-dot { background: var(--danger); }
+.ci-inbox-row.is-ok .ci-inbox-dot { background: var(--ok); }
+.ci-inbox-row.is-read .ci-inbox-dot { background: var(--border-strong); }
+.ci-inbox-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.ci-inbox-text strong { font-weight: 500; font-size: var(--fs-md); overflow-wrap: anywhere; }
+.ci-inbox-text span { font-size: var(--fs-sm); color: var(--text-dim); overflow-wrap: anywhere; }
+.ci-inbox-when { flex: 0 0 auto; font-size: var(--fs-xs, 10.5px); color: var(--text-faint); font-variant-numeric: tabular-nums; }

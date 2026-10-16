@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { CiToasts } from './components/CiNotices';
 import { startDrag } from './lib/resize';
 import { reapplyTerminalSizes, terminalLook, useStore } from './state/store';
 import { applyLook } from './lib/looks';
@@ -36,6 +37,20 @@ export function App() {
   }, []);
 
   useEffect(() => window.api.onMenuAction(({ id }) => handleMenuAction(id)), []);
+
+  // What CI says arrives here as well as from the system, which may refuse it: kept, shown, and counted on the dock.
+  useEffect(
+    () => window.api.jenkins.onNotice((notice) => useStore.getState().pushCiNotice(notice)),
+    [],
+  );
+  useEffect(() => window.api.jenkins.onNoticeBlocked(() => useStore.getState().setOsNotificationsBlocked(true)), []);
+  const ciUnread = useStore((s) => s.ciNotices.filter((one) => !one.read).length);
+  useEffect(() => {
+    void window.api.system.setBadge(ciUnread);
+  }, [ciUnread]);
+
+  // A Jenkins notification was clicked: the window is already in front, this shows what it was about.
+  useEffect(() => window.api.jenkins.onOpen((place) => useStore.getState().openJenkinsAt(place)), []);
 
   // The platform on the root, for the few rules that differ — the title bar
   // only leaves room for traffic lights where there are traffic lights.
@@ -83,6 +98,7 @@ export function App() {
   return (
     <div className="app">
       <TitleBar />
+      <CiToasts />
       <div className="workbench">
         {settings.sidebarVisible && (
           <>
