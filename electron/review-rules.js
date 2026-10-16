@@ -785,13 +785,14 @@ function buildConversation({ findings, comments, replies, today = new Date() }) 
  */
 function foreignRequests({ findings, comments, ourName }) {
   const ourPublished = new Set(findings.filter((finding) => !finding.askedBy).map((finding) => finding.publishedId).filter(Boolean));
-  const adopted = new Map(findings.filter((finding) => finding.askedBy && finding.publishedId).map((finding) => [finding.publishedId, finding.id]));
+  const adopted = new Map(findings.filter((finding) => finding.askedBy && finding.publishedId).map((finding) => [finding.publishedId, finding]));
   const children = childrenOf(comments);
   const name = String(ourName ?? '').trim().toLowerCase();
   return comments
     .filter((comment) => !comment.parentId && !comment.ours && !comment.deleted && !ourPublished.has(comment.commentId) && !(name && comment.author.toLowerCase() === name))
     .map((comment) => {
       const entries = descendants(comment.commentId, children).map((reply) => ({ id: reply.commentId, author: reply.author, body: reply.body, ours: reply.ours, at: reply.createdOn }));
+      const finding = adopted.get(comment.commentId) ?? null;
       return {
         commentId: comment.commentId,
         author: comment.author,
@@ -800,7 +801,12 @@ function foreignRequests({ findings, comments, ourName }) {
         body: comment.body,
         at: comment.createdOn,
         entries,
-        adoptedFindingId: adopted.get(comment.commentId) ?? null,
+        adoptedFindingId: finding?.id ?? null,
+        // Where it stands, the way one of ours would: verified, settled or closed by hand.
+        closed: Boolean(finding && (resolutionClosed(finding.resolution) || finding.closedAt)),
+        resolution: finding?.resolution ?? null,
+        resolutionNote: finding?.resolutionNote ?? null,
+        resolutionCommit: finding?.resolutionCommit ?? null,
         needsAnswer: entries.length === 0 || !entries[entries.length - 1].ours,
       };
     })
@@ -843,16 +849,26 @@ function repliesToUs(thread, ourIds) {
  * done rather than disappearing: removing them made a PR with every finding fixed
  * read 0%, because the final pass was the only item left.
  */
-function readiness({ pr, review, threads, findings, finalPassDone, finalPassBlockers }) {
+function readiness({ pr, review, threads, findings, foreign = [], finalPassDone, finalPassBlockers }) {
   if (!pr || !review) return { percent: 0, items: [{ key: 'noReview', label: 'No review yet', weight: 1, done: false }] };
   if (pr.state && pr.state !== 'OPEN') return { percent: 100, items: [{ key: 'notOpen', label: 'Not open', weight: 1, done: true }] };
   const items = [];
   const shut = (finding) => resolutionClosed(finding.resolution) || Boolean(finding.closedAt);
-  const published = findings.filter((finding) => finding.publishedId && !finding.dismissedAt);
+  // Somebody else's request is counted below, from what they asked, whether or not it was taken on yet.
+  const own = findings.filter((finding) => !finding.askedBy);
+  const published = own.filter((finding) => finding.publishedId && !finding.dismissedAt);
   for (const finding of published) {
     items.push({ key: 'finding', label: 'Published comment resolved', weight: 3, done: shut(finding), detail: `${finding.filePath.split('/').pop()}${finding.lineNo ? `:${finding.lineNo}` : ''}` });
   }
-  for (const finding of findings.filter((item) => !item.publishedId && !item.dismissedAt)) {
+  /*
+   * Requests from others weigh what ours do. A reviewer's comment on the pull
+   * request is something to resolve before the merge whoever wrote it; leaving
+   * them out read a PR with three open requests from a colleague as ready.
+   */
+  for (const request of foreign) {
+    items.push({ key: 'foreign', label: `Request from ${request.author} resolved`, weight: 3, done: Boolean(request.closed), detail: request.filePath ? `${request.filePath.split('/').pop()}${request.lineNo ? `:${request.lineNo}` : ''}` : 'general comment' });
+  }
+  for (const finding of own.filter((item) => !item.publishedId && !item.dismissedAt)) {
     items.push({ key: 'unpublished', label: 'Finding published or dismissed', weight: 1, done: shut(finding), detail: finding.filePath.split('/').pop() });
   }
   const unanswered = threads.filter(wantsAnswer).length;

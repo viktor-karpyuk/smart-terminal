@@ -18,7 +18,7 @@ function readJson(text) {
 }
 const { ReviewStore } = require('./review-store');
 const { Forge, parseRemote } = require('./review-forge');
-const { ReviewGit } = require('./review-git');
+const { ReviewGit, personKey } = require('./review-git');
 const { ClaudeRunner, orderAccounts } = require('./review-claude');
 const { ReviewEngine } = require('./review-engine');
 const { FixEngine } = require('./review-fix');
@@ -45,7 +45,7 @@ const { CrossFix } = require('./review-crossfix');
 const GUIDELINE_MAX = 60000;
 
 class ReviewService {
-  constructor({ db, secrets, fetch, profiles, resolvePath, notify, emit, dataDir, pickFolder, openExternal, DatabaseSync, importSource, busServer, deliver, deliveryState, matchPerson }) {
+  constructor({ db, secrets, fetch, profiles, resolvePath, notify, emit, dataDir, pickFolder, openExternal, DatabaseSync, importSource, busServer, deliver, deliveryState, matchPerson, personAddress }) {
     this.emitRaw = emit ?? (() => {});
     this.store = new ReviewStore(db, secrets);
     this.profiles = profiles ?? { list: () => [] };
@@ -65,6 +65,10 @@ class ReviewService {
     this.deliver = deliver ?? (async () => ({ ok: false, why: 'no-delivery' }));
     this.deliveryState = deliveryState ?? (() => ({ installed: false, ready: false }));
     this.matchPerson = matchPerson ?? (() => ({ ok: false, why: 'no-delivery' }));
+    /** The Teams address somebody was matched to, by handle, or null. Set by main. */
+    this.personAddress = personAddress ?? (() => null);
+    /** Each clone's committers, name → email, read from its history now and then rather than on every draw. */
+    this.emailsByRepo = new Map();
     /** Whether the author asked, from Teams, not to be reminded about a pull request yet. Set by main. */
     this.snoozed = () => false;
     /*
@@ -997,6 +1001,43 @@ class ReviewService {
     return { repo: this.publicRepo(repo), rows, fetchedAt: this.store.prMeta(repoId)?.fetched_at ?? null, readError: this.readError(repoId) };
   }
 
+  /**
+   * Who each of these people is, as an email: the address Teams was given for
+   * them, else the one they commit with in this repository. The history is read
+   * in the background and the screen drawn again when it is in, so opening a
+   * pull request never waits on git.
+   */
+  emailsFor(repo, names) {
+    let known = this.emailsByRepo.get(repo.id);
+    if ((!known || Date.now() - known.at > 10 * 60 * 1000) && !known?.loading && repo.localPath && this.git.isRepo(repo.localPath)) {
+      known = { at: known?.at ?? 0, map: known?.map ?? new Map(), loading: true };
+      this.emailsByRepo.set(repo.id, known);
+      this.git.authorEmails(repo.localPath)
+        .then((map) => { this.emailsByRepo.set(repo.id, { at: Date.now(), map, loading: false }); this.engine.changed(repo.id, null); })
+        .catch(() => { this.emailsByRepo.set(repo.id, { at: Date.now(), map: new Map(), loading: false }); });
+    }
+    const provider = String(repo.provider ?? 'forge').toLowerCase();
+    const people = {};
+    for (const name of new Set(names.filter(Boolean))) {
+      let email = null;
+      try { email = this.personAddress(`${provider}:${name}`); } catch { email = null; }
+      people[name] = email || known?.map.get(personKey(name)) || null;
+    }
+    return people;
+  }
+
+  /** Every request from somebody else not yet taken on, taken on as a finding of this review. */
+  adoptRequests(repoId, prId, reviewId) {
+    const comments = this.store.comments(repoId, prId);
+    const requests = rules.foreignRequests({ findings: this.store.findingsForPr(repoId, prId), comments, ourName: this.settings().me });
+    let adopted = 0;
+    for (const request of requests.filter((item) => !item.adoptedFindingId)) {
+      const comment = comments.find((item) => item.commentId === request.commentId);
+      if (comment) { this.store.adoptComment(repoId, prId, reviewId, comment); adopted += 1; }
+    }
+    return adopted;
+  }
+
   /** Everything one PR's screen shows, in one answer. */
   prView(repoId, prId) {
     const repo = this.engine.requireRepo(repoId);
@@ -1053,6 +1094,7 @@ class ReviewService {
     const migrationClash = pr?.state === 'OPEN' ? clashFor(prId, this.store.migrationClashes(repoId)) : null;
     const counts = { ...rules.mergeCounts({ pr, review: done, findings: judged.filter((finding) => !finding.askedBy), notes, replies: repliesHolding }), migrationClash: clashSentence(migrationClash) };
     const running = this.engine.activity.list().filter((run) => run.repoId === repoId && run.prId === prId);
+    const foreign = rules.foreignRequests({ findings: allFindings, comments, ourName: settings.me });
     return {
       repo: this.publicRepo(repo),
       pr,
@@ -1066,11 +1108,12 @@ class ReviewService {
       comments,
       publications: this.store.publications(repoId, prId),
       threads,
-      foreign: rules.foreignRequests({ findings: allFindings, comments, ourName: settings.me }),
+      foreign,
+      people: this.emailsFor(repo, [pr?.author, ...foreign.map((request) => request.author), ...foreign.flatMap((request) => request.entries.map((entry) => entry.author))]),
       fixes,
       workshop: this.fixer.workshopState(repo, prId),
       approvals: this.store.approvals(repoId, prId),
-      readiness: rules.readiness({ pr, review: done, threads, findings: judged, finalPassDone, finalPassBlockers: finalPassDone ? done.finalPassBlockers ?? 0 : 0 }),
+      readiness: rules.readiness({ pr, review: done, threads, findings: judged, foreign, finalPassDone, finalPassBlockers: finalPassDone ? done.finalPassBlockers ?? 0 : 0 }),
       finalPassDone,
       mergeBlocker: rules.mergeBlocker(counts),
       migrationClash,
@@ -1574,7 +1617,32 @@ class ReviewService {
       },
       cancel: (args) => e.cancel(str(args.repoId, 'A repository'), num(args.prId), args.kind === 'fix' ? 'fix' : args.kind === 'verify' ? 'verify' : args.kind === 'final' ? 'final' : 'review'),
       cancelRun: (args) => (e.activity.cancel(str(args.key, 'A run')) ? { ok: true } : { ok: false, error: 'That run has already finished.' }),
-      verify: async (args) => e.verify(str(args.repoId, 'A repository'), num(args.prId)),
+      /*
+       * Requests from others are verified with ours: each is taken on as a
+       * finding of the review being verified first, so the same verdict —
+       * fixed, still open, and in which commit — is given to all of them.
+       */
+      verify: async (args) => {
+        const repoId = str(args.repoId, 'A repository');
+        const prId = num(args.prId);
+        const review = s.store.latestDone(repoId, prId);
+        if (review) s.adoptRequests(repoId, prId, review.id);
+        return e.verify(repoId, prId);
+      },
+      /** Somebody else's request marked resolved by hand, or opened again — as "Close thread" does for ours. */
+      closeRequest: (args) => {
+        const repoId = str(args.repoId, 'A repository');
+        const prId = num(args.prId);
+        const commentId = str(args.commentId, 'A comment');
+        const review = s.store.currentReview(repoId, prId) ?? s.store.latestDone(repoId, prId);
+        if (!review) throw new Error('Run a review of this PR first: a request is resolved within one.');
+        const comment = s.store.comments(repoId, prId).find((item) => item.commentId === commentId);
+        if (!comment) throw new Error('That comment is not in the stored thread; reload the PR.');
+        const finding = s.store.adoptComment(repoId, prId, review.id, comment);
+        s.store.closeFinding(finding.id, args.closed !== false);
+        e.changed(repoId, prId);
+        return { ok: true };
+      },
       finalPass: async (args) => e.finalPass(str(args.repoId, 'A repository'), num(args.prId)),
 
       // findings, notes, publishing

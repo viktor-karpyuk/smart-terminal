@@ -42,6 +42,11 @@ function headRefspec(branch) {
   return `refs/heads/${name}:refs/heads/${name}`;
 }
 
+/** A name as people write it either way: "Tomás Rivero" and "tomas rivero" are one person. */
+function personKey(name) {
+  return String(name ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 class ReviewGit {
   constructor({ resolvePath } = {}) {
     this.resolvePath = resolvePath ?? (async () => process.env.PATH ?? '');
@@ -249,6 +254,24 @@ class ReviewGit {
     return files;
   }
 
+  /**
+   * Who has committed here and with which email, newest first: name → email.
+   * What the forge does not say — Bitbucket gives a display name — and the
+   * history does.
+   */
+  async authorEmails(dir) {
+    const res = await this.run(dir, ['log', '--all', '-n', '5000', '--format=%an%x09%ae']);
+    const map = new Map();
+    if (!res.ok) return map;
+    for (const line of res.stdout.split('\n')) {
+      const [name, email] = line.split('\t');
+      if (!name || !email || !email.includes('@') || /noreply/i.test(email)) continue;
+      const key = personKey(name);
+      if (key && !map.has(key)) map.set(key, email.trim());
+    }
+    return map;
+  }
+
   async logRange(dir, range) {
     const res = await this.run(dir, ['log', '--date=short', `--format=${LOG_FORMAT}`, range]);
     return res.ok ? parseLog(res.stdout) : [];
@@ -442,4 +465,4 @@ class ReviewGit {
   }
 }
 
-module.exports = { ReviewGit, LOG_FORMAT, commitId, headRefspec };
+module.exports = { personKey, ReviewGit, LOG_FORMAT, commitId, headRefspec };

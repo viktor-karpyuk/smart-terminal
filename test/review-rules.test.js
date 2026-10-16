@@ -250,6 +250,20 @@ test('requests from others: not ours, not our published findings, not by our own
   assert.deepEqual(requests.map((r) => [r.commentId, r.adoptedFindingId]), [['x1', 'g']]);
 });
 
+test('readiness: a request from somebody else weighs what one of ours does, and counts once', () => {
+  const pr = { state: 'OPEN', headSha: 'h' };
+  const review = { headSha: 'h' };
+  const base = { pr, review, threads: [], finalPassDone: true, finalPassBlockers: 0 };
+  const adopted = { id: 'g', publishedId: 'x1', askedBy: 'Ana', filePath: 'a.ts' };
+  const open = R.readiness({ ...base, findings: [adopted], foreign: [{ author: 'Ana', filePath: 'src/a.ts', lineNo: 3, closed: false }] });
+  assert.deepEqual(open.items.map((item) => item.key), ['foreign', 'finalPass']);
+  assert.equal(open.percent, 57);
+  const done = R.readiness({ ...base, findings: [adopted], foreign: [{ author: 'Ana', filePath: 'src/a.ts', closed: true }] });
+  assert.equal(done.percent, 100);
+  const requests = R.foreignRequests({ findings: [{ ...adopted, closedAt: 'x' }], comments: [{ commentId: 'x1', author: 'Ana', body: 'b', ours: false, createdOn: '1' }], ourName: '' });
+  assert.equal(requests[0].closed, true);
+});
+
 test('verification is worth a run only when something changed, and always when someone answered', () => {
   const pr = { state: 'OPEN', headSha: 'h2' };
   const findings = [{ publishedId: 'c' }];

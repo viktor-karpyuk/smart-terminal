@@ -411,6 +411,7 @@ function createReviewService() {
         const person = teamsService.store.matchPerson(handle, address);
         return { ok: true, person: { handle: person?.handle, address: person?.address } };
       },
+      personAddress: (handle) => teamsService?.store.person(handle)?.address ?? null,
       deliveryState: () => {
         const connection = teamsService?.connection();
         return {

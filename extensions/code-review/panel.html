@@ -472,6 +472,11 @@
   .avatar { flex: none; width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 0.792rem; font-weight: 700; letter-spacing: 0.02em; color: #fff; background: hsl(var(--hue, 210) 42% 44%); }
   .avatar.ours { box-shadow: 0 0 0 2px var(--accent); }
   .cmt-head .avatar { width: 18px; height: 18px; font-size: 0.708rem; }
+  .request .req-head { display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 4px; flex-wrap: wrap; }
+  .request .req-head .avatar { width: 30px; height: 30px; font-size: 0.875rem; }
+  .request .req-who { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+  .request .req-email { font-size: 0.875rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 320px; }
+  .request.closed { opacity: 0.75; }
 
   .nowrap { white-space: nowrap; }
   .repo-card { display: flex; flex-direction: column; }
@@ -2925,14 +2930,10 @@
     // --- requests from others
     if (v.foreign && v.foreign.length && open) {
       var unanswered = v.foreign.filter(function (req) { return req.needsAnswer && !req.adoptedFindingId; }).length;
-      html += fold('foreign', '<strong>Requests from others</strong><span class="count">' + v.foreign.length + '</span>' + (unanswered ? '<span class="chip mine">' + unanswered + ' unanswered</span>' : ''),
+      var stillOpen = v.foreign.filter(function (req) { return !req.closed; }).length;
+      html += fold('foreign', '<strong>Requests from others</strong><span class="count">' + v.foreign.length + '</span>' + (stillOpen ? '<span class="chip mine">' + stillOpen + ' open</span>' : '<span class="chip okc">all resolved</span>'),
         esc(v.foreign.map(function (req) { return req.author; }).filter(function (a, i, all) { return all.indexOf(a) === i; }).join(', ')),
-        v.foreign.map(function (req) {
-          return '<div class="finding"><div class="meta"><strong>' + esc(req.author) + '</strong>' + (req.filePath ? '<button class="link mono" data-act="jump" data-file="' + esc(req.filePath) + '" data-line="' + (req.lineNo || '') + '">' + anchor(req.filePath, req.lineNo) + '</button>' : '') +
-            '<span class="faint">' + esc(when(req.at)) + '</span>' + (req.needsAnswer ? '<span class="chip mine">unanswered</span>' : '') + '<span class="spacer"></span>' +
-            (req.adoptedFindingId ? '<span class="chip accent">adopted</span>' : v.repo.fixMode !== 'OFF' && v.done ? '<button class="btn small go" data-act="adopt" data-comment="' + esc(req.commentId) + '"' + busyAttr('adopt-' + req.commentId) + ' title="Take it on as a finding and fix it; the answer goes in their thread">Fix it</button>' : '') + '</div>' +
-            clamped('req-' + req.commentId, md(req.body), String(req.body).length > 520) + (req.entries.length ? '<div class="entries">' + req.entries.map(entryHtml).join('') + '</div>' : '') + '</div>';
-        }).join(''), unanswered > 0);
+        v.foreign.map(function (req) { return requestCard(req, v); }).join(''), unanswered > 0);
     }
 
     // --- running a review
@@ -2995,6 +2996,40 @@
         (done.publishedUrl ? '<button class="btn small" data-act="open-url" data-url="' + esc(done.publishedUrl) + '">View published ↗</button>' : '') + '</div>', false);
     }
     return html + '</div>';
+  }
+
+  /**
+   * Somebody else's request, read like one of ours: who asked — face, name and
+   * the email to reach them by — where, what, and where it stands. It counts
+   * towards the readiness the same way.
+   */
+  function requestCard(req, v) {
+    var open = v.pr.state === 'OPEN';
+    var email = (v.people || {})[req.author];
+    var status = req.closed
+      ? (req.resolution && VERDICT_WORDS[req.resolution] ? '<span class="chip okc">' + esc(VERDICT_WORDS[req.resolution][0]) + '</span>' : '<span class="chip okc">resolved</span>')
+      : req.resolution === 'UNRESOLVED' ? '<span class="chip badc">✗ not fixed</span>'
+      : req.resolution === 'PARTIAL' ? '<span class="chip mine">◐ partly fixed</span>'
+      : req.needsAnswer ? '<span class="chip mine">unanswered</span>' : '<span class="chip">open</span>';
+    var actions = '';
+    if (open && !req.closed && !req.adoptedFindingId && v.repo.fixMode !== 'OFF' && v.done) {
+      actions += '<button class="btn small go" data-act="adopt" data-comment="' + esc(req.commentId) + '"' + busyAttr('adopt-' + req.commentId) + ' title="Take it on as a finding and fix it; the answer goes in their thread">Fix it</button>';
+    }
+    if (open && v.done) {
+      actions += req.closed
+        ? '<button class="btn small" data-act="close-request" data-comment="' + esc(req.commentId) + '" data-on="0">Reopen</button>'
+        : '<button class="btn small" data-act="close-request" data-comment="' + esc(req.commentId) + '" data-on="1" title="It is dealt with: counts as done in the readiness, as closing one of ours does">Mark resolved</button>';
+    }
+    return '<div class="finding request' + (req.closed ? ' closed' : '') + '">' +
+      '<div class="req-head">' + avatar(req.author, false) +
+        '<div class="req-who"><strong>' + esc(req.author) + '</strong>' +
+          (email ? '<span class="req-email" title="' + esc(email) + '">' + esc(email) + '</span>' : '<span class="req-email faint">no email known</span>') + '</div>' +
+        '<span class="spacer"></span>' + status + (req.adoptedFindingId ? '<span class="chip accent">adopted</span>' : '') + actions + '</div>' +
+      '<div class="meta">' + (req.filePath ? '<button class="link mono" data-act="jump" data-file="' + esc(req.filePath) + '" data-line="' + (req.lineNo || '') + '">' + anchor(req.filePath, req.lineNo) + '</button>' : '<span class="faint">general comment</span>') +
+        '<span class="faint">' + esc(when(req.at)) + '</span></div>' +
+      clamped('req-' + req.commentId, md(req.body), String(req.body).length > 520) +
+      (req.entries.length ? '<div class="entries">' + req.entries.map(entryHtml).join('') + '</div>' : '') +
+      verdictHtml(req.resolutionNote, req.resolution, req.resolutionCommit) + '</div>';
   }
 
   function entryHtml(entry) {
@@ -5227,6 +5262,7 @@
         load();
       });
     },
+    'close-request': function (el) { call('closeRequest', prArgs({ commentId: el.getAttribute('data-comment'), closed: el.getAttribute('data-on') === '1' })).catch(fail); },
     'close-thread': function (el) { call('closeFinding', { findingId: el.getAttribute('data-id'), closed: el.getAttribute('data-on') === '1' }).catch(fail); },
     'follow-open': function (el) {
       var id = el.getAttribute('data-id');

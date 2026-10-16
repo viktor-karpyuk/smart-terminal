@@ -208,7 +208,7 @@ const REVIEW_WRITE = [
   'conflictsAnalyze', 'conflictsResolve', 'conflictsPush', 'conflictsDiscard', 'conflictsCancel', 'tellConflicts', 'notifyFindings', 'matchAuthor',
   'crossfixPrepare', 'crossfixPublish', 'crossfixDiscard',
   'draftReply', 'draftAll', 'saveReplyDraft', 'publishReply', 'dismissReply', 'dismissAllReplies', 'followUp',
-  'adopt', 'fix', 'fixAll', 'retryFixReply', 'giveBack', 'discardWorkshop', 'push', 'dropFix',
+  'adopt', 'closeRequest', 'fix', 'fixAll', 'retryFixReply', 'giveBack', 'discardWorkshop', 'push', 'dropFix',
   'remind', 'sweepReminders', 'escalateNow', 'speak',
   'approve', 'unapprove', 'requestChanges', 'undoRequestChanges', 'decline', 'merge',
 ] as const;

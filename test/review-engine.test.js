@@ -373,6 +373,55 @@ test('someone else\'s comment is adopted, fixed, and answered in their own threa
   assert.ok(service.store.finding(adopted.finding.id));
 });
 
+test('requests from others count towards the readiness like ours, and are shown with an email', { skip }, async () => {
+  const { service, repo, forgeState, w } = setup([async () => ({ structured: { summary: 's', findings: [] } })]);
+  // Tomás commits in this repository; the forge only knows him by his display name, written without the accent.
+  git(w.clone, 'checkout', '-b', 'side');
+  fs.writeFileSync(path.join(w.clone, 'side.txt'), 'x\n');
+  git(w.clone, 'add', '-A');
+  git(w.clone, 'commit', '--author=Tomas Rivero <tomas@example.com>', '-m', 'side');
+  git(w.clone, 'checkout', 'main');
+  forgeState.comments.push({ commentId: '601', author: 'Tomás Rivero', body: 'stock is 0 for services', inlinePath: 'app.js', inlineLine: 2, deleted: false, createdOn: '2026-10-16T00:00:00Z', parentId: null });
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+
+  let view = await service.call('pr', { repoId: repo.id, prId: 7 });
+  const item = view.readiness.items.find((entry) => entry.key === 'foreign');
+  assert.ok(item, 'the request is in the readiness');
+  assert.equal(item.done, false);
+  assert.equal(item.weight, 3, 'weighed like a published comment of ours');
+  assert.match(item.label, /Tomás Rivero/);
+
+  for (let i = 0; i < 50 && !view.people['Tomás Rivero']; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    view = await service.call('pr', { repoId: repo.id, prId: 7 });
+  }
+  assert.equal(view.people['Tomás Rivero'], 'tomas@example.com', 'found in the history, accents aside');
+
+  const closed = await service.call('closeRequest', { repoId: repo.id, prId: 7, commentId: '601' });
+  assert.equal(closed.ok, true, closed.error);
+  view = await service.call('pr', { repoId: repo.id, prId: 7 });
+  assert.equal(view.foreign[0].closed, true);
+  assert.equal(view.readiness.items.find((entry) => entry.key === 'foreign').done, true);
+  assert.equal(view.readiness.items.filter((entry) => entry.key === 'finding').length, 0, 'counted once, as a request, not again as a finding');
+
+  await service.call('closeRequest', { repoId: repo.id, prId: 7, commentId: '601', closed: false });
+  view = await service.call('pr', { repoId: repo.id, prId: 7 });
+  assert.equal(view.foreign[0].closed, false, 'and reopened');
+});
+
+test('a Teams address for somebody wins over the one in the history', { skip }, async () => {
+  const { service, repo, forgeState } = setup([async () => ({ structured: { summary: 's', findings: [] } })]);
+  const asked = [];
+  service.personAddress = (handle) => { asked.push(handle); return handle.endsWith(':Bo') ? 'bo@teams.example' : null; };
+  forgeState.comments.push({ commentId: '602', author: 'Bo', body: 'hm', inlinePath: 'app.js', inlineLine: 1, deleted: false, createdOn: '2026-10-16T00:00:00Z', parentId: null });
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  const view = await service.call('pr', { repoId: repo.id, prId: 7 });
+  assert.equal(view.people.Bo, 'bo@teams.example');
+  assert.ok(asked.includes('github:Bo'));
+});
+
 test('stances, decline and merge go to the forge and are remembered', { skip }, async () => {
   const { service, repo, forgeState } = setup([]);
   await service.call('refreshPrs', { repoId: repo.id });
