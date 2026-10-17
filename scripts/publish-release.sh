@@ -50,19 +50,20 @@ if [[ "$STAMPED" != "$VERSION" ]]; then
   exit 1
 fi
 
-# All three, or none. The app picks the file for the machine it is on, so a
+# All four, or none. The app picks the file for the machine it is on, so a
 # release with only the DMG leaves every Linux copy with an update it cannot take.
 FILES=(
   "release/Smart Terminal-$VERSION-arm64.dmg"
   "release/Smart Terminal-$VERSION.AppImage"
   "release/smart-terminal_${VERSION}_amd64.deb"
+  "release/Smart Terminal-$VERSION-portable.exe"
 )
 MISSING=0
 for file in "${FILES[@]}"; do
   [[ -f "$file" ]] || { print -u2 "missing: $file"; MISSING=1 }
 done
 if (( MISSING )); then
-  print -u2 "\nnot publishing a partial release. 'npm run dist' builds all three from one stamp."
+  print -u2 "\nnot publishing a partial release. 'npm run dist' builds all four from one stamp."
   exit 1
 fi
 
@@ -93,6 +94,9 @@ inside the app clears the flag itself.
 
 **Linux (x64)** — \`Smart Terminal-$VERSION.AppImage\` (\`chmod +x\` it first) or
 \`smart-terminal_${VERSION}_amd64.deb\`. Same build number as the DMG.
+
+**Windows (x64)** — \`Smart Terminal-$VERSION-portable.exe\`, one executable.
+Unsigned: SmartScreen says "unknown publisher" once.
 EOF
   print "notes: $NOTES"
   "${EDITOR:-vi}" "$NOTES"
