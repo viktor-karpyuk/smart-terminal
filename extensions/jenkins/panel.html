@@ -292,6 +292,14 @@
   .pfield .perr { color: var(--danger); min-height: 0; } .pfield .perr:empty { display: none; }
   .pfield.bad input, .pfield.bad select, .pfield.bad textarea { border-color: var(--danger); }
   .otherpick { max-width: 80px; font-size: 0.9rem; }
+  .pdesc.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .linkish { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; }
+  .flagbox { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius, 8px); display: grid; gap: 8px; }
+  .flagbox.idle .flaggrid { opacity: .55; }
+  .flaggrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px 14px; }
+  .flag span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .optform { margin-top: 14px; }
+  .actionbar { position: sticky; bottom: 0; margin-top: 12px; padding: 10px 0 2px; gap: 8px; background: var(--bg-panel); border-top: 1px solid var(--border); }
   .sendbox { margin-top: 10px; } .sendbox summary { cursor: pointer; color: var(--text-dim); }
   pre.preview { margin: 6px 0 0; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font-family: ui-monospace, Menlo, monospace; font-size: 0.95rem; white-space: pre-wrap; overflow-wrap: anywhere; }
   .prodbar { margin: 0 0 10px; padding: 8px 12px; border: 1px solid var(--danger); border-left-width: 6px; border-radius: var(--radius, 8px); background: color-mix(in srgb, var(--danger) 10%, var(--bg-panel)); color: var(--text); font-weight: 600; }
@@ -5407,13 +5415,38 @@
     return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
   }
 
+  /**
+   * How a run form is laid out: the text and choices as fields, the long tail of switches (RUN_A, RUN_B, ...) as one
+   * picker, and the few other switches as options. A picker is made only from three or more switches that share a prefix;
+   * `when` is the one condition their descriptions agree on ("Read only when MODE is SELECTED"), so the form can say when it matters.
+   */
+  function groupParams(params) {
+    var list = params || [];
+    var fields = list.filter(function (p) { return p.type !== 'boolean'; });
+    var switches = list.filter(function (p) { return p.type === 'boolean'; });
+    var counts = {};
+    switches.forEach(function (p) { var m = /^([A-Za-z0-9]+_)/.exec(p.name); if (m) counts[m[1]] = (counts[m[1]] || 0) + 1; });
+    var prefix = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; })[0];
+    if (!prefix || counts[prefix] < 3) return { fields: fields, flags: null, options: switches };
+    var inGroup = switches.filter(function (p) { return p.name.indexOf(prefix) === 0; });
+    var conditions = inGroup.map(function (p) {
+      var m = /read only when ([A-Za-z0-9_]+) is ([A-Za-z0-9_]+)/i.exec(p.description || '');
+      return m ? m[1] + '=' + m[2] : '';
+    });
+    var same = conditions[0] && conditions.every(function (c) { return c === conditions[0]; });
+    var when = same ? { name: conditions[0].split('=')[0], value: conditions[0].split('=')[1] } : null;
+    return { fields: fields, flags: { prefix: prefix, params: inGroup, when: when }, options: switches.filter(function (p) { return p.name.indexOf(prefix) !== 0; }) };
+  }
+
   /** What is wrong with the values in a run form, by parameter name: a needed one empty, a choice that is not one. */
   function paramProblems(params, values) {
     var out = {};
     (params || []).forEach(function (p) {
       var v = values[p.name];
       var empty = v === undefined || v === null || String(v) === '';
-      if (p.required && empty && p.type !== 'boolean') out[p.name] = p.secret ? 'Type it: a secret is never filled in for you.' : 'Needed: it has no default.';
+      // Only a secret has to be typed. Any other text may be empty: Jenkins takes an empty string, and a job's own
+      // description often says "leave empty" (the backend already treats it as a warning, never a refusal).
+      if (p.required && p.secret && empty && p.type !== 'boolean') out[p.name] = 'Type it: a secret is never filled in for you.';
       else if (p.type === 'choice' && p.choices && !empty && p.choices.indexOf(String(v)) < 0) out[p.name] = 'Not one of the choices Jenkins offers.';
     });
     return out;
@@ -5580,10 +5613,73 @@
     form.planApplied = true;
   }
 
+  /** A value the form did not start from the default for says where it came from — and only then: on every field it is noise. */
   function sourceChip(p) {
     if (p.secret) return h('span', { class: 'chip warnc', title: 'A secret is never saved and never filled in', text: 'type it — never saved' });
     if (!p.source) return null;
-    return h('span', { class: 'chip', title: 'Where this value came from', text: p.source });
+    var chip = h('span', { class: 'chip', title: 'Where this value came from', text: p.source });
+    chip.setAttribute('data-src', '1');
+    return chip;
+  }
+
+  /** The value a parameter has when nobody touches it, in the form's own terms (a switch is true or false). */
+  function paramDefault(p) {
+    var d = p.default === null || p.default === undefined ? '' : p.default;
+    return p.type === 'boolean' ? (d === true || d === 'true') : String(d);
+  }
+  function differsFromDefault(p, value) {
+    if (p.secret) return false;
+    return p.type === 'boolean' ? (value === true || value === 'true') !== paramDefault(p) : String(value === undefined || value === null ? '' : value) !== paramDefault(p);
+  }
+
+  /** What a parameter is for: two lines of it, and the rest one tap away. */
+  function describe(text) {
+    if (!text) return null;
+    var long = String(text).length > 150;
+    var el = h('div', { class: 'help pdesc' + (long ? ' clamp' : ''), text: text });
+    if (!long) return el;
+    var more = h('button', { class: 'linkish', type: 'button', text: 'more', 'aria-expanded': 'false', onclick: function () {
+      var open = el.classList.toggle('clamp') === false;
+      more.textContent = open ? 'less' : 'more';
+      more.setAttribute('aria-expanded', open ? 'true' : 'false');
+    } });
+    return h('div', null, el, more);
+  }
+
+  /**
+   * The long tail of switches as one picker: a name each, All / None, a count — and, when their descriptions say they are
+   * only read in one mode, a word on whether that is the mode the form is in.
+   */
+  function flagsPicker(flags, refresh) {
+    var form = state.form;
+    var values = form.values;
+    var count = h('span', { class: 'help' });
+    var note = h('div', { class: 'help' });
+    var inputs = {};
+    var setAll = function (on) {
+      flags.params.forEach(function (p) { values[p.name] = on; if (inputs[p.name]) inputs[p.name].checked = on; });
+      form.dirty = true;
+      refresh();
+    };
+    var grid = h('div', { class: 'flaggrid' }, flags.params.map(function (p) {
+      var input = h('input', { type: 'checkbox', checked: values[p.name] === true || values[p.name] === 'true', onchange: function (event) { values[p.name] = event.target.checked; form.dirty = true; refresh(); } });
+      inputs[p.name] = input;
+      return h('label', { class: 'check flag', title: p.name + (p.description ? ' — ' + p.description : '') }, input, h('span', { text: p.name.slice(flags.prefix.length) || p.name }));
+    }));
+    var box = h('div', { class: 'flagbox', 'data-flags': flags.prefix },
+      h('div', { class: 'row', style: 'gap:8px' }, h('span', { class: 'plabel', text: flags.prefix.replace(/_$/, '') + ' — pick which' }), count, h('span', { class: 'spacer' }),
+        h('button', { class: 'btn small', type: 'button', text: 'All', onclick: function () { setAll(true); } }),
+        h('button', { class: 'btn small', type: 'button', text: 'None', onclick: function () { setAll(false); } })),
+      note, grid);
+    box.sync = function () {
+      var on = flags.params.filter(function (p) { return values[p.name] === true || values[p.name] === 'true'; }).length;
+      count.textContent = on + ' of ' + flags.params.length + ' ticked';
+      var live = !flags.when || String(values[flags.when.name]) === flags.when.value;
+      box.classList.toggle('idle', !live);
+      note.textContent = !flags.when ? '' : live ? 'Read because ' + flags.when.name + ' is ' + flags.when.value + '.'
+        : 'Not read while ' + flags.when.name + ' is ' + (values[flags.when.name] === undefined || values[flags.when.name] === '' ? 'not ' + flags.when.value : values[flags.when.name]) + ' — they count when it is ' + flags.when.value + '.';
+    };
+    return box;
   }
 
   /** One parameter of the form: its name, where its value came from, the control, and what is wrong with it. */
@@ -5614,9 +5710,9 @@
       drawMain();
     } }, h('option', { value: '', text: 'Use…' }), others.map(function (o, i) { return h('option', { value: String(i), text: String(o.value).slice(0, 40) + '  (' + o.source + ')' }); })) : null;
     var field = h('div', { class: 'field pfield', 'data-param': p.name },
-      h('div', { class: 'row', style: 'gap:6px' }, h('span', { class: 'plabel', text: p.name }), p.required ? h('span', { class: 'req', title: 'Needed', 'aria-label': 'needed', text: '*' }) : null, sourceChip(p), h('span', { class: 'spacer' }), pick),
+      h('div', { class: 'row', style: 'gap:6px' }, h('span', { class: 'plabel', text: p.name }), p.required && p.secret ? h('span', { class: 'req', title: 'Needed', 'aria-label': 'needed', text: '*' }) : null, sourceChip(p), h('span', { class: 'spacer' }), pick),
       control,
-      p.description ? h('div', { class: 'help', text: p.description }) : null,
+      describe(p.description),
       problem);
     return field;
   }
@@ -5633,13 +5729,24 @@
     var stripe = h('div', { class: 'prodbar', role: 'note', hidden: true, text: 'This looks like production. You will be asked to confirm before anything starts.' });
     var run = h('button', { class: 'btn primary', type: 'button', text: '▶ Run', onclick: function () { submitPlan(job, data); } });
     var wrap;
+    var groups = groupParams(params);
+    var picker = groups.flags ? flagsPicker(groups.flags, function () { refresh(); }) : null;
+    var changed = h('span', { class: 'help' });
+    var byName = {};
+    params.forEach(function (p) { byName[p.name] = p; });
     var refresh = function () {
       var problems = paramProblems(params, form.values);
+      var edited = 0;
+      params.forEach(function (p) { if (differsFromDefault(p, form.values[p.name])) edited += 1; });
+      changed.textContent = edited ? edited + ' changed from the defaults' : 'Every value is the default';
+      if (picker) picker.sync();
       [].forEach.call(wrap.querySelectorAll('.pfield'), function (el) {
         var name = el.getAttribute('data-param');
         var msg = el.querySelector('.perr');
         msg.textContent = problems[name] || '';
         el.classList.toggle('bad', Boolean(problems[name]));
+        var chip = el.querySelector('[data-src]');
+        if (chip && byName[name]) chip.hidden = !differsFromDefault(byName[name], form.values[name]);
       });
       var count = Object.keys(problems).length;
       run.disabled = count > 0 || isBusy('run:' + job.path);
@@ -5650,11 +5757,15 @@
     wrap = h('div', null,
       stripe,
       presetsRow(job),
-      h('div', { class: 'form' }, params.map(function (p) { return planField(p, job, refresh); })),
+      h('div', { class: 'form' }, groups.fields.map(function (p) { return planField(p, job, refresh); })),
+      picker,
+      groups.options.length ? h('div', { class: 'form optform' }, groups.options.map(function (p) { return planField(p, job, refresh); })) : null,
       h('details', { class: 'sendbox' }, h('summary', { text: 'What will be sent' }), preview),
-      h('div', { class: 'row', style: 'margin-top:12px' }, run,
+      h('div', { class: 'row actionbar' }, run,
         h('button', { class: 'btn', type: 'button', text: 'Run at…', title: 'Start it later, at a time you choose', onclick: function () { openSchedule(job.path, formValues(job, params)); } }),
         h('button', { class: 'btn', type: 'button', text: 'Cancel', onclick: function () { form.open = false; drawMain(); } }),
+        changed,
+        h('span', { class: 'spacer' }),
         h('span', { class: 'help', text: form.fromNumber ? 'Started from the parameters of #' + form.fromNumber + '. Secrets are never filled in.' : 'Each value says where it came from. Secrets are never saved.' })));
     refresh();
     return wrap;

@@ -48,7 +48,7 @@ const P = fromPanel([
   'PAGE_TYPES', 'SMART_KINDS', 'cleanPage', 'listKey', 'SMART_NOTES', 'STATUS_ORDER', 'sortRows', 'matchRow',
   'ARCHIVE_MODES', 'ARCHIVE_LIMITS', 'formatBytes', 'clampNumber', 'archiveUsage', 'copyNote', 'hasCopy',
   'IMPORT_EXAMPLE', 'describeImport', 'exportWhat', 'describeExport',
-  'RANGES', 'rangeOf', 'packLanes', 'runsAt', 'niceTicks', 'compact', 'WEEKDAYS', 'MONTHS', 'fmtMoment', 'fmtTick', 'deltaOf', 'ratePct', 'downsample', 'stepCursor', 'heatLevel', 'isStuck', 'fractionOf', 'PALETTE_ACTIONS', 'paletteActions', 'typeAheadFrom', 'MIN_WINDOW_MS', 'fitWindow', 'fitBuckets', 'binFinished', 'binLoad', 'historyCovers', 'assign', 'PATIENT', 'declined', 'promoteItems', 'promoteMissing', 'promoteSend', 'rememberableParams', 'inputDefaults', 'inputAnswers', 'isCertError', 'certDay', 'buildPercent', 'NOTIFY_SWITCHES', 'commitLine', 'BOARD_OLD', 'boardLags', 'boardNeverBuilt', 'boardNoise', 'boardRank', 'boardKind', 'boardPrepare', 'DISGUISES', 'plainShown', 'SCOPE_TRIGGERS', 'SCOPE_RESULTS', 'scopeArgs', 'scopeChips', 'scopeMatchesPath', 'csvCell', 'csvOf', 'heatTone', 'trendWords', 'driftWords', 'LAUNCH_WORDS', 'LAUNCH_GLYPHS', 'launchWord', 'launchGlyph', 'launchOver', 'launchTone', 'quickChoices', 'whenWords', 'parseLocalTime', 'toLocalTime', 'paramProblems', 'callPreviewText', 'formLooksProd', 'batchProgress', 'paramChips', 'promoteWorthAsking', 'packLanesPx', 'densityColumns', 'zoomWindow', 'panWindow', 'jobsByActivity', 'spanWords', 'CLAUDE_DENIED', 'CLAUDE_OUTCOME', 'claudeResult', 'queueJobPath',
+  'groupParams', 'RANGES', 'rangeOf', 'packLanes', 'runsAt', 'niceTicks', 'compact', 'WEEKDAYS', 'MONTHS', 'fmtMoment', 'fmtTick', 'deltaOf', 'ratePct', 'downsample', 'stepCursor', 'heatLevel', 'isStuck', 'fractionOf', 'PALETTE_ACTIONS', 'paletteActions', 'typeAheadFrom', 'MIN_WINDOW_MS', 'fitWindow', 'fitBuckets', 'binFinished', 'binLoad', 'historyCovers', 'assign', 'PATIENT', 'declined', 'promoteItems', 'promoteMissing', 'promoteSend', 'rememberableParams', 'inputDefaults', 'inputAnswers', 'isCertError', 'certDay', 'buildPercent', 'NOTIFY_SWITCHES', 'commitLine', 'BOARD_OLD', 'boardLags', 'boardNeverBuilt', 'boardNoise', 'boardRank', 'boardKind', 'boardPrepare', 'DISGUISES', 'plainShown', 'SCOPE_TRIGGERS', 'SCOPE_RESULTS', 'scopeArgs', 'scopeChips', 'scopeMatchesPath', 'csvCell', 'csvOf', 'heatTone', 'trendWords', 'driftWords', 'LAUNCH_WORDS', 'LAUNCH_GLYPHS', 'launchWord', 'launchGlyph', 'launchOver', 'launchTone', 'quickChoices', 'whenWords', 'parseLocalTime', 'toLocalTime', 'paramProblems', 'callPreviewText', 'formLooksProd', 'batchProgress', 'paramChips', 'promoteWorthAsking', 'packLanesPx', 'densityColumns', 'zoomWindow', 'panWindow', 'jobsByActivity', 'spanWords', 'CLAUDE_DENIED', 'CLAUDE_OUTCOME', 'claudeResult', 'queueJobPath',
 ]);
 
 test('a time is "just now" for under a minute, and then says how long, in the unit that fits', () => {
@@ -871,7 +871,7 @@ test('the run form: what is wrong with the values, what will be sent, and whethe
     { name: 'API_KEY', type: 'password', secret: true, required: true }
   ];
   const bad = P.paramProblems(params, { VERSION: '', ENV: 'moon', DRY: false, API_KEY: '' });
-  assert.deepEqual(Object.keys(bad).sort(), ['API_KEY', 'ENV', 'VERSION']);
+  assert.deepEqual(Object.keys(bad).sort(), ['API_KEY', 'ENV'], 'a text parameter with no default may be sent empty: Jenkins takes an empty string');
   assert.match(bad.API_KEY, /secret/i);
   assert.deepEqual({ ...P.paramProblems(params, { VERSION: '1', ENV: 'staging', DRY: true, API_KEY: 'x' }) }, {});
   const text = P.callPreviewText({ callPreview: { method: 'POST', url: 'https://ci/job/x/buildWithParameters' } }, params, { VERSION: '1 2', ENV: 'staging', DRY: true, API_KEY: 'hunter2' });
@@ -1064,4 +1064,26 @@ test('a clock that is ahead does not make a negative duration', () => {
   assert.equal(P.dur(-90000), '—');
   assert.equal(P.dur(null), '—');
   assert.equal(P.dur(90000), '1:30');
+});
+
+test('a run form groups what belongs together: the long tail of RUN_* switches becomes one picker, and says when it matters', () => {
+  const flag = (name, extra) => ({ name, type: 'boolean', description: 'Run ' + name + ' PROD. Read only when MODE is SELECTED.', ...extra });
+  const params = [
+    { name: 'MODE', type: 'choice', choices: ['ONLY_CHANGED', 'SELECTED'] },
+    flag('RUN_A'), flag('RUN_B'), flag('RUN_C'),
+    { name: 'FAIL_FAST', type: 'boolean', description: 'Abort the rest.' },
+    { name: 'EXCLUDE', type: 'string', required: true }
+  ];
+  const g = P.groupParams(params);
+  assert.deepEqual(g.fields.map((p) => p.name), ['MODE', 'EXCLUDE'], 'text and choices stay as fields, in order');
+  assert.deepEqual(g.flags.params.map((p) => p.name), ['RUN_A', 'RUN_B', 'RUN_C']);
+  assert.equal(g.flags.prefix, 'RUN_');
+  assert.deepEqual(g.flags.when, { name: 'MODE', value: 'SELECTED' }, 'the description says when they are read');
+  assert.deepEqual(g.options.map((p) => p.name), ['FAIL_FAST'], 'a lone switch is an option, not a group');
+  const few = P.groupParams([flag('RUN_A'), flag('RUN_B')]);
+  assert.equal(few.flags, null, 'two switches are not a long tail');
+  assert.deepEqual(few.options.map((p) => p.name), ['RUN_A', 'RUN_B']);
+  const mixed = P.groupParams([flag('RUN_A'), flag('RUN_B', { description: 'Read only when MODE is ALL.' }), flag('RUN_C')]);
+  assert.equal(mixed.flags.when, null, 'no single condition, none claimed');
+  assert.deepEqual(P.groupParams([]), { fields: [], flags: null, options: [] });
 });
