@@ -1459,7 +1459,7 @@ class Launch {
       } else if (whereName(definition.name) && pointAtTarget(definition)) {
         // The parameter that says where it goes: pointed at the environment the target is for.
       } else if (isRequired(definition)) {
-        needsInput.push({ name: definition.name, kind: 'required', blocking: true, reason: 'it has no default and the build has no value for it', choices: definition.choices ?? null });
+        needsInput.push({ name: definition.name, kind: 'required', blocking: false, reason: 'it has no default and the build has no value for it: Jenkins gets an empty value', choices: definition.choices ?? null });
       }
     }
     return { params, copied, needsInput, blocked, unmatched, environment, ready: !needsInput.some((one) => one.blocking) && blocked.length === 0 };
