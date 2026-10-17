@@ -20,6 +20,10 @@
  *
  * With none of those set the result is exactly the unsigned DMG as before.
  *
+ * Windows is packaged the same way as Linux, in a container (`scripts/dist-windows.sh`), because
+ * the installer's executable metadata is written by a tool that needs wine on a Mac. `node-pty`
+ * ships Windows binaries, so nothing is compiled for it.
+ *
  * Linux is packaged from the same configuration, but not from the same machine:
  * `node-pty` is native, and a Mac cannot compile a Linux binary. So `npm run
  * dist:linux` runs this very file inside a Linux container — see
@@ -135,6 +139,18 @@ module.exports = {
         Keywords: 'claude;terminal;development;',
       },
     },
+  },
+  win: {
+    // One portable executable, unsigned: a certificate is a purchase, so SmartScreen will say
+    // "unknown publisher" once. An installer (nsis) is not offered from here because it is
+    // finished by running it under wine, and wine does not run in the emulated container a Mac
+    // builds in; it can come back from a Windows machine or runner.
+    // `icon.png` is 2048 px; electron-builder makes the .ico from it.
+    target: [{ target: 'portable', arch: ['x64'] }],
+    icon: 'resources/icon.png',
+  },
+  portable: {
+    artifactName: 'Smart Terminal-${version}-portable.${ext}',
   },
   dmg: {
     title: 'Smart Terminal',
