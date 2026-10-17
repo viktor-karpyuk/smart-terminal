@@ -367,10 +367,12 @@ class Updates extends EventEmitter {
    * @param {string} options.dir where downloads are kept
    * @param {import('electron')} options.electron
    * @param {object} [options.settings] a JsonStore-shaped thing: get()/set()
+   * @param {boolean} [options.devCopy] this is Smart Terminal Dev, built from the repository
    */
-  constructor({ current, slug, dir, electron, settings }) {
+  constructor({ current, slug, dir, electron, settings, devCopy = false }) {
     super();
     this.current = current;
+    this.devCopy = devCopy;
     this.slug = slug;
     this.dir = dir;
     this.electron = electron;
@@ -474,6 +476,19 @@ class Updates extends EventEmitter {
 
     if (!app.isPackaged) {
       return { can: false, kind, why: 'This is a development run — there is no installed app to replace.' };
+    }
+    /*
+     * The development copy is a different app with a different name, and a
+     * release carries only Smart Terminal. The installer would open, find no
+     * Smart Terminal Dev in it and stop, and the copy would come back as the
+     * version it was — so this says how the copy is updated instead.
+     */
+    if (this.devCopy) {
+      return {
+        can: false,
+        kind,
+        why: 'This is Smart Terminal Dev, built from the repository; a release installs Smart Terminal, not this copy. To update it, run npm run dist:dev and then scripts/reinstall-locally.sh --dev.',
+      };
     }
     if (kind === 'deb') {
       return {

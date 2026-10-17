@@ -10,12 +10,23 @@
 #
 # Progress goes to the log named below, since a detached script has nowhere else
 # to say anything.
+#
+# With --dev it replaces Smart Terminal Dev with the build `npm run dist:dev`
+# made, and leaves Smart Terminal alone:
+#
+#   nohup scripts/reinstall-locally.sh --dev >/dev/null 2>&1 &
 set -u
+
+NAME="Smart Terminal"
+if [[ "${1:-}" == "--dev" ]]; then
+  NAME="Smart Terminal Dev"
+  shift
+fi
 
 HERE="${0:A:h}"
 REPO="${HERE:h}"
-NEW="$REPO/release/mac-arm64/Smart Terminal.app"
-DEST="/Applications/Smart Terminal.app"
+NEW="$REPO/release/mac-arm64/$NAME.app"
+DEST="/Applications/$NAME.app"
 LOG="${TMPDIR:-/tmp}/smart-terminal-reinstall.log"
 
 say() { print -r -- "$(date '+%H:%M:%S') $*" >> "$LOG" }
@@ -24,7 +35,7 @@ say() { print -r -- "$(date '+%H:%M:%S') $*" >> "$LOG" }
 # app to quit costs every live conversation in it, so it must not happen only to
 # fail on a missing build a moment later.
 if [[ ! -d "$NEW" ]]; then
-  say "aborted: no build at $NEW — run 'npm run dist' first. Nothing was touched."
+  say "aborted: no build at $NEW — run 'npm run dist' (or 'npm run dist:dev' for --dev) first. Nothing was touched."
   exit 1
 fi
 
@@ -43,15 +54,15 @@ fi
 # live app, `open -a` merely activates the copy already running, and the whole
 # thing reports success while changing nothing.
 app_pid() {
-  ps -axo pid=,command= | awk -v bin="$DEST/Contents/MacOS/Smart Terminal" '
+  ps -axo pid=,command= | awk -v bin="$DEST/Contents/MacOS/$NAME" '
     { pid = $1; sub(/^[ ]*[0-9]+[ ]+/, ""); if ($0 == bin) { print pid; exit } }'
 }
 
 PID="${1:-$(app_pid)}"
 
 if [[ -n "$PID" ]]; then
-  say "asking Smart Terminal (pid $PID) to quit — it puts up a confirmation dialog if sessions are running"
-  osascript -e 'tell application "Smart Terminal" to quit' >/dev/null 2>&1 &
+  say "asking $NAME (pid $PID) to quit — it puts up a confirmation dialog if sessions are running"
+  osascript -e "tell application \"$NAME\" to quit" >/dev/null 2>&1 &
   for i in {1..180}; do
     ps -p "$PID" >/dev/null 2>&1 || break
     sleep 1
@@ -68,7 +79,7 @@ fi
 
 # Copy alongside first and swap afterwards. Deleting first leaves a window in
 # which a failed copy means no app at all.
-STAGE="/Applications/Smart Terminal.installing.app"
+STAGE="/Applications/$NAME.installing.app"
 rm -rf "$STAGE"
 if ! cp -R "$NEW" "$STAGE"; then
   say "aborted: could not copy the new build. The installed one is untouched."

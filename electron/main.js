@@ -2716,6 +2716,7 @@ if (isPrimaryInstance) app.whenReady().then(() => {
     dir: path.join(app.getPath('userData'), 'updates'),
     electron: { app, net, shell },
     settings: new JsonStore('updates.json', { auto: true, skipped: null, prereleases: false, checkedAt: null }),
+    devCopy: buildInfo.variant === 'dev',
   });
   updates.on('state', (state) => send('updates:state', state));
   /*

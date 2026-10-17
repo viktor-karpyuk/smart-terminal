@@ -396,3 +396,17 @@ test('a restart asks again, even when the last check was minutes ago, and only t
   await updates.check({ force: true });
   assert.equal(asked, 2, 'the button always asks');
 });
+
+test('the development copy never offers to install a release, and says how it is updated', () => {
+  const { Updates } = require('../electron/updates');
+  const electron = {
+    app: { isPackaged: true, getPath: () => '/Applications/Smart Terminal Dev.app/Contents/MacOS/Smart Terminal Dev' },
+    shell: {},
+    net: { fetch: async () => ({ ok: true, status: 200, json: async () => [] }) },
+  };
+  const updates = new Updates({ current: { version: '0.8.17', build: 1 }, slug: 'me/app', dir: '/nonexistent', electron, devCopy: true });
+  const { install } = updates.snapshot();
+  assert.equal(install.can, false);
+  assert.match(install.why, /npm run dist:dev/);
+  assert.match(install.why, /reinstall-locally\.sh --dev/);
+});
