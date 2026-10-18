@@ -472,11 +472,38 @@ export function HousekeepingPanel() {
       )}
 
       <div className="housekeeping-tabs" role="tablist">
-        {TABS.map((one) => (
-          <button key={one.id} role="tab" aria-selected={tab === one.id} className={`housekeeping-tab${tab === one.id ? ' is-on' : ''}`} onClick={() => setTab(one.id)}>
-            {one.label}
-          </button>
-        ))}
+        {TABS.map((one) => {
+          const count =
+            one.id === 'sessions'
+              ? inBucket(items, 'sessions').filter((s) => s.state !== 'open').length
+              : one.id === 'worktrees'
+                ? items.filter((s) => s.kind === 'worktree').length
+                : one.id === 'app'
+                  ? inBucket(items, 'app').length
+                  : one.id === 'health'
+                    ? (health?.conditions.length ?? 0)
+                    : jobs.filter((job) => !['done', 'cancelled', 'failed'].includes(job.status)).length;
+          const hint =
+            one.id === 'worktrees'
+              ? `${items.filter((s) => s.kind === 'worktree' && s.meta?.finished && !s.blockers.length).length} finished and clear`
+              : one.id === 'health'
+                ? health?.status === 'fine'
+                  ? 'nothing crossed'
+                  : `${count} condition${count === 1 ? '' : 's'}`
+                : one.id === 'log'
+                  ? count
+                    ? `${count} job${count === 1 ? '' : 's'} in flight`
+                    : 'what was removed'
+                  : '';
+          return (
+            <button key={one.id} role="tab" aria-selected={tab === one.id} className={`housekeeping-tab${tab === one.id ? ' is-on' : ''}`} onClick={() => setTab(one.id)} title={hint || undefined}>
+              {one.id === 'health' && <span className={`housekeeping-tab-dot is-${health?.status ?? 'fine'}`} aria-hidden />}
+              {one.label}
+              {one.id !== 'health' && count > 0 && <span className="housekeeping-tab-count">{count}</span>}
+              {one.id === 'health' && count > 0 && <span className="housekeeping-tab-count is-warn">{count}</span>}
+            </button>
+          );
+        })}
       </div>
 
       {tab === 'sessions' && (

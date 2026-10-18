@@ -4087,10 +4087,18 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
 .housekeeping-bar .usage-note { margin: 0; }
 .housekeeping .usage-note.is-error { color: var(--danger, #d9534f); }
-.housekeeping-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
-.housekeeping-tab { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--text-faint); padding: 6px 10px; cursor: pointer; font: inherit; }
-.housekeeping-tab:hover { color: var(--text); }
-.housekeeping-tab.is-on { color: var(--text); border-bottom-color: var(--accent); }
+.housekeeping-tabs { display: inline-flex; gap: 2px; padding: 3px; margin: 2px 0 14px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-input); }
+.housekeeping-tab { display: inline-flex; align-items: center; gap: 6px; background: none; border: 0; border-radius: 999px; color: var(--text-faint); padding: 5px 12px; cursor: pointer; font: inherit; font-weight: 500; line-height: 1.2; transition: background 0.12s ease, color 0.12s ease; }
+.housekeeping-tab:hover { color: var(--text); background: var(--bg-hover); }
+.housekeeping-tab.is-on { color: var(--text); background: var(--bg-elevated); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25), inset 0 0 0 1px var(--border-strong); }
+.housekeeping-tab:focus { outline: none; }
+.housekeeping-tab:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.housekeeping-tab-count { font-size: var(--fs-xs); font-variant-numeric: tabular-nums; padding: 0 6px; border-radius: 999px; background: var(--bg-hover); color: var(--text-faint); line-height: 1.6; }
+.housekeeping-tab.is-on .housekeeping-tab-count { background: var(--bg-input); color: var(--text); }
+.housekeeping-tab-count.is-warn { background: #c9a227; color: #1b1b1b; }
+.housekeeping-tab-dot { width: 7px; height: 7px; border-radius: 50%; background: #3a9d5d; }
+.housekeeping-tab-dot.is-attention { background: #c9a227; }
+.housekeeping-tab-dot.is-limit { background: var(--danger, #d9534f); }
 .housekeeping-filters { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-bottom: 10px; color: var(--text-faint); }
 .housekeeping-filters label { display: inline-flex; align-items: center; gap: 6px; }
 .housekeeping-filters input[type='number'] { width: 64px; padding: 2px 6px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); font: inherit; }
