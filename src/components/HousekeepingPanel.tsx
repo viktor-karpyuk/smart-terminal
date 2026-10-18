@@ -754,8 +754,39 @@ function Sessions({
           {rows.length} session{rows.length === 1 ? '' : 's'}, {formatBytes(weigh(rows))}
         </span>
       </div>
-      <Table rows={rows} selected={selected} toggle={toggle} selectAll={selectAll} empty="No session matches. Lower the days or the size." quick={{ label: 'Forget', run: quickRow }} inFlight={inFlight} />
-      <div className="storage-actions">
+      <Table
+        rows={rows}
+        selected={selected}
+        toggle={toggle}
+        selectAll={selectAll}
+        empty="No session matches. Lower the days or the size."
+        quick={{ label: 'Forget', run: quickRow }}
+        inFlight={inFlight}
+        onClear={() => selectAll(rows, false)}
+        actions={() => (
+          <>
+            {confirm(
+              'forget',
+              `Forget ${picked.length} conversation${picked.length === 1 ? '' : 's'}`,
+              'Deletes the kept conversations and their saved copies. The record of what ran, when and where stays in History.',
+              () => startJob('forget-transcripts', picked, `Forget ${picked.length} conversation${picked.length === 1 ? '' : 's'}`),
+              false,
+              picked.length === 0,
+              picked,
+            )}
+            {confirm(
+              'delete',
+              `Delete ${picked.length} entirely`,
+              'Removes the sessions — record, conversation, messages and readings. This cannot be undone.',
+              () => startJob('delete-sessions', picked, `Delete ${picked.length} session${picked.length === 1 ? '' : 's'}`),
+              true,
+              picked.length === 0,
+              picked,
+            )}
+          </>
+        )}
+      />
+      <div className="storage-actions" hidden>
         {confirm(
           'forget',
           `Forget ${picked.length} conversation${picked.length === 1 ? '' : 's'} (${formatBytes(weigh(picked))})`,
@@ -874,27 +905,42 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
           {trees.length} of {allTrees.length} worktree{allTrees.length === 1 ? '' : 's'}, {formatBytes(weigh(trees))} · {finished.length} finished and clear
         </span>
       </div>
-      <Table rows={trees} selected={selected} toggle={toggle} selectAll={selectAll} empty={allTrees.length ? 'No worktree matches. Lower the days or untick finished only.' : 'No worktrees found. Add the folder they live in above.'} quick={{ label: 'Remove', run: quickRow }} inFlight={inFlight} allowForce />
-      <div className="storage-actions">
-        {confirm(
-          'trees',
-          `Remove ${pickedTrees.length} worktree${pickedTrees.length === 1 ? '' : 's'} (${formatBytes(weigh(pickedTrees))})`,
-          'git worktree remove, never forced: anything that changed since it was looked at is refused. A finished branch is deleted; an unfinished one keeps its commits.',
-          () => startJob('remove-worktrees', pickedTrees, `Remove ${pickedTrees.length} worktree${pickedTrees.length === 1 ? '' : 's'} (${formatBytes(weigh(pickedTrees))})`),
-          true,
-          pickedTrees.length === 0,
-          pickedTrees,
+      <Table
+        rows={trees}
+        selected={selected}
+        toggle={toggle}
+        selectAll={selectAll}
+        empty={allTrees.length ? 'No worktree matches. Lower the days or untick finished only.' : 'No worktrees found. Add the folder they live in above.'}
+        quick={{ label: 'Remove', run: quickRow }}
+        inFlight={inFlight}
+        allowForce
+        onClear={() => selectAll(trees, false)}
+        actions={() => (
+          <>
+            {pickedTrees.length > 0 &&
+              confirm(
+                'trees',
+                `Remove ${pickedTrees.length} (${formatBytes(weigh(pickedTrees))})`,
+                'git worktree remove, never forced: anything that changed since it was looked at is refused. A finished branch is deleted with -d, an unfinished one keeps its commits.',
+                () => startJob('remove-worktrees', pickedTrees, `Remove ${pickedTrees.length} worktree${pickedTrees.length === 1 ? '' : 's'} (${formatBytes(weigh(pickedTrees))})`),
+                true,
+                false,
+                pickedTrees,
+              )}
+            {pickedForced.length > 0 &&
+              confirm(
+                'trees-forced',
+                `Remove ${pickedForced.length} anyway, discarding work (${formatBytes(weigh(pickedForced))})`,
+                'These have changes not committed, commits on no base branch, or ignored files. git worktree remove --force throws the uncommitted work away; commits stay on their branch, which is kept. There is no undo.',
+                () => startJob('remove-worktrees-forced', pickedForced, `Remove ${pickedForced.length} worktree${pickedForced.length === 1 ? '' : 's'} anyway, discarding work`),
+                true,
+                false,
+                pickedForced,
+              )}
+          </>
         )}
-        {pickedForced.length > 0 &&
-          confirm(
-            'trees-forced',
-            `Remove ${pickedForced.length} anyway, discarding ${pickedForced.length === 1 ? 'its' : 'their'} work (${formatBytes(weigh(pickedForced))})`,
-            'These have changes not committed, commits on no base branch, or ignored files. git worktree remove --force throws the uncommitted work away; commits stay on their branch, which is kept. There is no undo.',
-            () => startJob('remove-worktrees-forced', pickedForced, `Remove ${pickedForced.length} worktree${pickedForced.length === 1 ? '' : 's'} anyway, discarding work`),
-            true,
-            false,
-            pickedForced,
-          )}
+      />
+      <div className="storage-actions">
         {broken.length > 0 &&
           confirm(
             'repair',
@@ -925,8 +971,28 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
       <p className="usage-note">
         Folders a build writes and writes again: .angular, node_modules, target, dist. Removing one costs the next build a rebuild and nothing else. A folder git does not ignore is refused. A cache inside a worktree listed above is shown here but counted inside that worktree's size.
       </p>
-      <Table rows={caches} selected={selected} toggle={toggle} selectAll={selectAll} empty="No build caches under the folders above." quick={{ label: 'Clear', run: quickRow }} inFlight={inFlight} />
-      <div className="storage-actions">
+      <Table
+        rows={caches}
+        selected={selected}
+        toggle={toggle}
+        selectAll={selectAll}
+        empty="No build caches under the folders above."
+        quick={{ label: 'Clear', run: quickRow }}
+        inFlight={inFlight}
+        onClear={() => selectAll(caches, false)}
+        actions={() =>
+          confirm(
+            'caches',
+            `Clear ${pickedCaches.length} (${formatBytes(weigh(pickedCaches))})`,
+            'Each folder is renamed aside at once and deleted in the background. The next build rewrites it.',
+            () => startJob('free', pickedCaches, `Clear ${pickedCaches.length} cache${pickedCaches.length === 1 ? '' : 's'} (${formatBytes(weigh(pickedCaches))})`),
+            false,
+            pickedCaches.length === 0,
+            pickedCaches,
+          )
+        }
+      />
+      <div className="storage-actions" hidden>
         {confirm(
           'caches',
           `Clear ${pickedCaches.length} cache${pickedCaches.length === 1 ? '' : 's'} (${formatBytes(weigh(pickedCaches))})`,
@@ -940,8 +1006,28 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
 
       <h3 className="monitor-heading">Code Reviewer clones</h3>
       <p className="usage-note">A clone per pull request the reviewer wrote fixes in. One whose pull request is closed and whose fixes were handed back can go.</p>
-      <Table rows={shops} selected={selected} toggle={toggle} selectAll={selectAll} empty="No review clones on disk." quick={{ label: 'Discard', run: quickRow }} inFlight={inFlight} />
-      <div className="storage-actions">
+      <Table
+        rows={shops}
+        selected={selected}
+        toggle={toggle}
+        selectAll={selectAll}
+        empty="No review clones on disk."
+        quick={{ label: 'Discard', run: quickRow }}
+        inFlight={inFlight}
+        onClear={() => selectAll(shops, false)}
+        actions={() =>
+          confirm(
+            'shops',
+            `Discard ${pickedShops.length} (${formatBytes(weigh(pickedShops))})`,
+            'The reviewer refuses any clone with a fix still waiting to be handed back.',
+            () => startJob('discard-workshops', pickedShops, `Discard ${pickedShops.length} clone${pickedShops.length === 1 ? '' : 's'}`),
+            true,
+            pickedShops.length === 0,
+            pickedShops,
+          )
+        }
+      />
+      <div className="storage-actions" hidden>
         {confirm(
           'shops',
           `Discard ${pickedShops.length} clone${pickedShops.length === 1 ? '' : 's'} (${formatBytes(weigh(pickedShops))})`,
@@ -1024,8 +1110,28 @@ function AppFiles({ items, selected, toggle, selectAll, chosen, confirm, quickRo
       <p className="usage-note">
         What the app keeps beside its database: copies of the database and of whole data folders made before upgrades, installers already downloaded, pasted images, the window's own cache. The database itself is tended from the Monitor.
       </p>
-      <Table rows={rows} selected={selected} toggle={toggle} selectAll={selectAll} empty="Nothing beside the database." quick={{ label: 'Remove', run: quickRow }} inFlight={inFlight} />
-      <div className="storage-actions">
+      <Table
+        rows={rows}
+        selected={selected}
+        toggle={toggle}
+        selectAll={selectAll}
+        empty="Nothing beside the database."
+        quick={{ label: 'Remove', run: quickRow }}
+        inFlight={inFlight}
+        onClear={() => selectAll(rows, false)}
+        actions={() =>
+          confirm(
+            'app',
+            `Remove ${picked.length} (${formatBytes(weigh(picked))})`,
+            'Backups older than the running version, installers, pasted images and caches. The newest downloaded update is the one waiting to be installed.',
+            () => startJob('free', picked, `Remove ${picked.length} item${picked.length === 1 ? '' : 's'} (${formatBytes(weigh(picked))})`),
+            false,
+            picked.length === 0,
+            picked,
+          )
+        }
+      />
+      <div className="storage-actions" hidden>
         {confirm(
           'app',
           `Remove ${picked.length} item${picked.length === 1 ? '' : 's'} (${formatBytes(weigh(picked))})`,
@@ -1571,6 +1677,8 @@ function Table({
   quick,
   inFlight,
   allowForce = false,
+  actions,
+  onClear,
 }: {
   rows: HousekeepingItem[];
   selected: Set<string>;
@@ -1582,6 +1690,9 @@ function Table({
   inFlight?: Map<string, 'removing' | 'queued' | 'paused'>;
   /** Blocked rows whose blockers are only the work inside may be ticked one by one, for a removal that says so. */
   allowForce?: boolean;
+  /** What can be done with the selection: shown in a bar above the list that stays while scrolling. */
+  actions?: (picked: HousekeepingItem[]) => ReactElement | null;
+  onClear?: () => void;
 }) {
   const [sort, setSort] = useState<'size' | 'idle' | 'name'>('size');
   if (!rows.length) return <p className="empty-state">{empty}</p>;
@@ -1600,6 +1711,18 @@ function Table({
     </th>
   );
   return (
+    <>
+      {picked.length > 0 && (
+        <div className="housekeeping-selection" role="toolbar" aria-label="Selection">
+          <strong>
+            {picked.length} selected · {formatBytes(weigh(picked))}
+          </strong>
+          {actions?.(picked)}
+          <button className="ghost-btn tiny" onClick={() => (onClear ? onClear() : selectAll(rows, false))}>
+            Clear
+          </button>
+        </div>
+      )}
     <table className="housekeeping-table">
       <thead>
         <tr>
@@ -1614,14 +1737,6 @@ function Table({
         </tr>
       </thead>
       <tbody>
-        {picked.length > 0 && (
-          <tr className="housekeeping-picked">
-            <td />
-            <td colSpan={5}>
-              {picked.length} selected, {formatBytes(weigh(picked))}
-            </td>
-          </tr>
-        )}
         {ordered.map((one) => {
           const blocked = one.blockers.length > 0;
           const unsized = one.meta?.sized === false;
@@ -1702,5 +1817,6 @@ function Table({
         })}
       </tbody>
     </table>
+    </>
   );
 }

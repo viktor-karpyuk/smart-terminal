@@ -4247,3 +4247,5 @@ button.ci-toast-main { cursor: pointer; }
 @keyframes hk-spin { to { transform: rotate(360deg); } }
 .housekeeping-table input.is-force { accent-color: #c9a227; }
 .housekeeping-confirm-state .is-lost { color: var(--danger, #d9534f); }
+.housekeeping-selection { position: sticky; top: -14px; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 8px; padding: 8px 12px; border: 1px solid var(--accent); border-radius: var(--r-md); background: var(--bg-elevated); box-shadow: var(--shadow-lg); }
+.housekeeping-selection strong { margin-right: 4px; }
