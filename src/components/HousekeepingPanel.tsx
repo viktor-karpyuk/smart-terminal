@@ -380,7 +380,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
   const pickedCaches = chosen(caches);
   const pickedShops = chosen(shops);
   const [adding, setAdding] = useState(false);
-  const [idleFor, setIdleFor] = useState(14);
+  const [idleFor, setIdleFor] = useState(0);
   const [finishedOnly, setFinishedOnly] = useState(false);
   const trees = filterWorktrees(items, { olderThanDays: idleFor, finishedOnly });
   const allTrees = items.filter((one) => one.kind === 'worktree');
