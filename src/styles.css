@@ -4155,3 +4155,5 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-week small { font-size: var(--fs-xs); color: var(--text-faint); }
 .housekeeping-rowactions { white-space: nowrap; }
 .housekeeping-rowactions .ghost-btn + .ghost-btn { margin-left: 4px; }
+.housekeeping-regenerable { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 12px; }
+.housekeeping-regenerable textarea { width: 320px; max-width: 100%; padding: 4px 8px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); font: inherit; font-family: var(--font-mono, monospace); font-size: var(--fs-xs); resize: vertical; }

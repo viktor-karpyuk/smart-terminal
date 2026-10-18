@@ -1156,6 +1156,7 @@ declare global {
         measureNow(): Promise<HousekeepingHealth | null>;
         brief(question?: string | null): Promise<string>;
         snapshot(): Promise<(HousekeepingInventory & { stale: boolean }) | null>;
+        regenerable(list?: string[] | string): Promise<string[]>;
         stats(days?: number): Promise<HousekeepingStats | null>;
         advice(): Promise<HousekeepingProposal[]>;
         act(id: string, ids?: string[]): Promise<{ freed?: number; results?: HousekeepingResult[]; deleted?: string[]; count?: number; bytes?: number }>;

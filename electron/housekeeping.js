@@ -72,6 +72,7 @@ class Housekeeping {
       sessionActivity: (dir) => this.#sessionActivityUnder(dir),
       fetch,
       now,
+      regenerable: () => this.regenerable(),
     });
   }
 
@@ -315,6 +316,19 @@ class Housekeeping {
         meta: { sessionId: row.id, transcriptBytes: row.transcriptBytes, snapshotBytes: snapshot, sized: true },
       });
     });
+  }
+
+  /** Names or globs the person said a build makes again, beyond the cache list. */
+  regenerable() {
+    const kept = this.store.setting?.('regenerable');
+    return Array.isArray(kept) ? kept.filter((one) => typeof one === 'string' && one.trim()).map((one) => one.trim()) : [];
+  }
+
+  setRegenerable(list) {
+    const clean = [...new Set((Array.isArray(list) ? list : String(list ?? '').split(/[\n,]/)).map((one) => String(one).trim()).filter(Boolean))].slice(0, 100);
+    this.store.setSetting('regenerable', clean);
+    this.worktrees.memo.clear();
+    return clean;
   }
 
   /** The checkouts as of the last inventory, so one pass does not stat the roots three times. */

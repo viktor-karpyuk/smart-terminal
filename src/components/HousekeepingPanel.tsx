@@ -592,6 +592,12 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
         {adding ? 'Choosing…' : 'Add a folder…'}
       </button>
 
+      <h3 className="monitor-heading">Files a build makes again</h3>
+      <p className="usage-note">
+        A worktree with an ignored file nothing could rebuild (an .env, a key) is kept. Build caches on the list are not counted; add here the other names your builds write, one per line, * allowed: for example <code>dist-*</code>, <code>buildNumber.properties</code>.
+      </p>
+      <Regenerable reload={reload} onError={onError} />
+
       <h3 className="monitor-heading">Worktrees</h3>
       <p className="usage-note">
         Every worktree of the repositories above and of the ones your sessions are in, except each repository's main working tree. Idle is the latest of its last commit, its last checkout, and the last time a session was inside it. One
@@ -675,6 +681,38 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
         )}
       </div>
     </>
+  );
+}
+
+function Regenerable({ reload, onError }: { reload: () => void; onError: (m: string) => void }) {
+  const [text, setText] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    window.api.housekeeping
+      .regenerable()
+      .then((list) => setText(list.join('\n')))
+      .catch(() => setText(''));
+  }, []);
+  if (text === null) return null;
+  const save = async () => {
+    setSaving(true);
+    try {
+      const list = await window.api.housekeeping.regenerable(text);
+      setText(list.join('\n'));
+      reload();
+    } catch (e) {
+      onError(String((e as Error)?.message ?? e));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <div className="housekeeping-regenerable">
+      <textarea value={text} rows={3} spellCheck={false} onChange={(e) => setText(e.target.value)} placeholder={'dist-*\nbuildNumber.properties'} aria-label="Files a build makes again" />
+      <button className="ghost-btn tiny" disabled={saving} onClick={save}>
+        {saving ? 'Saving…' : 'Save and look again'}
+      </button>
+    </div>
   );
 }
 

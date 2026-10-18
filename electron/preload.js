@@ -344,6 +344,8 @@ contextBridge.exposeInMainWorld('api', {
     measureNow: () => ipcRenderer.invoke('housekeeping:measure-now'),
     /** The last inventory kept, for an instant open; `stale` says a fresh one is worth reading. */
     snapshot: () => ipcRenderer.invoke('housekeeping:snapshot'),
+    /** Names or globs a build makes again, beyond the cache list; with a list, sets them. */
+    regenerable: (list) => ipcRenderer.invoke('housekeeping:regenerable', list),
     /** What was given back and how things moved over the last days. */
     stats: (days) => ipcRenderer.invoke('housekeeping:stats', days),
     /** The panel's own plan, in order, with actions. */

@@ -154,7 +154,35 @@ test('remove takes the clean ones, prunes the gone one, deletes a finished branc
   assert.equal(isRegenerable('.angular/'), true);
   assert.equal(isRegenerable('node_modules.trash-5'), true);
   assert.equal(isRegenerable('.env'), false);
+  assert.equal(isRegenerable('dist-test', ['dist-*']), true);
+  assert.equal(isRegenerable('buildNumber.properties', ['buildNumber.properties']), true);
+  assert.equal(isRegenerable('src/assets/config.json', ['dist-*']), false);
+  assert.equal(isRegenerable('src/assets/config.json', ['src/assets/*.json']), true);
   assert.ok(!branches.includes('feature/gone') || true, 'a pruned worktree keeps its branch; that is git');
+});
+
+test('a detached worktree whose commit is on a base is finished, and the person\'s own regenerable names count', async () => {
+  const { main, wt } = repo();
+  // Detached at develop's tip: nothing of its own, nothing to lose.
+  execFileSync('git', ['worktree', 'add', '-q', '--detach', path.join(wt, 'perf'), 'develop'], { cwd: main });
+  fs.writeFileSync(path.join(wt, 'perf', 'buildNumber.properties'), 'n=1');
+  fs.writeFileSync(path.join(main, '.gitignore'), 'node_modules\n.angular\n.env\nbuildNumber.properties\n');
+  let extra = [];
+  const inv = new WorktreeInventory({ folders: () => [main], fetch: false, regenerable: () => extra });
+  let perf = (await inv.list()).find((row) => row.label === 'perf');
+  assert.equal(perf.detached, true);
+  // The gitignore change is uncommitted in main, so the worktree sees the old rules: the file is untracked there.
+  assert.ok(perf.blockers.includes('changes not committed'));
+  execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-am', 'ignore build number'], { cwd: main });
+  execFileSync('git', ['checkout', '-q', 'develop', '--', '.gitignore'], { cwd: path.join(wt, 'perf') });
+  inv.memo.clear();
+  perf = (await inv.list()).find((row) => row.label === 'perf');
+  assert.ok(perf.blockers.some((b) => /buildNumber\.properties/.test(b)), 'an ignored file nothing could rebuild keeps it');
+  extra = ['buildNumber.properties'];
+  inv.memo.clear();
+  perf = (await inv.list()).find((row) => row.label === 'perf');
+  assert.deepEqual(perf.blockers.filter((b) => !/changes not committed/.test(b)), [], 'named as regenerable, it no longer keeps it; detached but on a base is not a blocker');
+  assert.ok(perf.mergedInto, 'its commit is on develop');
 });
 
 test('finish derives state and blockers from a row, in the order a person reads them', () => {

@@ -1355,6 +1355,7 @@ function registerIpc() {
     return housekeepingMonitor?.report() ?? null;
   });
   ipcMain.handle('housekeeping:snapshot', () => housekeeping.snapshot());
+  ipcMain.handle('housekeeping:regenerable', (_e, list) => (list === undefined ? housekeeping.regenerable() : housekeeping.setRegenerable(list)));
   ipcMain.handle('housekeeping:stats', (_e, days) => housekeepingMonitor?.stats(Number(days) || 30) ?? null);
   /** The panel's own plan: what to do, in order, with the action that does it when there is one. */
   ipcMain.handle('housekeeping:advice', async () => {

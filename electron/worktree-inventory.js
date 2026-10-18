@@ -58,10 +58,38 @@ function real(one) {
   }
 }
 
-/** A name a build writes again: the cache list, and a cache already renamed aside. */
-function isRegenerable(name) {
-  const base = path.posix.basename(String(name).replace(/\/$/, ''));
-  return caches.KNOWN.some((known) => known.name === base) || caches.TRASH.test(base) || /\.(log|tsbuildinfo)$/.test(base) || base === '.DS_Store';
+/**
+ * A name a build writes again: the cache list, a cache already renamed aside,
+ * logs, and whatever the person added — a name, or a glob with `*`.
+ */
+function isRegenerable(name, extra = []) {
+  const clean = String(name).replace(/\/$/, '');
+  const base = path.posix.basename(clean);
+  if (caches.KNOWN.some((known) => known.name === base) || caches.TRASH.test(base) || /\.(log|tsbuildinfo)$/.test(base) || base === '.DS_Store') return true;
+  return extra.some((pattern) => globMatches(pattern, base) || globMatches(pattern, clean));
+}
+
+/** `*` matches anything but a slash; everything else is literal. */
+function globMatches(pattern, text) {
+  const source = String(pattern)
+    .trim()
+    .split('*')
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('[^/]*');
+  return source !== '' && new RegExp(`^${source}$`).test(text);
+}
+
+/**
+ * The ignored entries of a worktree, top-level ones collapsed, without walking
+ * inside them: `ls-files --directory` stops at an ignored folder, where
+ * `status --ignored` walks every file in a seventy-gigabyte cache and
+ * times out — which was read as "something irreplaceable", and kept the
+ * worktree. A failure here is said as such, not as a file.
+ */
+async function ignoredIn(dir) {
+  const out = await git(dir, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'], { timeout: 60_000 });
+  if (!out.ok) return ['(could not read ignored files)'];
+  return out.stdout.split('\0').filter(Boolean).map((name) => name.replace(/\/$/, ''));
 }
 
 function mtimeOf(target) {
@@ -94,12 +122,14 @@ class WorktreeInventory {
    * @param {() => string[]} [deps.live]           folders live sessions are standing in
    * @param {(dir: string) => number|null} [deps.sessionActivity] when a session was last active inside a folder, or null
    * @param {boolean} [deps.fetch]                 `git fetch --prune` each repository once per `ttl`
+   * @param {() => string[]} [deps.regenerable]    extra names or globs a build makes again, beyond the cache list
    * @param {number} [deps.ttl]
    * @param {number} [deps.concurrency]
    * @param {() => number} [deps.now]
    */
-  constructor({ folders, live = () => [], sessionActivity = () => null, fetch = true, ttl = 10 * MINUTE, concurrency = 6, now = () => Date.now() }) {
+  constructor({ folders, live = () => [], sessionActivity = () => null, fetch = true, ttl = 10 * MINUTE, concurrency = 6, now = () => Date.now(), regenerable = () => [] }) {
     this.folders = folders;
+    this.regenerable = regenerable;
     this.live = live;
     this.sessionActivity = sessionActivity;
     this.fetch = fetch;
@@ -143,7 +173,8 @@ class WorktreeInventory {
 
   async describe(root, entry, isMain, bases, live) {
     const gitMtime = mtimeOf(path.join(entry.path, '.git'));
-    const stamp = `${entry.head}:${gitMtime}:${entry.branch}:${entry.locked}:${entry.prunable}`;
+    const extra = this.regenerable() ?? [];
+    const stamp = `${entry.head}:${gitMtime}:${entry.branch}:${entry.locked}:${entry.prunable}:${extra.join(',')}`;
     const kept = this.memo.get(entry.path);
     const liveInside = live.some((folder) => inside(folder, entry.path));
     const sessionAt = this.sessionActivity(entry.path);
@@ -180,7 +211,11 @@ class WorktreeInventory {
       row.lastCommitAt = commit.ok && commit.stdout.trim() ? Number(commit.stdout.trim()) * 1000 : null;
       // Ignored files a build cannot make again. A build cache by any name on the list is not one of them:
       // .angular at seventy gigabytes is the thing to remove, not the thing that keeps the worktree.
-      if (!isMain) row.irreplaceable = (await this.helper.irreplaceable(entry.path)).filter((name) => !isRegenerable(name));
+      if (!isMain) row.irreplaceable = (await ignoredIn(entry.path)).filter((name) => !isRegenerable(name, extra));
+      // A detached worktree can still be finished: its commit may already be on a base branch.
+      if (entry.detached && !isMain && bases.length) {
+        row.mergedInto = await this.helper.mergedInto(root, entry.head, bases);
+      }
       if (entry.branch && !isMain && !row.base) {
         const [into, gone, own, track] = await Promise.all([
           this.helper.mergedInto(root, entry.head, bases),
@@ -262,7 +297,7 @@ function finish(row, liveInside, sessionAt) {
   if (row.main) blockers.push('the main working tree');
   if (row.base) blockers.push(`${row.branch} is a base branch`);
   if (row.locked) blockers.push('locked');
-  if (row.detached && !row.prunable) blockers.push('detached HEAD');
+  if (row.detached && !row.prunable && !row.mergedInto) blockers.push('detached HEAD, and its commit is on no base branch');
   if (liveInside) blockers.push('a session is inside it');
   if (row.dirty) blockers.push('changes not committed');
   if (row.irreplaceable.length) blockers.push(`ignored files nothing could rebuild: ${row.irreplaceable.slice(0, 3).join(', ')}${row.irreplaceable.length > 3 ? '…' : ''}`);
@@ -294,4 +329,4 @@ function finish(row, liveInside, sessionAt) {
   return { ...row, liveInside, sessionAt, lastActivityAt, finished, blockers, state, work };
 }
 
-module.exports = { WorktreeInventory, finish, mapLimit, isRegenerable };
+module.exports = { WorktreeInventory, finish, mapLimit, isRegenerable, globMatches, ignoredIn };
