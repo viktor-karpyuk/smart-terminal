@@ -1136,7 +1136,95 @@ declare global {
         /** The dock's number (the taskbar's elsewhere): how much is waiting on you. */
         setBadge(count: number): Promise<void>;
       };
+      /** What is on disk and can be given back. See electron/housekeeping.js. */
+      housekeeping: {
+        inventory(): Promise<HousekeepingInventory>;
+        measure(paths: string[], force?: boolean): Promise<Record<string, number>>;
+        free(ids: string[]): Promise<{ results: HousekeepingResult[]; freed: number }>;
+        deleteSessions(ids: string[]): Promise<{ deleted: string[]; skipped: string[]; bytes: number }>;
+        forgetTranscripts(ids: string[]): Promise<{ count: number; bytes: number }>;
+        discardWorkshops(ids: string[]): Promise<{ results: HousekeepingResult[] }>;
+        roots(): Promise<HousekeepingRoot[]>;
+        addRoot(folder: string): Promise<HousekeepingRoot[]>;
+        removeRoot(folder: string): Promise<HousekeepingRoot[]>;
+        log(limit?: number): Promise<HousekeepingLogRow[]>;
+        onSize(handler: (payload: { path: string; bytes: number; files: number; partial?: boolean }) => void): () => void;
+      };
       onMenuAction(handler: (payload: { id: string }) => void): () => void;
     };
+  }
+
+  type HousekeepingKind =
+    | 'session'
+    | 'build-cache'
+    | 'worktree'
+    | 'workshop'
+    | 'db-backup'
+    | 'install-backup'
+    | 'installer'
+    | 'pasted'
+    | 'browser-cache'
+    | 'trash';
+  type HousekeepingBucket = 'sessions' | 'worktrees' | 'app';
+
+  /** One removable thing on disk, whatever it is. */
+  interface HousekeepingItem {
+    id: string;
+    kind: HousekeepingKind;
+    bucket: HousekeepingBucket;
+    /** Comes back by itself if removed (a cache, an installer); false for the only copy of something. */
+    reversible: boolean;
+    label: string;
+    path: string | null;
+    bytes: number;
+    lastActivityAt: number | null;
+    state: string | null;
+    /** Why it cannot be removed right now, as text; empty when nothing stands in the way. */
+    blockers: string[];
+    detail: string | null;
+    meta: Record<string, unknown> | null;
+  }
+
+  interface HousekeepingTotals {
+    bytes: number;
+    count: number;
+    blocked: number;
+    reversibleBytes: number;
+  }
+
+  interface HousekeepingRoot {
+    path: string;
+    addedAt: number;
+  }
+
+  interface HousekeepingLogRow {
+    id: number;
+    at: number;
+    action: string;
+    kind: HousekeepingKind;
+    label: string;
+    bytes: number;
+    ok: boolean;
+    detail: string | null;
+  }
+
+  interface HousekeepingResult {
+    id: string;
+    ok: boolean;
+    bytes?: number;
+    error?: string;
+    note?: string;
+  }
+
+  interface HousekeepingInventory {
+    items: HousekeepingItem[];
+    totals: Record<'all' | HousekeepingBucket, HousekeepingTotals>;
+    /** Paths whose size is not known yet; `measure` walks them. */
+    unsized: string[];
+    roots: HousekeepingRoot[];
+    checkouts: number;
+    disk: { free: number | null; total: number | null };
+    log: HousekeepingLogRow[];
+    readAt: number;
   }
 }

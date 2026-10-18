@@ -267,6 +267,12 @@ saved. On launch the panes come back and each Claude session **resumes its own
 conversation** in the same folder under the same account. The processes themselves cannot
 survive a restart, but what was said does.
 
+What all of that weighs — kept conversations and their copies, the build caches inside
+your worktrees, the Code Reviewer's clones, old installers and backups — is listed under
+**Session › Housekeeping…**, with the idle time of each and the buttons that give the
+space back. Caches and installers go behind one button; sessions and clones are picked
+row by row. See [docs/housekeeping.md](docs/housekeeping.md).
+
 ## Project structure
 
 ```

@@ -1010,6 +1010,14 @@ function Storage() {
 
       <Tables />
 
+      <p className="usage-note">
+        The file itself is tended here. What sits beside it — saved conversations, build caches in your worktrees, the reviewer's clones, old installers and backups — is in{' '}
+        <button className="link-btn" onClick={() => useStore.getState().openHousekeeping()}>
+          Housekeeping
+        </button>
+        .
+      </p>
+
       <h3 className="monitor-heading">Tidying</h3>
       {said && <p className="usage-note">{said}</p>}
       <div className="storage-actions">

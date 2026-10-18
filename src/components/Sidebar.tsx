@@ -1723,17 +1723,32 @@ function MonitorList() {
           onToggle={() => updateSettings({ sidebarMonitorCollapsed: !collapsed })}
           onClose={() => updateSettings({ sidebarShowMonitor: false })}
           extra={
-            <button
-              className="section-open"
-              title="Open the monitor in a section"
-              aria-label="Open the monitor"
-              onClick={(event) => {
-                event.stopPropagation();
-                useStore.getState().openMonitor();
-              }}
-            >
-              <OpenInSectionIcon />
-            </button>
+            <>
+              <button
+                className="section-open"
+                title="Housekeeping: what is on disk, and giving it back"
+                aria-label="Open housekeeping"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  useStore.getState().openHousekeeping();
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden>
+                  <path d="M3 3.5h8M4 3.5l.7 8h4.6l.7-8M5.8 3.5V2.2h2.4v1.3" />
+                </svg>
+              </button>
+              <button
+                className="section-open"
+                title="Open the monitor in a section"
+                aria-label="Open the monitor"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  useStore.getState().openMonitor();
+                }}
+              >
+                <OpenInSectionIcon />
+              </button>
+            </>
           }
         />
       }

@@ -152,6 +152,7 @@ export function asFilePanel(panel: Panel | undefined | null): FilePanel | null {
 export function panelLabel(panel: Panel | undefined | null): string {
   if (panel?.kind === 'monitor') return 'Monitor';
   if (panel?.kind === 'extensions') return 'Extensions';
+  if (panel?.kind === 'housekeeping') return 'Housekeeping';
   if (panel?.kind === 'extension') return panel.title;
   const root = panel?.kind === 'files' ? panel.root : '';
   return root.split('/').filter(Boolean).pop() ?? 'section';
@@ -681,6 +682,7 @@ interface State {
   setUsagePanelOpen(open: boolean): void;
   openMonitor(sessionId?: string | null): void;
   openExtensions(): void;
+  openHousekeeping(): void;
   /** Open a view an extension contributes, on a folder. */
   openExtensionView(viewId: string, root: string | null): void;
   /**
@@ -3248,6 +3250,34 @@ export const useStore = create<State>((set, get) => ({
     const targetLeafId = state.activeLeafId || allLeaves(state.layout)[0]?.id;
     set((prev) => {
       const panels = { ...prev.panels, [panelId]: { id: panelId, kind: 'extensions' as const } };
+      const target = landingLeaf(prev.layout, targetLeafId);
+      if (!target) {
+        const leaf = makeLeaf([panelId]);
+        return { panels, layout: leaf, activeLeafId: leaf.id };
+      }
+      return { panels, layout: insertTab(prev.layout, target, panelId), activeLeafId: target };
+    });
+    schedulePersist(get);
+  },
+
+  /** Open housekeeping, or bring the one that is already open forward. One is enough: it shows the whole disk. */
+  openHousekeeping() {
+    const state = get();
+    const existing = Object.values(state.panels).find((panel) => panel.kind === 'housekeeping');
+    if (existing) {
+      const leaf = allLeaves(state.layout).find((candidate) => candidate.tabs.includes(existing.id));
+      if (leaf) {
+        get().focusPanel(leaf.id, existing.id);
+        return;
+      }
+      get().restoreMinimized(existing.id);
+      return;
+    }
+
+    const panelId = crypto.randomUUID();
+    const targetLeafId = state.activeLeafId || allLeaves(state.layout)[0]?.id;
+    set((prev) => {
+      const panels = { ...prev.panels, [panelId]: { id: panelId, kind: 'housekeeping' as const } };
       const target = landingLeaf(prev.layout, targetLeafId);
       if (!target) {
         const leaf = makeLeaf([panelId]);

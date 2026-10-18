@@ -80,6 +80,7 @@ function buildMenu(send, newWindow, reopenWindow = () => {}) {
         { label: 'Rename Session…', accelerator: 'CmdOrCtrl+E', click: action('rename') },
         { type: 'separator' },
         { label: 'History…', accelerator: 'CmdOrCtrl+Y', click: action('history') },
+        { label: 'Housekeeping…', click: action('housekeeping') },
       ],
     },
     {

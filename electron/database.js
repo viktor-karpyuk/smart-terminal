@@ -1603,6 +1603,54 @@ class Database {
   }
 
   /**
+   * Every session with what it weighs and when it was last alive — the rows the
+   * housekeeping panel lists. Open sessions are included and marked, because
+   * the number on the panel should be what is there; they are refused on
+   * deletion, not hidden from the count.
+   */
+  sessionFootprints() {
+    return this.db
+      .prepare(
+        `SELECT id, profile_name AS profileName, title, kind, start_cwd AS startCwd, last_cwd AS lastCwd,
+                started_at AS startedAt, ended_at AS endedAt,
+                COALESCE(last_worked_at, last_active_at, ended_at, started_at) AS lastActivityAt,
+                COALESCE(transcript_bytes, 0) AS transcriptBytes, store_transcript AS recording
+         FROM sessions
+         ORDER BY COALESCE(last_worked_at, last_active_at, ended_at, started_at) DESC`,
+      )
+      .all();
+  }
+
+  /**
+   * Remove many sessions in one transaction, skipping any still running.
+   *
+   * Many, because clearing a month of history one `deleteSession` at a time is
+   * a commit per session and a search-index trigger per chunk; in one
+   * transaction it is one commit, and a failure halfway leaves nothing half
+   * deleted. Returns the ids that went, so the saved copies can follow.
+   */
+  deleteSessions(ids = []) {
+    const wanted = [...new Set(ids)];
+    if (!wanted.length) return [];
+    const placeholders = wanted.map(() => '?').join(',');
+    const ended = this.db
+      .prepare(`SELECT id FROM sessions WHERE id IN (${placeholders}) AND ended_at IS NOT NULL`)
+      .all(...wanted)
+      .map((row) => row.id);
+    if (!ended.length) return [];
+    this.db.exec('BEGIN');
+    try {
+      for (const id of ended) this.#eraseSession(id);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    this.db.exec('PRAGMA wal_checkpoint(PASSIVE)');
+    return ended;
+  }
+
+  /**
    * Everything belonging to one session, gone.
    *
    * In one place because it is the thing most easily got wrong: every table
