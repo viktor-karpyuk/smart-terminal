@@ -60,7 +60,7 @@ export function HousekeepingPanel() {
   /** What a button is about to do, shown as a modal that lists every item before anything goes. */
   const [pending, setPending] = useState<PendingAction | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [olderThan, setOlderThan] = useState(30);
+  const [olderThan, setOlderThan] = useState(0);
   const [minMb, setMinMb] = useState(0);
   const [includeOpen, setIncludeOpen] = useState(false);
   const [health, setHealth] = useState<HousekeepingHealth | null>(null);
