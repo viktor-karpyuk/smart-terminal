@@ -80,10 +80,28 @@ function buildMenu(send, newWindow, reopenWindow = () => {}, cleanWorktrees = ()
         { label: 'Rename Session…', accelerator: 'CmdOrCtrl+E', click: action('rename') },
         { type: 'separator' },
         { label: 'History…', accelerator: 'CmdOrCtrl+Y', click: action('history') },
-        { label: 'Housekeeping…', click: action('housekeeping') },
+      ],
+    },
+    {
+      /*
+       * What is on disk and how the machine is doing, as a menu of its own:
+       * it is about the whole machine, not about the session in front of you,
+       * and each tab is a place somebody goes to on purpose.
+       */
+      label: 'Housekeeping',
+      submenu: [
+        { label: 'Open Housekeeping', accelerator: 'CmdOrCtrl+Shift+H', click: action('housekeeping') },
+        { type: 'separator' },
+        { label: 'Sessions', click: action('housekeeping:sessions') },
+        { label: 'Worktrees', click: action('housekeeping:worktrees') },
+        { label: 'App Files', click: action('housekeeping:app') },
+        { label: 'Health', click: action('housekeeping:health') },
+        { label: 'Log', click: action('housekeeping:log') },
         { type: 'separator' },
         // Asks before it removes anything: see offerWorktreeCleanup in main.js.
         { label: 'Clean Up Finished Worktrees…', click: () => cleanWorktrees() },
+        { label: 'Weigh Everything Now', click: action('housekeeping:weigh') },
+        { label: 'Check Health Now', click: action('housekeeping:check') },
       ],
     },
     {

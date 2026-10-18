@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
-import { describeIdle, diskUsedPercent, filterSessions, filterWorktrees, formatBytes, freeable, idleDays, inBucket, weigh, withSize } from '../lib/housekeeping';
+import { useStore } from '../state/store';
+import { describeIdle, diskUsedPercent, filterSessions, filterWorktrees, formatBytes, freeable, idleDays, inBucket, weigh, withSize, type HousekeepingTab } from '../lib/housekeeping';
 
 /**
  * What Smart Terminal and the work around it leave on disk, and giving it back.
@@ -16,7 +17,7 @@ import { describeIdle, diskUsedPercent, filterSessions, filterWorktrees, formatB
  * and each row fills in as its number lands.
  */
 
-type Tab = 'sessions' | 'worktrees' | 'app' | 'health' | 'log';
+type Tab = HousekeepingTab;
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'sessions', label: 'Sessions' },
@@ -26,13 +27,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'log', label: 'Log' },
 ];
 
-/** The tab a metric belongs to, for a notification that was clicked. */
-function tabFor(metric: string | undefined): Tab {
-  if (!metric) return 'health';
-  if (metric.startsWith('worktrees') || metric === 'budget.worktrees.bytes') return 'worktrees';
-  if (metric.startsWith('db.') || metric === 'budget.app.bytes') return 'app';
-  return 'health';
-}
+
 
 const KIND_LABEL: Record<HousekeepingKind, string> = {
   session: 'session',
@@ -62,6 +57,13 @@ export function HousekeepingPanel() {
   const [includeOpen, setIncludeOpen] = useState(false);
   const [health, setHealth] = useState<HousekeepingHealth | null>(null);
   const alive = useRef(true);
+  // A menu entry or a notification named a tab: go there, on mount and whenever it changes.
+  const wantedTab = useStore((s) => s.housekeepingTab);
+  useEffect(() => {
+    if (!wantedTab) return;
+    setTab(wantedTab);
+    useStore.getState().clearHousekeepingTab();
+  }, [wantedTab]);
 
   const load = async ({ measure = true } = {}) => {
     setBusy('reading');
@@ -98,12 +100,10 @@ export function HousekeepingPanel() {
       .then((h) => alive.current && setHealth(h))
       .catch(() => {});
     const offHealth = window.api.housekeeping.onHealth(({ status, conditions }) => setHealth((prev) => (prev ? { ...prev, status, conditions } : prev)));
-    const offOpen = window.api.housekeeping.onOpen(({ metric }) => setTab(tabFor(metric)));
     return () => {
       alive.current = false;
       off();
       offHealth();
-      offOpen();
     };
     // Read once when it opens; "Refresh" reads again. Polling a disk to watch it not change is what makes a panel expensive to leave open.
   }, []);
