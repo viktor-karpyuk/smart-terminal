@@ -1175,8 +1175,8 @@ function OfferOnClose({ onError }: { onError: (m: string) => void }) {
           setOn(next);
           window.api.housekeeping.pref('offer-on-close', next).catch((err: unknown) => onError(String((err as Error)?.message ?? err)));
         }}
-      />{' '}
-      When a session closes in a worktree whose work is merged and clean, offer to remove it (also from Housekeeping › Check This Session's Worktree…)
+      />
+      <span className="housekeeping-switch-text">When a session closes in a worktree whose work is merged and clean, offer to remove it. Also from Housekeeping › Check This Session's Worktree…</span>
     </label>
   );
 }

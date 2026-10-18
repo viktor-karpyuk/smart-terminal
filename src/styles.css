@@ -4211,7 +4211,8 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-job .housekeeping-progress-bar { position: relative; height: 6px; }
 .housekeeping-job .housekeeping-progress-bar > div.is-inner { position: absolute; left: 0; top: 0; height: 100%; background: var(--text-faint); opacity: 0.5; }
 .housekeeping-job-actions { margin-left: 10px; display: inline-flex; gap: 4px; }
-.housekeeping-switch { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 14px; color: var(--text-faint); font-size: var(--fs-sm); }
+.housekeeping-switch { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 8px; align-items: start; justify-items: start; margin: 0 0 14px; color: var(--text-faint); font-size: var(--fs-sm); max-width: 80ch; }
+.housekeeping-switch-text { line-height: 1.45; }
 .housekeeping-confirm { width: min(calc(640px * var(--ui-scale)), 94vw); max-height: 84vh; }
 .housekeeping-confirm-sum { color: var(--text) !important; }
 .housekeeping-confirm-sum .is-error { color: var(--danger, #d9534f); }
@@ -4230,8 +4231,7 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-settings[open] > summary::before { content: '▾'; }
 .housekeeping-settings > summary small { color: var(--text-faint); font-weight: 400; }
 .housekeeping-settings .monitor-heading { margin-top: 12px; }
-.housekeeping-switch { align-items: center; max-width: 80ch; }
-.housekeeping-switch input { flex: 0 0 auto; }
+.housekeeping-switch input { margin-top: 3px; }
 .housekeeping-balance td.is-num { position: relative; min-width: 110px; }
 .housekeeping-meter { height: 3px; margin-top: 3px; margin-left: auto; border-radius: 2px; max-width: 100%; }
 .housekeeping-meter.is-freed { background: #3a9d5d; }
