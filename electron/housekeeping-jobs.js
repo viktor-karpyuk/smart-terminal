@@ -139,7 +139,7 @@ class JobRunner {
       try {
         const out = await this.housekeeping.act(job.kind, [itemId]);
         const one = (out.results ?? [])[0] ?? (out.deleted ? { ok: out.deleted.length > 0, bytes: out.bytes ?? 0 } : { ok: true, bytes: out.bytes ?? out.freed ?? 0 });
-        result = { ok: Boolean(one.ok), bytes: one.ok ? Number(one.bytes ?? 0) : 0, error: one.error ?? one.note ?? null, at: this.now() };
+        result = { ok: Boolean(one.ok), bytes: Number(one.bytes ?? 0), error: one.ok ? null : (one.error ?? null), note: one.note ?? null, at: this.now() };
       } catch (error) {
         result = { ok: false, bytes: 0, error: String(error?.message ?? error), at: this.now() };
       }

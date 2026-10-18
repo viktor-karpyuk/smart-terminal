@@ -127,6 +127,24 @@ frees and carries the button that does it; the same ones appear as **Quick
 actions** under the bar. Nothing that would lose unmerged work is ever
 proposed for removal; it is pointed at.
 
+**Jobs** — every removal runs as a job: written to the database before it
+starts, one item at a time through the same checks a button has, each result
+kept as it lands. The strip under the bar shows where it is, what it has given
+back, what it refused, and inside a large deletion how many bytes and files
+are gone so far. **Pause** stops after the item in hand, **Stop** keeps what
+was done, **Resume** carries on from the first item not yet done. A job that
+was running when the app quit is found at the next start marked interrupted,
+with its place kept, and waits to be resumed; nothing restarts on its own.
+One job runs at a time. Inside a worktree the build caches are deleted first
+by the worker, with progress; `git worktree remove` then takes an instant.
+
+**Uncommitted** — each worktree row says how many files git status lists as
+changed, staged or untracked, or that it is clean.
+
+**Vitals in the title bar** — memory used (what a process could have: free plus
+inactive plus purgeable on macOS), swap, disk free and load per core, coloured
+by the health job's verdict; clicking opens Health.
+
 **Progress** — every action and every inventory report as they go: which item,
 how many of how many, how much given back so far, how many refused. The panel
 opens on the last inventory kept and says so while a fresh one is read.

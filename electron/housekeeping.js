@@ -659,6 +659,8 @@ class Housekeeping {
      */
     const rows = new Map((await this.worktrees.list()).map((row) => [row.path, row]));
     let cleared = 0;
+    /** Bytes of caches deleted per worktree, so each result says what it gave back even after its size was forgotten. */
+    const clearedBy = new Map();
     for (const target of paths) {
       const row = rows.get(target);
       if (!row || row.blockers.length) continue;
@@ -672,6 +674,7 @@ class Housekeeping {
           if (aside.trash) {
             const out = await this.#removeTree(aside.trash, `${path.basename(target)}/${found.name}`, expected);
             cleared += out.bytes;
+            clearedBy.set(target, (clearedBy.get(target) ?? 0) + out.bytes);
           }
         } catch {
           /* git will say if the worktree cannot go */
@@ -680,16 +683,19 @@ class Housekeeping {
     }
     const results = await this.worktrees.remove(paths, { onEach: ({ index, total, label }) => this.emit('progress', { op: 'remove-worktrees', index, total, label, freed: cleared, done: false }) });
     let freed = cleared;
+    const bytesOf = new Map();
     for (const one of results) {
-      const bytes = this.sizes.known(one.path)?.bytes ?? 0;
+      const rest = Math.max(0, (this.sizes.known(one.path)?.bytes ?? 0) - (clearedBy.get(one.path) ?? 0));
+      const bytes = one.ok ? rest + (clearedBy.get(one.path) ?? 0) : clearedBy.get(one.path) ?? 0;
+      bytesOf.set(one.path, bytes);
       if (one.ok) {
-        freed += bytes;
+        freed += rest;
         this.sizes.forget(one.path);
       }
-      this.store.log({ action: 'remove-worktree', kind: 'worktree', label: path.basename(one.path), bytes: one.ok ? bytes : 0, ok: one.ok, detail: one.ok ? (one.branchKept ? 'branch kept' : null) : one.error });
+      this.store.log({ action: 'remove-worktree', kind: 'worktree', label: path.basename(one.path), bytes, ok: one.ok, detail: one.ok ? (one.branchKept ? 'branch kept' : null) : one.error });
     }
     this.emit('progress', { op: 'remove-worktrees', index: paths.length, total: paths.length, label: null, freed, done: true, failed: results.filter((one) => !one.ok).length });
-    return { results: results.map((one) => ({ id: `worktree:${one.path}`, ok: one.ok, bytes: one.ok ? this.sizes.known(one.path)?.bytes ?? 0 : 0, error: one.error, note: one.branchKept ? 'branch kept' : undefined })), freed };
+    return { results: results.map((one) => ({ id: `worktree:${one.path}`, ok: one.ok, bytes: bytesOf.get(one.path) ?? 0, error: one.error, note: one.branchKept ? 'branch kept' : undefined })), freed };
   }
 
   /** Point broken worktrees back at their repository. Nothing is removed. */
