@@ -26,6 +26,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { WorktreeCleanup, parseWorktrees } = require('./worktree-cleanup');
+const caches = require('./build-caches');
 const { execFile } = require('node:child_process');
 
 const MINUTE = 60_000;
@@ -55,6 +56,12 @@ function real(one) {
     const parent = path.dirname(resolved);
     return parent === resolved ? resolved : path.join(real(parent), path.basename(resolved));
   }
+}
+
+/** A name a build writes again: the cache list, and a cache already renamed aside. */
+function isRegenerable(name) {
+  const base = path.posix.basename(String(name).replace(/\/$/, ''));
+  return caches.KNOWN.some((known) => known.name === base) || caches.TRASH.test(base) || /\.(log|tsbuildinfo)$/.test(base) || base === '.DS_Store';
 }
 
 function mtimeOf(target) {
@@ -171,7 +178,9 @@ class WorktreeInventory {
       const [status, commit] = await Promise.all([git(entry.path, ['status', '--porcelain']), git(entry.path, ['log', '-1', '--format=%ct'])]);
       row.dirty = !status.ok || Boolean(status.stdout.trim());
       row.lastCommitAt = commit.ok && commit.stdout.trim() ? Number(commit.stdout.trim()) * 1000 : null;
-      if (!isMain) row.irreplaceable = await this.helper.irreplaceable(entry.path);
+      // Ignored files a build cannot make again. A build cache by any name on the list is not one of them:
+      // .angular at seventy gigabytes is the thing to remove, not the thing that keeps the worktree.
+      if (!isMain) row.irreplaceable = (await this.helper.irreplaceable(entry.path)).filter((name) => !isRegenerable(name));
       if (entry.branch && !isMain && !row.base) {
         const [into, gone, own, track] = await Promise.all([
           this.helper.mergedInto(root, entry.head, bases),
@@ -285,4 +294,4 @@ function finish(row, liveInside, sessionAt) {
   return { ...row, liveInside, sessionAt, lastActivityAt, finished, blockers, state, work };
 }
 
-module.exports = { WorktreeInventory, finish, mapLimit };
+module.exports = { WorktreeInventory, finish, mapLimit, isRegenerable };

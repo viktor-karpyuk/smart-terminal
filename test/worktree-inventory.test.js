@@ -31,7 +31,7 @@ function repo() {
   sh(home, ['clone', '-q', origin, main]);
   sh(main, ['checkout', '-q', '-b', 'develop']);
   fs.writeFileSync(path.join(main, 'README'), 'hi');
-  fs.writeFileSync(path.join(main, '.gitignore'), 'node_modules\n');
+  fs.writeFileSync(path.join(main, '.gitignore'), 'node_modules\n.angular\n.env\n');
   sh(main, ['add', '-A']);
   sh(main, ['commit', '-q', '-m', 'init']);
   sh(main, ['push', '-q', '-u', 'origin', 'develop']);
@@ -44,6 +44,9 @@ function repo() {
   sh(path.join(wt, 'done'), ['add', '-A']);
   sh(path.join(wt, 'done'), ['commit', '-q', '-m', 'done work']);
   sh(path.join(wt, 'done'), ['push', '-q', '-u', 'origin', 'feature/done']);
+  // An ignored build cache inside it, and an ignored file nothing could rebuild in another.
+  fs.mkdirSync(path.join(wt, 'done', '.angular', 'cache'), { recursive: true });
+  fs.writeFileSync(path.join(wt, 'done', '.angular', 'cache', 'x'), 'x');
   sh(main, ['merge', '-q', '--no-ff', '-m', 'merge done', 'feature/done']);
   sh(main, ['push', '-q', 'origin', 'develop']);
 
@@ -56,6 +59,7 @@ function repo() {
   // pushed: own commit, pushed, not merged.
   sh(main, ['worktree', 'add', '-q', '-b', 'feature/pushed', path.join(wt, 'pushed')]);
   fs.writeFileSync(path.join(wt, 'pushed', 'p.txt'), 'z');
+  fs.writeFileSync(path.join(wt, 'pushed', '.env'), 'SECRET=1');
   sh(path.join(wt, 'pushed'), ['add', '-A']);
   sh(path.join(wt, 'pushed'), ['commit', '-q', '-m', 'pushed work']);
   sh(path.join(wt, 'pushed'), ['push', '-q', '-u', 'origin', 'feature/pushed']);
@@ -91,7 +95,8 @@ test('every worktree is listed with its state, and only the finished clean one h
   assert.equal(by.pushed.state, '1 commit not merged');
   assert.equal(by.pushed.work, 'unmerged');
   assert.equal(by.pushed.aheadOfBase, 1);
-  assert.deepEqual(by.pushed.blockers, [], 'pushed and clean: removable as inactive, the branch stays');
+  assert.deepEqual(by.pushed.blockers, ['ignored files nothing could rebuild: .env'], 'an ignored .env keeps the worktree');
+  assert.deepEqual(by.done.irreplaceable, [], 'an ignored .angular is a cache, not a reason to keep it');
   assert.equal(by.done.work, 'done');
   assert.equal(by.open.work, 'unmerged');
   assert.equal(by.dirty.work, 'unmerged');
@@ -132,19 +137,23 @@ test('remove takes the clean ones, prunes the gone one, deletes a finished branc
   const by = Object.fromEntries(results.map((r) => [path.basename(r.path), r]));
   assert.equal(by.done.ok, true);
   assert.equal(by.done.branchKept, false);
-  assert.equal(by.pushed.ok, true);
-  assert.equal(by.pushed.branchKept, true, 'not merged: the branch stays with its commits');
+  assert.equal(by.pushed.ok, false, 'the .env keeps it');
+  assert.match(by.pushed.error, /\.env/);
   assert.equal(by.open.ok, false);
   assert.match(by.open.error, /never pushed/);
   assert.equal(by.dirty.ok, false);
   assert.equal(by.gone.ok, true);
   assert.equal(by.nowhere.ok, false);
   assert.ok(!fs.existsSync(path.join(wt, 'done')));
-  assert.ok(!fs.existsSync(path.join(wt, 'pushed')));
+  assert.ok(fs.existsSync(path.join(wt, 'pushed')));
   assert.ok(fs.existsSync(path.join(wt, 'open')));
   const branches = execFileSync('git', ['branch', '--format=%(refname:short)'], { cwd: main }).toString();
   assert.ok(!branches.includes('feature/done'));
   assert.ok(branches.includes('feature/pushed'));
+  const { isRegenerable } = require('../electron/worktree-inventory');
+  assert.equal(isRegenerable('.angular/'), true);
+  assert.equal(isRegenerable('node_modules.trash-5'), true);
+  assert.equal(isRegenerable('.env'), false);
   assert.ok(!branches.includes('feature/gone') || true, 'a pruned worktree keeps its branch; that is git');
 });
 
