@@ -1440,6 +1440,8 @@ function registerIpc() {
   ipcMain.handle('housekeeping:discard-workshops', (_e, ids = []) => housekeeping.discardWorkshops(Array.isArray(ids) ? ids : []));
   ipcMain.handle('housekeeping:remove-worktrees', (_e, ids = []) => housekeeping.removeWorktrees(Array.isArray(ids) ? ids : []));
   ipcMain.handle('housekeeping:repair-worktrees', (_e, ids = []) => housekeeping.repairWorktrees(Array.isArray(ids) ? ids : []));
+  /** What a Claude session opened in a worktree is told. Text; nothing runs. */
+  ipcMain.handle('housekeeping:worktree-brief', (_e, target) => housekeeping.worktreeBrief(String(target ?? '')));
   ipcMain.handle('housekeeping:roots', () => housekeeping.roots());
   ipcMain.handle('housekeeping:add-root', (_e, folder) => housekeeping.addRoot(String(folder ?? '')));
   ipcMain.handle('housekeeping:remove-root', (_e, folder) => housekeeping.removeRoot(String(folder ?? '')));

@@ -146,6 +146,14 @@ that run; the switch under Worktrees turns the offer off. **Housekeeping ›
 Check This Session's Worktree…** asks the same of the session in front, with
 an answer even when there is nothing to do.
 
+**Finish it instead** — each worktree row has **Ask Claude here**: a Claude
+session opens in a new tab standing in the worktree and is handed its branch,
+the commits no base branch has (with their messages), the uncommitted files
+and the ask — commit what is worth it, push, open a pull request against the
+nearest base, or say why the work should be dropped; never remove the
+worktree itself. *Go to session* and *Pick up session* appear when a recorded
+session worked in the folder; *Terminal* opens a shell there.
+
 **Remove anyway** — a worktree blocked only by the work inside it (files not
 committed, commits on no base branch, ignored files, a detached head) can be
 ticked one by one — the tick is amber, and "select all" never includes it —

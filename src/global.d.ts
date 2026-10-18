@@ -1159,6 +1159,7 @@ declare global {
         discardWorkshops(ids: string[]): Promise<{ results: HousekeepingResult[] }>;
         removeWorktrees(ids: string[]): Promise<{ results: HousekeepingResult[]; freed: number }>;
         repairWorktrees(ids: string[]): Promise<{ results: HousekeepingResult[] }>;
+        worktreeBrief(path: string): Promise<string>;
         roots(): Promise<HousekeepingRoot[]>;
         addRoot(folder: string): Promise<HousekeepingRoot[]>;
         removeRoot(folder: string): Promise<HousekeepingRoot[]>;

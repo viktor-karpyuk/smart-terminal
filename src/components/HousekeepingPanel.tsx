@@ -729,8 +729,38 @@ function WorktreeDoors({ item }: { item: HousekeepingItem }) {
   const openShell = () => {
     void useStore.getState().newSession({ kind: 'shell', cwd: item.path ?? undefined, title: `sh ${item.label.split('/').pop() ?? ''}`.slice(0, 28) });
   };
+  const [asking, setAsking] = useState(false);
+  /** A Claude session in the worktree, in a new tab, handed what is unmerged and asked to finish it. */
+  const askHere = async () => {
+    if (!item.path) return;
+    setAsking(true);
+    try {
+      const store = useStore.getState();
+      const brief = await window.api.housekeeping.worktreeBrief(item.path);
+      const { profiles, settings, authByProfile } = store;
+      const usual = profiles.find((p) => p.id === settings.defaultProfileId) ?? profiles[0];
+      const profileId = usual && authByProfile[usual.id]?.loggedIn !== false ? usual.id : (profiles.find((p) => authByProfile[p.id]?.loggedIn)?.id ?? usual?.id);
+      const sessionId = await store.newSession({ kind: 'claude', cwd: item.path, profileId, title: `finish ${item.label.split('/').pop() ?? ''}`.slice(0, 28) });
+      if (!sessionId) return;
+      store.focusSession(sessionId);
+      await window.api.analysis.handOver(sessionId, brief);
+    } finally {
+      setAsking(false);
+    }
+  };
+  const unfinished = item.meta?.work === 'unmerged' || item.meta?.dirty === true;
   return (
     <>
+      {!item.meta?.prunable && !item.meta?.broken && (
+        <button
+          className={`${unfinished ? 'primary-btn' : 'ghost-btn'} tiny`}
+          disabled={asking}
+          onClick={() => void askHere()}
+          title={unfinished ? 'Open a Claude session in this worktree, in a new tab, with its unmerged commits and uncommitted changes, and ask it to finish the work: commit, push, open a pull request — or say why not' : 'Open a Claude session in this worktree, in a new tab, with its state'}
+        >
+          {asking ? 'Opening…' : 'Ask Claude here'}
+        </button>
+      )}
       {session && (session.live || session.resumable) && (
         <button
           className="ghost-btn tiny"
