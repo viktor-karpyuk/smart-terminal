@@ -112,7 +112,7 @@ class Housekeeping {
     this.#checkouts = this.checkouts();
     const items = [
       ...this.sessionItems(),
-      ...this.buildCacheItems(),
+      ...(await this.buildCacheItems()),
       ...(await this.workshopItems()),
       ...this.appItems(),
       ...(await this.browserItems()),
@@ -192,13 +192,23 @@ class Housekeeping {
   /** The checkouts as of the last inventory, so one pass does not stat the roots three times. */
   #checkouts = null;
 
-  buildCacheItems() {
+  async buildCacheItems() {
     const live = this.live().filter(Boolean);
     const out = [];
-    for (const checkout of this.#checkouts ?? this.checkouts()) {
+    const checkouts = this.#checkouts ?? this.checkouts();
+    // Up to eight checkouts at a time asked which names they ignore: enough to hide the latency, few enough not to fork a storm.
+    const answers = await mapLimit(checkouts, 8, async (checkout) => {
+      const list = caches.findIn(checkout);
+      const ignored = await caches.ignoredIn(checkout, list.map((one) => one.name));
+      return { checkout, list, ignored };
+    });
+    for (const { checkout, list, ignored } of answers) {
       const inside = live.some((cwd) => cwd === checkout || cwd.startsWith(checkout + path.sep));
-      for (const found of caches.findIn(checkout)) {
+      for (const found of list) {
         const known = this.sizes.known(found.path);
+        const blockers = [];
+        if (!ignored.has(found.name)) blockers.push('not ignored by git, so it may be committed work');
+        if (inside) blockers.push('a session is working in this checkout');
         out.push(
           item({
             id: `cache:${found.path}`,
@@ -208,8 +218,7 @@ class Housekeeping {
             bytes: known?.bytes ?? 0,
             lastActivityAt: mtime(found.path),
             state: found.tool,
-            // A session inside the checkout may be mid-build. The cache is still removable, but it is said.
-            blockers: inside ? ['a session is working in this checkout'] : [],
+            blockers,
             detail: `${found.tool} output in ${checkout}`,
             meta: { checkout, name: found.name, sized: Boolean(known) },
           }),
@@ -464,6 +473,20 @@ class Housekeeping {
 }
 
 // --- small helpers -----------------------------------------------------------
+
+/** `Promise.all` with at most `limit` in flight, in the order given. */
+async function mapLimit(list, limit, fn) {
+  const out = new Array(list.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, list.length) }, async () => {
+    while (next < list.length) {
+      const index = next++;
+      out[index] = await fn(list[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
 
 function readdir(dir) {
   try {

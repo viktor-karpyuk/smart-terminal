@@ -78,6 +78,41 @@ function findIn(dir) {
   return found;
 }
 
+/**
+ * Which of several names git ignores in one checkout, asked in one process.
+ *
+ * One `check-ignore` per folder is one process per folder; across two hundred
+ * worktrees that is a thousand processes to open a panel. Fed through stdin it
+ * is one per checkout. The answer is remembered against the mtime of the
+ * checkout's `.gitignore`, which is the file that would change it.
+ */
+const ignoredMemo = new Map();
+async function ignoredIn(checkout, names) {
+  if (!names.length) return new Set();
+  const stamp = `${mtimeOf(path.join(checkout, '.gitignore'))}:${names.join(',')}`;
+  const kept = ignoredMemo.get(checkout);
+  if (kept && kept.stamp === stamp) return kept.ignored;
+  const ignored = await new Promise((resolve) => {
+    const child = execFile('git', ['check-ignore', '-z', '--stdin'], { cwd: checkout, timeout: 10_000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+      // Exit 1 means "none of them"; anything above is git refusing, and nothing is claimed ignored.
+      if (error && error.code !== 1) return resolve(new Set());
+      resolve(new Set(String(stdout ?? '').split('\0').filter(Boolean)));
+    });
+    child.stdin.on('error', () => {});
+    child.stdin.end(names.join('\0') + '\0');
+  });
+  ignoredMemo.set(checkout, { stamp, ignored });
+  return ignored;
+}
+
+function mtimeOf(file) {
+  try {
+    return Math.floor(fs.statSync(file).mtimeMs);
+  } catch {
+    return 0;
+  }
+}
+
 /** Whether git ignores the folder — the proof that it is a cache and not something committed under a cache's name. */
 async function ignoredByGit(folder) {
   const dir = path.dirname(folder);
@@ -147,4 +182,4 @@ async function sweep(dirs, { remove = removeLater } = {}) {
   return found;
 }
 
-module.exports = { KNOWN, TRASH, isCheckout, findIn, ignoredByGit, discard, pendingTrash, sweep, removeLater };
+module.exports = { KNOWN, TRASH, isCheckout, findIn, ignoredByGit, ignoredIn, discard, pendingTrash, sweep, removeLater };

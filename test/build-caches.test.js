@@ -38,6 +38,20 @@ test('findIn lists the known cache folders present, in the order they are shown'
   assert.ok(!caches.isCheckout(path.join(dir, 'src')));
 });
 
+test('ignoredIn answers for many names in one process and remembers against .gitignore', async () => {
+  const dir = repo();
+  const first = await caches.ignoredIn(dir, ['node_modules', '.angular', 'dist']);
+  assert.deepEqual([...first].sort(), ['.angular', 'node_modules']);
+  fs.writeFileSync(path.join(dir, '.gitignore'), 'node_modules\n.angular\ndist\n');
+  const future = new Date(Date.now() + 5000);
+  fs.utimesSync(path.join(dir, '.gitignore'), future, future);
+  const second = await caches.ignoredIn(dir, ['node_modules', '.angular', 'dist']);
+  assert.deepEqual([...second].sort(), ['.angular', 'dist', 'node_modules']);
+  const loose = fs.mkdtempSync(path.join(os.tmpdir(), 'st-loose-'));
+  made.push(loose);
+  assert.deepEqual([...(await caches.ignoredIn(loose, ['dist']))], [], 'a folder that is not a checkout ignores nothing');
+});
+
 test('a cache git ignores is renamed aside and deleted after; one git does not ignore is left alone', async () => {
   const dir = repo();
   const removed = [];

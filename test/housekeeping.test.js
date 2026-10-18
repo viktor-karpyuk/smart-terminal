@@ -68,6 +68,8 @@ function world() {
   fs.mkdirSync(checkout, { recursive: true });
   execFileSync('git', ['init', '-q', checkout]);
   fs.writeFileSync(path.join(checkout, '.gitignore'), 'node_modules\n');
+  fs.mkdirSync(path.join(checkout, 'dist'));
+  fs.writeFileSync(path.join(checkout, 'dist', 'kept.js'), 'shipped');
   fs.mkdirSync(path.join(checkout, 'node_modules'));
   fs.writeFileSync(path.join(checkout, 'node_modules', 'x.js'), 'q'.repeat(700));
 
@@ -91,15 +93,17 @@ test('the inventory lists sessions, caches and the folders beside the database, 
     assert.equal(old.bytes, 350, 'transcript plus the saved copy');
     assert.equal(old.blockers.length, 0);
 
-    const cache = first.items.find((one) => one.kind === 'build-cache');
+    const cache = first.items.find((one) => one.kind === 'build-cache' && one.meta.name === 'node_modules');
     assert.equal(cache.meta.sized, false, 'not walked yet');
+    const dist = first.items.find((one) => one.kind === 'build-cache' && one.meta.name === 'dist');
+    assert.deepEqual(dist.blockers, ['not ignored by git, so it may be committed work']);
     assert.ok(first.unsized.includes(cache.path));
 
     const measured = await hk.measure([...first.unsized, old.path]);
     assert.equal(measured[cache.path], 700);
     assert.equal(measured[old.path], undefined, 'a session\'s working folder is never walked');
     const second = await hk.inventory();
-    assert.equal(second.items.find((one) => one.kind === 'build-cache').bytes, 700);
+    assert.equal(second.items.find((one) => one.meta?.name === 'node_modules').bytes, 700);
     assert.equal(second.items.find((one) => one.kind === 'install-backup').bytes, 4096);
     assert.equal(second.totals.all.reversibleBytes, 700 + 4096 + 2048 + 100 + 200 + 10 + 777);
 
