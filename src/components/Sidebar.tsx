@@ -1698,6 +1698,7 @@ function ClusterMenu({
  */
 function MonitorList() {
   const collapsed = useStore((s) => s.settings.sidebarMonitorCollapsed);
+  const housekeepingStatus = useStore((s) => s.housekeepingStatus);
   const updateSettings = useStore((s) => s.updateSettings);
   const ids = useStore(
     useShallow((s) =>
@@ -1725,7 +1726,7 @@ function MonitorList() {
           extra={
             <>
               <button
-                className="section-open"
+                className={`section-open housekeeping-dot is-${housekeepingStatus}`}
                 title="Housekeeping: what is on disk, and giving it back"
                 aria-label="Open housekeeping"
                 onClick={(event) => {

@@ -7,7 +7,9 @@
  * through for worktrees and build caches, beyond the ones the app finds on its
  * own. `hk_size`: the last measurement of each path, so the panel opens on
  * numbers rather than on a wait. `hk_log`: what was removed, when, and how much
- * it gave back — the panel's answer to "what did that just do".
+ * it gave back — the panel's answer to "what did that just do". `hk_reading`:
+ * the monitor's measurements, a month of them, for the trend. `hk_setting`:
+ * thresholds and budgets the person changed, and what was already said.
  */
 
 const MIGRATIONS = [
@@ -33,6 +35,16 @@ const MIGRATIONS = [
      detail TEXT
    );
    CREATE INDEX IF NOT EXISTS hk_log_at ON hk_log (at DESC);`,
+  `CREATE TABLE IF NOT EXISTS hk_reading (
+     at     INTEGER NOT NULL,
+     metric TEXT NOT NULL,
+     value  REAL NOT NULL
+   );
+   CREATE INDEX IF NOT EXISTS hk_reading_metric_at ON hk_reading (metric, at);
+   CREATE TABLE IF NOT EXISTS hk_setting (
+     key   TEXT PRIMARY KEY,
+     value TEXT
+   );`,
 ];
 
 class HousekeepingStore {
@@ -117,6 +129,65 @@ class HousekeepingStore {
   /** Keep the log from growing without bound: a year is more than anybody reads back. */
   trimLog({ keepDays = 365 } = {}) {
     return this.db.prepare('DELETE FROM hk_log WHERE at < ?').run(Date.now() - keepDays * 86_400_000).changes;
+  }
+
+  // --- readings ---------------------------------------------------------------
+
+  recordReading(metric, value, at = Date.now()) {
+    this.db.prepare('INSERT INTO hk_reading (at, metric, value) VALUES (?, ?, ?)').run(at, metric, Number(value));
+  }
+
+  /** A tick's readings in one transaction: ten inserts are one write to the log, not ten. */
+  recordReadings(rows, at = Date.now()) {
+    const insert = this.db.prepare('INSERT INTO hk_reading (at, metric, value) VALUES (?, ?, ?)');
+    this.db.exec('BEGIN');
+    try {
+      for (const [metric, value] of rows) insert.run(at, metric, Number(value));
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  /** One metric's readings since a time, oldest first. */
+  readings(metric, since = 0) {
+    return this.db.prepare('SELECT at, value FROM hk_reading WHERE metric = ? AND at >= ? ORDER BY at').all(metric, since);
+  }
+
+  /** A month of readings is enough for a trend; a minute's worth a day for a year is not worth keeping. */
+  trimReadings({ keepDays = 30 } = {}) {
+    return this.db.prepare('DELETE FROM hk_reading WHERE at < ?').run(Date.now() - keepDays * 86_400_000).changes;
+  }
+
+  // --- settings ---------------------------------------------------------------
+
+  settings() {
+    const out = {};
+    for (const row of this.db.prepare('SELECT key, value FROM hk_setting').all()) {
+      try {
+        out[row.key] = row.value === null ? null : JSON.parse(row.value);
+      } catch {
+        out[row.key] = null;
+      }
+    }
+    return out;
+  }
+
+  setting(key) {
+    const row = this.db.prepare('SELECT value FROM hk_setting WHERE key = ?').get(key);
+    if (!row) return undefined;
+    try {
+      return row.value === null ? null : JSON.parse(row.value);
+    } catch {
+      return null;
+    }
+  }
+
+  setSetting(key, value) {
+    this.db
+      .prepare('INSERT INTO hk_setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+      .run(key, value === undefined ? null : JSON.stringify(value));
   }
 }
 

@@ -79,9 +79,9 @@ function world() {
 
   const forgotten = [];
   const context = { trackedIds: () => ['live'], forget: (id) => forgotten.push(id), setRecording: () => {} };
-  const hk = new Housekeeping({ db, store, sizes, userData, context, live: () => [], now: () => NOW, review: null, browser: { size: async () => 777, clear: async () => {} } });
+  const hk = new Housekeeping({ db, store, sizes, userData, context, live: () => [], now: () => NOW, review: null, fetch: false, browser: { size: async () => 777, clear: async () => {} } });
   hk.addRoot(roots);
-  return { hk, db, sizes, userData, home, checkout, forgotten };
+  return { hk, db, sizes, userData, home, checkout: fs.realpathSync(checkout), forgotten };
 }
 
 test('the inventory lists sessions, caches and the folders beside the database, with blockers where they belong', { skip }, async () => {
@@ -218,6 +218,39 @@ test('sweep finishes old removals, forgets sizes of folders that are gone, and t
     assert.ok(!fs.existsSync(path.join(checkout, 'target.trash-1')));
     assert.equal(sizes.known(path.join(checkout, 'vanished')), null);
     assert.ok(hk.log().every((row) => row.label !== 'ancient'));
+  } finally {
+    sizes.stop();
+  }
+});
+
+test('worktrees of a checkout under a root are items, their caches are nested, and removing one goes through git', { skip }, async () => {
+  const { hk, sizes, checkout } = world();
+  try {
+    const sh = (cwd, args) => execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd, stdio: 'pipe' });
+    fs.writeFileSync(path.join(checkout, 'README'), 'hi');
+    sh(checkout, ['add', '-A']);
+    sh(checkout, ['commit', '-q', '-m', 'init']);
+    const wt = path.join(path.dirname(checkout), 'app-task');
+    sh(checkout, ['worktree', 'add', '-q', '-b', 'task', wt]);
+    fs.mkdirSync(path.join(wt, 'node_modules'));
+    fs.writeFileSync(path.join(wt, 'node_modules', 'y.js'), 'q'.repeat(50));
+
+    const inv = await hk.inventory();
+    const tree = inv.items.find((one) => one.kind === 'worktree');
+    assert.ok(tree, 'the worktree is listed');
+    assert.equal(tree.label, 'app/app-task');
+    assert.deepEqual(tree.blockers, [], 'no commit of its own, clean: nothing to lose');
+    const nested = inv.items.find((one) => one.kind === 'build-cache' && one.meta.checkout === fs.realpathSync(wt));
+    assert.equal(nested?.meta.nested, true, 'a cache inside a listed worktree is counted once');
+    assert.ok(inv.unsized.includes(tree.path));
+    await hk.measure([tree.path]);
+    const sized = (await hk.inventory()).items.find((one) => one.kind === 'worktree');
+    assert.ok(sized.bytes >= 50);
+
+    const out = await hk.removeWorktrees([tree.id]);
+    assert.equal(out.results[0].ok, true);
+    assert.ok(!fs.existsSync(wt));
+    assert.ok(hk.log().some((row) => row.action === 'remove-worktree' && row.ok));
   } finally {
     sizes.stop();
   }

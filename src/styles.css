@@ -4111,3 +4111,20 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-sort.is-on, .housekeeping-sort:hover { color: var(--text); }
 .housekeeping-picked td { color: var(--text-faint); font-style: italic; background: var(--bg-input); }
 .link-btn { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }
+.housekeeping-strip { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 12px; border-radius: var(--r-md); margin-bottom: 12px; border: 1px solid var(--border); background: var(--bg-input); }
+.housekeeping-strip.is-attention { border-color: #c9a227; }
+.housekeeping-strip.is-limit { border-color: var(--danger, #d9534f); }
+.housekeeping .monitor-stat.is-attention { border-color: #c9a227; }
+.housekeeping .monitor-stat.is-limit { border-color: var(--danger, #d9534f); }
+.housekeeping-conditions { margin: 0 0 14px; padding-left: 18px; }
+.housekeeping-conditions li { margin-bottom: 6px; }
+.housekeeping-conditions li.is-limit strong { color: var(--danger, #d9534f); }
+.housekeeping-conditions li.is-attention strong { color: #c9a227; }
+.housekeeping-table tr.is-attention td:first-child { box-shadow: inset 3px 0 0 #c9a227; }
+.housekeeping-table tr.is-limit td:first-child { box-shadow: inset 3px 0 0 var(--danger, #d9534f); }
+.housekeeping-threshold { display: inline-flex; align-items: center; gap: 4px; }
+.housekeeping-threshold input { width: 64px; padding: 2px 6px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); font: inherit; }
+.housekeeping-why { display: block; max-width: 48ch; white-space: normal; color: var(--text-faint); }
+.housekeeping-dot { position: relative; }
+.housekeeping-dot.is-attention::after, .housekeeping-dot.is-limit::after { content: ''; position: absolute; top: 1px; right: 1px; width: 6px; height: 6px; border-radius: 50%; background: #c9a227; }
+.housekeeping-dot.is-limit::after { background: var(--danger, #d9534f); }

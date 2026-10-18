@@ -329,12 +329,20 @@ contextBridge.exposeInMainWorld('api', {
     deleteSessions: (ids) => ipcRenderer.invoke('housekeeping:delete-sessions', ids),
     forgetTranscripts: (ids) => ipcRenderer.invoke('housekeeping:forget-transcripts', ids),
     discardWorkshops: (ids) => ipcRenderer.invoke('housekeeping:discard-workshops', ids),
+    removeWorktrees: (ids) => ipcRenderer.invoke('housekeeping:remove-worktrees', ids),
     roots: () => ipcRenderer.invoke('housekeeping:roots'),
     addRoot: (folder) => ipcRenderer.invoke('housekeeping:add-root', folder),
     removeRoot: (folder) => ipcRenderer.invoke('housekeeping:remove-root', folder),
     log: (limit) => ipcRenderer.invoke('housekeeping:log', limit),
     // A size landed while measuring: the row can fill in.
     onSize: (handler) => on('housekeeping:size', handler),
+    /** The health job: readings against lines, and where things are heading. */
+    health: (fresh = false) => ipcRenderer.invoke('housekeeping:health', { fresh }),
+    setThreshold: (metric, level, value) => ipcRenderer.invoke('housekeeping:set-threshold', { metric, level, value }),
+    measureNow: () => ipcRenderer.invoke('housekeeping:measure-now'),
+    onHealth: (handler) => on('housekeeping:health', handler),
+    // A notification was clicked: show the panel.
+    onOpen: (handler) => on('housekeeping:open', handler),
   },
 
   onMenuAction: (handler) => on('menu:action', handler),

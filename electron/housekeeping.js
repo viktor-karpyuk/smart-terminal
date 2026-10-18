@@ -29,6 +29,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { item, totals, byWeight, formatBytes, KINDS } = require('./housekeeping-items');
 const caches = require('./build-caches');
+const { WorktreeInventory } = require('./worktree-inventory');
 const { fileSize } = require('./disk-usage');
 
 const DAY = 86_400_000;
@@ -46,9 +47,11 @@ class Housekeeping {
    * @param {object} [options.review] `{ workshops(): Promise<[]>, discard(repoId, prId) }`
    * @param {object} [options.browser] `{ size(): Promise<number>, clear(): Promise<void> }`
    * @param {() => string[]} [options.live] the folders live sessions are standing in
+   * @param {() => string[]} [options.repoFolders] repositories the app knows apart from the roots (the Code Reviewer's)
+   * @param {boolean} [options.fetch] let the worktree inventory fetch origin once in a while
    * @param {() => number} [options.now]
    */
-  constructor({ db, store, sizes, userData, context = null, review = null, browser = null, live = () => [], now = () => Date.now(), emit = () => {} }) {
+  constructor({ db, store, sizes, userData, context = null, review = null, browser = null, live = () => [], repoFolders = () => [], fetch = true, now = () => Date.now(), emit = () => {} }) {
     this.db = db;
     this.store = store;
     this.sizes = sizes;
@@ -61,6 +64,26 @@ class Housekeeping {
     this.emit = emit;
     /** The last inventory, so a removal asked for a moment later resolves its ids without reading the disk again. */
     this.last = null;
+    /** When a session was last active under a folder, from the database, rebuilt per inventory. */
+    this.#activity = [];
+    this.worktrees = new WorktreeInventory({
+      folders: () => [...(this.#checkouts ?? this.checkouts()), ...this.live(), ...(repoFolders() ?? [])].filter(Boolean),
+      live: () => this.live(),
+      sessionActivity: (dir) => this.#sessionActivityUnder(dir),
+      fetch,
+      now,
+    });
+  }
+
+  #activity = [];
+
+  /** The latest a session was active in or under a folder, or null. */
+  #sessionActivityUnder(dir) {
+    let latest = null;
+    for (const [cwd, at] of this.#activity) {
+      if (cwd === dir || cwd.startsWith(dir + path.sep)) latest = Math.max(latest ?? 0, at);
+    }
+    return latest;
   }
 
   // --- roots ------------------------------------------------------------------
@@ -71,8 +94,10 @@ class Housekeeping {
   }
 
   addRoot(folder) {
-    const resolved = path.resolve(String(folder || '').replace(/^~(?=$|\/)/, os.homedir()));
-    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) throw new Error(`${resolved} is not a folder.`);
+    const given = path.resolve(String(folder || '').replace(/^~(?=$|\/)/, os.homedir()));
+    if (!fs.existsSync(given) || !fs.statSync(given).isDirectory()) throw new Error(`${given} is not a folder.`);
+    // Kept as the filesystem spells it, so what is stored matches what git prints for the worktrees inside.
+    const resolved = fs.realpathSync(given);
     // The root of the disk or a home folder is not a folder of worktrees. Only their direct children would be looked at
     // anyway, and a cache found directly under one of them is somebody's, not a build's.
     if (resolved === path.parse(resolved).root || resolved === os.homedir()) throw new Error('Choose a folder of worktrees or a checkout, not the whole disk or your home folder.');
@@ -92,7 +117,16 @@ class Housekeeping {
    */
   checkouts() {
     const found = new Set();
-    for (const { path: root } of this.roots()) {
+    // As the filesystem spells them: git prints resolved paths, and a worktree listed by git must match a checkout listed here.
+    const real = (one) => {
+      try {
+        return fs.realpathSync(one);
+      } catch {
+        return one;
+      }
+    };
+    for (const { path: given } of this.roots()) {
+      const root = real(given);
       if (caches.isCheckout(root)) found.add(root);
       let entries = [];
       try {
@@ -116,9 +150,15 @@ class Housekeeping {
     // The checkouts are read once per inventory: three of the lists below want them, and a root of
     // two hundred worktrees is two hundred stats each time it is asked.
     this.#checkouts = this.checkouts();
+    const worktrees = await this.worktreeItems();
+    const inside = new Set(worktrees.map((one) => one.path));
+    const cacheItems = (await this.buildCacheItems()).map((one) =>
+      inside.has(one.meta?.checkout) ? { ...one, meta: { ...one.meta, nested: true } } : one,
+    );
     const items = [
       ...this.sessionItems(),
-      ...(await this.buildCacheItems()),
+      ...worktrees,
+      ...cacheItems,
       ...(await this.workshopItems()),
       ...this.appItems(),
       ...(await this.browserItems()),
@@ -169,13 +209,47 @@ class Housekeeping {
     const aside = new RegExp(`^${escapeRegExp(path.basename(this.userData))}[.-](backup|state)[-.]`);
     for (const name of readdir(parent)) if (aside.test(name) && isDir(path.join(parent, name))) out.push(path.join(parent, name));
     if (this.review?.dirs) for (const dir of this.review.dirs()) out.push(dir);
+    for (const one of this.last?.items ?? []) if (one.kind === 'worktree' && one.path) out.push(one.path);
     return out;
+  }
+
+  /**
+   * Every worktree of every repository the app knows, except each repository's
+   * main working tree: that one is never removable and its size is the repository's,
+   * not housekeeping's business.
+   */
+  async worktreeItems() {
+    let rows;
+    try {
+      rows = await this.worktrees.list();
+    } catch {
+      return [];
+    }
+    return rows
+      .filter((row) => !row.main)
+      .map((row) => {
+        const known = this.sizes.known(row.path);
+        return item({
+          id: `worktree:${row.path}`,
+          kind: 'worktree',
+          label: `${row.repo}/${row.label}`,
+          path: row.path,
+          bytes: known?.bytes ?? 0,
+          lastActivityAt: row.lastActivityAt,
+          state: row.state,
+          blockers: row.blockers,
+          detail: [row.branch ? `branch ${row.branch}` : null, row.upstream ? `tracks ${row.upstream}` : row.ownWork ? 'no upstream' : null].filter(Boolean).join(' · ') || null,
+          meta: { root: row.root, branch: row.branch, finished: row.finished, prunable: row.prunable, sized: Boolean(known) || row.prunable },
+        });
+      });
   }
 
   sessionItems() {
     const live = new Set(this.context?.trackedIds?.() ?? []);
     const snapshots = path.join(this.userData, 'context-snapshots');
-    return this.db.sessionFootprints().map((row) => {
+    const footprints = this.db.sessionFootprints();
+    this.#activity = footprints.flatMap((row) => [row.lastCwd, row.startCwd].filter(Boolean).map((cwd) => [cwd, row.lastActivityAt]));
+    return footprints.map((row) => {
       const snapshot = snapshotBytes(path.join(snapshots, row.id));
       const blockers = [];
       if (row.endedAt === null) blockers.push('still running');
@@ -496,6 +570,26 @@ class Housekeeping {
     return { count, bytes };
   }
 
+  /**
+   * Remove worktrees by item id. The inventory looks at each again now and refuses
+   * anything with a blocker; git refuses anything that changed since. A finished
+   * branch is deleted, an unfinished one keeps its commits.
+   */
+  async removeWorktrees(ids = []) {
+    const paths = ids.map((id) => String(id)).filter((id) => id.startsWith('worktree:')).map((id) => id.slice('worktree:'.length));
+    const results = await this.worktrees.remove(paths);
+    let freed = 0;
+    for (const one of results) {
+      const bytes = this.sizes.known(one.path)?.bytes ?? 0;
+      if (one.ok) {
+        freed += bytes;
+        this.sizes.forget(one.path);
+      }
+      this.store.log({ action: 'remove-worktree', kind: 'worktree', label: path.basename(one.path), bytes: one.ok ? bytes : 0, ok: one.ok, detail: one.ok ? (one.branchKept ? 'branch kept' : null) : one.error });
+    }
+    return { results: results.map((one) => ({ id: `worktree:${one.path}`, ok: one.ok, bytes: one.ok ? this.sizes.known(one.path)?.bytes ?? 0 : 0, error: one.error, note: one.branchKept ? 'branch kept' : undefined })), freed };
+  }
+
   /** Discard the Code Reviewer's clones for pull requests that are finished. The reviewer's own checks still apply. */
   async discardWorkshops(ids = []) {
     const results = [];
@@ -528,7 +622,8 @@ class Housekeeping {
     const swept = await caches.sweep(this.checkouts());
     const forgotten = this.sizes.pruneMissing?.() ?? 0;
     const trimmed = this.store.trimLog();
-    return { swept, forgotten, trimmed };
+    const readings = this.store.trimReadings?.() ?? 0;
+    return { swept, forgotten, trimmed, readings };
   }
 
   log(limit = 50) {

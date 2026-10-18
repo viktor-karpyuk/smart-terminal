@@ -14,11 +14,14 @@ const { accountsRoot, authStatus, ensureConfigDir, invalidateAuthCache, suggestC
 const { JsonStore } = require('./store');
 const { Database } = require('./database');
 const { buildMenu } = require('./menu');
+const { WorktreeCleanup } = require('./worktree-cleanup');
+const { createOffer } = require('./worktree-offer');
 const { CwdWatcher, worthRemembering } = require('./cwd-watcher');
 const { ContextStore, transcriptPath, locateTranscript, readTurnState } = require('./context-store');
 const { Housekeeping } = require('./housekeeping');
 const { HousekeepingStore } = require('./housekeeping-store');
 const { DiskUsage } = require('./disk-usage');
+const { HousekeepingMonitor } = require('./housekeeping-monitor');
 const rules = require('./review-rules');
 const { SessionMonitor } = require('./session-monitor');
 const { summarise, oneLine } = require('./session-analysis');
@@ -227,6 +230,10 @@ let reviewService = null;
 /** What the app and the work around it leave on disk, and giving it back — see housekeeping.js. */
 let housekeeping = null;
 let diskUsage = null;
+/** The health job: readings on a clock, said when they cross a line. */
+let housekeepingMonitor = null;
+let worktreeCleanup = null;
+let worktreeOffer = null;
 let teamsService = null;
 /** Jenkins: the credentials, the poller, and the verbs the panel may call. Its tables live in this app's own database. */
 let jenkinsService = null;
@@ -737,6 +744,31 @@ function friendlyFileError(error) {
   }
 }
 
+/**
+ * A finished task leaves its worktree behind, and the Code Reviewer its workshop. This finds them and asks before
+ * taking them away (see worktree-offer.js for the questions).
+ */
+function offerWorktreeCleanup(options) {
+  worktreeOffer ??= createOffer({
+    cleanup: (worktreeCleanup ??= new WorktreeCleanup({
+      folders: () => [
+        // Where each live session is standing right now, as the cwd watcher last saw it.
+        ...ptys.list().map((one) => cwdWatcher?.known?.get(one.id)?.cwd),
+        ...(reviewService?.store?.repos?.() ?? []).map((repo) => repo.localPath),
+      ].filter(Boolean),
+      workshops: async () => reviewService?.finishedWorkshops?.() ?? [],
+    })),
+    sessionsKnown: () => ptys.list().every((one) => cwdWatcher?.known?.get(one.id)?.cwd),
+    ask: async ({ message, detail, buttons }) => {
+      const owner = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined;
+      const answer = await dialog.showMessageBox(owner, { type: 'question', buttons, defaultId: buttons.length - 1, cancelId: buttons.length - 1, message, detail });
+      return answer.response;
+    },
+    tell: ({ type, message, detail }) => dialog.showMessageBox(BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined, { type, message, detail }),
+  });
+  return worktreeOffer.offer(options);
+}
+
 /** Menu commands act on the window in front. */
 function sendToFocused(channel, payload) {
   const win = BrowserWindow.getFocusedWindow() ?? [...windows.values()][0];
@@ -964,6 +996,8 @@ function createHousekeeping() {
     browser,
     // Where each live session is standing right now, as the cwd watcher last saw it.
     live: () => (ptys?.list() ?? []).map((one) => cwdWatcher?.known?.get(one.id)?.cwd).filter(Boolean),
+    // The Code Reviewer's repositories: their worktrees are listed too.
+    repoFolders: () => (reviewService?.store?.repos?.() ?? []).map((repo) => repo.localPath).filter(Boolean),
     emit: (name, payload) => send(`housekeeping:${name}`, payload),
   });
 }
@@ -1305,10 +1339,23 @@ function registerIpc() {
   ipcMain.handle('housekeeping:delete-sessions', (_e, ids = []) => housekeeping.deleteSessions(Array.isArray(ids) ? ids : []));
   ipcMain.handle('housekeeping:forget-transcripts', (_e, ids = []) => housekeeping.forgetTranscripts(Array.isArray(ids) ? ids : []));
   ipcMain.handle('housekeeping:discard-workshops', (_e, ids = []) => housekeeping.discardWorkshops(Array.isArray(ids) ? ids : []));
+  ipcMain.handle('housekeeping:remove-worktrees', (_e, ids = []) => housekeeping.removeWorktrees(Array.isArray(ids) ? ids : []));
   ipcMain.handle('housekeeping:roots', () => housekeeping.roots());
   ipcMain.handle('housekeeping:add-root', (_e, folder) => housekeeping.addRoot(String(folder ?? '')));
   ipcMain.handle('housekeeping:remove-root', (_e, folder) => housekeeping.removeRoot(String(folder ?? '')));
   ipcMain.handle('housekeeping:log', (_e, limit) => housekeeping.log(Number(limit) || 50));
+  ipcMain.handle('housekeeping:health', async (_e, { fresh = false } = {}) => {
+    if (fresh) await housekeepingMonitor?.tickSystem();
+    return housekeepingMonitor?.report() ?? null;
+  });
+  ipcMain.handle('housekeeping:set-threshold', (_e, { metric, level, value } = {}) => {
+    housekeepingMonitor?.setThreshold(String(metric), String(level), value);
+    return housekeepingMonitor?.report() ?? null;
+  });
+  ipcMain.handle('housekeeping:measure-now', async () => {
+    await housekeepingMonitor?.tickInventory();
+    return housekeepingMonitor?.report() ?? null;
+  });
 
   ipcMain.handle('db:health', (_e, { deep = false } = {}) => {
     const health = db.health({ deep });
@@ -2761,6 +2808,21 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   housekeeping = createHousekeeping();
   // Removals a previous run started and did not finish, finished now. Nothing new is removed.
   void housekeeping.sweep().catch(() => {});
+  housekeepingMonitor = new HousekeepingMonitor({
+    store: housekeeping.store,
+    housekeeping,
+    userData: app.getPath('userData'),
+    openSessions: () => ptys?.list().length ?? 0,
+    notify: ({ title, body, metric }) => {
+      if (!Notification.isSupported()) return;
+      const note = new Notification({ title, body });
+      // Clicking opens the panel on the tab the metric belongs to.
+      note.on('click', () => send('housekeeping:open', { metric }));
+      note.show();
+    },
+    emit: (name, payload) => send(`housekeeping:${name}`, payload),
+  });
+  housekeepingMonitor.start();
   // Watching how sessions behave is a separate job from keeping copies of them,
   // but it needs the same two things — where a transcript is, and which sessions
   // have one — so it is handed the store rather than working them out again.
@@ -2837,7 +2899,7 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   buildMenu(sendToFocused, () => createWindow(), () => {
     const found = db.lastClosedWindow([...windows.keys()]);
     if (found) createWindow(found.id, found.bounds);
-  });
+  }, () => offerWorktreeCleanup());
 
   // Bring back every window that was open, the way an editor does.
   const previous = db.openWindows();
@@ -2845,6 +2907,11 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   else createWindow();
   // After the windows: a review resumed from a previous launch must have somewhere to be seen.
   reviewService?.start();
+  // A minute after start, and then hourly: a finished task is noticed without anybody having to remember it.
+  if (app.isPackaged) {
+    setTimeout(() => offerWorktreeCleanup({ quiet: true }).catch(() => {}), 60_000).unref();
+    setInterval(() => offerWorktreeCleanup({ quiet: true }).catch(() => {}), 3_600_000).unref();
+  }
 
   app.on('activate', () => {
     // Not on the way out: the database is closed and a window would open onto nothing.
@@ -3522,6 +3589,7 @@ app.on('will-quit', () => {
   jenkinsService?.stop();
   teamsBot?.stop();
   diskUsage?.stop();
+  housekeepingMonitor?.stop();
   // A Gradle client asked for a task list is a JVM that would otherwise
   // outlive the app by up to three minutes.
   buildTools.stopAll();
