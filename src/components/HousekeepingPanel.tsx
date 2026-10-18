@@ -729,25 +729,68 @@ function WorktreeDoors({ item }: { item: HousekeepingItem }) {
   const openShell = () => {
     void useStore.getState().newSession({ kind: 'shell', cwd: item.path ?? undefined, title: `sh ${item.label.split('/').pop() ?? ''}`.slice(0, 28) });
   };
+  const [asking, setAsking] = useState(false);
+  /** A Claude session in the worktree, in a new tab, handed what is unmerged and asked to finish it. */
+  const askHere = async () => {
+    if (!item.path) return;
+    setAsking(true);
+    try {
+      const store = useStore.getState();
+      const brief = await window.api.housekeeping.worktreeBrief(item.path);
+      const { profiles, settings, authByProfile } = store;
+      const usual = profiles.find((p) => p.id === settings.defaultProfileId) ?? profiles[0];
+      const profileId = usual && authByProfile[usual.id]?.loggedIn !== false ? usual.id : (profiles.find((p) => authByProfile[p.id]?.loggedIn)?.id ?? usual?.id);
+      const sessionId = await store.newSession({ kind: 'claude', cwd: item.path, profileId, title: `finish ${item.label.split('/').pop() ?? ''}`.slice(0, 28) });
+      if (!sessionId) return;
+      store.focusSession(sessionId);
+      await window.api.analysis.handOver(sessionId, brief);
+    } finally {
+      setAsking(false);
+    }
+  };
+  const unfinished = item.meta?.work === 'unmerged' || item.meta?.dirty === true;
   return (
     <>
-      {session && (session.live || session.resumable) && (
+      {!item.meta?.prunable && !item.meta?.broken && (
         <button
-          className="ghost-btn tiny"
-          onClick={openSession}
-          title={
-            session.live
-              ? `Bring forward the session working here${session.title ? `: ${session.title}` : ''}`
-              : `Pick up the last session that worked here${session.title ? `: ${session.title}` : ''}${session.lastActivityAt ? ` (${describeIdle(session.lastActivityAt)} ago)` : ''}, on its conversation`
-          }
+          className={`housekeeping-icon${unfinished ? ' is-accent' : ''}${asking ? ' is-busy' : ''}`}
+          disabled={asking}
+          onClick={() => void askHere()}
+          aria-label="Ask Claude"
+          data-tip={unfinished ? 'Ask Claude to finish this' : 'Ask Claude here'}
         >
-          {session.live ? 'Go to session' : 'Pick up session'}
+          <BrainIcon />
         </button>
       )}
-      <button className="ghost-btn tiny" onClick={openShell} title={`A terminal in ${item.path}`}>
-        Terminal
+      {session && (session.live || session.resumable) && (
+        <button
+          className="housekeeping-icon"
+          onClick={openSession}
+          aria-label={session.live ? 'Go to session' : 'Pick up session'}
+          data-tip={session.live ? `Go to session${session.title ? ` · ${session.title}` : ''}` : `Pick up session${session.title ? ` · ${session.title}` : ''}`}
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            {session.live ? <path d="M2 7h9M7.5 3.5 11 7l-3.5 3.5" /> : <path d="M3 7a4 4 0 1 1 1.2 2.85M3 4.5V7h2.5" />}
+          </svg>
+        </button>
+      )}
+      <button className="housekeeping-icon" onClick={openShell} aria-label="Terminal here" data-tip="Terminal here">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M2.5 3.5 6 7l-3.5 3.5M7.5 10.5h4" />
+        </svg>
       </button>
     </>
+  );
+}
+
+/** Claude, as a small brain: the one door that thinks. */
+function BrainIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M5.6 2.2a1.9 1.9 0 0 0-2.3 1.6 1.8 1.8 0 0 0-1 2.6 1.8 1.8 0 0 0 .6 2.9 1.9 1.9 0 0 0 2.7 1.5V2.2Z" />
+      <path d="M8.4 2.2a1.9 1.9 0 0 1 2.3 1.6 1.8 1.8 0 0 1 1 2.6 1.8 1.8 0 0 1-.6 2.9 1.9 1.9 0 0 1-2.7 1.5V2.2Z" />
+      <path d="M5.6 5.2h-.9M8.4 5.2h.9M5.6 8.2H4.4M8.4 8.2h1.2" />
+    </svg>
   );
 }
 
@@ -1972,8 +2015,10 @@ function Table({
                 )}
                 {one.kind === 'worktree' && one.path && <WorktreeDoors item={one} />}
                 {one.path && one.kind !== 'browser-cache' && (
-                  <button className="ghost-btn tiny" title={`Show ${one.path} in the file manager`} onClick={() => window.api.files.reveal(one.path as string)}>
-                    Show
+                  <button className="housekeeping-icon" aria-label="Show in Finder" data-tip="Show in Finder" onClick={() => window.api.files.reveal(one.path as string)}>
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" aria-hidden>
+                      <path d="M1.8 3.6h3.6l1.1 1.3h5.7v5.5H1.8z" />
+                    </svg>
                   </button>
                 )}
               </td>

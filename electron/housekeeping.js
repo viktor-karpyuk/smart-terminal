@@ -82,9 +82,10 @@ class Housekeeping {
   /** The session that last worked in or under a folder — open, or one that can be picked up. */
   #sessionUnder(dir) {
     let best = null;
+    const target = realOf(dir);
     for (const row of this.#footprints) {
-      const cwd = row.lastCwd || row.startCwd;
-      if (!cwd || !(cwd === dir || cwd.startsWith(dir + path.sep))) continue;
+      const cwd = realOf(row.lastCwd || row.startCwd);
+      if (!cwd || !(cwd === target || cwd.startsWith(target + path.sep))) continue;
       const live = row.endedAt === null;
       const score = (live ? 1e15 : 0) + (row.lastActivityAt ?? 0);
       if (!best || score > best.score) best = { score, row };
@@ -747,6 +748,66 @@ class Housekeeping {
     return out;
   }
 
+  /**
+   * What a Claude session opened in a worktree is told: where it stands, what
+   * is unmerged or uncommitted, and the ask — finish it or say why not. Facts
+   * from git and the inventory, then the question; nothing runs.
+   */
+  async worktreeBrief(target) {
+    const rows = await this.worktrees.list();
+    const row = rows.find((one) => one.path === target || one.path === realOf(target));
+    if (!row) throw new Error('That is not a worktree the app knows; look again.');
+    const git = (args) =>
+      new Promise((resolve) => {
+        require('node:child_process').execFile('git', args, { cwd: row.path, timeout: 15_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => resolve(error ? '' : String(stdout ?? '').trim()));
+      });
+    let bases = await this.worktrees.helper.basesOf(row.root);
+    // A repository with no origin still has a trunk: the local base branches, when origin/* is not there.
+    if (!bases.length) {
+      for (const name of ['develop', 'main', 'master', 'trunk']) {
+        if (await git(['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])) bases.push(name);
+      }
+    }
+    let base = null;
+    let least = Infinity;
+    for (const candidate of bases) {
+      const count = Number(await git(['rev-list', '--count', `${candidate}..${row.head}`]));
+      if (Number.isFinite(count) && count < least) {
+        least = count;
+        base = candidate;
+      }
+    }
+    const commits = base ? await git(['log', '--oneline', '--no-decorate', '-25', `${base}..HEAD`]) : '';
+    const status = await git(['status', '--short']);
+    const lines = [];
+    lines.push(`# Worktree ${row.label} (${row.repo})`);
+    lines.push('');
+    lines.push(`- Path: ${row.path}`);
+    lines.push(`- Branch: ${row.branch ?? '(detached)'}${row.upstream ? `, tracks ${row.upstream}` : row.ownWork ? ', no upstream (never pushed)' : ''}`);
+    lines.push(`- State: ${row.state}${row.finished ? ' (its work is already on a base branch)' : ''}`);
+    if (base) lines.push(`- Nearest base: ${base}, ${least} commit${least === 1 ? '' : 's'} ahead`);
+    if (row.dirtyCount) lines.push(`- Uncommitted: ${row.dirtyCount} file${row.dirtyCount === 1 ? '' : 's'}`);
+    if (row.lastCommitAt) lines.push(`- Last commit: ${new Date(row.lastCommitAt).toISOString().slice(0, 10)}`);
+    if (commits) {
+      lines.push('');
+      lines.push(`## Commits not on ${base}`);
+      for (const line of commits.split('\n')) lines.push(`- ${line}`);
+    }
+    if (status) {
+      lines.push('');
+      lines.push('## Uncommitted changes (git status --short)');
+      for (const line of status.split('\n').slice(0, 30)) lines.push(`    ${line}`);
+    }
+    lines.push('');
+    lines.push('## Ask');
+    lines.push(
+      row.finished
+        ? 'This worktree\'s work is already merged. Check nothing uncommitted here still matters; if it does not, say so plainly and I will remove the worktree from Housekeeping. Do not remove it yourself.'
+        : 'Finish this worktree\'s work. Read the commits and the uncommitted changes, run the tests if they are cheap, then either: commit what is worth committing, push the branch (set its upstream if it has none) and open a pull request against the nearest base with a clear description; or, if this work should be dropped, say so and why. Do not remove or force-reset the worktree; Housekeeping does that once you report.',
+    );
+    return lines.join('\n');
+  }
+
   /** Discard the Code Reviewer's clones for pull requests that are finished. The reviewer's own checks still apply. */
   async discardWorkshops(ids = []) {
     const results = [];
@@ -791,6 +852,23 @@ class Housekeeping {
 }
 
 // --- small helpers -----------------------------------------------------------
+
+/** A path as the filesystem spells it, or as given when it is not there; cached, since the same folder is asked hundreds of times per inventory. */
+const realCache = new Map();
+function realOf(target) {
+  if (!target) return target;
+  const kept = realCache.get(target);
+  if (kept) return kept;
+  let real = target;
+  try {
+    real = fs.realpathSync(target);
+  } catch {
+    /* as given */
+  }
+  if (realCache.size > 5000) realCache.clear();
+  realCache.set(target, real);
+  return real;
+}
 
 /** `Promise.all` with at most `limit` in flight, in the order given. */
 async function mapLimit(list, limit, fn) {

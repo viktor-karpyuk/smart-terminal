@@ -252,8 +252,24 @@ test('worktrees of a checkout under a root are items, their caches are nested, a
     const sized = (await hk.inventory()).items.find((one) => one.kind === 'worktree');
     assert.ok(sized.bytes >= 50);
 
+    // A second worktree with a commit of its own and a change not committed: what the brief must name.
+    const wb = path.join(path.dirname(checkout), 'app-brief');
+    sh(checkout, ['worktree', 'add', '-q', '-b', 'brief', wb]);
+    fs.writeFileSync(path.join(wb, 'work.txt'), 'w');
+    sh(wb, ['add', '-A']);
+    sh(wb, ['commit', '-q', '-m', 'task: first step']);
+    fs.writeFileSync(path.join(wb, 'draft.txt'), 'd');
+    const brief = await hk.worktreeBrief(wb);
+    assert.match(brief, /# Worktree app-brief \(app\)/);
+    assert.match(brief, /Nearest base: main, 1 commit ahead/);
+    assert.match(brief, /Branch: brief/);
+    assert.match(brief, /task: first step/);
+    assert.match(brief, /\?\? draft\.txt/);
+    assert.match(brief, /## Ask/);
+    assert.match(brief, /open a pull request/);
+
     const out = await hk.removeWorktrees([tree.id]);
-    assert.equal(out.results[0].ok, true);
+    assert.equal(out.results[0].ok, true, JSON.stringify(out.results[0]));
     assert.ok(!fs.existsSync(wt));
     assert.ok(hk.log().some((row) => row.action === 'remove-worktree' && row.ok));
   } finally {

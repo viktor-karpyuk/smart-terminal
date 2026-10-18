@@ -146,6 +146,14 @@ that run; the switch under Worktrees turns the offer off. **Housekeeping ›
 Check This Session's Worktree…** asks the same of the session in front, with
 an answer even when there is nothing to do.
 
+**Finish it instead** — each worktree row has **Ask Claude here**: a Claude
+session opens in a new tab standing in the worktree and is handed its branch,
+the commits no base branch has (with their messages), the uncommitted files
+and the ask — commit what is worth it, push, open a pull request against the
+nearest base, or say why the work should be dropped; never remove the
+worktree itself. *Go to session* and *Pick up session* appear when a recorded
+session worked in the folder; *Terminal* opens a shell there.
+
 **Remove anyway** — a worktree blocked only by the work inside it (files not
 committed, commits on no base branch, ignored files, a detached head) can be
 ticked one by one — the tick is amber, and "select all" never includes it —
@@ -211,6 +219,12 @@ Settings › Memory:
   paused by the cap. The cap is also the health job's attention line for open
   sessions, so crossing it is said. What the cap or the policy paused, the
   policy resumes on restore; what you paused waits for you.
+
+**Pausing several at once.** The pause button in the sidebar's Sessions
+header turns the list into a picker: rows take a checkbox, a bar offers *all
+running* or *all paused*, then *Pause n* or *Resume n*, and *Done*. A paused
+session wears a small tag in the list. Each pause keeps the conversation and
+gives the process back; each resume picks the conversation up.
 
 The title bar shows **SESSIONS n (k active) · memory**: how many Claude
 sessions are running, how many of those are on screen, and the resident memory
