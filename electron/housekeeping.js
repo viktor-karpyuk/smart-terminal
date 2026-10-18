@@ -32,6 +32,8 @@ const caches = require('./build-caches');
 const { fileSize } = require('./disk-usage');
 
 const DAY = 86_400_000;
+/** How long the last inventory is trusted to resolve ids for a removal. */
+const LAST_INVENTORY_MS = 10 * 60_000;
 
 class Housekeeping {
   /**
@@ -57,7 +59,8 @@ class Housekeeping {
     this.live = live;
     this.now = now;
     this.emit = emit;
-    this.measuring = null;
+    /** The last inventory, so a removal asked for a moment later resolves its ids without reading the disk again. */
+    this.last = null;
   }
 
   // --- roots ------------------------------------------------------------------
@@ -118,6 +121,7 @@ class Housekeeping {
       ...(await this.browserItems()),
     ];
     const sized = items.filter((one) => one.meta?.sized === false).map((one) => one.path);
+    this.last = { items, at: this.now() };
     return {
       items: byWeight(items, this.now()),
       totals: totals(items),
@@ -344,7 +348,7 @@ class Housekeeping {
    * reversible is refused rather than quietly done.
    */
   async free(ids = []) {
-    const current = await this.inventory();
+    const current = this.last && this.now() - this.last.at < LAST_INVENTORY_MS ? this.last : await this.inventory();
     const byId = new Map(current.items.map((one) => [one.id, one]));
     const results = [];
     let freed = 0;
@@ -359,6 +363,7 @@ class Housekeeping {
         continue;
       }
       try {
+        this.#guard(one);
         await this.#freeOne(one);
         freed += one.bytes;
         this.store.log({ action: 'free', kind: one.kind, label: one.label, bytes: one.bytes, ok: true });
@@ -370,6 +375,42 @@ class Housekeeping {
       }
     }
     return { results, freed };
+  }
+
+  /**
+   * Before anything is removed, its path is checked against where its kind lives.
+   *
+   * The ids come from the window, and the window is trusted — but an id made
+   * from a path is still a path, and the cheapest defence against a mistake
+   * anywhere upstream is to refuse to delete a database backup that is not
+   * beside the database, or a copied data folder that is not beside this one.
+   */
+  #guard(one) {
+    const target = one.path ? path.resolve(one.path) : null;
+    const under = (parent) => target && (target === parent || target.startsWith(parent + path.sep));
+    const userData = path.resolve(this.userData);
+    switch (one.kind) {
+      case 'build-cache':
+      case 'trash': {
+        const checkouts = this.#checkouts ?? this.checkouts();
+        if (!checkouts.some((checkout) => target && path.dirname(target) === path.resolve(checkout))) throw new Error(`${one.label} is not directly inside a checkout this app looks through.`);
+        return;
+      }
+      case 'db-backup':
+        if (!target || path.dirname(target) !== userData || !path.basename(target).startsWith('smart-terminal.db.backup')) throw new Error(`${one.label} is not a database backup beside the database.`);
+        return;
+      case 'install-backup':
+        if (!target || path.dirname(target) !== path.dirname(userData) || target === userData) throw new Error(`${one.label} is not a copy of the data folder beside this one.`);
+        return;
+      case 'installer':
+        if (!under(path.join(userData, 'updates'))) throw new Error(`${one.label} is not in the updates folder.`);
+        return;
+      case 'pasted':
+        if (target !== path.join(userData, 'pasted')) throw new Error('Not the pasted-images folder.');
+        return;
+      default:
+        return;
+    }
   }
 
   async #freeOne(one) {

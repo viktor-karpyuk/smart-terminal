@@ -138,6 +138,26 @@ test('free removes only the reversible, renames a cache aside, and writes the lo
   }
 });
 
+test('free refuses a path that is not where its kind lives, even with a well-formed id', { skip }, async () => {
+  const { hk, sizes, home } = world();
+  try {
+    await hk.inventory();
+    const stray = path.join(home, 'elsewhere');
+    fs.mkdirSync(stray);
+    fs.writeFileSync(path.join(stray, 'x'), '1');
+    // Forge items into the last inventory as a window gone wrong might.
+    hk.last.items.push({ id: 'dbbackup:stray', kind: 'db-backup', reversible: true, label: 'stray', path: path.join(stray, 'smart-terminal.db.backup-9'), bytes: 1, blockers: [] });
+    hk.last.items.push({ id: 'cache:stray', kind: 'build-cache', reversible: true, label: 'stray', path: path.join(stray, 'node_modules'), bytes: 1, blockers: [] });
+    hk.last.items.push({ id: 'installbackup:self', kind: 'install-backup', reversible: true, label: 'self', path: hk.userData, bytes: 1, blockers: [] });
+    const { results } = await hk.free(['dbbackup:stray', 'cache:stray', 'installbackup:self']);
+    assert.deepEqual(results.map((one) => one.ok), [false, false, false]);
+    assert.ok(fs.existsSync(hk.userData), 'the data folder itself is never a candidate');
+    assert.ok(fs.existsSync(path.join(stray, 'x')));
+  } finally {
+    sizes.stop();
+  }
+});
+
 test('deleting sessions takes rows and saved copies together and skips the one still running', { skip }, async () => {
   const { hk, db, sizes, userData, forgotten } = world();
   try {
