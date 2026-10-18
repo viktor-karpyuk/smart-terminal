@@ -293,16 +293,19 @@ export function HousekeepingPanel() {
 
   /** The row's own button: the same modal, for this one item. */
   const quickRow = (one: HousekeepingItem) => {
+    const forced = one.kind === 'worktree' && one.blockers.length > 0 && one.meta?.forceable === true;
     const kind: HousekeepingJobKind | null =
-      one.kind === 'session' ? 'forget-transcripts' : one.kind === 'worktree' ? (one.meta?.broken ? 'repair-worktrees' : 'remove-worktrees') : one.kind === 'workshop' ? 'discard-workshops' : one.reversible ? 'free' : null;
+      one.kind === 'session' ? 'forget-transcripts' : one.kind === 'worktree' ? (one.meta?.broken ? 'repair-worktrees' : forced ? 'remove-worktrees-forced' : 'remove-worktrees') : one.kind === 'workshop' ? 'discard-workshops' : one.reversible ? 'free' : null;
     if (!kind) return;
-    const verb = kind === 'forget-transcripts' ? 'Forget the conversation of' : kind === 'repair-worktrees' ? 'Repair' : kind === 'remove-worktrees' ? 'Remove' : kind === 'discard-workshops' ? 'Discard' : 'Remove';
+    const verb = kind === 'forget-transcripts' ? 'Forget the conversation of' : kind === 'repair-worktrees' ? 'Repair' : kind === 'remove-worktrees-forced' ? 'Remove anyway' : kind === 'remove-worktrees' ? 'Remove' : kind === 'discard-workshops' ? 'Discard' : 'Remove';
     const danger = kind !== 'free' && kind !== 'repair-worktrees';
     setPending({
       key: `row:${one.id}`,
       title: `${verb} ${one.label}`,
       detail:
-        kind === 'remove-worktrees'
+        kind === 'remove-worktrees-forced'
+          ? 'git worktree remove --force: the uncommitted work inside is thrown away. Commits stay on their branch, which is kept. There is no undo.'
+          : kind === 'remove-worktrees'
           ? 'git worktree remove, never forced. A merged branch is deleted; an unmerged one keeps its commits.'
           : kind === 'forget-transcripts'
             ? 'The kept conversation and its saved copy go; the record of the session stays in History.'
@@ -788,6 +791,8 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
   const broken = items.filter((one) => one.kind === 'worktree' && one.meta?.broken);
   const allTrees = items.filter((one) => one.kind === 'worktree');
   const pickedTrees = chosen(trees);
+  /** The blocked ones the person ticked on purpose: old worktrees whose work no longer matters. */
+  const pickedForced = trees.filter((one) => selected.has(one.id) && one.blockers.length > 0 && one.meta?.forceable === true && !inFlight.has(one.id));
   const finished = allTrees.filter((one) => one.meta?.finished && one.blockers.length === 0);
 
   const addRoot = async () => {
@@ -869,7 +874,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
           {trees.length} of {allTrees.length} worktree{allTrees.length === 1 ? '' : 's'}, {formatBytes(weigh(trees))} · {finished.length} finished and clear
         </span>
       </div>
-      <Table rows={trees} selected={selected} toggle={toggle} selectAll={selectAll} empty={allTrees.length ? 'No worktree matches. Lower the days or untick finished only.' : 'No worktrees found. Add the folder they live in above.'} quick={{ label: 'Remove', run: quickRow }} inFlight={inFlight} />
+      <Table rows={trees} selected={selected} toggle={toggle} selectAll={selectAll} empty={allTrees.length ? 'No worktree matches. Lower the days or untick finished only.' : 'No worktrees found. Add the folder they live in above.'} quick={{ label: 'Remove', run: quickRow }} inFlight={inFlight} allowForce />
       <div className="storage-actions">
         {confirm(
           'trees',
@@ -880,6 +885,16 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
           pickedTrees.length === 0,
           pickedTrees,
         )}
+        {pickedForced.length > 0 &&
+          confirm(
+            'trees-forced',
+            `Remove ${pickedForced.length} anyway, discarding ${pickedForced.length === 1 ? 'its' : 'their'} work (${formatBytes(weigh(pickedForced))})`,
+            'These have changes not committed, commits on no base branch, or ignored files. git worktree remove --force throws the uncommitted work away; commits stay on their branch, which is kept. There is no undo.',
+            () => startJob('remove-worktrees-forced', pickedForced, `Remove ${pickedForced.length} worktree${pickedForced.length === 1 ? '' : 's'} anyway, discarding work`),
+            true,
+            false,
+            pickedForced,
+          )}
         {broken.length > 0 &&
           confirm(
             'repair',
@@ -1313,7 +1328,8 @@ interface PendingAction {
  */
 function ConfirmModal({ pending, busy, onCancel, onConfirm }: { pending: PendingAction; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
   const bytes = weigh(pending.items);
-  const blocked = pending.items.filter((one) => one.blockers.length);
+  const forcedKind = pending.key.includes('forced') || /anyway/i.test(pending.title);
+  const blocked = forcedKind ? pending.items.filter((one) => one.blockers.length && one.meta?.forceable !== true) : pending.items.filter((one) => one.blockers.length);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onCancel();
@@ -1347,7 +1363,11 @@ function ConfirmModal({ pending, busy, onCancel, onConfirm }: { pending: Pending
                     <span className="housekeeping-confirm-state">
                       {one.kind === 'worktree' && typeof one.meta?.work === 'string' ? <span className={`housekeeping-work is-${String(one.meta.work)}`}>{String(one.meta.work)}</span> : null}
                       {one.state ?? KIND_LABEL[one.kind]}
-                      {one.blockers.length ? <small> · {one.blockers.join(', ')}</small> : null}
+                      {Array.isArray(one.meta?.loses) && (one.meta.loses as string[]).length ? (
+                        <small className="is-lost"> · loses {(one.meta.loses as string[]).join(', ')}</small>
+                      ) : one.blockers.length ? (
+                        <small> · {one.blockers.join(', ')}</small>
+                      ) : null}
                     </span>
                     <span className="housekeeping-confirm-size">{one.meta?.sized === false ? '…' : formatBytes(one.bytes)}</span>
                   </li>
@@ -1550,6 +1570,7 @@ function Table({
   empty,
   quick,
   inFlight,
+  allowForce = false,
 }: {
   rows: HousekeepingItem[];
   selected: Set<string>;
@@ -1559,6 +1580,8 @@ function Table({
   /** The row's own button: selects the row alone and arms the list's confirm. */
   quick?: { label: string; run: (one: HousekeepingItem) => void };
   inFlight?: Map<string, 'removing' | 'queued' | 'paused'>;
+  /** Blocked rows whose blockers are only the work inside may be ticked one by one, for a removal that says so. */
+  allowForce?: boolean;
 }) {
   const [sort, setSort] = useState<'size' | 'idle' | 'name'>('size');
   if (!rows.length) return <p className="empty-state">{empty}</p>;
@@ -1609,7 +1632,15 @@ function Table({
                 {working ? (
                   <span className={`housekeeping-spinner${working === 'removing' ? ' is-live' : ''}`} aria-label={working} />
                 ) : (
-                  <input type="checkbox" checked={selected.has(one.id)} disabled={blocked} onChange={() => toggle(one.id)} aria-label={`select ${one.label}`} />
+                  <input
+                    type="checkbox"
+                    className={blocked && allowForce && one.meta?.forceable === true ? 'is-force' : undefined}
+                    checked={selected.has(one.id)}
+                    disabled={blocked && !(allowForce && one.meta?.forceable === true)}
+                    onChange={() => toggle(one.id)}
+                    title={blocked && allowForce && one.meta?.forceable === true ? 'Blocked by the work inside; tick to remove it anyway, discarding that work' : undefined}
+                    aria-label={`select ${one.label}`}
+                  />
                 )}
               </td>
               <td>
@@ -1651,9 +1682,13 @@ function Table({
                 {blocked && <small className="housekeeping-blocker">{one.blockers.join(', ')}</small>}
               </td>
               <td className="is-num housekeeping-rowactions">
-                {quick && !working && (!blocked || Boolean(one.meta?.broken)) && (
-                  <button className="ghost-btn tiny" onClick={() => quick.run(one)} title={`${one.meta?.broken ? 'Repair' : quick.label} only this one`}>
-                    {one.meta?.broken ? 'Repair' : quick.label}
+                {quick && !working && (!blocked || Boolean(one.meta?.broken) || (allowForce && one.meta?.forceable === true)) && (
+                  <button
+                    className={`${blocked && !one.meta?.broken ? 'danger-btn' : 'ghost-btn'} tiny`}
+                    onClick={() => quick.run(one)}
+                    title={one.meta?.broken ? 'Repair only this one' : blocked ? 'Remove it anyway, discarding the work inside' : `${quick.label} only this one`}
+                  >
+                    {one.meta?.broken ? 'Repair' : blocked ? 'Remove anyway' : quick.label}
                   </button>
                 )}
                 {one.path && one.kind !== 'browser-cache' && (

@@ -1275,7 +1275,7 @@ declare global {
     readAt: number;
   }
 
-  type HousekeepingJobKind = 'free' | 'remove-worktrees' | 'forget-transcripts' | 'delete-sessions' | 'discard-workshops' | 'repair-worktrees';
+  type HousekeepingJobKind = 'free' | 'remove-worktrees' | 'remove-worktrees-forced' | 'forget-transcripts' | 'delete-sessions' | 'discard-workshops' | 'repair-worktrees';
   type HousekeepingJobStatus = 'queued' | 'running' | 'paused' | 'interrupted' | 'done' | 'cancelled' | 'failed';
 
   interface HousekeepingJob {

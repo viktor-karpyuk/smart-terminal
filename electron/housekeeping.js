@@ -229,6 +229,8 @@ class Housekeeping {
         return this.free(ids);
       case 'remove-worktrees':
         return this.removeWorktrees(ids);
+      case 'remove-worktrees-forced':
+        return this.removeWorktrees(ids, { force: true });
       case 'repair-worktrees':
         return this.repairWorktrees(ids);
       case 'forget-transcripts':
@@ -291,7 +293,7 @@ class Housekeeping {
           state: row.state,
           blockers: row.blockers,
           detail: [row.branch ? `branch ${row.branch}` : null, row.upstream ? `tracks ${row.upstream}` : row.ownWork ? 'no upstream' : null].filter(Boolean).join(' · ') || null,
-          meta: { root: row.root, branch: row.branch, finished: row.finished, prunable: row.prunable, broken: row.broken, work: row.work, aheadOfBase: row.aheadOfBase, dirtyCount: row.dirtyCount, dirty: row.dirty, sized: Boolean(known) || row.prunable },
+          meta: { root: row.root, branch: row.branch, finished: row.finished, prunable: row.prunable, broken: row.broken, work: row.work, aheadOfBase: row.aheadOfBase, dirtyCount: row.dirtyCount, dirty: row.dirty, forceable: row.forceable, loses: row.loses, sized: Boolean(known) || row.prunable },
         });
       });
   }
@@ -659,7 +661,7 @@ class Housekeeping {
    * anything with a blocker; git refuses anything that changed since. A finished
    * branch is deleted, an unfinished one keeps its commits.
    */
-  async removeWorktrees(ids = []) {
+  async removeWorktrees(ids = [], { force = false } = {}) {
     const paths = ids.map((id) => String(id)).filter((id) => id.startsWith('worktree:')).map((id) => id.slice('worktree:'.length));
     this.emit('progress', { op: 'remove-worktrees', index: 0, total: paths.length, label: 'looking at each worktree again', freed: 0, done: false });
     /*
@@ -674,7 +676,7 @@ class Housekeeping {
     const clearedBy = new Map();
     for (const target of paths) {
       const row = rows.get(target);
-      if (!row || row.blockers.length) continue;
+      if (!row || (row.blockers.length && !(force && row.forceable))) continue;
       const inside = caches.findIn(target);
       const ignored = await caches.ignoredIn(target, inside.map((one) => one.name));
       for (const found of inside) {
@@ -692,7 +694,7 @@ class Housekeeping {
         }
       }
     }
-    const results = await this.worktrees.remove(paths, { onEach: ({ index, total, label }) => this.emit('progress', { op: 'remove-worktrees', index, total, label, freed: cleared, done: false }) });
+    const results = await this.worktrees.remove(paths, { force, onEach: ({ index, total, label }) => this.emit('progress', { op: 'remove-worktrees', index, total, label, freed: cleared, done: false }) });
     let freed = cleared;
     const bytesOf = new Map();
     for (const one of results) {
@@ -703,7 +705,7 @@ class Housekeeping {
         freed += rest;
         this.sizes.forget(one.path);
       }
-      this.store.log({ action: 'remove-worktree', kind: 'worktree', label: path.basename(one.path), bytes, ok: one.ok, detail: one.ok ? (one.branchKept ? 'branch kept' : null) : one.error });
+      this.store.log({ action: one.forced ? 'remove-worktree-forced' : 'remove-worktree', kind: 'worktree', label: path.basename(one.path), bytes, ok: one.ok, detail: one.ok ? [one.forced ? 'work inside discarded' : null, one.branchKept ? 'branch kept' : null].filter(Boolean).join(', ') || null : one.error });
     }
     this.emit('progress', { op: 'remove-worktrees', index: paths.length, total: paths.length, label: null, freed, done: true, failed: results.filter((one) => !one.ok).length });
     return { results: results.map((one) => ({ id: `worktree:${one.path}`, ok: one.ok, bytes: bytesOf.get(one.path) ?? 0, error: one.error, note: one.branchKept ? 'branch kept' : undefined })), freed };

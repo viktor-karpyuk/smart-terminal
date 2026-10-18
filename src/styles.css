@@ -4245,3 +4245,5 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-spinner { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--text-faint); vertical-align: middle; }
 .housekeeping-spinner.is-live { border-top-color: var(--accent); animation: hk-spin 0.9s linear infinite; }
 @keyframes hk-spin { to { transform: rotate(360deg); } }
+.housekeeping-table input.is-force { accent-color: #c9a227; }
+.housekeeping-confirm-state .is-lost { color: var(--danger, #d9534f); }

@@ -209,6 +209,33 @@ test('a worktree whose .git points at a repository that is gone is \'link broken
   void original;
 });
 
+test('forced removal takes a dirty or unpushed worktree the person named, never one with a hard blocker, and keeps an unmerged branch', async () => {
+  const { main, wt } = repo();
+  const inv = new WorktreeInventory({ folders: () => [main], live: () => [path.join(wt, 'dirty')], fetch: false });
+  const rows = await inv.list();
+  const by = Object.fromEntries(rows.map((row) => [row.label, row]));
+  assert.equal(by.open.forceable, true);
+  assert.deepEqual(by.open.loses, ['1 commit on no base branch (the branch is kept)']);
+  assert.equal(by.dirty.forceable, false, 'a session is inside it: not even forced');
+  assert.ok(by.dirty.hardBlockers.includes('a session is inside it'));
+  assert.equal(by.app.forceable, false);
+
+  const plain = await inv.remove([path.join(wt, 'open')]);
+  assert.equal(plain[0].ok, false, 'without force, refused as before');
+  const forced = await inv.remove([path.join(wt, 'open'), path.join(wt, 'dirty'), path.join(wt, 'app')], { force: true });
+  const r = Object.fromEntries(forced.map((x) => [path.basename(x.path), x]));
+  assert.equal(r.open.ok, true);
+  assert.equal(r.open.forced, true);
+  assert.equal(r.open.branchKept, true, 'the commits stay on their branch');
+  assert.equal(r.dirty.ok, false);
+  assert.match(r.dirty.error, /session is inside/);
+  assert.equal(r.app.ok, false);
+  assert.ok(!fs.existsSync(path.join(wt, 'open')));
+  assert.ok(fs.existsSync(path.join(wt, 'dirty')));
+  const branches = execFileSync('git', ['branch', '--format=%(refname:short)'], { cwd: main }).toString();
+  assert.ok(branches.includes('feature/open'));
+});
+
 test('finish derives state and blockers from a row, in the order a person reads them', () => {
   const row = { main: false, base: false, ownWork: true, locked: true, detached: false, prunable: false, branch: 'x', dirty: true, irreplaceable: ['.env', 'secrets', 'a', 'b'], mergedInto: null, upstreamGone: false, upstream: 'origin/x', ahead: 2, lastCommitAt: 10, gitMtime: 20 };
   const out = finish(row, false, 30);

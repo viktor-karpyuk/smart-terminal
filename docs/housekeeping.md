@@ -146,6 +146,15 @@ that run; the switch under Worktrees turns the offer off. **Housekeeping ›
 Check This Session's Worktree…** asks the same of the session in front, with
 an answer even when there is nothing to do.
 
+**Remove anyway** — a worktree blocked only by the work inside it (files not
+committed, commits on no base branch, ignored files, a detached head) can be
+ticked one by one — the tick is amber, and "select all" never includes it —
+and removed with **Remove N anyway**, after a modal that says per item what is
+lost. That is the one place `git worktree remove --force` is used; commits
+stay on their branch, which is kept. What is never forced: the main working
+tree, a base branch, a worktree a session is standing in, a locked one, a
+broken link (repair it first). The log marks these removals as forced.
+
 **Uncommitted** — each worktree row says how many files git status lists as
 changed, staged or untracked, or that it is clean.
 
