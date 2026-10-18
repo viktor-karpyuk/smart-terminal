@@ -319,7 +319,7 @@ class Housekeeping {
         state: row.endedAt === null ? 'open' : 'ended',
         blockers,
         detail: [row.profileName, row.kind, snapshot ? `${fmt(snapshot)} saved copy` : null].filter(Boolean).join(' · '),
-        meta: { sessionId: row.id, transcriptBytes: row.transcriptBytes, snapshotBytes: snapshot, sized: true },
+        meta: { sessionId: row.id, transcriptBytes: row.transcriptBytes, snapshotBytes: snapshot, profile: row.profileName ?? null, sessionKind: row.kind ?? null, cwd: where, startedAt: row.startedAt, sized: true },
       });
     });
   }

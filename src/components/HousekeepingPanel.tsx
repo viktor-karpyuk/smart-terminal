@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { useStore } from '../state/store';
-import { describeIdle, diskUsedPercent, filterSessions, filterWorktrees, formatBytes, freeable, idleDays, inBucket, weigh, withSize, type HousekeepingTab } from '../lib/housekeeping';
+import { describeIdle, diskUsedPercent, filterSessions, filterWorktrees, formatBytes, freeable, idleDays, inBucket, sessionFacets, weigh, withSize, type HousekeepingTab } from '../lib/housekeeping';
 
 /**
  * What Smart Terminal and the work around it leave on disk, and giving it back.
@@ -734,24 +734,96 @@ function Sessions({
   includeOpen: boolean;
   setIncludeOpen: (on: boolean) => void;
 }) {
-  const rows = filterSessions(items, { olderThanDays: olderThan, minBytes: minMb * 1024 * 1024, includeOpen });
+  const [query, setQuery] = useState('');
+  const [profile, setProfile] = useState('');
+  const [sessionKind, setSessionKind] = useState('');
+  const [withConversation, setWithConversation] = useState(false);
+  const facets = sessionFacets(items);
+  const all = items.filter((one) => one.kind === 'session');
+  const rows = filterSessions(items, { olderThanDays: olderThan, minBytes: minMb * 1024 * 1024, includeOpen, query, profile, sessionKind, withConversation });
   const picked = chosen(rows);
+  const active = [query && 'search', profile && 'account', sessionKind && 'kind', olderThan > 0 && 'idle', minMb > 0 && 'size', withConversation && 'conversation', includeOpen && 'running'].filter(Boolean).length;
+  const reset = () => {
+    setQuery('');
+    setProfile('');
+    setSessionKind('');
+    setOlderThan(0);
+    setMinMb(0);
+    setWithConversation(false);
+    setIncludeOpen(false);
+  };
+  const chip = (on: boolean, label: string, onClick: () => void, title?: string) => (
+    <button type="button" className={`housekeeping-chip-toggle${on ? ' is-on' : ''}`} onClick={onClick} title={title} aria-pressed={on}>
+      {label}
+    </button>
+  );
   return (
     <>
-      <div className="housekeeping-filters">
-        <label>
-          Idle for at least
-          <input type="number" min={0} value={olderThan} onChange={(e) => setOlderThan(Math.max(0, Number(e.target.value) || 0))} /> days
+      <div className="housekeeping-filterbar">
+        <label className="housekeeping-filter housekeeping-filter-search">
+          <span>Search</span>
+          <input type="search" placeholder="title, folder, account" value={query} onChange={(e) => setQuery(e.target.value)} />
         </label>
-        <label>
-          Weighing at least
-          <input type="number" min={0} value={minMb} onChange={(e) => setMinMb(Math.max(0, Number(e.target.value) || 0))} /> MB
-        </label>
-        <label>
-          <input type="checkbox" checked={includeOpen} onChange={(e) => setIncludeOpen(e.target.checked)} /> show running
-        </label>
-        <span className="usage-note">
-          {rows.length} session{rows.length === 1 ? '' : 's'}, {formatBytes(weigh(rows))}
+        {facets.profiles.length > 1 && (
+          <label className="housekeeping-filter">
+            <span>Account</span>
+            <select value={profile} onChange={(e) => setProfile(e.target.value)}>
+              <option value="">any</option>
+              {facets.profiles.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {facets.kinds.length > 1 && (
+          <label className="housekeeping-filter">
+            <span>Kind</span>
+            <select value={sessionKind} onChange={(e) => setSessionKind(e.target.value)}>
+              <option value="">any</option>
+              {facets.kinds.map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <div className="housekeeping-filter">
+          <span>Idle</span>
+          <div className="housekeeping-chips">
+            {chip(olderThan === 0, 'any', () => setOlderThan(0))}
+            {chip(olderThan === 7, '7d+', () => setOlderThan(7))}
+            {chip(olderThan === 30, '30d+', () => setOlderThan(30))}
+            {chip(olderThan === 90, '90d+', () => setOlderThan(90))}
+            <input type="number" min={0} value={olderThan} onChange={(e) => setOlderThan(Math.max(0, Number(e.target.value) || 0))} aria-label="idle for at least, days" title="days" />
+          </div>
+        </div>
+        <div className="housekeeping-filter">
+          <span>Size</span>
+          <div className="housekeeping-chips">
+            {chip(minMb === 0, 'any', () => setMinMb(0))}
+            {chip(minMb === 1, '1 MB+', () => setMinMb(1))}
+            {chip(minMb === 10, '10 MB+', () => setMinMb(10))}
+            {chip(minMb === 100, '100 MB+', () => setMinMb(100))}
+            <input type="number" min={0} value={minMb} onChange={(e) => setMinMb(Math.max(0, Number(e.target.value) || 0))} aria-label="weighing at least, MB" title="MB" />
+          </div>
+        </div>
+        <div className="housekeeping-filter">
+          <span>Show</span>
+          <div className="housekeeping-chips">
+            {chip(withConversation, 'with conversation', () => setWithConversation((v) => !v), 'Only sessions that kept a conversation or a copy')}
+            {chip(includeOpen, 'running too', () => setIncludeOpen((v) => !v), 'Running sessions are shown, never removable')}
+          </div>
+        </div>
+        <span className="housekeeping-filter-sum">
+          {rows.length} of {all.length} session{all.length === 1 ? '' : 's'} · {formatBytes(weigh(rows))}
+          {active > 0 && (
+            <button type="button" className="link-btn" onClick={reset}>
+              reset {active} filter{active === 1 ? '' : 's'}
+            </button>
+          )}
         </span>
       </div>
       <Table

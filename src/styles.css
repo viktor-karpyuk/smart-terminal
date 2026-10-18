@@ -4249,3 +4249,14 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-confirm-state .is-lost { color: var(--danger, #d9534f); }
 .housekeeping-selection { position: sticky; top: -14px; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 8px; padding: 8px 12px; border: 1px solid var(--accent); border-radius: var(--r-md); background: var(--bg-elevated); box-shadow: var(--shadow-lg); }
 .housekeeping-selection strong { margin-right: 4px; }
+.housekeeping-filterbar { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: flex-end; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-input); }
+.housekeeping-filter { display: flex; flex-direction: column; gap: 4px; }
+.housekeeping-filter > span { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); }
+.housekeeping-filter input[type='search'], .housekeeping-filter select { padding: 4px 8px; background: var(--bg-elevated); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); font: inherit; min-width: 160px; }
+.housekeeping-filter-search input { min-width: 220px; }
+.housekeeping-chips { display: inline-flex; gap: 4px; align-items: center; }
+.housekeeping-chips input[type='number'] { width: 58px; padding: 3px 6px; background: var(--bg-elevated); color: var(--text); border: 1px solid var(--border); border-radius: 999px; font: inherit; font-size: var(--fs-xs); text-align: center; }
+.housekeeping-chip-toggle { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 999px; color: var(--text-faint); padding: 3px 10px; font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.housekeeping-chip-toggle:hover { color: var(--text); }
+.housekeeping-chip-toggle.is-on { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--bg-elevated)); }
+.housekeeping-filter-sum { margin-left: auto; color: var(--text-faint); align-self: center; display: inline-flex; gap: 10px; align-items: center; }

@@ -43,6 +43,22 @@ test('the session filter keeps by idle days and weight, hides running ones unles
   assert.deepEqual(ids({ olderThanDays: 0, minBytes: 0, includeOpen: false }), ['old', 'recent', 'undated']);
 });
 
+test('session filters: search words, account, kind and with-conversation narrow the list; facets list what is there', () => {
+  const items = [
+    one({ id: 'a', label: 'billing fix', path: '/dev/billing', bytes: 10, lastActivityAt: NOW - DAY, meta: { profile: 'kubrik', sessionKind: 'claude' } }),
+    one({ id: 'b', label: 'shell', path: '/dev/erp', bytes: 0, lastActivityAt: NOW - DAY, meta: { profile: 'personal', sessionKind: 'shell' } }),
+    one({ id: 'c', label: 'erp refactor', path: '/dev/erp', bytes: 5, lastActivityAt: NOW - 3 * DAY, meta: { profile: 'kubrik', sessionKind: 'claude' } }),
+  ];
+  const base = { olderThanDays: 0, minBytes: 0, includeOpen: false };
+  const ids = (f) => lib.filterSessions(items, { ...base, ...f }, NOW).map((i) => i.id);
+  assert.deepEqual(ids({ query: 'erp' }), ['b', 'c']);
+  assert.deepEqual(ids({ query: 'erp refactor' }), ['c']);
+  assert.deepEqual(ids({ profile: 'personal' }), ['b']);
+  assert.deepEqual(ids({ sessionKind: 'claude' }), ['a', 'c']);
+  assert.deepEqual(ids({ withConversation: true }), ['a', 'c']);
+  assert.deepEqual(lib.sessionFacets(items), { profiles: ['kubrik', 'personal'], kinds: ['claude', 'shell'] });
+});
+
 test('the worktree filter keeps by idle days and finished state', () => {
   const items = [
     one({ id: 'done', kind: 'worktree', bucket: 'worktrees', lastActivityAt: NOW - 40 * DAY, meta: { finished: true } }),
