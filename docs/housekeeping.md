@@ -138,6 +138,14 @@ with its place kept, and waits to be resumed; nothing restarts on its own.
 One job runs at a time. Inside a worktree the build caches are deleted first
 by the worker, with progress; `git worktree remove` then takes an instant.
 
+**When a session closes** — the folder it stood in is looked at a moment
+later. If it is a worktree whose work is merged or whose branch is gone on
+origin, clean and with nobody inside, a dialog offers to remove it, as a job
+with the same checks and progress. What was declined is not asked again in
+that run; the switch under Worktrees turns the offer off. **Housekeeping ›
+Check This Session's Worktree…** asks the same of the session in front, with
+an answer even when there is nothing to do.
+
 **Uncommitted** — each worktree row says how many files git status lists as
 changed, staged or untracked, or that it is clean.
 
