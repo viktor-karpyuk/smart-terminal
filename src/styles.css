@@ -4300,3 +4300,5 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-icon.is-busy { opacity: 0.5; cursor: progress; }
 .housekeeping-rowactions .ghost-btn.tiny, .housekeeping-rowactions .danger-btn.tiny { vertical-align: middle; }
 .housekeeping-rowactions > * + * { margin-left: 2px; }
+/* In a table row the right edge is the pane's, so the tip goes above the icon. */
+.housekeeping-rowactions [data-tip]::after { left: auto; right: 0; top: auto; bottom: calc(100% + 6px); transform: none; }

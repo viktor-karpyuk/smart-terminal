@@ -756,8 +756,8 @@ function WorktreeDoors({ item }: { item: HousekeepingItem }) {
           className={`housekeeping-icon${unfinished ? ' is-accent' : ''}${asking ? ' is-busy' : ''}`}
           disabled={asking}
           onClick={() => void askHere()}
-          aria-label="Ask Claude here"
-          title={unfinished ? 'Ask Claude here: a session in this worktree, in a new tab, handed its unmerged commits and uncommitted changes and asked to finish the work — commit, push, open a pull request, or say why not' : 'Ask Claude here: a session in this worktree, in a new tab, with its state'}
+          aria-label="Ask Claude"
+          data-tip={unfinished ? 'Ask Claude to finish this' : 'Ask Claude here'}
         >
           <BrainIcon />
         </button>
@@ -767,18 +767,14 @@ function WorktreeDoors({ item }: { item: HousekeepingItem }) {
           className="housekeeping-icon"
           onClick={openSession}
           aria-label={session.live ? 'Go to session' : 'Pick up session'}
-          title={
-            session.live
-              ? `Go to the session working here${session.title ? `: ${session.title}` : ''}`
-              : `Pick up the last session that worked here${session.title ? `: ${session.title}` : ''}${session.lastActivityAt ? ` (${describeIdle(session.lastActivityAt)} ago)` : ''}, on its conversation`
-          }
+          data-tip={session.live ? `Go to session${session.title ? ` · ${session.title}` : ''}` : `Pick up session${session.title ? ` · ${session.title}` : ''}`}
         >
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             {session.live ? <path d="M2 7h9M7.5 3.5 11 7l-3.5 3.5" /> : <path d="M3 7a4 4 0 1 1 1.2 2.85M3 4.5V7h2.5" />}
           </svg>
         </button>
       )}
-      <button className="housekeeping-icon" onClick={openShell} aria-label="Terminal here" title={`A terminal in ${item.path}`}>
+      <button className="housekeeping-icon" onClick={openShell} aria-label="Terminal here" data-tip="Terminal here">
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
           <path d="M2.5 3.5 6 7l-3.5 3.5M7.5 10.5h4" />
         </svg>
@@ -2019,7 +2015,7 @@ function Table({
                 )}
                 {one.kind === 'worktree' && one.path && <WorktreeDoors item={one} />}
                 {one.path && one.kind !== 'browser-cache' && (
-                  <button className="housekeeping-icon" aria-label="Show in Finder" title={`Show ${one.path} in the file manager`} onClick={() => window.api.files.reveal(one.path as string)}>
+                  <button className="housekeeping-icon" aria-label="Show in Finder" data-tip="Show in Finder" onClick={() => window.api.files.reveal(one.path as string)}>
                     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" aria-hidden>
                       <path d="M1.8 3.6h3.6l1.1 1.3h5.7v5.5H1.8z" />
                     </svg>
