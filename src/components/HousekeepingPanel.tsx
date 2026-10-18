@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
-import { describeIdle, diskUsedPercent, filterSessions, formatBytes, freeable, inBucket, weigh, withSize } from '../lib/housekeeping';
+import { describeIdle, diskUsedPercent, filterSessions, formatBytes, freeable, idleDays, inBucket, weigh, withSize } from '../lib/housekeeping';
 
 /**
  * What Smart Terminal and the work around it leave on disk, and giving it back.
@@ -490,9 +490,22 @@ function Table({
   selectAll: (list: HousekeepingItem[], on: boolean) => void;
   empty: string;
 }) {
+  const [sort, setSort] = useState<'size' | 'idle' | 'name'>('size');
   if (!rows.length) return <p className="empty-state">{empty}</p>;
   const free = rows.filter((one) => one.blockers.length === 0);
   const allOn = free.length > 0 && free.every((one) => selected.has(one.id));
+  const picked = rows.filter((one) => selected.has(one.id));
+  const ordered = [...rows].sort((a, b) =>
+    sort === 'size' ? b.bytes - a.bytes : sort === 'idle' ? (idleDays(b.lastActivityAt) ?? -1) - (idleDays(a.lastActivityAt) ?? -1) : a.label.localeCompare(b.label),
+  );
+  const head = (key: 'size' | 'idle' | 'name', label: string, className = '') => (
+    <th className={className}>
+      <button className={`housekeeping-sort${sort === key ? ' is-on' : ''}`} onClick={() => setSort(key)} title={`Sort by ${label.toLowerCase()}`}>
+        {label}
+        {sort === key ? ' ▾' : ''}
+      </button>
+    </th>
+  );
   return (
     <table className="housekeeping-table">
       <thead>
@@ -500,14 +513,23 @@ function Table({
           <th>
             <input type="checkbox" checked={allOn} disabled={!free.length} onChange={(e) => selectAll(rows, e.target.checked)} aria-label="select all" />
           </th>
-          <th>What</th>
-          <th>Idle</th>
-          <th className="is-num">Size</th>
+          {head('name', 'What')}
+          {head('idle', 'Idle')}
+          {head('size', 'Size', 'is-num')}
           <th>State</th>
+          <th />
         </tr>
       </thead>
       <tbody>
-        {rows.map((one) => {
+        {picked.length > 0 && (
+          <tr className="housekeeping-picked">
+            <td />
+            <td colSpan={5}>
+              {picked.length} selected, {formatBytes(weigh(picked))}
+            </td>
+          </tr>
+        )}
+        {ordered.map((one) => {
           const blocked = one.blockers.length > 0;
           const unsized = one.meta?.sized === false;
           return (
@@ -535,6 +557,13 @@ function Table({
                 )}
               </td>
               <td>{blocked ? <span className="housekeeping-blocker">{one.blockers.join(', ')}</span> : (one.state ?? '')}</td>
+              <td className="is-num">
+                {one.path && one.kind !== 'browser-cache' && (
+                  <button className="ghost-btn tiny" title={`Show ${one.path} in the file manager`} onClick={() => window.api.files.reveal(one.path as string)}>
+                    Show
+                  </button>
+                )}
+              </td>
             </tr>
           );
         })}
