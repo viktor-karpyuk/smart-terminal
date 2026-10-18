@@ -2029,6 +2029,7 @@ function ActivityBar() {
       <button className="activity" onClick={() => setHistoryOpen(true)} data-tip="History (⌘Y)" aria-label="History">
         <HistoryIcon />
       </button>
+      <HousekeepingActivity />
       <button className="activity" onClick={() => setAppearanceOpen(true)} data-tip="Settings (⇧⌘,)" aria-label="Settings">
         <AppearanceIcon />
       </button>
@@ -2187,4 +2188,20 @@ function SidebarItem({ sessionId }: { sessionId: string }) {
 /** Whether this tab is the one in front of the section you are working in. */
 function isInFront(state: ReturnType<typeof useStore.getState>, id: string) {
   return findLeaf(state.layout, state.activeLeafId)?.active === id;
+}
+
+/**
+ * Housekeeping in the activity bar, with the health job's dot: a place of its
+ * own among the things you open, beside History, not a detail inside Monitor.
+ */
+function HousekeepingActivity() {
+  const status = useStore((s) => s.housekeepingStatus);
+  const tip = status === 'limit' ? 'Housekeeping — at a limit (⇧⌘H)' : status === 'attention' ? 'Housekeeping — needs attention (⇧⌘H)' : 'Housekeeping (⇧⌘H)';
+  return (
+    <button className={`activity housekeeping-dot is-${status}`} onClick={() => useStore.getState().openHousekeeping()} data-tip={tip} aria-label="Housekeeping">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M3.5 5h11M5 5l.9 9.5h6.2L13 5M7.3 5V3.3h3.4V5M7.6 7.5v5M10.4 7.5v5" />
+      </svg>
+    </button>
+  );
 }
