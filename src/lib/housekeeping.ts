@@ -74,6 +74,26 @@ export function filterSessions(items: HousekeepingItem[], filter: SessionFilter,
   });
 }
 
+export interface WorktreeFilter {
+  /** Keep only worktrees idle at least this many days; 0 keeps all. */
+  olderThanDays: number;
+  /** Keep only the finished ones: merged, or branch deleted on origin. */
+  finishedOnly: boolean;
+}
+
+/** The worktree items a filter keeps. An unknown age never passes an age filter. */
+export function filterWorktrees(items: HousekeepingItem[], filter: WorktreeFilter, now = Date.now()): HousekeepingItem[] {
+  return items.filter((one) => {
+    if (one.kind !== 'worktree') return false;
+    if (filter.finishedOnly && !one.meta?.finished) return false;
+    if (filter.olderThanDays > 0) {
+      const days = idleDays(one.lastActivityAt, now);
+      if (days === null || days < filter.olderThanDays) return false;
+    }
+    return true;
+  });
+}
+
 /** The items in one bucket, largest first. */
 export function inBucket(items: HousekeepingItem[], bucket: HousekeepingBucket): HousekeepingItem[] {
   return items.filter((one) => one.bucket === bucket);

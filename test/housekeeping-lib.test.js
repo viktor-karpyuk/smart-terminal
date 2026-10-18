@@ -43,6 +43,19 @@ test('the session filter keeps by idle days and weight, hides running ones unles
   assert.deepEqual(ids({ olderThanDays: 0, minBytes: 0, includeOpen: false }), ['old', 'recent', 'undated']);
 });
 
+test('the worktree filter keeps by idle days and finished state', () => {
+  const items = [
+    one({ id: 'done', kind: 'worktree', bucket: 'worktrees', lastActivityAt: NOW - 40 * DAY, meta: { finished: true } }),
+    one({ id: 'fresh', kind: 'worktree', bucket: 'worktrees', lastActivityAt: NOW - DAY, meta: { finished: true } }),
+    one({ id: 'old-open', kind: 'worktree', bucket: 'worktrees', lastActivityAt: NOW - 90 * DAY, meta: { finished: false } }),
+    one({ id: 'chat' }),
+  ];
+  const ids = (f) => lib.filterWorktrees(items, f, NOW).map((i) => i.id);
+  assert.deepEqual(ids({ olderThanDays: 0, finishedOnly: false }), ['done', 'fresh', 'old-open']);
+  assert.deepEqual(ids({ olderThanDays: 14, finishedOnly: false }), ['done', 'old-open']);
+  assert.deepEqual(ids({ olderThanDays: 14, finishedOnly: true }), ['done']);
+});
+
 test('a size that lands replaces the row without reordering, and an unknown path changes nothing', () => {
   const items = [one({ id: 'a', path: '/a', meta: { sized: false } }), one({ id: 'b', path: '/b', bytes: 3 })];
   const next = lib.withSize(items, '/a', 42);

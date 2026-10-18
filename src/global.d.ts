@@ -1144,6 +1144,7 @@ declare global {
         deleteSessions(ids: string[]): Promise<{ deleted: string[]; skipped: string[]; bytes: number }>;
         forgetTranscripts(ids: string[]): Promise<{ count: number; bytes: number }>;
         discardWorkshops(ids: string[]): Promise<{ results: HousekeepingResult[] }>;
+        removeWorktrees(ids: string[]): Promise<{ results: HousekeepingResult[]; freed: number }>;
         roots(): Promise<HousekeepingRoot[]>;
         addRoot(folder: string): Promise<HousekeepingRoot[]>;
         removeRoot(folder: string): Promise<HousekeepingRoot[]>;

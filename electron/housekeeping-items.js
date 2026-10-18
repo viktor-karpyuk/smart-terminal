@@ -92,6 +92,8 @@ function totals(items) {
   const out = { all: { bytes: 0, count: 0, blocked: 0, reversibleBytes: 0 } };
   for (const bucket of BUCKETS) out[bucket] = { bytes: 0, count: 0, blocked: 0, reversibleBytes: 0 };
   for (const one of items) {
+    // A cache inside a listed worktree is already inside that worktree's bytes: shown on its own, counted once.
+    if (one.meta?.nested) continue;
     for (const key of ['all', one.bucket]) {
       const row = out[key];
       row.bytes += one.bytes;

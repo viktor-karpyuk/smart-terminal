@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
-import { describeIdle, diskUsedPercent, filterSessions, formatBytes, freeable, idleDays, inBucket, weigh, withSize } from '../lib/housekeeping';
+import { describeIdle, diskUsedPercent, filterSessions, filterWorktrees, formatBytes, freeable, idleDays, inBucket, weigh, withSize } from '../lib/housekeeping';
 
 /**
  * What Smart Terminal and the work around it leave on disk, and giving it back.
@@ -348,6 +348,12 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
   const pickedCaches = chosen(caches);
   const pickedShops = chosen(shops);
   const [adding, setAdding] = useState(false);
+  const [idleFor, setIdleFor] = useState(14);
+  const [finishedOnly, setFinishedOnly] = useState(false);
+  const trees = filterWorktrees(items, { olderThanDays: idleFor, finishedOnly });
+  const allTrees = items.filter((one) => one.kind === 'worktree');
+  const pickedTrees = chosen(trees);
+  const finished = allTrees.filter((one) => one.meta?.finished && one.blockers.length === 0);
 
   const addRoot = async () => {
     setAdding(true);
@@ -391,9 +397,54 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
         {adding ? 'Choosing…' : 'Add a folder…'}
       </button>
 
+      <h3 className="monitor-heading">Worktrees</h3>
+      <p className="usage-note">
+        Every worktree of the repositories above and of the ones your sessions are in, except each repository's main working tree. Idle is the latest of its last commit, its last checkout, and the last time a session was inside it. One
+        with changes of its own, commits never pushed, or a session inside is shown and refused.
+      </p>
+      <div className="housekeeping-filters">
+        <label>
+          Idle for at least
+          <input type="number" min={0} value={idleFor} onChange={(e) => setIdleFor(Math.max(0, Number(e.target.value) || 0))} /> days
+        </label>
+        <label>
+          <input type="checkbox" checked={finishedOnly} onChange={(e) => setFinishedOnly(e.target.checked)} /> finished only (merged, or branch gone on origin)
+        </label>
+        <span className="usage-note">
+          {trees.length} of {allTrees.length} worktree{allTrees.length === 1 ? '' : 's'}, {formatBytes(weigh(trees))} · {finished.length} finished and clear
+        </span>
+      </div>
+      <Table rows={trees} selected={selected} toggle={toggle} selectAll={selectAll} empty={allTrees.length ? 'No worktree matches. Lower the days or untick finished only.' : 'No worktrees found. Add the folder they live in above.'} />
+      <div className="storage-actions">
+        {confirm(
+          'trees',
+          `Remove ${pickedTrees.length} worktree${pickedTrees.length === 1 ? '' : 's'} (${formatBytes(weigh(pickedTrees))})`,
+          'git worktree remove, never forced: anything that changed since it was looked at is refused. A finished branch is deleted; an unfinished one keeps its commits.',
+          async () => {
+            const out = await window.api.housekeeping.removeWorktrees(pickedTrees.map((one) => one.id));
+            const failed = out.results.filter((one) => !one.ok);
+            return `Removed ${out.results.length - failed.length}, ${formatBytes(out.freed)}.${failed.length ? ` ${failed.length} refused: ${failed[0].error}` : ''}`;
+          },
+          true,
+          pickedTrees.length === 0,
+        )}
+        {finished.length > 0 &&
+          confirm(
+            'finished',
+            `Remove all ${finished.length} finished (${formatBytes(weigh(finished))})`,
+            'Only worktrees whose work is merged or whose branch is gone on origin, with nothing of their own and nobody inside.',
+            async () => {
+              const out = await window.api.housekeeping.removeWorktrees(finished.map((one) => one.id));
+              const failed = out.results.filter((one) => !one.ok);
+              return `Removed ${out.results.length - failed.length}, ${formatBytes(out.freed)}.${failed.length ? ` ${failed.length} refused: ${failed[0].error}` : ''}`;
+            },
+            true,
+          )}
+      </div>
+
       <h3 className="monitor-heading">Build caches</h3>
       <p className="usage-note">
-        Folders a build writes and writes again: .angular, node_modules, target, dist. Removing one costs the next build a rebuild and nothing else. A folder git does not ignore is refused.
+        Folders a build writes and writes again: .angular, node_modules, target, dist. Removing one costs the next build a rebuild and nothing else. A folder git does not ignore is refused. A cache inside a worktree listed above is shown here but counted inside that worktree's size.
       </p>
       <Table rows={caches} selected={selected} toggle={toggle} selectAll={selectAll} empty="No build caches under the folders above." />
       <div className="storage-actions">

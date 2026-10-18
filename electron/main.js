@@ -993,6 +993,8 @@ function createHousekeeping() {
     browser,
     // Where each live session is standing right now, as the cwd watcher last saw it.
     live: () => (ptys?.list() ?? []).map((one) => cwdWatcher?.known?.get(one.id)?.cwd).filter(Boolean),
+    // The Code Reviewer's repositories: their worktrees are listed too.
+    repoFolders: () => (reviewService?.store?.repos?.() ?? []).map((repo) => repo.localPath).filter(Boolean),
     emit: (name, payload) => send(`housekeeping:${name}`, payload),
   });
 }
@@ -1334,6 +1336,7 @@ function registerIpc() {
   ipcMain.handle('housekeeping:delete-sessions', (_e, ids = []) => housekeeping.deleteSessions(Array.isArray(ids) ? ids : []));
   ipcMain.handle('housekeeping:forget-transcripts', (_e, ids = []) => housekeeping.forgetTranscripts(Array.isArray(ids) ? ids : []));
   ipcMain.handle('housekeeping:discard-workshops', (_e, ids = []) => housekeeping.discardWorkshops(Array.isArray(ids) ? ids : []));
+  ipcMain.handle('housekeeping:remove-worktrees', (_e, ids = []) => housekeeping.removeWorktrees(Array.isArray(ids) ? ids : []));
   ipcMain.handle('housekeeping:roots', () => housekeeping.roots());
   ipcMain.handle('housekeeping:add-root', (_e, folder) => housekeeping.addRoot(String(folder ?? '')));
   ipcMain.handle('housekeeping:remove-root', (_e, folder) => housekeeping.removeRoot(String(folder ?? '')));

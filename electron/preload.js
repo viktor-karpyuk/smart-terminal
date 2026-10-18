@@ -329,6 +329,7 @@ contextBridge.exposeInMainWorld('api', {
     deleteSessions: (ids) => ipcRenderer.invoke('housekeeping:delete-sessions', ids),
     forgetTranscripts: (ids) => ipcRenderer.invoke('housekeeping:forget-transcripts', ids),
     discardWorkshops: (ids) => ipcRenderer.invoke('housekeeping:discard-workshops', ids),
+    removeWorktrees: (ids) => ipcRenderer.invoke('housekeeping:remove-worktrees', ids),
     roots: () => ipcRenderer.invoke('housekeeping:roots'),
     addRoot: (folder) => ipcRenderer.invoke('housekeeping:add-root', folder),
     removeRoot: (folder) => ipcRenderer.invoke('housekeeping:remove-root', folder),

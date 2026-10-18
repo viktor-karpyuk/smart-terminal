@@ -1,0 +1,272 @@
+'use strict';
+
+/**
+ * Every worktree of every repository the app knows, with what would have to be
+ * true before it could go.
+ *
+ * `worktree-cleanup.js` answers a narrower question — which worktrees are
+ * *finished* and may be offered for removal without asking anything else. This
+ * answers the wider one the housekeeping panel asks: what is there, how long
+ * has each been idle, and why can this one not be removed. The same git
+ * primitives are used for both so the two never disagree about what "merged"
+ * or "irreplaceable" means.
+ *
+ * Idleness is the latest of three signs of life, because any one of them lies
+ * on its own: the last commit (a worktree with uncommitted work from yesterday
+ * has a commit from a month ago), the mtime of the worktree's `.git` file
+ * (moved by checkout and commit, not by editing), and the last time a Smart
+ * Terminal session was standing inside it, which the database knows.
+ *
+ * A repository's worktrees are read with a bounded number of git processes at
+ * a time, and each worktree's answer is remembered against its HEAD and the
+ * mtime of its `.git` until `ttl` passes. Two hundred worktrees are a few
+ * seconds the first time and nothing the second.
+ */
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { WorktreeCleanup, parseWorktrees } = require('./worktree-cleanup');
+const { execFile } = require('node:child_process');
+
+const MINUTE = 60_000;
+const TIMEOUT = 20_000;
+const BASES = new Set(['main', 'master', 'develop', 'trunk']);
+
+function git(dir, args, { timeout = TIMEOUT } = {}) {
+  return new Promise((resolve) => {
+    execFile('git', ['-c', 'core.quotePath=false', ...args], { cwd: dir, timeout, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND || 'ssh -o BatchMode=yes', LC_ALL: 'C' } }, (error, stdout, stderr) => {
+      resolve({ ok: !error, code: error ? (typeof error.code === 'number' ? error.code : 1) : 0, stdout: String(stdout ?? ''), stderr: String(stderr ?? '') });
+    });
+  });
+}
+
+const inside = (child, parent) => {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+};
+
+/** A path as the filesystem spells it — git prints resolved paths, and on macOS /var is /private/var. */
+function real(one) {
+  const resolved = path.resolve(one);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    // Not there (yet, or any more): resolve the nearest ancestor that is, and keep the rest as written.
+    const parent = path.dirname(resolved);
+    return parent === resolved ? resolved : path.join(real(parent), path.basename(resolved));
+  }
+}
+
+function mtimeOf(target) {
+  try {
+    return Math.floor(fs.statSync(target).mtimeMs);
+  } catch {
+    return null;
+  }
+}
+
+/** `Promise.all` with at most `limit` in flight. */
+async function mapLimit(list, limit, fn) {
+  const out = new Array(list.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, list.length) }, async () => {
+      while (next < list.length) {
+        const index = next++;
+        out[index] = await fn(list[index], index);
+      }
+    }),
+  );
+  return out;
+}
+
+class WorktreeInventory {
+  /**
+   * @param {object} deps
+   * @param {() => string[]} deps.folders         checkouts and folders to find repositories from (roots' checkouts, live sessions, known repos)
+   * @param {() => string[]} [deps.live]           folders live sessions are standing in
+   * @param {(dir: string) => number|null} [deps.sessionActivity] when a session was last active inside a folder, or null
+   * @param {boolean} [deps.fetch]                 `git fetch --prune` each repository once per `ttl`
+   * @param {number} [deps.ttl]
+   * @param {number} [deps.concurrency]
+   * @param {() => number} [deps.now]
+   */
+  constructor({ folders, live = () => [], sessionActivity = () => null, fetch = true, ttl = 10 * MINUTE, concurrency = 6, now = () => Date.now() }) {
+    this.folders = folders;
+    this.live = live;
+    this.sessionActivity = sessionActivity;
+    this.fetch = fetch;
+    this.ttl = ttl;
+    this.concurrency = concurrency;
+    this.now = now;
+    this.helper = new WorktreeCleanup({ folders, fetch: false });
+    /** path → { stamp, at, row } */
+    this.memo = new Map();
+    /** root → when it was last fetched */
+    this.fetched = new Map();
+  }
+
+  /** The main working trees of the repositories the folders belong to. */
+  async roots() {
+    const folders = [...new Set((this.folders() ?? []).filter(Boolean).map(real))];
+    const roots = new Set();
+    for (const root of await mapLimit(folders, this.concurrency, (folder) => this.helper.rootOf(folder))) if (root) roots.add(root);
+    return [...roots].sort();
+  }
+
+  /** Every worktree of every repository, as rows. The main working tree of each repository is listed too, marked `main: true`, and never removable. */
+  async list() {
+    const live = (this.live() ?? []).filter(Boolean).map(real);
+    const roots = await this.roots();
+    const perRoot = await mapLimit(roots, 2, (root) => this.listIn(root, live));
+    return perRoot.flat();
+  }
+
+  async listIn(root, live) {
+    if (this.fetch && this.now() - (this.fetched.get(root) ?? 0) > this.ttl) {
+      await git(root, ['fetch', '--quiet', '--prune', 'origin'], { timeout: 30_000 });
+      this.fetched.set(root, this.now());
+    }
+    const bases = await this.helper.basesOf(root);
+    const list = await git(root, ['worktree', 'list', '--porcelain']);
+    if (!list.ok) return [];
+    const entries = parseWorktrees(list.stdout);
+    return mapLimit(entries, this.concurrency, (entry, index) => this.describe(root, entry, index === 0, bases, live));
+  }
+
+  async describe(root, entry, isMain, bases, live) {
+    const gitMtime = mtimeOf(path.join(entry.path, '.git'));
+    const stamp = `${entry.head}:${gitMtime}:${entry.branch}:${entry.locked}:${entry.prunable}`;
+    const kept = this.memo.get(entry.path);
+    const liveInside = live.some((folder) => inside(folder, entry.path));
+    const sessionAt = this.sessionActivity(entry.path);
+    if (kept && kept.stamp === stamp && this.now() - kept.at < this.ttl) return finish(kept.row, liveInside, sessionAt);
+
+    const row = {
+      root,
+      repo: path.basename(root),
+      path: entry.path,
+      label: path.basename(entry.path),
+      branch: entry.branch,
+      head: entry.head,
+      main: isMain,
+      detached: entry.detached,
+      locked: entry.locked,
+      prunable: entry.prunable,
+      base: Boolean(entry.branch && BASES.has(entry.branch)),
+      dirty: false,
+      irreplaceable: [],
+      mergedInto: null,
+      upstreamGone: false,
+      upstream: null,
+      ahead: 0,
+      ownWork: false,
+      lastCommitAt: null,
+      gitMtime,
+    };
+
+    if (!entry.prunable && fs.existsSync(entry.path)) {
+      const [status, commit] = await Promise.all([git(entry.path, ['status', '--porcelain']), git(entry.path, ['log', '-1', '--format=%ct'])]);
+      row.dirty = !status.ok || Boolean(status.stdout.trim());
+      row.lastCommitAt = commit.ok && commit.stdout.trim() ? Number(commit.stdout.trim()) * 1000 : null;
+      if (!isMain) row.irreplaceable = await this.helper.irreplaceable(entry.path);
+      if (entry.branch && !isMain && !row.base) {
+        const [into, gone, own, track] = await Promise.all([
+          this.helper.mergedInto(root, entry.head, bases),
+          this.helper.upstreamGone(root, entry.branch),
+          this.helper.hasOwnWork(root, entry.branch),
+          git(root, ['for-each-ref', '--format=%(upstream:short) %(upstream:track)', `refs/heads/${entry.branch}`]),
+        ]);
+        row.mergedInto = into && own ? into : null;
+        row.upstreamGone = gone;
+        row.ownWork = own;
+        const [upstream, ...rest] = track.ok ? track.stdout.trim().split(' ') : [''];
+        row.upstream = upstream || null;
+        const aheadMatch = rest.join(' ').match(/ahead (\d+)/);
+        row.ahead = aheadMatch ? Number(aheadMatch[1]) : 0;
+      }
+    }
+    this.memo.set(entry.path, { stamp, at: this.now(), row });
+    return finish(row, liveInside, sessionAt);
+  }
+
+  /**
+   * Remove worktrees by path, each on its own. Never `--force`: git refuses
+   * anything that changed since it was looked at. A finished branch is deleted
+   * with `-d`, which refuses what is not merged, so the commits of an
+   * unfinished one stay on their branch.
+   */
+  async remove(paths) {
+    const rows = new Map((await this.list()).map((row) => [row.path, row]));
+    const results = [];
+    for (const target of paths) {
+      const row = rows.get(target) ?? rows.get(real(target));
+      if (!row) {
+        results.push({ path: target, ok: false, error: 'That is not a worktree the app knows; look again.' });
+        continue;
+      }
+      if (row.blockers.length) {
+        results.push({ path: target, ok: false, error: row.blockers.join('; ') });
+        continue;
+      }
+      try {
+        if (row.prunable) {
+          const done = await git(row.root, ['worktree', 'prune']);
+          if (!done.ok) throw new Error(done.stderr.trim() || 'git could not prune');
+        } else {
+          const done = await git(row.root, ['worktree', 'remove', row.path]);
+          if (!done.ok) throw new Error(done.stderr.trim().split('\n').pop() || 'git refused');
+          let branchKept = false;
+          if (row.branch && row.finished) {
+            const branch = await git(row.root, ['branch', '-d', row.branch]);
+            branchKept = !branch.ok;
+          } else branchKept = Boolean(row.branch);
+          await git(row.root, ['worktree', 'prune']);
+          this.memo.delete(row.path);
+          results.push({ path: target, ok: true, branchKept });
+          continue;
+        }
+        this.memo.delete(row.path);
+        results.push({ path: target, ok: true });
+      } catch (error) {
+        results.push({ path: target, ok: false, error: String(error?.message ?? error) });
+      }
+    }
+    return results;
+  }
+}
+
+/** The parts that change without git changing: who is inside now, and the activity the database knows. */
+function finish(row, liveInside, sessionAt) {
+  const lastActivityAt = Math.max(row.lastCommitAt ?? 0, row.gitMtime ?? 0, sessionAt ?? 0) || null;
+  const finished = Boolean(row.mergedInto || row.upstreamGone);
+  const blockers = [];
+  if (row.main) blockers.push('the main working tree');
+  if (row.base) blockers.push(`${row.branch} is a base branch`);
+  if (row.locked) blockers.push('locked');
+  if (row.detached && !row.prunable) blockers.push('detached HEAD');
+  if (liveInside) blockers.push('a session is inside it');
+  if (row.dirty) blockers.push('changes not committed');
+  if (row.irreplaceable.length) blockers.push(`ignored files nothing could rebuild: ${row.irreplaceable.slice(0, 3).join(', ')}${row.irreplaceable.length > 3 ? '…' : ''}`);
+  // Only work of its own can be lost by removal: a branch with no commit of its own has nothing to push.
+  if (!finished && !row.main && !row.base && !row.prunable && row.branch && row.ownWork) {
+    if (!row.upstream) blockers.push('never pushed');
+    else if (row.ahead > 0) blockers.push(`${row.ahead} commit${row.ahead === 1 ? '' : 's'} not pushed`);
+  }
+  const state = row.prunable
+    ? 'folder gone'
+    : row.main
+      ? 'main working tree'
+      : row.mergedInto
+        ? `merged into ${row.mergedInto}`
+        : row.upstreamGone
+          ? 'branch deleted on origin'
+          : row.detached
+            ? 'detached'
+            : row.dirty
+              ? 'uncommitted changes'
+              : 'open';
+  return { ...row, liveInside, sessionAt, lastActivityAt, finished, blockers, state };
+}
+
+module.exports = { WorktreeInventory, finish, mapLimit };
