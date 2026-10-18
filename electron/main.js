@@ -16,6 +16,10 @@ const { Database } = require('./database');
 const { buildMenu } = require('./menu');
 const { CwdWatcher, worthRemembering } = require('./cwd-watcher');
 const { ContextStore, transcriptPath, locateTranscript, readTurnState } = require('./context-store');
+const { Housekeeping } = require('./housekeeping');
+const { HousekeepingStore } = require('./housekeeping-store');
+const { DiskUsage } = require('./disk-usage');
+const rules = require('./review-rules');
 const { SessionMonitor } = require('./session-monitor');
 const { summarise, oneLine } = require('./session-analysis');
 const { Advisor } = require('./advisor');
@@ -220,6 +224,9 @@ let db = null;
  * about it. Its tables live in this app's own database.
  */
 let reviewService = null;
+/** What the app and the work around it leave on disk, and giving it back — see housekeeping.js. */
+let housekeeping = null;
+let diskUsage = null;
 let teamsService = null;
 /** Jenkins: the credentials, the poller, and the verbs the panel may call. Its tables live in this app's own database. */
 let jenkinsService = null;
@@ -886,6 +893,72 @@ function createWindow(windowId = randomUUID(), bounds = null) {
   return win;
 }
 
+/**
+ * Housekeeping is the other modules' knowledge, pointed at the disk: sessions
+ * from the database, their copies from the context store, the Code Reviewer's
+ * clones from its fix engine, and the folders the person named. It is given
+ * adapters rather than the services, so what it may do to each is written here
+ * and nowhere else.
+ */
+function createHousekeeping() {
+  const userData = app.getPath('userData');
+  const store = new HousekeepingStore(db.db);
+  diskUsage = new DiskUsage({ store });
+  const review = reviewService
+    ? {
+        /** The fix clones on disk, each with its pull request's state and whether anything in it is still owed. */
+        workshops: async () => {
+          const fixer = reviewService.fixer;
+          const root = fixer?.root;
+          if (!root || !fs.existsSync(root)) return [];
+          const running = fixer.running();
+          const out = [];
+          for (const repo of reviewService.store.repos()) {
+            const prefix = `${rules.slug(repo.name)}-pr`;
+            for (const name of fs.readdirSync(root)) {
+              if (!name.startsWith(prefix)) continue;
+              const prId = Number(name.slice(prefix.length));
+              if (!Number.isInteger(prId)) continue;
+              const pr = reviewService.store.pr(repo.id, prId);
+              out.push({
+                repoId: repo.id,
+                repoName: repo.name,
+                prId,
+                dir: path.join(root, name),
+                title: pr?.title ?? null,
+                prState: pr?.state ?? null,
+                pendingReturn: reviewService.store.pendingReturn(repo.id, prId).length,
+                busy: running.some((run) => run.repoId === repo.id && String(run.prId) === String(prId)),
+              });
+            }
+          }
+          return out;
+        },
+        dirOf: (repoId, prId) => {
+          const repo = reviewService.store.repos().find((one) => one.id === repoId);
+          return repo && reviewService.fixer?.root ? path.join(reviewService.fixer.root, `${rules.slug(repo.name)}-pr${prId}`) : null;
+        },
+        discard: (repoId, prId) => reviewService.fixer.discard(repoId, prId),
+      }
+    : null;
+  const browser = {
+    size: () => session.defaultSession.getCacheSize(),
+    clear: () => session.defaultSession.clearCache(),
+  };
+  return new Housekeeping({
+    db,
+    store,
+    sizes: diskUsage,
+    userData,
+    context,
+    review,
+    browser,
+    // Where each live session is standing right now, as the cwd watcher last saw it.
+    live: () => (ptys?.list() ?? []).map((one) => cwdWatcher?.known?.get(one.id)?.cwd).filter(Boolean),
+    emit: (name, payload) => send(`housekeeping:${name}`, payload),
+  });
+}
+
 function registerIpc() {
   ipcMain.handle('pty:create', (_e, options = {}) => {
     const profile = profiles.get(options.profileId);
@@ -1216,6 +1289,18 @@ function registerIpc() {
    * How the database is doing, with the file sizes the database itself cannot
    * see: the write-ahead log, and the snapshots kept beside it.
    */
+  // --- housekeeping: what is on disk, and giving it back. Every removal is asked for by id. ---
+  ipcMain.handle('housekeeping:inventory', () => housekeeping.inventory());
+  ipcMain.handle('housekeeping:measure', (_e, { paths = [], force = false } = {}) => housekeeping.measure(Array.isArray(paths) ? paths : [], { force }));
+  ipcMain.handle('housekeeping:free', (_e, ids = []) => housekeeping.free(Array.isArray(ids) ? ids : []));
+  ipcMain.handle('housekeeping:delete-sessions', (_e, ids = []) => housekeeping.deleteSessions(Array.isArray(ids) ? ids : []));
+  ipcMain.handle('housekeeping:forget-transcripts', (_e, ids = []) => housekeeping.forgetTranscripts(Array.isArray(ids) ? ids : []));
+  ipcMain.handle('housekeeping:discard-workshops', (_e, ids = []) => housekeeping.discardWorkshops(Array.isArray(ids) ? ids : []));
+  ipcMain.handle('housekeeping:roots', () => housekeeping.roots());
+  ipcMain.handle('housekeeping:add-root', (_e, folder) => housekeeping.addRoot(String(folder ?? '')));
+  ipcMain.handle('housekeeping:remove-root', (_e, folder) => housekeeping.removeRoot(String(folder ?? '')));
+  ipcMain.handle('housekeeping:log', (_e, limit) => housekeeping.log(Number(limit) || 50));
+
   ipcMain.handle('db:health', (_e, { deep = false } = {}) => {
     const health = db.health({ deep });
     const file = path.join(app.getPath('userData'), 'smart-terminal.db');
@@ -2664,6 +2749,9 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   startMessaging();
   fileWatcher = new FileWatcher((changes) => send('files:changed', changes));
   context = new ContextStore(db);
+  housekeeping = createHousekeeping();
+  // Removals a previous run started and did not finish, finished now. Nothing new is removed.
+  void housekeeping.sweep().catch(() => {});
   // Watching how sessions behave is a separate job from keeping copies of them,
   // but it needs the same two things — where a transcript is, and which sessions
   // have one — so it is handed the store rather than working them out again.
@@ -3424,6 +3512,7 @@ app.on('will-quit', () => {
   reviewService?.stop();
   jenkinsService?.stop();
   teamsBot?.stop();
+  diskUsage?.stop();
   // A Gradle client asked for a task list is a JVM that would otherwise
   // outlive the app by up to three minutes.
   buildTools.stopAll();

@@ -217,6 +217,9 @@ export function handleMenuAction(id: string) {
     case 'history':
       store.setHistoryOpen(true);
       break;
+    case 'housekeeping':
+      store.openHousekeeping();
+      break;
     case 'updates':
       store.setUpdatePanelOpen(true);
       break;

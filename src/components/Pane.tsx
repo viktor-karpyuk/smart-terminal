@@ -14,6 +14,7 @@ import { GroupChip, GroupTheseTabs } from './GroupChip';
 import { FilesPanel } from './FilesPanel';
 import { MonitorPanel } from './MonitorPanel';
 import { ExtensionsPanel } from './ExtensionsPanel';
+import { HousekeepingPanel } from './HousekeepingPanel';
 import { ExtensionView } from './ExtensionView';
 import { PlusIcon, ChevronDownIcon, MinimizeIcon, MaximizeIcon, CloseGlyph } from './icons';
 import { PanelTab } from './PanelTab';
@@ -429,6 +430,8 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
             <MonitorPanel key={leaf.active} panelId={leaf.active} />
           ) : activePanelKind === 'extensions' ? (
             <ExtensionsPanel key={leaf.active} />
+          ) : activePanelKind === 'housekeeping' ? (
+            <HousekeepingPanel key={leaf.active} />
           ) : (
             <FilesPanel key={leaf.active} panelId={leaf.active} />
           )

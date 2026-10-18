@@ -293,8 +293,19 @@ export interface ExtensionViewPanel {
   resume?: unknown;
 }
 
+/**
+ * Housekeeping, as a tab: what the app and the work around it leave on disk,
+ * and the buttons that give it back. A section rather than a dialog for the
+ * same reason the monitor is one — it is read while working, and acted on in
+ * passes, and a dialog would cover the terminal whose folder it is about.
+ */
+export interface HousekeepingPanel {
+  id: string;
+  kind: 'housekeeping';
+}
+
 /** What a section can hold besides a terminal. */
-export type Panel = FilePanel | MonitorPanel | ExtensionsPanel | ExtensionViewPanel;
+export type Panel = FilePanel | MonitorPanel | ExtensionsPanel | ExtensionViewPanel | HousekeepingPanel;
 
 /**
  * Git's place in the content row. A file path is always absolute, so this can

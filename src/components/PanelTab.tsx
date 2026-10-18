@@ -61,6 +61,7 @@ export function PanelTab({
   if (!panel) return null;
   const monitor = panel.kind === 'monitor';
   const shop = panel.kind === 'extensions';
+  const housekeeping = panel.kind === 'housekeeping';
   // A view an extension brought. It carries its own name — the cluster, for a
   // Kubernetes tab — and without this it wore the folder icon and the word
   // "Files", which is neither what it is nor what it shows.
@@ -70,6 +71,8 @@ export function PanelTab({
     ? 'Monitor'
     : shop
       ? 'Extensions'
+      : housekeeping
+        ? 'Housekeeping'
       : view
         ? view.title
         : (root.split('/').filter(Boolean).pop() ?? 'Files');
@@ -83,6 +86,8 @@ export function PanelTab({
           ? 'How every session is behaving'
           : shop
             ? 'What the app can be taught to open'
+            : housekeeping
+              ? 'What is on disk, and giving it back'
             : view
               ? nameTip(view.title, view.root)
               : root
@@ -131,22 +136,24 @@ export function PanelTab({
           <path d="M2.2 4.6h4.2v4.2H2.2zM7.6 2.4h4v4h-4zM7.6 8.2h4v3.4h-4z" />
         ) : monitor ? (
           <path d="M1.4 8h2.3l1.4-3.9L7.2 10l1.5-3.2 1 1.2h2.9" />
+        ) : housekeeping ? (
+          <path d="M3 3.5h8M4 3.5l.7 8h4.6l.7-8M5.8 3.5V2.2h2.4v1.3" />
         ) : (
           <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
         )}
       </svg>
       <span className="tab-title">{cutName(name, nameMax)}</span>
-      {!monitor && !view && unsaved && <span className="file-tab-dirty" title="unsaved changes" />}
+      {!monitor && !view && !shop && !housekeeping && unsaved && <span className="file-tab-dirty" title="unsaved changes" />}
       {/*
         The same two colours the Git tab uses for the same two things, so a
         folder tab and the panel behind it are never saying different things:
         amber for work that is only in the working tree, green for commits that
         are only on this machine.
       */}
-      {!monitor && !view && git.state === 'uncommitted' && (
+      {!monitor && !view && !shop && !housekeeping && git.state === 'uncommitted' && (
         <span className="tab-git-dot" title={git.title} aria-label={git.title} />
       )}
-      {!monitor && !view && git.state === 'unpushed' && (
+      {!monitor && !view && !shop && !housekeeping && git.state === 'unpushed' && (
         <span className="tab-git-up" title={git.title} aria-label={git.title}>
           ↑{git.count}
         </span>

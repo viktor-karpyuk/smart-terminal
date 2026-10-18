@@ -321,5 +321,21 @@ contextBridge.exposeInMainWorld('api', {
     setBadge: (count) => ipcRenderer.invoke('app:set-badge', count),
   },
 
+  /** What is on disk and can be given back: sessions, build caches, the Code Reviewer's clones, old installers. */
+  housekeeping: {
+    inventory: () => ipcRenderer.invoke('housekeeping:inventory'),
+    measure: (paths, force = false) => ipcRenderer.invoke('housekeeping:measure', { paths, force }),
+    free: (ids) => ipcRenderer.invoke('housekeeping:free', ids),
+    deleteSessions: (ids) => ipcRenderer.invoke('housekeeping:delete-sessions', ids),
+    forgetTranscripts: (ids) => ipcRenderer.invoke('housekeeping:forget-transcripts', ids),
+    discardWorkshops: (ids) => ipcRenderer.invoke('housekeeping:discard-workshops', ids),
+    roots: () => ipcRenderer.invoke('housekeeping:roots'),
+    addRoot: (folder) => ipcRenderer.invoke('housekeeping:add-root', folder),
+    removeRoot: (folder) => ipcRenderer.invoke('housekeeping:remove-root', folder),
+    log: (limit) => ipcRenderer.invoke('housekeeping:log', limit),
+    // A size landed while measuring: the row can fill in.
+    onSize: (handler) => on('housekeeping:size', handler),
+  },
+
   onMenuAction: (handler) => on('menu:action', handler),
 });
