@@ -58,20 +58,58 @@ export interface SessionFilter {
   minBytes: number;
   /** Include the ones still running (shown, never removable). */
   includeOpen: boolean;
+  /** Words that must appear in the title, the folder or the account; empty keeps all. */
+  query?: string;
+  /** One account's sessions only; empty keeps all. */
+  profile?: string;
+  /** 'claude' or 'shell'; empty keeps all. */
+  sessionKind?: string;
+  /** Only sessions that kept a conversation or a copy (bytes > 0). */
+  withConversation?: boolean;
+  /** 'running' | 'ended' | 'any'; when set it overrides includeOpen. */
+  status?: 'any' | 'running' | 'ended';
+  /** Keep sessions active on or after this time (ms). */
+  activeSince?: number | null;
+  /** Keep sessions whose last activity is on or before this time (ms): inactive since then. */
+  inactiveSince?: number | null;
 }
 
 /** The sessions a filter keeps, the order unchanged. An unknown age never passes an age filter. */
 export function filterSessions(items: HousekeepingItem[], filter: SessionFilter, now = Date.now()): HousekeepingItem[] {
+  const words = (filter.query ?? '').toLowerCase().split(/\s+/).filter(Boolean);
   return items.filter((one) => {
     if (one.kind !== 'session') return false;
-    if (!filter.includeOpen && one.state === 'open') return false;
+    if (filter.status === 'running' && one.state !== 'open') return false;
+    if (filter.status === 'ended' && one.state === 'open') return false;
+    if (!filter.status && !filter.includeOpen && one.state === 'open') return false;
+    if (filter.activeSince && (one.lastActivityAt === null || one.lastActivityAt < filter.activeSince)) return false;
+    if (filter.inactiveSince && one.lastActivityAt !== null && one.lastActivityAt > filter.inactiveSince) return false;
     if (filter.minBytes > 0 && one.bytes < filter.minBytes) return false;
+    if (filter.withConversation && one.bytes <= 0) return false;
+    if (filter.profile && String(one.meta?.profile ?? '') !== filter.profile) return false;
+    if (filter.sessionKind && String(one.meta?.sessionKind ?? '') !== filter.sessionKind) return false;
+    if (words.length) {
+      const hay = `${one.label} ${one.path ?? ''} ${String(one.meta?.profile ?? '')} ${one.detail ?? ''}`.toLowerCase();
+      if (!words.every((w) => hay.includes(w))) return false;
+    }
     if (filter.olderThanDays > 0) {
       const days = idleDays(one.lastActivityAt, now);
       if (days === null || days < filter.olderThanDays) return false;
     }
     return true;
   });
+}
+
+/** The accounts and kinds present among the sessions, for the filter's menus. */
+export function sessionFacets(items: HousekeepingItem[]): { profiles: string[]; kinds: string[] } {
+  const profiles = new Set<string>();
+  const kinds = new Set<string>();
+  for (const one of items) {
+    if (one.kind !== 'session') continue;
+    if (one.meta?.profile) profiles.add(String(one.meta.profile));
+    if (one.meta?.sessionKind) kinds.add(String(one.meta.sessionKind));
+  }
+  return { profiles: [...profiles].sort(), kinds: [...kinds].sort() };
 }
 
 export interface WorktreeFilter {
@@ -92,6 +130,21 @@ export function filterWorktrees(items: HousekeepingItem[], filter: WorktreeFilte
     }
     return true;
   });
+}
+
+export type HousekeepingTab = 'sessions' | 'worktrees' | 'app' | 'health' | 'log';
+
+/** The tab a health metric belongs to, for a notification or a menu entry. */
+export function tabFor(metric: string | null | undefined): HousekeepingTab {
+  if (!metric) return 'health';
+  if (metric.startsWith('worktrees') || metric === 'budget.worktrees.bytes') return 'worktrees';
+  if (metric.startsWith('db.') || metric === 'budget.app.bytes') return 'app';
+  return 'health';
+}
+
+/** Whether a string names a tab. */
+export function isTab(value: unknown): value is HousekeepingTab {
+  return value === 'sessions' || value === 'worktrees' || value === 'app' || value === 'health' || value === 'log';
 }
 
 /** The items in one bucket, largest first. */

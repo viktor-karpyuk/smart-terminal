@@ -21,7 +21,10 @@ const { ContextStore, transcriptPath, locateTranscript, readTurnState } = requir
 const { Housekeeping } = require('./housekeeping');
 const { HousekeepingStore } = require('./housekeeping-store');
 const { DiskUsage } = require('./disk-usage');
-const { HousekeepingMonitor } = require('./housekeeping-monitor');
+const { HousekeepingMonitor, topProcesses } = require('./housekeeping-monitor');
+const { composeBrief } = require('./housekeeping-brief');
+const { proposals } = require('./housekeeping-advice');
+const { JobRunner } = require('./housekeeping-jobs');
 const rules = require('./review-rules');
 const { SessionMonitor } = require('./session-monitor');
 const { summarise, oneLine } = require('./session-analysis');
@@ -234,6 +237,8 @@ let housekeeping = null;
 let diskUsage = null;
 /** The health job: readings on a clock, said when they cross a line. */
 let housekeepingMonitor = null;
+/** Removals as jobs: queued, stoppable, resumable after a restart. */
+let housekeepingJobs = null;
 let worktreeCleanup = null;
 let worktreeOffer = null;
 let teamsService = null;
@@ -1004,6 +1009,73 @@ function createHousekeeping() {
   });
 }
 
+/** What was declined in this run, by worktree path, so a background offer does not ask twice. */
+const declinedWorktreeOffers = new Set();
+
+/**
+ * A session closed, or the person asked: is the folder it stood in a worktree
+ * whose work is done? If so, offer to remove it — as a job, with the same
+ * checks and the same progress as the panel. `quiet` says nothing when there
+ * is nothing to say; from the menu, there is always an answer.
+ */
+async function offerWorktreeFor(cwd, { quiet = true, exceptPty = null } = {}) {
+  const owner = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined;
+  const say = async (type, message, detail) => {
+    if (quiet) return;
+    await dialog.showMessageBox(owner, { type, message, detail });
+  };
+  if (!cwd || !housekeeping) {
+    await say('info', 'This session is not standing in a folder the app knows.', 'Open a terminal in a worktree and try again.');
+    return { found: false };
+  }
+  let rows;
+  try {
+    // The session asking is not "inside": it is the one being closed, or the one that asked.
+    const live = housekeeping.live;
+    if (exceptPty) housekeeping.live = () => (ptys?.list() ?? []).filter((one) => one.id !== exceptPty).map((one) => cwdWatcher?.known?.get(one.id)?.cwd).filter(Boolean);
+    try {
+      rows = await housekeeping.worktrees.list();
+    } finally {
+      housekeeping.live = live;
+    }
+  } catch (error) {
+    await say('error', 'The worktrees could not be checked.', String(error?.message ?? error));
+    return { found: false };
+  }
+  const real = (one) => { try { return fs.realpathSync(one); } catch { return path.resolve(one); } };
+  const here = real(cwd);
+  const row = rows.filter((one) => !one.main).find((one) => here === one.path || here.startsWith(one.path + path.sep));
+  if (!row) {
+    await say('info', 'This session is not in a worktree.', `${cwd} is a main working tree or no checkout at all; there is nothing to tidy.`);
+    return { found: false };
+  }
+  if (!row.finished) {
+    await say('info', `${row.label} is still in progress.`, `Its state is "${row.state}". Housekeeping offers a worktree only once its work is merged, or its branch is gone on origin.`);
+    return { found: true, path: row.path, finished: false, state: row.state };
+  }
+  if (row.blockers.length) {
+    await say('warning', `${row.label} is finished, but cannot go yet.`, row.blockers.join('\n'));
+    return { found: true, path: row.path, finished: true, blockers: row.blockers };
+  }
+  if (quiet && declinedWorktreeOffers.has(row.path)) return { found: true, path: row.path, finished: true, declined: true };
+  const bytes = housekeeping.sizes.known(row.path)?.bytes ?? 0;
+  const answer = await dialog.showMessageBox(owner, {
+    type: 'question',
+    buttons: ['Remove it', 'Keep it'],
+    defaultId: 1,
+    cancelId: 1,
+    message: `Remove the worktree ${row.label}?`,
+    detail: `Its work is ${row.state}${bytes ? `, and it weighs ${require('./housekeeping-items').formatBytes(bytes)}` : ''}. It is clean and nobody is inside it. Removal runs as a Housekeeping job: git worktree remove, never forced; a merged branch is deleted, an unmerged one kept.`,
+  });
+  if (answer.response !== 0) {
+    declinedWorktreeOffers.add(row.path);
+    return { found: true, path: row.path, finished: true, declined: true };
+  }
+  const job = housekeepingJobs.start({ kind: 'remove-worktrees', ids: [`worktree:${row.path}`], labels: { [`worktree:${row.path}`]: row.label }, title: `Remove ${row.label} after its session closed` });
+  send('housekeeping:open', { tab: 'worktrees' });
+  return { found: true, path: row.path, finished: true, job: job.id };
+}
+
 function registerIpc() {
   ipcMain.handle('pty:create', (_e, options = {}) => {
     const profile = profiles.get(options.profileId);
@@ -1149,9 +1221,21 @@ function registerIpc() {
   ipcMain.on('scrollback:forget', (_e, id) => scrollback.forget(id));
   ipcMain.on('scrollback:clear', () => scrollback.clear());
   ipcMain.on('pty:kill', (_e, { id }) => {
+    // Where it was standing, before the watcher forgets: a session closed in a finished worktree is the moment to offer the worktree.
+    const cwd = cwdWatcher?.known?.get(id)?.cwd ?? null;
     cwdWatcher.forget(id);
     ptys.kill(id);
+    if (cwd && housekeeping?.pref?.('offer-on-close', true)) {
+      const timer = setTimeout(() => offerWorktreeFor(cwd, { quiet: true }).catch(() => {}), 1500);
+      timer.unref?.();
+    }
   });
+  /** The menu's check of the session in front: the folder its pty is in, and the offer, with an answer even when there is nothing. */
+  ipcMain.handle('housekeeping:check-session-worktree', (_e, ptyId) => {
+    const cwd = cwdWatcher?.known?.get(String(ptyId))?.cwd ?? null;
+    return offerWorktreeFor(cwd, { quiet: false, exceptPty: String(ptyId) });
+  });
+  ipcMain.handle('housekeeping:pref', (_e, { key, value } = {}) => (value === undefined ? housekeeping.pref(String(key), null) : housekeeping.setPref(String(key), value)));
 
   /**
    * The command to start Claude inside a session that already has a shell. The
@@ -1355,6 +1439,7 @@ function registerIpc() {
   ipcMain.handle('housekeeping:forget-transcripts', (_e, ids = []) => housekeeping.forgetTranscripts(Array.isArray(ids) ? ids : []));
   ipcMain.handle('housekeeping:discard-workshops', (_e, ids = []) => housekeeping.discardWorkshops(Array.isArray(ids) ? ids : []));
   ipcMain.handle('housekeeping:remove-worktrees', (_e, ids = []) => housekeeping.removeWorktrees(Array.isArray(ids) ? ids : []));
+  ipcMain.handle('housekeeping:repair-worktrees', (_e, ids = []) => housekeeping.repairWorktrees(Array.isArray(ids) ? ids : []));
   ipcMain.handle('housekeeping:roots', () => housekeeping.roots());
   ipcMain.handle('housekeeping:add-root', (_e, folder) => housekeeping.addRoot(String(folder ?? '')));
   ipcMain.handle('housekeeping:remove-root', (_e, folder) => housekeeping.removeRoot(String(folder ?? '')));
@@ -1366,6 +1451,36 @@ function registerIpc() {
   ipcMain.handle('housekeeping:set-threshold', (_e, { metric, level, value } = {}) => {
     housekeepingMonitor?.setThreshold(String(metric), String(level), value);
     return housekeepingMonitor?.report() ?? null;
+  });
+  ipcMain.handle('housekeeping:snapshot', () => housekeeping.snapshot());
+  ipcMain.handle('housekeeping:regenerable', (_e, list) => (list === undefined ? housekeeping.regenerable() : housekeeping.setRegenerable(list)));
+  ipcMain.handle('housekeeping:stats', (_e, days) => housekeepingMonitor?.stats(Number(days) || 30) ?? null);
+  /** The panel's own plan: what to do, in order, with the action that does it when there is one. */
+  ipcMain.handle('housekeeping:advice', async () => {
+    const snapshot = housekeeping.snapshot();
+    const inventory = snapshot && !snapshot.stale ? snapshot : await housekeeping.inventory();
+    let dbHealth = null;
+    try {
+      const health = db.health();
+      dbHealth = { bytes: health.bytes, wasted: health.wasted };
+    } catch {
+      /* the plan does without */
+    }
+    return proposals({ report: housekeepingMonitor?.report() ?? null, inventory, processes: topProcesses(8), dbHealth });
+  });
+  ipcMain.handle('housekeeping:act', (_e, { id, ids = [] } = {}) => housekeeping.act(String(id), Array.isArray(ids) ? ids : []));
+  // Jobs: the long removals, one item at a time, with their place kept in the database.
+  ipcMain.handle('housekeeping:jobs', () => housekeepingJobs?.list() ?? []);
+  ipcMain.handle('housekeeping:job-start', (_e, { kind, ids = [], labels = {}, title = null } = {}) => housekeepingJobs.start({ kind: String(kind), ids: Array.isArray(ids) ? ids : [], labels: labels && typeof labels === 'object' ? labels : {}, title: title ? String(title).slice(0, 120) : null }));
+  ipcMain.handle('housekeeping:job-pause', (_e, id) => housekeepingJobs.pause(Number(id)));
+  ipcMain.handle('housekeeping:job-resume', (_e, id) => housekeepingJobs.resume(Number(id)));
+  ipcMain.handle('housekeeping:job-cancel', (_e, id) => housekeepingJobs.cancel(Number(id)));
+  ipcMain.handle('housekeeping:job-dismiss', (_e, id) => housekeepingJobs.dismiss(Number(id)));
+  /** What Ask Claude hands over: the health report, the inventory, the processes, as text. Nothing is run. */
+  ipcMain.handle('housekeeping:brief', async (_e, { question = null } = {}) => {
+    await housekeepingMonitor?.tickSystem();
+    const inventory = housekeeping.last && Date.now() - housekeeping.last.at < 10 * 60_000 ? { items: housekeeping.last.items, totals: require('./housekeeping-items').totals(housekeeping.last.items), disk: require('./housekeeping').diskFree(app.getPath('userData')) } : await housekeeping.inventory();
+    return composeBrief({ report: housekeepingMonitor?.report() ?? null, inventory, processes: topProcesses(12), openSessions: ptys?.list().length ?? 0, question: question ? String(question).slice(0, 2000) : null });
   });
   ipcMain.handle('housekeeping:measure-now', async () => {
     await housekeepingMonitor?.tickInventory();
@@ -2851,6 +2966,15 @@ if (isPrimaryInstance) app.whenReady().then(() => {
     emit: (name, payload) => send(`housekeeping:${name}`, payload),
   });
   housekeepingMonitor.start();
+  housekeepingJobs = new JobRunner({
+    store: housekeeping.store,
+    housekeeping,
+    emit: (name, payload) => {
+      send(`housekeeping:${name}`, payload);
+      // A job that ended moved the disk: the title bar's figures are read again now, not at the next minute.
+      if (name === 'job' && ['done', 'cancelled', 'failed'].includes(payload?.status)) housekeepingMonitor?.tickSystem().catch(() => {});
+    },
+  });
   // Watching how sessions behave is a separate job from keeping copies of them,
   // but it needs the same two things — where a transcript is, and which sessions
   // have one — so it is handed the store rather than working them out again.

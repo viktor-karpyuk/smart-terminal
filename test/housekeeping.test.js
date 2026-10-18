@@ -209,7 +209,7 @@ test('sweep finishes old removals, forgets sizes of folders that are gone, and t
   try {
     fs.mkdirSync(path.join(checkout, 'target.trash-1'));
     sizes.cache.set(path.join(checkout, 'vanished'), { bytes: 1, files: 1, mtime: 0, measuredAt: NOW });
-    hk.store.log({ action: 'free', kind: 'build-cache', label: 'ancient', bytes: 1, at: NOW - 400 * DAY });
+    hk.store.log({ action: 'free', kind: 'build-cache', label: 'ancient', bytes: 1, at: NOW - 800 * DAY });
     hk.store.log({ action: 'free', kind: 'build-cache', label: 'recent', bytes: 1, at: NOW - DAY });
     const out = await hk.sweep();
     assert.equal(out.swept.length, 1);
@@ -251,6 +251,41 @@ test('worktrees of a checkout under a root are items, their caches are nested, a
     assert.equal(out.results[0].ok, true);
     assert.ok(!fs.existsSync(wt));
     assert.ok(hk.log().some((row) => row.action === 'remove-worktree' && row.ok));
+  } finally {
+    sizes.stop();
+  }
+});
+
+test('the last inventory is kept and answers at once as a snapshot; quick actions run through the same checks', { skip }, async () => {
+  const { hk, sizes } = world();
+  try {
+    assert.equal(hk.snapshot(), null, 'nothing kept yet');
+    const inv = await hk.inventory();
+    const snap = hk.snapshot();
+    assert.equal(snap.items.length, inv.items.length);
+    assert.equal(snap.stale, false);
+    hk.last = null;
+    const kept = hk.snapshot();
+    assert.equal(kept.stale, true, 'from the store once the run forgot it');
+    assert.equal(kept.items.length, inv.items.length);
+    assert.ok(Array.isArray(kept.roots) && kept.roots.length === 1, 'roots are the list the panel maps over');
+    assert.ok(Array.isArray(kept.log));
+    assert.equal(typeof kept.checkouts, 'number');
+    // An older snapshot that kept a count instead of the list is still answered in the panel's shape.
+    hk.store.setSetting('last-inventory', { items: inv.items, totals: inv.totals, roots: 1, checkouts: '1', readAt: NOW });
+    assert.ok(Array.isArray(hk.snapshot().roots));
+
+    const events = [];
+    hk.emit = (name, payload) => events.push([name, payload]);
+    const backup = inv.items.find((one) => one.kind === 'db-backup');
+    const out = await hk.act('free', [backup.id]);
+    assert.equal(out.freed, 2048);
+    const progress = events.filter(([name]) => name === 'progress').map(([, p]) => p);
+    assert.ok(progress.some((p) => p.op === 'free' && !p.done && p.label === backup.label));
+    assert.ok(progress.some((p) => p.op === 'free' && p.done && p.freed === 2048));
+    await assert.rejects(hk.act('explode', []), /Not an action/);
+    const folded = await hk.act('db-checkpoint', []);
+    assert.equal(folded.results[0].ok, true);
   } finally {
     sizes.stop();
   }

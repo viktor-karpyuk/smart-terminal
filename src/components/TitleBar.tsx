@@ -82,10 +82,12 @@ export function TitleBar() {
       */}
       <div className="titlebar-centre">
         {gaugeProfile && <UsageGauge profileId={gaugeProfile.id} />}
+        <SystemVitals />
       </div>
 
       <div className="titlebar-actions">
         <UpdateNotice />
+        <HousekeepingButton />
         <CiBell />
         <button className="icon-btn" title="Split right (⌘D)" aria-label="Split right" onClick={() => splitActive('row')}>
           <SplitRightIcon />
@@ -205,6 +207,85 @@ function WaitingOnYou() {
       onClick={() => focusSession(waiting[0])}
     >
       {waiting.length} waiting on you
+    </button>
+  );
+}
+
+/**
+ * Housekeeping, from the window's own bar: the system menu bar belongs to
+ * whichever app is in front, and a person with two copies open was looking at
+ * the wrong one. The dot is the health job's status, the same as the sidebar's.
+ */
+function HousekeepingButton() {
+  const status = useStore((s) => s.housekeepingStatus);
+  const open = useStore((s) => s.openHousekeeping);
+  const title =
+    status === 'limit'
+      ? 'Housekeeping: something is at a limit (⇧⌘H)'
+      : status === 'attention'
+        ? 'Housekeeping: something needs attention (⇧⌘H)'
+        : 'Housekeeping: what is on disk, and how the machine is doing (⇧⌘H)';
+  return (
+    <button className={`icon-btn housekeeping-dot is-${status}`} title={title} aria-label="Housekeeping" onClick={() => open()}>
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden>
+        <path d="M3 3.5h8M4 3.5l.7 8h4.6l.7-8M5.8 3.5V2.2h2.4v1.3" />
+      </svg>
+    </button>
+  );
+}
+
+/**
+ * The machine, in the title bar: memory used, swap, disk free, sessions. The
+ * health job reads them every minute; the colour is its verdict. Clicking
+ * opens Housekeeping on Health, where the numbers are explained.
+ */
+function SystemVitals() {
+  const vitals = useStore((s) => s.housekeepingVitals);
+  const status = useStore((s) => s.housekeepingStatus);
+  const open = useStore((s) => s.openHousekeeping);
+  if (!vitals) return null;
+  const gb = (n: number | null) => (n === null ? '—' : n >= 100 * 1024 ** 3 ? `${Math.round(n / 1024 ** 3)} GB` : `${(n / 1024 ** 3).toFixed(1)} GB`);
+  const level = (value: number | null, warn: number, bad: number, below = false) => {
+    if (value === null) return '';
+    const worse = below ? value < bad : value > bad;
+    const warnish = below ? value < warn : value > warn;
+    return worse ? ' is-limit' : warnish ? ' is-attention' : '';
+  };
+  return (
+    <button
+      className={`titlebar-vitals is-${status}`}
+      onClick={() => open('health')}
+      title={[
+        `Memory ${vitals.memUsedPct ?? '—'}% used, ${gb(vitals.memFree)} free`,
+        `Swap ${vitals.swapPct ?? '—'}% used${vitals.pageouts ? `, ${vitals.pageouts} pages/min out` : ''}`,
+        `Disk ${gb(vitals.diskFree)} free${vitals.diskFreePct !== null ? ` (${vitals.diskFreePct}%)` : ''}`,
+        `Load ${vitals.load ?? '—'} per core`,
+        `${vitals.sessions ?? 0} sessions open`,
+        'Click for Housekeeping › Health',
+      ].join('\n')}
+      aria-label="System vitals"
+    >
+      <span className={`titlebar-vital${level(vitals.memUsedPct, 85, 93)}`}>
+        <small>MEM</small> {vitals.memUsedPct ?? '—'}%
+      </span>
+      <span className={`titlebar-vital${level(vitals.swapPct, 50, 80)}`}>
+        <small>SWAP</small> {vitals.swapPct ?? '—'}%
+      </span>
+      <span className={`titlebar-vital${level(vitals.diskFreePct, 15, 8, true)}`}>
+        <small>DISK</small> {gb(vitals.diskFree)}
+      </span>
+      <span className={`titlebar-vital${level(vitals.load, 1, 2)}`}>
+        <small>LOAD</small> {vitals.load ?? '—'}
+      </span>
+      {(vitals.todayFreed > 0 || (vitals.todayConsumed ?? 0) > 0) && (
+        <span
+          className={`titlebar-vital titlebar-today${vitals.todayUsedDelta !== null && vitals.todayUsedDelta < 0 ? ' is-good' : vitals.todayUsedDelta !== null && vitals.todayUsedDelta > 0 ? ' is-warm' : ''}`}
+          title={`Today: ${gb(vitals.todayFreed)} freed by housekeeping, ${vitals.todayConsumed === null ? '—' : gb(vitals.todayConsumed)} consumed; used space ${vitals.todayUsedDelta === null ? 'not measured yet' : `${vitals.todayUsedDelta >= 0 ? 'up' : 'down'} ${gb(Math.abs(vitals.todayUsedDelta))}`}${vitals.todayUsedPct !== null ? ` (${vitals.todayUsedPct > 0 ? '+' : ''}${vitals.todayUsedPct}%)` : ''}`}
+        >
+          <small>TODAY</small> −{gb(vitals.todayFreed)} / +{vitals.todayConsumed === null ? '—' : gb(vitals.todayConsumed)}
+          {vitals.todayUsedPct !== null ? ` · ${vitals.todayUsedPct > 0 ? '+' : ''}${vitals.todayUsedPct}%` : ''}
+        </span>
+      )}
     </button>
   );
 }

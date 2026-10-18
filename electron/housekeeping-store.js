@@ -45,6 +45,31 @@ const MIGRATIONS = [
      key   TEXT PRIMARY KEY,
      value TEXT
    );`,
+  `CREATE TABLE IF NOT EXISTS hk_job (
+     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+     kind        TEXT NOT NULL,
+     title       TEXT NOT NULL,
+     status      TEXT NOT NULL,
+     ids         TEXT NOT NULL,
+     labels      TEXT NOT NULL DEFAULT '{}',
+     results     TEXT NOT NULL DEFAULT '{}',
+     current     TEXT,
+     idx         INTEGER NOT NULL DEFAULT 0,
+     freed       INTEGER NOT NULL DEFAULT 0,
+     failed      INTEGER NOT NULL DEFAULT 0,
+     created_at  INTEGER NOT NULL,
+     started_at  INTEGER,
+     updated_at  INTEGER NOT NULL,
+     finished_at INTEGER
+   );
+   CREATE INDEX IF NOT EXISTS hk_job_status ON hk_job (status, created_at);`,
+  `CREATE TABLE IF NOT EXISTS hk_daily (
+     day    INTEGER NOT NULL,
+     metric TEXT NOT NULL,
+     first  REAL NOT NULL,
+     last   REAL NOT NULL,
+     PRIMARY KEY (day, metric)
+   );`,
 ];
 
 class HousekeepingStore {
@@ -126,9 +151,74 @@ class HousekeepingStore {
       .map((row) => ({ ...row, ok: Boolean(row.ok) }));
   }
 
-  /** Keep the log from growing without bound: a year is more than anybody reads back. */
-  trimLog({ keepDays = 365 } = {}) {
+  /** Keep the log from growing without bound: two years, so a year's balance has a year to compare with. */
+  trimLog({ keepDays = 730 } = {}) {
     return this.db.prepare('DELETE FROM hk_log WHERE at < ?').run(Date.now() - keepDays * 86_400_000).changes;
+  }
+
+  /** What was given back since a time: bytes and actions, by action. */
+  logTotals(since = 0) {
+    const rows = this.db
+      .prepare('SELECT action, COUNT(*) AS n, COALESCE(SUM(bytes), 0) AS bytes FROM hk_log WHERE ok = 1 AND at >= ? GROUP BY action')
+      .all(since);
+    const total = rows.reduce((acc, row) => ({ n: acc.n + row.n, bytes: acc.bytes + row.bytes }), { n: 0, bytes: 0 });
+    return { ...total, byAction: Object.fromEntries(rows.map((row) => [row.action, { n: row.n, bytes: row.bytes }])) };
+  }
+
+  /** The first and last reading of a metric since a time, for "went from A to B". */
+  firstLast(metric, since = 0) {
+    const first = this.db.prepare('SELECT at, value FROM hk_reading WHERE metric = ? AND at >= ? ORDER BY at LIMIT 1').get(metric, since);
+    const last = this.db.prepare('SELECT at, value FROM hk_reading WHERE metric = ? AND at >= ? ORDER BY at DESC LIMIT 1').get(metric, since);
+    return first && last ? { first, last } : null;
+  }
+
+  // --- jobs -------------------------------------------------------------------
+
+  createJob({ kind, title, ids, labels = {}, createdAt = Date.now() }) {
+    const info = this.db
+      .prepare('INSERT INTO hk_job (kind, title, status, ids, labels, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(kind, title, 'queued', JSON.stringify(ids), JSON.stringify(labels), createdAt, createdAt);
+    return this.job(Number(info.lastInsertRowid));
+  }
+
+  job(id) {
+    const row = this.db.prepare('SELECT * FROM hk_job WHERE id = ?').get(id);
+    return row ? jobRow(row) : null;
+  }
+
+  /** Jobs in the states named (or all), newest first. */
+  jobs(statuses = null, limit = 50) {
+    const rows = statuses?.length
+      ? this.db.prepare(`SELECT * FROM hk_job WHERE status IN (${statuses.map(() => '?').join(',')}) ORDER BY created_at DESC, id DESC LIMIT ?`).all(...statuses, limit)
+      : this.db.prepare('SELECT * FROM hk_job ORDER BY created_at DESC, id DESC LIMIT ?').all(limit);
+    return rows.map(jobRow);
+  }
+
+  updateJob(id, patch) {
+    const map = { status: 'status', current: 'current', index: 'idx', freed: 'freed', failed: 'failed', startedAt: 'started_at', updatedAt: 'updated_at', finishedAt: 'finished_at' };
+    const sets = [];
+    const values = [];
+    for (const [key, column] of Object.entries(map)) {
+      if (patch[key] !== undefined) {
+        sets.push(`${column} = ?`);
+        values.push(patch[key]);
+      }
+    }
+    if (patch.results !== undefined) {
+      sets.push('results = ?');
+      values.push(JSON.stringify(patch.results));
+    }
+    if (sets.length) this.db.prepare(`UPDATE hk_job SET ${sets.join(', ')} WHERE id = ?`).run(...values, id);
+    return this.job(id);
+  }
+
+  deleteJob(id) {
+    this.db.prepare('DELETE FROM hk_job WHERE id = ?').run(id);
+  }
+
+  /** Finished jobs older than a month go; the log keeps what they gave back. */
+  trimJobs({ keepDays = 30 } = {}) {
+    return this.db.prepare("DELETE FROM hk_job WHERE status IN ('done','cancelled','failed') AND updated_at < ?").run(Date.now() - keepDays * 86_400_000).changes;
   }
 
   // --- readings ---------------------------------------------------------------
@@ -160,6 +250,30 @@ class HousekeepingStore {
     return this.db.prepare('DELETE FROM hk_reading WHERE at < ?').run(Date.now() - keepDays * 86_400_000).changes;
   }
 
+  // --- daily roll-up ------------------------------------------------------------
+
+  /** The first and last value of a metric on a day, kept for years where minute readings are kept a month. */
+  rollup(metric, value, at = Date.now()) {
+    const day = Math.floor(at / 86_400_000);
+    this.db
+      .prepare(
+        `INSERT INTO hk_daily (day, metric, first, last) VALUES (?, ?, ?, ?)
+         ON CONFLICT(day, metric) DO UPDATE SET last = excluded.last`,
+      )
+      .run(day, metric, Number(value), Number(value));
+  }
+
+  /** How a metric moved from the first reading on or after a day to the latest: {from, to, fromDay, toDay}, or null. */
+  dailyRange(metric, sinceDay) {
+    const first = this.db.prepare('SELECT day, first FROM hk_daily WHERE metric = ? AND day >= ? ORDER BY day LIMIT 1').get(metric, sinceDay);
+    const last = this.db.prepare('SELECT day, last FROM hk_daily WHERE metric = ? AND day >= ? ORDER BY day DESC LIMIT 1').get(metric, sinceDay);
+    return first && last ? { from: first.first, to: last.last, fromDay: first.day, toDay: last.day } : null;
+  }
+
+  trimDaily({ keepDays = 800 } = {}) {
+    return this.db.prepare('DELETE FROM hk_daily WHERE day < ?').run(Math.floor(Date.now() / 86_400_000) - keepDays).changes;
+  }
+
   // --- settings ---------------------------------------------------------------
 
   settings() {
@@ -189,6 +303,33 @@ class HousekeepingStore {
       .prepare('INSERT INTO hk_setting (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
       .run(key, value === undefined ? null : JSON.stringify(value));
   }
+}
+
+function jobRow(row) {
+  const parse = (text, fallback) => {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return fallback;
+    }
+  };
+  return {
+    id: row.id,
+    kind: row.kind,
+    title: row.title,
+    status: row.status,
+    ids: parse(row.ids, []),
+    labels: parse(row.labels, {}),
+    results: parse(row.results, {}),
+    current: row.current,
+    index: row.idx,
+    freed: row.freed,
+    failed: row.failed,
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    updatedAt: row.updated_at,
+    finishedAt: row.finished_at,
+  };
 }
 
 module.exports = { HousekeepingStore, MIGRATIONS };

@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { isTab, tabFor, type HousekeepingTab } from './lib/housekeeping';
 import { CiToasts } from './components/CiNotices';
 import { startDrag } from './lib/resize';
 import { reapplyTerminalSizes, terminalLook, useStore } from './state/store';
@@ -38,12 +39,23 @@ export function App() {
 
   useEffect(() => window.api.onMenuAction(({ id }) => handleMenuAction(id)), []);
   // The health job: its status for the sidebar's dot, and a clicked notification opens the panel.
-  useEffect(() => window.api.housekeeping.onHealth(({ status }) => useStore.getState().setHousekeepingStatus(status)), []);
-  useEffect(() => window.api.housekeeping.onOpen(() => useStore.getState().openHousekeeping()), []);
+  useEffect(
+    () =>
+      window.api.housekeeping.onHealth(({ status, vitals }) => {
+        useStore.getState().setHousekeepingStatus(status);
+        if (vitals) useStore.getState().setHousekeepingVitals(vitals);
+      }),
+    [],
+  );
+  useEffect(() => window.api.housekeeping.onOpen(({ metric, tab }) => useStore.getState().openHousekeeping(isTab(tab) ? tab : tabFor(metric))), []);
   useEffect(() => {
     window.api.housekeeping
       .health()
-      .then((health) => health && useStore.getState().setHousekeepingStatus(health.status))
+      .then((health) => {
+        if (!health) return;
+        useStore.getState().setHousekeepingStatus(health.status);
+        useStore.getState().setHousekeepingVitals(health.vitals ?? null);
+      })
       .catch(() => {});
   }, []);
 
@@ -229,6 +241,26 @@ export function handleMenuAction(id: string) {
       break;
     case 'housekeeping':
       store.openHousekeeping();
+      break;
+    case 'housekeeping:sessions':
+    case 'housekeeping:worktrees':
+    case 'housekeeping:app':
+    case 'housekeeping:health':
+    case 'housekeeping:log':
+      store.openHousekeeping(id.slice('housekeeping:'.length) as HousekeepingTab);
+      break;
+    case 'housekeeping:worktree-here': {
+      const ptyId = sessionId ? store.sessions[sessionId]?.ptyId : null;
+      void window.api.housekeeping.checkSessionWorktree(ptyId ?? null).catch(() => {});
+      break;
+    }
+    case 'housekeeping:weigh':
+      store.openHousekeeping('health');
+      void window.api.housekeeping.measureNow().catch(() => {});
+      break;
+    case 'housekeeping:check':
+      store.openHousekeeping('health');
+      void window.api.housekeeping.health(true).catch(() => {});
       break;
     case 'updates':
       store.setUpdatePanelOpen(true);

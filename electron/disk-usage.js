@@ -96,6 +96,20 @@ class DiskUsage {
   }
 
   /**
+   * Delete a tree on the worker, hearing how far it got. Resolves with bytes,
+   * files and what would not go; the remembered size of the path is dropped.
+   */
+  async remove(target, { onProgress = null } = {}) {
+    let final = { bytes: 0, files: 0, failed: 0 };
+    await this.#ask([], (row) => {
+      if (row.partial) onProgress?.({ bytes: row.bytes, files: row.files, failed: row.failed });
+      else final = { bytes: row.bytes, files: row.files, failed: row.failed, error: row.error };
+    }, { remove: target });
+    this.forget(target);
+    return final;
+  }
+
+  /**
    * Sizes for many paths. Fresh answers come straight back; the rest are
    * walked by the worker, and `onEach` hears every one as it lands so a
    * caller can show progress. Resolves to a map of path → measurement.
@@ -129,7 +143,7 @@ class DiskUsage {
     return out;
   }
 
-  #ask(paths, onRow) {
+  #ask(paths, onRow, extra = {}) {
     return new Promise((resolve, reject) => {
       let worker = this.worker;
       if (!worker) {
@@ -168,7 +182,7 @@ class DiskUsage {
       const id = this.askId;
       this.asking.set(id, { resolve, reject, onRow });
       try {
-        worker.postMessage({ id, paths });
+        worker.postMessage({ id, paths, ...extra });
       } catch (error) {
         this.asking.delete(id);
         reject(error);

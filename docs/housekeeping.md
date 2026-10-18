@@ -1,8 +1,10 @@
 # Housekeeping
 
 What Smart Terminal and the work around it leave on disk, and giving it back.
-Open it from **Session › Housekeeping…**, from the bin icon in the sidebar's
-Monitor header, or from the link in the Monitor's database view.
+It has a menu of its own in the menu bar — **Housekeeping › Open Housekeeping**
+(⌘⇧H), one entry per tab, Clean Up Finished Worktrees, Weigh Everything Now,
+Check Health Now — and is also reachable from the bin icon in the sidebar's
+Monitor header and from the link in the Monitor's database view.
 
 ## What it lists
 
@@ -65,8 +67,11 @@ Each row carries:
   ahead of the upstream; ignored files nothing could rebuild (an `.env`, a
   key); a session inside; locked; detached HEAD; a base branch.
 
-A worktree whose branch has no commit of its own and is clean has nothing to
-lose and no push blocker.
+Each row also answers "is the work in it done" in one word: **done** (merged,
+or branch gone on origin), **unmerged** (commits no base branch has, or
+uncommitted changes; the state says how many, e.g. `3 commits not merged`),
+**empty** (no commit of its own). A worktree whose branch has no commit of
+its own and is clean has nothing to lose and no push blocker.
 
 Filter by idle days (default fourteen) and **finished only**. **Remove** takes
 the selection through `git worktree remove` without `--force`, so git refuses
@@ -107,6 +112,83 @@ to fine may be said again the next time it crosses. Clicking the notification
 opens the panel on the tab the metric belongs to. The sidebar's housekeeping
 button carries a dot while anything is crossed, and the panel opens with a
 strip naming the conditions.
+
+Swap is read too (`sysctl vm.swapusage` on macOS, `/proc/meminfo` on Linux):
+swap in use above 50% is attention and above 80% a limit, because swap is what
+makes typing in the terminals lag.
+
+**What to do, in order** — the Health tab's own plan, before anybody asks
+Claude: memory first when the machine is swapping (which processes hold it,
+how many sessions are open), then the disk by what is largest and safest
+(build caches in worktrees idle for two weeks, finished worktrees, old
+installations and backups, conversations of sessions idle three months), then
+the database (fold the log, compact the file). Each proposal says what it
+frees and carries the button that does it; the same ones appear as **Quick
+actions** under the bar. Nothing that would lose unmerged work is ever
+proposed for removal; it is pointed at.
+
+**Jobs** — every removal runs as a job: written to the database before it
+starts, one item at a time through the same checks a button has, each result
+kept as it lands. The strip under the bar shows where it is, what it has given
+back, what it refused, and inside a large deletion how many bytes and files
+are gone so far. **Pause** stops after the item in hand, **Stop** keeps what
+was done, **Resume** carries on from the first item not yet done. A job that
+was running when the app quit is found at the next start marked interrupted,
+with its place kept, and waits to be resumed; nothing restarts on its own.
+One job runs at a time. Inside a worktree the build caches are deleted first
+by the worker, with progress; `git worktree remove` then takes an instant.
+
+**When a session closes** — the folder it stood in is looked at a moment
+later. If it is a worktree whose work is merged or whose branch is gone on
+origin, clean and with nobody inside, a dialog offers to remove it, as a job
+with the same checks and progress. What was declined is not asked again in
+that run; the switch under Worktrees turns the offer off. **Housekeeping ›
+Check This Session's Worktree…** asks the same of the session in front, with
+an answer even when there is nothing to do.
+
+**Remove anyway** — a worktree blocked only by the work inside it (files not
+committed, commits on no base branch, ignored files, a detached head) can be
+ticked one by one — the tick is amber, and "select all" never includes it —
+and removed with **Remove N anyway**, after a modal that says per item what is
+lost. That is the one place `git worktree remove --force` is used; commits
+stay on their branch, which is kept. What is never forced: the main working
+tree, a base branch, a worktree a session is standing in, a locked one, a
+broken link (repair it first). The log marks these removals as forced.
+
+**Uncommitted** — each worktree row says how many files git status lists as
+changed, staged or untracked, or that it is clean.
+
+**Vitals in the title bar** — memory used (what a process could have: free plus
+inactive plus purgeable on macOS), swap, disk free and load per core, coloured
+by the health job's verdict; clicking opens Health.
+
+**Progress** — every action and every inventory report as they go: which item,
+how many of how many, how much given back so far, how many refused. The panel
+opens on the last inventory kept and says so while a fresh one is read.
+
+**Freed against consumed** — by day, week, month and year: what housekeeping
+gave back (the log), how the disk's used space moved in the same time, and
+what was *consumed* — the movement plus what was freed, which is what the
+disk would have grown by had nothing been removed. A daily roll-up
+(`hk_daily`, first and last value per day, kept two years) is what the month
+and year stand on; minute readings are kept a month. The title bar shows
+today's figures beside the vitals — freed, consumed and the day's change in
+used space as a share of its start — refreshed the moment a job ends.
+
+**The last 30 days** — what housekeeping gave back (by week), and how the disk,
+the worktrees and the database moved, from the kept log and readings.
+
+Swap in use is history; **pages swapped out per minute** (from `vm_stat` on
+macOS) is swapping happening now, with lines at 200 and 2000 a minute.
+
+**Ask Claude** — in the strip at the top, in the bar, and in the Health tab —
+opens a Claude session (one per panel, on a signed-in account) and hands it the
+machine's state as text: the lines crossed and why they matter, memory and
+swap, the processes holding the most memory, the disk and the buckets, the
+worktrees with whether their work is merged, the largest caches, and a
+question: which processes or sessions to close first, what to free on disk
+without losing unmerged work, and what would stop it happening again. The
+session proposes; nothing is run by the panel.
 
 Readings are kept for a month in `hk_reading`. From them the tab shows how
 fast the disk, the worktrees and the app's data are growing per week (a

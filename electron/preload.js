@@ -338,16 +338,43 @@ contextBridge.exposeInMainWorld('api', {
     forgetTranscripts: (ids) => ipcRenderer.invoke('housekeeping:forget-transcripts', ids),
     discardWorkshops: (ids) => ipcRenderer.invoke('housekeeping:discard-workshops', ids),
     removeWorktrees: (ids) => ipcRenderer.invoke('housekeeping:remove-worktrees', ids),
+    repairWorktrees: (ids) => ipcRenderer.invoke('housekeeping:repair-worktrees', ids),
     roots: () => ipcRenderer.invoke('housekeeping:roots'),
     addRoot: (folder) => ipcRenderer.invoke('housekeeping:add-root', folder),
     removeRoot: (folder) => ipcRenderer.invoke('housekeeping:remove-root', folder),
     log: (limit) => ipcRenderer.invoke('housekeeping:log', limit),
     // A size landed while measuring: the row can fill in.
     onSize: (handler) => on('housekeeping:size', handler),
+    // An action or an inventory moved on: which item, how many of how many, how much so far.
+    onProgress: (handler) => on('housekeeping:progress', handler),
     /** The health job: readings against lines, and where things are heading. */
     health: (fresh = false) => ipcRenderer.invoke('housekeeping:health', { fresh }),
     setThreshold: (metric, level, value) => ipcRenderer.invoke('housekeeping:set-threshold', { metric, level, value }),
     measureNow: () => ipcRenderer.invoke('housekeeping:measure-now'),
+    /** The last inventory kept, for an instant open; `stale` says a fresh one is worth reading. */
+    snapshot: () => ipcRenderer.invoke('housekeeping:snapshot'),
+    /** Names or globs a build makes again, beyond the cache list; with a list, sets them. */
+    regenerable: (list) => ipcRenderer.invoke('housekeeping:regenerable', list),
+    /** What was given back and how things moved over the last days. */
+    stats: (days) => ipcRenderer.invoke('housekeeping:stats', days),
+    /** The panel's own plan, in order, with actions. */
+    advice: () => ipcRenderer.invoke('housekeeping:advice'),
+    /** One quick action by name, over the ids the plan named. */
+    act: (id, ids) => ipcRenderer.invoke('housekeeping:act', { id, ids }),
+    /** Removals as jobs: queued, one item at a time, stoppable, resumable after the app was closed. */
+    jobs: () => ipcRenderer.invoke('housekeeping:jobs'),
+    jobStart: (kind, ids, labels, title) => ipcRenderer.invoke('housekeeping:job-start', { kind, ids, labels, title }),
+    jobPause: (id) => ipcRenderer.invoke('housekeeping:job-pause', id),
+    jobResume: (id) => ipcRenderer.invoke('housekeeping:job-resume', id),
+    jobCancel: (id) => ipcRenderer.invoke('housekeeping:job-cancel', id),
+    jobDismiss: (id) => ipcRenderer.invoke('housekeeping:job-dismiss', id),
+    onJob: (handler) => on('housekeeping:job', handler),
+    /** Is the session's folder a finished worktree? The main process asks, and offers. */
+    checkSessionWorktree: (ptyId) => ipcRenderer.invoke('housekeeping:check-session-worktree', ptyId),
+    /** A small switch by name; with a value, sets it. */
+    pref: (key, value) => ipcRenderer.invoke('housekeeping:pref', { key, value }),
+    /** The briefing Ask Claude hands to a session: health, memory, processes, disk, worktrees. */
+    brief: (question) => ipcRenderer.invoke('housekeeping:brief', { question }),
     onHealth: (handler) => on('housekeeping:health', handler),
     // A notification was clicked: show the panel.
     onOpen: (handler) => on('housekeeping:open', handler),
