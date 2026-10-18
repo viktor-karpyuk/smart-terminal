@@ -14,6 +14,7 @@ const { accountsRoot, authStatus, ensureConfigDir, invalidateAuthCache, suggestC
 const { JsonStore } = require('./store');
 const { Database } = require('./database');
 const { buildMenu } = require('./menu');
+const { WorktreeCleanup } = require('./worktree-cleanup');
 const { CwdWatcher, worthRemembering } = require('./cwd-watcher');
 const { ContextStore, transcriptPath, locateTranscript, readTurnState } = require('./context-store');
 const { SessionMonitor } = require('./session-monitor');
@@ -220,6 +221,9 @@ let db = null;
  * about it. Its tables live in this app's own database.
  */
 let reviewService = null;
+let worktreeCleanup = null;
+/** What the person said no to in this run, so a background check does not ask about it again. */
+const declinedWorktrees = new Set();
 let teamsService = null;
 /** Jenkins: the credentials, the poller, and the verbs the panel may call. Its tables live in this app's own database. */
 let jenkinsService = null;
@@ -727,6 +731,50 @@ function friendlyFileError(error) {
       return 'Something is using it right now.';
     default:
       return String(error?.message ?? error);
+  }
+}
+
+/**
+ * A finished task leaves its worktree behind, and the Code Reviewer its workshop. This finds them and asks before
+ * taking them away. `quiet` is the background check: it says nothing when there is nothing, and it does not ask
+ * again about what was declined. From the menu it always answers.
+ */
+async function offerWorktreeCleanup({ quiet = false } = {}) {
+  worktreeCleanup ??= new WorktreeCleanup({
+    folders: () => [
+      // Where each live session is standing right now, as the cwd watcher last saw it.
+      ...ptys.list().map((one) => cwdWatcher?.known?.get(one.id)?.cwd),
+      ...(reviewService?.store?.repos?.() ?? []).map((repo) => repo.localPath),
+    ].filter(Boolean),
+    workshops: async () => reviewService?.finishedWorkshops?.() ?? [],
+  });
+  // A session whose folder is not known yet might be standing in one of them: wait for the next check.
+  if (quiet && ptys.list().some((one) => !cwdWatcher?.known?.get(one.id)?.cwd)) return;
+  const owner = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined;
+  let found;
+  try { found = (await worktreeCleanup.scan()).filter((one) => !quiet || !declinedWorktrees.has(one.path)); } catch (error) {
+    if (!quiet) await dialog.showMessageBox(owner, { type: 'error', message: 'The worktrees could not be checked.', detail: String(error.message ?? error) });
+    return;
+  }
+  if (!found.length) {
+    if (!quiet) await dialog.showMessageBox(owner, { type: 'info', message: 'There are no finished worktrees to clean up.', detail: 'A worktree is finished when its work is merged, it has no changes of its own, and no session is inside it.' });
+    return;
+  }
+  const lines = found.slice(0, 12).map((one) => `• ${one.label} — ${one.why}`);
+  if (found.length > 12) lines.push(`…and ${found.length - 12} more`);
+  const answer = await dialog.showMessageBox(owner, {
+    type: 'question',
+    buttons: [`Clean up ${found.length}`, 'Not now'],
+    defaultId: 1,
+    cancelId: 1,
+    message: found.length === 1 ? 'Clean up 1 finished worktree?' : `Clean up ${found.length} finished worktrees?`,
+    detail: `${lines.join('\n')}\n\nOnly what has no changes of its own is removed. git refuses the rest.`,
+  });
+  if (answer.response !== 0) { for (const one of found) declinedWorktrees.add(one.path); return; }
+  const results = await worktreeCleanup.clean(found.map((one) => one.path));
+  const failed = results.filter((one) => !one.ok);
+  if (failed.length) {
+    await dialog.showMessageBox(owner, { type: 'warning', message: `${failed.length} could not be cleaned up.`, detail: failed.map((one) => `• ${path.basename(one.path)}: ${one.error}`).join('\n') });
   }
 }
 
@@ -2740,7 +2788,7 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   buildMenu(sendToFocused, () => createWindow(), () => {
     const found = db.lastClosedWindow([...windows.keys()]);
     if (found) createWindow(found.id, found.bounds);
-  });
+  }, () => offerWorktreeCleanup());
 
   // Bring back every window that was open, the way an editor does.
   const previous = db.openWindows();
@@ -2748,6 +2796,11 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   else createWindow();
   // After the windows: a review resumed from a previous launch must have somewhere to be seen.
   reviewService?.start();
+  // A minute after start, and then hourly: a finished task is noticed without anybody having to remember it.
+  if (app.isPackaged) {
+    setTimeout(() => offerWorktreeCleanup({ quiet: true }).catch(() => {}), 60_000).unref();
+    setInterval(() => offerWorktreeCleanup({ quiet: true }).catch(() => {}), 3_600_000).unref();
+  }
 
   app.on('activate', () => {
     // Not on the way out: the database is closed and a window would open onto nothing.

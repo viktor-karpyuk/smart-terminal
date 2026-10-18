@@ -5,7 +5,7 @@ const { Menu, app, shell } = require('electron');
  * App menu. Accelerators live here rather than in the renderer so they fire
  * reliably even while xterm has keyboard focus.
  */
-function buildMenu(send, newWindow, reopenWindow = () => {}) {
+function buildMenu(send, newWindow, reopenWindow = () => {}, cleanWorktrees = () => {}) {
   const isMac = process.platform === 'darwin';
   const action = (id) => () => send('menu:action', { id });
 
@@ -80,6 +80,9 @@ function buildMenu(send, newWindow, reopenWindow = () => {}) {
         { label: 'Rename Session…', accelerator: 'CmdOrCtrl+E', click: action('rename') },
         { type: 'separator' },
         { label: 'History…', accelerator: 'CmdOrCtrl+Y', click: action('history') },
+        { type: 'separator' },
+        // Asks before it removes anything: see offerWorktreeCleanup in main.js.
+        { label: 'Clean Up Finished Worktrees…', click: () => cleanWorktrees() },
       ],
     },
     {
