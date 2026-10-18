@@ -14,6 +14,8 @@ const { accountsRoot, authStatus, ensureConfigDir, invalidateAuthCache, suggestC
 const { JsonStore } = require('./store');
 const { Database } = require('./database');
 const { buildMenu } = require('./menu');
+const { WorktreeCleanup } = require('./worktree-cleanup');
+const { createOffer } = require('./worktree-offer');
 const { CwdWatcher, worthRemembering } = require('./cwd-watcher');
 const { ContextStore, transcriptPath, locateTranscript, readTurnState } = require('./context-store');
 const { Housekeeping } = require('./housekeeping');
@@ -227,6 +229,8 @@ let reviewService = null;
 /** What the app and the work around it leave on disk, and giving it back — see housekeeping.js. */
 let housekeeping = null;
 let diskUsage = null;
+let worktreeCleanup = null;
+let worktreeOffer = null;
 let teamsService = null;
 /** Jenkins: the credentials, the poller, and the verbs the panel may call. Its tables live in this app's own database. */
 let jenkinsService = null;
@@ -735,6 +739,31 @@ function friendlyFileError(error) {
     default:
       return String(error?.message ?? error);
   }
+}
+
+/**
+ * A finished task leaves its worktree behind, and the Code Reviewer its workshop. This finds them and asks before
+ * taking them away (see worktree-offer.js for the questions).
+ */
+function offerWorktreeCleanup(options) {
+  worktreeOffer ??= createOffer({
+    cleanup: (worktreeCleanup ??= new WorktreeCleanup({
+      folders: () => [
+        // Where each live session is standing right now, as the cwd watcher last saw it.
+        ...ptys.list().map((one) => cwdWatcher?.known?.get(one.id)?.cwd),
+        ...(reviewService?.store?.repos?.() ?? []).map((repo) => repo.localPath),
+      ].filter(Boolean),
+      workshops: async () => reviewService?.finishedWorkshops?.() ?? [],
+    })),
+    sessionsKnown: () => ptys.list().every((one) => cwdWatcher?.known?.get(one.id)?.cwd),
+    ask: async ({ message, detail, buttons }) => {
+      const owner = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined;
+      const answer = await dialog.showMessageBox(owner, { type: 'question', buttons, defaultId: buttons.length - 1, cancelId: buttons.length - 1, message, detail });
+      return answer.response;
+    },
+    tell: ({ type, message, detail }) => dialog.showMessageBox(BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined, { type, message, detail }),
+  });
+  return worktreeOffer.offer(options);
 }
 
 /** Menu commands act on the window in front. */
@@ -2837,7 +2866,7 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   buildMenu(sendToFocused, () => createWindow(), () => {
     const found = db.lastClosedWindow([...windows.keys()]);
     if (found) createWindow(found.id, found.bounds);
-  });
+  }, () => offerWorktreeCleanup());
 
   // Bring back every window that was open, the way an editor does.
   const previous = db.openWindows();
@@ -2845,6 +2874,11 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   else createWindow();
   // After the windows: a review resumed from a previous launch must have somewhere to be seen.
   reviewService?.start();
+  // A minute after start, and then hourly: a finished task is noticed without anybody having to remember it.
+  if (app.isPackaged) {
+    setTimeout(() => offerWorktreeCleanup({ quiet: true }).catch(() => {}), 60_000).unref();
+    setInterval(() => offerWorktreeCleanup({ quiet: true }).catch(() => {}), 3_600_000).unref();
+  }
 
   app.on('activate', () => {
     // Not on the way out: the database is closed and a window would open onto nothing.

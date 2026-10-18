@@ -167,6 +167,26 @@ class ReviewService {
     });
   }
 
+  /**
+   * Workshops of pull requests that are no longer open and hold nothing still to be handed back, with how to discard each:
+   * what the app may offer to clean up. One a fix is writing in, one that was imported from elsewhere, and one with fixes
+   * waiting are never in it.
+   */
+  finishedWorkshops() {
+    const found = [];
+    for (const repo of this.store.repos()) {
+      for (const pr of this.store.prs(repo.id)) {
+        if (pr.state === 'OPEN') continue;
+        const dir = this.fixer.dirFor(repo, pr.id);
+        if (!dir.startsWith(this.fixer.root + path.sep) || !fs.existsSync(dir)) continue;
+        if (this.store.pendingReturn(repo.id, pr.id).length) continue;
+        if (this.fixer.running().some((run) => run.repoId === repo.id && String(run.prId) === String(pr.id))) continue;
+        found.push({ path: dir, label: `${repo.name} — PR #${pr.id}`, discard: () => this.fixer.discard(repo.id, pr.id) });
+      }
+    }
+    return found;
+  }
+
   /** Called once the app is up: runs left behind by a previous process are failed and queued, and the sweep starts. */
   start() {
     this.bus.sweep();
