@@ -2008,6 +2008,7 @@ function ActivityBar() {
       {launchers.map((view) => (
         <LauncherButton key={`${view.from}:${view.id}`} viewId={view.id} title={view.title} icon={view.icon ?? null} />
       ))}
+      <HousekeepingActivity />
 
       <span className="activity-spacer" />
 
@@ -2029,7 +2030,6 @@ function ActivityBar() {
       <button className="activity" onClick={() => setHistoryOpen(true)} data-tip="History (⌘Y)" aria-label="History">
         <HistoryIcon />
       </button>
-      <HousekeepingActivity />
       <button className="activity" onClick={() => setAppearanceOpen(true)} data-tip="Settings (⇧⌘,)" aria-label="Settings">
         <AppearanceIcon />
       </button>
@@ -2192,7 +2192,7 @@ function isInFront(state: ReturnType<typeof useStore.getState>, id: string) {
 
 /**
  * Housekeeping in the activity bar, with the health job's dot: a place of its
- * own among the things you open, beside History, not a detail inside Monitor.
+ * own among the lists at the top, after the extensions, not a detail inside Monitor.
  */
 function HousekeepingActivity() {
   const status = useStore((s) => s.housekeepingStatus);
