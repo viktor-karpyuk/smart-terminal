@@ -37,6 +37,15 @@ export function App() {
   }, []);
 
   useEffect(() => window.api.onMenuAction(({ id }) => handleMenuAction(id)), []);
+  // The health job: its status for the sidebar's dot, and a clicked notification opens the panel.
+  useEffect(() => window.api.housekeeping.onHealth(({ status }) => useStore.getState().setHousekeepingStatus(status)), []);
+  useEffect(() => window.api.housekeeping.onOpen(() => useStore.getState().openHousekeeping()), []);
+  useEffect(() => {
+    window.api.housekeeping
+      .health()
+      .then((health) => health && useStore.getState().setHousekeepingStatus(health.status))
+      .catch(() => {});
+  }, []);
 
   // What CI says arrives here as well as from the system, which may refuse it: kept, shown, and counted on the dock.
   useEffect(

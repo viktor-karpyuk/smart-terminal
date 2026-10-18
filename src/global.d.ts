@@ -1150,6 +1150,11 @@ declare global {
         removeRoot(folder: string): Promise<HousekeepingRoot[]>;
         log(limit?: number): Promise<HousekeepingLogRow[]>;
         onSize(handler: (payload: { path: string; bytes: number; files: number; partial?: boolean }) => void): () => void;
+        health(fresh?: boolean): Promise<HousekeepingHealth | null>;
+        setThreshold(metric: string, level: 'attention' | 'limit', value: number | null): Promise<HousekeepingHealth | null>;
+        measureNow(): Promise<HousekeepingHealth | null>;
+        onHealth(handler: (payload: { status: HousekeepingStatus; conditions: HousekeepingCondition[] }) => void): () => void;
+        onOpen(handler: (payload: { metric?: string }) => void): () => void;
       };
       onMenuAction(handler: (payload: { id: string }) => void): () => void;
     };
@@ -1215,6 +1220,41 @@ declare global {
     bytes?: number;
     error?: string;
     note?: string;
+  }
+
+  type HousekeepingStatus = 'fine' | 'attention' | 'limit';
+
+  interface HousekeepingCondition {
+    metric: string;
+    label: string;
+    level: 'attention' | 'limit';
+    value: number;
+    unit: string;
+    threshold: number;
+    direction: 'above' | 'below';
+    why: string;
+    at: number;
+  }
+
+  interface HousekeepingThreshold {
+    label: string;
+    unit: string;
+    direction: 'above' | 'below';
+    attention: number | null;
+    limit: number | null;
+    why: string;
+  }
+
+  interface HousekeepingHealth {
+    status: HousekeepingStatus;
+    conditions: HousekeepingCondition[];
+    latest: Record<string, { value: number; at: number }>;
+    thresholds: Record<string, HousekeepingThreshold>;
+    /** Bytes (or units) per week each tracked metric moves; null without two days of readings. */
+    growthPerWeek: Record<string, number | null>;
+    daysUntilFull: number | null;
+    lastInventoryAt: number | null;
+    readAt: number;
   }
 
   interface HousekeepingInventory {

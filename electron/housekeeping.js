@@ -622,7 +622,8 @@ class Housekeeping {
     const swept = await caches.sweep(this.checkouts());
     const forgotten = this.sizes.pruneMissing?.() ?? 0;
     const trimmed = this.store.trimLog();
-    return { swept, forgotten, trimmed };
+    const readings = this.store.trimReadings?.() ?? 0;
+    return { swept, forgotten, trimmed, readings };
   }
 
   log(limit = 50) {

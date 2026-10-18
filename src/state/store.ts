@@ -532,6 +532,8 @@ interface State {
   /** Named sets of sessions that belong to the same piece of work, shared by every window. */
   groups: SessionGroup[];
   historyOpen: boolean;
+  /** What the health job last said: shown as a dot beside the housekeeping button. */
+  housekeepingStatus: 'fine' | 'attention' | 'limit';
   appearanceOpen: boolean;
   /**
    * What the app knows about newer versions of itself. Owned by the main
@@ -739,6 +741,7 @@ interface State {
   addToGroup(sessionId: string, groupId: string): void;
   restoreGroup(groupId: string, arrangement?: GroupArrangement): Promise<number>;
   setHistoryOpen(open: boolean): void;
+  setHousekeepingStatus(status: 'fine' | 'attention' | 'limit'): void;
   setAppearanceOpen(open: boolean): void;
   setUpdatePanelOpen(open: boolean): void;
   /** Ask now. `force` also ignores a version that was skipped. */
@@ -919,6 +922,7 @@ export const useStore = create<State>((set, get) => ({
   sessionSizes: {},
   groups: [],
   historyOpen: false,
+  housekeepingStatus: 'fine',
   appearanceOpen: false,
   update: null,
   updatePanelOpen: false,
@@ -3258,6 +3262,10 @@ export const useStore = create<State>((set, get) => ({
       return { panels, layout: insertTab(prev.layout, target, panelId), activeLeafId: target };
     });
     schedulePersist(get);
+  },
+
+  setHousekeepingStatus(status) {
+    if (get().housekeepingStatus !== status) set({ housekeepingStatus: status });
   },
 
   /** Open housekeeping, or bring the one that is already open forward. One is enough: it shows the whole disk. */

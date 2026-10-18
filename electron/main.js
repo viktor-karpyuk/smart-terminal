@@ -21,6 +21,7 @@ const { ContextStore, transcriptPath, locateTranscript, readTurnState } = requir
 const { Housekeeping } = require('./housekeeping');
 const { HousekeepingStore } = require('./housekeeping-store');
 const { DiskUsage } = require('./disk-usage');
+const { HousekeepingMonitor } = require('./housekeeping-monitor');
 const rules = require('./review-rules');
 const { SessionMonitor } = require('./session-monitor');
 const { summarise, oneLine } = require('./session-analysis');
@@ -229,6 +230,8 @@ let reviewService = null;
 /** What the app and the work around it leave on disk, and giving it back — see housekeeping.js. */
 let housekeeping = null;
 let diskUsage = null;
+/** The health job: readings on a clock, said when they cross a line. */
+let housekeepingMonitor = null;
 let worktreeCleanup = null;
 let worktreeOffer = null;
 let teamsService = null;
@@ -1341,6 +1344,18 @@ function registerIpc() {
   ipcMain.handle('housekeeping:add-root', (_e, folder) => housekeeping.addRoot(String(folder ?? '')));
   ipcMain.handle('housekeeping:remove-root', (_e, folder) => housekeeping.removeRoot(String(folder ?? '')));
   ipcMain.handle('housekeeping:log', (_e, limit) => housekeeping.log(Number(limit) || 50));
+  ipcMain.handle('housekeeping:health', async (_e, { fresh = false } = {}) => {
+    if (fresh) await housekeepingMonitor?.tickSystem();
+    return housekeepingMonitor?.report() ?? null;
+  });
+  ipcMain.handle('housekeeping:set-threshold', (_e, { metric, level, value } = {}) => {
+    housekeepingMonitor?.setThreshold(String(metric), String(level), value);
+    return housekeepingMonitor?.report() ?? null;
+  });
+  ipcMain.handle('housekeeping:measure-now', async () => {
+    await housekeepingMonitor?.tickInventory();
+    return housekeepingMonitor?.report() ?? null;
+  });
 
   ipcMain.handle('db:health', (_e, { deep = false } = {}) => {
     const health = db.health({ deep });
@@ -2793,6 +2808,21 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   housekeeping = createHousekeeping();
   // Removals a previous run started and did not finish, finished now. Nothing new is removed.
   void housekeeping.sweep().catch(() => {});
+  housekeepingMonitor = new HousekeepingMonitor({
+    store: housekeeping.store,
+    housekeeping,
+    userData: app.getPath('userData'),
+    openSessions: () => ptys?.list().length ?? 0,
+    notify: ({ title, body, metric }) => {
+      if (!Notification.isSupported()) return;
+      const note = new Notification({ title, body });
+      // Clicking opens the panel on the tab the metric belongs to.
+      note.on('click', () => send('housekeeping:open', { metric }));
+      note.show();
+    },
+    emit: (name, payload) => send(`housekeeping:${name}`, payload),
+  });
+  housekeepingMonitor.start();
   // Watching how sessions behave is a separate job from keeping copies of them,
   // but it needs the same two things — where a transcript is, and which sessions
   // have one — so it is handed the store rather than working them out again.
@@ -3559,6 +3589,7 @@ app.on('will-quit', () => {
   jenkinsService?.stop();
   teamsBot?.stop();
   diskUsage?.stop();
+  housekeepingMonitor?.stop();
   // A Gradle client asked for a task list is a JVM that would otherwise
   // outlive the app by up to three minutes.
   buildTools.stopAll();

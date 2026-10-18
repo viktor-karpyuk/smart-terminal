@@ -336,6 +336,13 @@ contextBridge.exposeInMainWorld('api', {
     log: (limit) => ipcRenderer.invoke('housekeeping:log', limit),
     // A size landed while measuring: the row can fill in.
     onSize: (handler) => on('housekeeping:size', handler),
+    /** The health job: readings against lines, and where things are heading. */
+    health: (fresh = false) => ipcRenderer.invoke('housekeeping:health', { fresh }),
+    setThreshold: (metric, level, value) => ipcRenderer.invoke('housekeeping:set-threshold', { metric, level, value }),
+    measureNow: () => ipcRenderer.invoke('housekeeping:measure-now'),
+    onHealth: (handler) => on('housekeeping:health', handler),
+    // A notification was clicked: show the panel.
+    onOpen: (handler) => on('housekeeping:open', handler),
   },
 
   onMenuAction: (handler) => on('menu:action', handler),

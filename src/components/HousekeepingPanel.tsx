@@ -16,14 +16,23 @@ import { describeIdle, diskUsedPercent, filterSessions, filterWorktrees, formatB
  * and each row fills in as its number lands.
  */
 
-type Tab = 'sessions' | 'worktrees' | 'app' | 'log';
+type Tab = 'sessions' | 'worktrees' | 'app' | 'health' | 'log';
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'sessions', label: 'Sessions' },
   { id: 'worktrees', label: 'Worktrees' },
   { id: 'app', label: 'App' },
+  { id: 'health', label: 'Health' },
   { id: 'log', label: 'Log' },
 ];
+
+/** The tab a metric belongs to, for a notification that was clicked. */
+function tabFor(metric: string | undefined): Tab {
+  if (!metric) return 'health';
+  if (metric.startsWith('worktrees') || metric === 'budget.worktrees.bytes') return 'worktrees';
+  if (metric.startsWith('db.') || metric === 'budget.app.bytes') return 'app';
+  return 'health';
+}
 
 const KIND_LABEL: Record<HousekeepingKind, string> = {
   session: 'session',
@@ -51,6 +60,7 @@ export function HousekeepingPanel() {
   const [olderThan, setOlderThan] = useState(30);
   const [minMb, setMinMb] = useState(0);
   const [includeOpen, setIncludeOpen] = useState(false);
+  const [health, setHealth] = useState<HousekeepingHealth | null>(null);
   const alive = useRef(true);
 
   const load = async ({ measure = true } = {}) => {
@@ -83,9 +93,17 @@ export function HousekeepingPanel() {
       setItems((prev) => withSize(prev, path, bytes, partial));
       if (!partial) setMeasuring((n) => Math.max(0, n - 1));
     });
+    window.api.housekeeping
+      .health(true)
+      .then((h) => alive.current && setHealth(h))
+      .catch(() => {});
+    const offHealth = window.api.housekeeping.onHealth(({ status, conditions }) => setHealth((prev) => (prev ? { ...prev, status, conditions } : prev)));
+    const offOpen = window.api.housekeeping.onOpen(({ metric }) => setTab(tabFor(metric)));
     return () => {
       alive.current = false;
       off();
+      offHealth();
+      offOpen();
     };
     // Read once when it opens; "Refresh" reads again. Polling a disk to watch it not change is what makes a panel expensive to leave open.
   }, []);
@@ -196,6 +214,19 @@ export function HousekeepingPanel() {
         </div>
       </div>
 
+      {health && health.conditions.length > 0 && (
+        <div className={`housekeeping-strip is-${health.status}`} role="status">
+          <strong>{health.status === 'limit' ? 'At a limit' : 'Needs attention'}:</strong>{' '}
+          {health.conditions
+            .slice(0, 3)
+            .map((one) => `${one.label} ${one.unit === 'bytes' ? formatBytes(one.value) : one.unit === '%' ? `${one.value}%` : one.unit === 'x' ? `${one.value}×` : one.value}`)
+            .join(' · ')}
+          {health.conditions.length > 3 ? ` · and ${health.conditions.length - 3} more` : ''}
+          <button className="link-btn" onClick={() => setTab('health')}>
+            see why
+          </button>
+        </div>
+      )}
       <div className="housekeeping-bar">
         {confirm(
           'free',
@@ -254,6 +285,7 @@ export function HousekeepingPanel() {
         <Worktrees items={items} roots={inventory.roots} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} reload={() => load()} onError={setError} />
       )}
       {tab === 'app' && <AppFiles items={items} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} />}
+      {tab === 'health' && <Health health={health} setHealth={setHealth} onError={setError} />}
       {tab === 'log' && <Log rows={inventory.log} />}
     </div>
   );
@@ -506,6 +538,154 @@ function AppFiles({ items, selected, toggle, selectAll, chosen, confirm }: ListP
           picked.length === 0,
         )}
       </div>
+    </>
+  );
+}
+
+const METRIC_ORDER = ['disk.free.bytes', 'disk.free.pct', 'mem.free.bytes', 'load.per.core', 'app.rss.bytes', 'sessions.open', 'db.bytes', 'db.wal.bytes', 'worktrees.inactive', 'budget.app.bytes', 'budget.worktrees.bytes'];
+
+function showValue(value: number | null | undefined, unit: string): string {
+  if (value === null || value === undefined) return '—';
+  if (unit === 'bytes') return formatBytes(value);
+  if (unit === '%') return `${value}%`;
+  if (unit === 'x') return `${value}×`;
+  return String(value);
+}
+
+/** A threshold typed by a person: bytes are typed in GB, the rest as they are. */
+function ThresholdInput({ metric, level, unit, value, onSave }: { metric: string; level: 'attention' | 'limit'; unit: string; value: number | null; onSave: (metric: string, level: 'attention' | 'limit', value: number | null) => void }) {
+  const toField = (v: number | null) => (v === null ? '' : unit === 'bytes' ? String(Math.round((v / 1024 ** 3) * 10) / 10) : String(v));
+  const [text, setText] = useState(toField(value));
+  useEffect(() => setText(toField(value)), [value, unit]);
+  const commit = () => {
+    const trimmed = text.trim();
+    const number = trimmed === '' ? null : Number(trimmed);
+    if (number !== null && !Number.isFinite(number)) return setText(toField(value));
+    const stored = number === null ? null : unit === 'bytes' ? number * 1024 ** 3 : number;
+    if (stored !== value) onSave(metric, level, stored);
+  };
+  return (
+    <span className="housekeeping-threshold">
+      <input value={text} onChange={(e) => setText(e.target.value)} onBlur={commit} onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()} placeholder="off" aria-label={`${metric} ${level}`} />
+      <small>{unit === 'bytes' ? 'GB' : unit}</small>
+    </span>
+  );
+}
+
+function Health({ health, setHealth, onError }: { health: HousekeepingHealth | null; setHealth: (h: HousekeepingHealth | null) => void; onError: (m: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  if (!health) return <p className="empty-state">The first reading lands a few seconds after start.</p>;
+  const save = (metric: string, level: 'attention' | 'limit', value: number | null) =>
+    window.api.housekeeping
+      .setThreshold(metric, level, value)
+      .then((h) => h && setHealth(h))
+      .catch((e: unknown) => onError(String((e as Error)?.message ?? e)));
+  const measureNow = () => {
+    setBusy(true);
+    window.api.housekeeping
+      .measureNow()
+      .then((h) => h && setHealth(h))
+      .catch((e: unknown) => onError(String((e as Error)?.message ?? e)))
+      .finally(() => setBusy(false));
+  };
+  const growth = (metric: string) => {
+    const g = health.growthPerWeek[metric];
+    if (g === null || g === undefined) return 'not enough days yet';
+    return `${g >= 0 ? '+' : '−'}${formatBytes(Math.abs(g))} a week`;
+  };
+  return (
+    <>
+      <p className="usage-note">
+        The system is read every minute, what things weigh once an hour. A line crossed is said once by a notification and not again for a day unless it gets worse. Bytes are typed in GB; an empty field turns a line off.
+      </p>
+      <div className="monitor-stats">
+        <div className={`monitor-stat is-${health.status}`}>
+          <span className="monitor-stat-label">Status</span>
+          <strong>{health.status === 'fine' ? 'Fine' : health.status === 'limit' ? 'At a limit' : 'Attention'}</strong>
+          <small>{health.conditions.length ? `${health.conditions.length} condition${health.conditions.length === 1 ? '' : 's'}` : 'nothing crossed'}</small>
+        </div>
+        <div className="monitor-stat">
+          <span className="monitor-stat-label">Disk, at this rate</span>
+          <strong>{health.daysUntilFull === null ? '—' : `${health.daysUntilFull} days`}</strong>
+          <small>{health.daysUntilFull === null ? 'needs two days of readings, or the disk is not filling' : 'until the volume is full'}</small>
+        </div>
+        <div className="monitor-stat">
+          <span className="monitor-stat-label">Disk used</span>
+          <strong>{growth('disk.used.bytes')}</strong>
+          <small>over the last two weeks</small>
+        </div>
+        <div className="monitor-stat">
+          <span className="monitor-stat-label">Worktrees</span>
+          <strong>{growth('bucket.worktrees.bytes')}</strong>
+          <small>{health.lastInventoryAt ? `weighed ${describeIdle(health.lastInventoryAt) === 'today' ? 'today' : describeIdle(health.lastInventoryAt) + ' ago'}` : 'not weighed yet'}</small>
+        </div>
+        <div className="monitor-stat">
+          <span className="monitor-stat-label">App data</span>
+          <strong>{growth('bucket.app.bytes')}</strong>
+          <small>conversations, copies, backups</small>
+        </div>
+      </div>
+      <div className="housekeeping-bar">
+        <button className="ghost-btn tiny" disabled={busy} onClick={measureNow}>
+          {busy ? 'Weighing…' : 'Weigh everything now'}
+        </button>
+      </div>
+
+      {health.conditions.length > 0 && (
+        <>
+          <h3 className="monitor-heading">Why the machine may be slow</h3>
+          <ul className="housekeeping-conditions">
+            {health.conditions.map((one) => (
+              <li key={one.metric} className={`is-${one.level}`}>
+                <strong>
+                  {one.label} is {showValue(one.value, one.unit)}
+                </strong>{' '}
+                ({one.level} {one.direction} {showValue(one.threshold, one.unit)}). {one.why}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
+      <h3 className="monitor-heading">Readings and lines</h3>
+      <table className="housekeeping-table">
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th className="is-num">Now</th>
+            <th>Attention</th>
+            <th>Limit</th>
+            <th>Why it matters</th>
+          </tr>
+        </thead>
+        <tbody>
+          {METRIC_ORDER.filter((metric) => health.thresholds[metric]).map((metric) => {
+            const line = health.thresholds[metric];
+            const reading = health.latest[metric];
+            const condition = health.conditions.find((one) => one.metric === metric);
+            return (
+              <tr key={metric} className={condition ? `is-${condition.level}` : ''}>
+                <td>
+                  <span className="housekeeping-label">{line.label}</span>
+                  <small>
+                    {metric} · worse {line.direction}
+                  </small>
+                </td>
+                <td className="is-num">{showValue(reading?.value, line.unit)}</td>
+                <td>
+                  <ThresholdInput metric={metric} level="attention" unit={line.unit} value={line.attention} onSave={save} />
+                </td>
+                <td>
+                  <ThresholdInput metric={metric} level="limit" unit={line.unit} value={line.limit} onSave={save} />
+                </td>
+                <td>
+                  <small className="housekeeping-why">{line.why}</small>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </>
   );
 }
