@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useStore } from '../state/store';
 import { formatBytes } from '../lib/labels';
 import { currentTerminalTheme } from '../state/store';
-import { FOLLOW_APP, OVERRIDABLE, PALETTES, paletteById, type OverridableKey } from '../terminals/themes';
+import { FOLLOW_APP, OVERRIDABLE, allPalettes, paletteById, type OverridableKey } from '../terminals/themes';
+import { FEATURE_LABELS, type TerminalFeature } from '../terminals/features';
 import { FileIcon, colourFor } from '../lib/fileIcons';
 import {
   ACCENTS,
@@ -440,6 +441,8 @@ function TerminalSection() {
     updateSettings({ fontFamily: `"${clean}", ${FALLBACK}` });
   };
 
+  // Read so the palettes an extension brings are drawn the moment it is switched on.
+  useStore((s) => s.extensions.terminal);
   const bold = { '300': 500, '400': 600, '500': 700 }[settings.terminalFontWeight];
   const followName = paletteById(activeTheme(settings).palette)?.name ?? '';
 
@@ -613,7 +616,7 @@ function TerminalSection() {
             swatches={swatchesOf(paletteById(activeTheme(settings).palette)?.theme ?? {})}
             onSelect={() => updateSettings({ terminalPalette: FOLLOW_APP })}
           />
-          {[...PALETTES]
+          {[...allPalettes()]
             .sort((a, b) => (a.mode === b.mode ? 0 : a.mode === 'dark' ? -1 : 1))
             .map((palette) => (
               <PaletteChip
@@ -648,6 +651,8 @@ function TerminalSection() {
         </div>
       </Group>
 
+      <TerminalExtensionGroup />
+
       <Group title="Memory">
         <Row
           label="Scrollback"
@@ -664,6 +669,53 @@ function TerminalSection() {
         </Row>
       </Group>
     </>
+  );
+}
+
+/**
+ * The Terminal extension's parts, each with a switch of its own.
+ *
+ * The extension decides what is offered; this decides, per person, what of
+ * that is wanted — copy-on-select is a habit some people have and others find
+ * maddening, and nobody should have to give up the rest to be rid of it.
+ * Without the extension the group says where to get it rather than vanishing,
+ * so the terminal's improvements can be found from the place people look.
+ */
+function TerminalExtensionGroup() {
+  const [settings, updateSettings] = useSettings();
+  const contributed = useStore((s) => s.extensions.terminal);
+  const offered = (contributed?.features ?? []) as TerminalFeature[];
+  const openExtensions = useStore((s) => s.openExtensions);
+  const off = settings.terminalFeaturesOff ?? [];
+
+  if (!offered.length) {
+    return (
+      <Group title="Terminal extension">
+        <p className="form-hint">
+          Copy on select, clickable file paths, a terminal that keeps up with fast output and
+          remembers its screen across restarts come with the Terminal extension.{' '}
+          <button className="link-btn" onClick={openExtensions}>
+            Open Extensions
+          </button>
+        </p>
+      </Group>
+    );
+  }
+
+  return (
+    <Group title="Terminal extension" hint="What the Terminal extension adds. Each part can be turned off on its own.">
+      {offered.map((name) => (
+        <Toggle
+          key={name}
+          label={FEATURE_LABELS[name].title}
+          hint={FEATURE_LABELS[name].detail}
+          checked={!off.includes(name)}
+          onChange={(on) =>
+            updateSettings({ terminalFeaturesOff: on ? off.filter((one) => one !== name) : [...off, name] })
+          }
+        />
+      ))}
+    </Group>
   );
 }
 

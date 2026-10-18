@@ -4,8 +4,11 @@ import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
+import { SerializeAddon } from '@xterm/addon-serialize';
 import type { ITheme } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
+import { featureOn } from './features';
+import { findPaths, resolvePath } from '../lib/terminalPaths';
 
 export interface TerminalHandle {
   id: string;
@@ -17,6 +20,116 @@ export interface TerminalHandle {
   lastRows: number;
   /** The GPU renderer, while this terminal is one of the ones holding one. */
   webgl: WebglAddon | null;
+  /** Characters handed to xterm and not yet drawn, for flow control. */
+  backlog: number;
+  /** When this terminal last asked for its program's output to be paused, or 0. */
+  pausedAt: number;
+  serialize: SerializeAddon;
+  /** Output since the screen was last kept. */
+  dirty: boolean;
+  /** Output that arrived while the last run's screen was being read back, in order. */
+  held: string[] | null;
+}
+
+/**
+ * What the terminal needs to know from the rest of the app, handed in rather
+ * than imported: this file knows about terminals and nothing about the store.
+ */
+interface TerminalHooks {
+  /** The folder a terminal's shell is in, for paths printed relative to it. */
+  cwdOf(id: string): string | null;
+  home: string | null;
+  /** Open a file the output pointed at. */
+  openPath(id: string, path: string, line: number | null, column: number | null): void;
+  /** Pause or resume the program writing into this terminal. */
+  flow(id: string, paused: boolean): void;
+  /**
+   * Whether this terminal's screen is worth keeping across a restart. Not a
+   * Claude session's: it resumes its conversation and draws it again itself,
+   * and the kept copy above it would be the same thing twice.
+   */
+  keepsScreen(id: string): boolean;
+}
+
+/**
+ * How much of a terminal is kept for after a restart.
+ *
+ * The last thousand rows, which is a few screens of a build and all of most
+ * shells — enough to see where things were, without writing megabytes for every
+ * session every half-minute. Modes and the alternate screen are left out: they
+ * describe the program that was running, and it is not running any more.
+ */
+const KEPT_ROWS = 1000;
+const KEEP_EVERY_MS = 30_000;
+/** How long new output waits for the old screen before it is shown anyway. */
+const RESTORE_WAIT_MS = 1500;
+
+const hooks: TerminalHooks = {
+  cwdOf: () => null,
+  home: null,
+  openPath: () => {},
+  flow: () => {},
+  keepsScreen: () => true,
+};
+
+export function setTerminalHooks(given: Partial<TerminalHooks>) {
+  Object.assign(hooks, given);
+}
+
+/**
+ * How far behind the screen may fall before the program is asked to wait.
+ *
+ * xterm parses what it is given in slices between frames, so a program that
+ * prints a megabyte a second is never refused — it just piles up, and with
+ * enough piled up the window stops answering keys. Past the high mark the pty
+ * is paused; once xterm has drawn its way back under the low one it resumes.
+ */
+const BACKLOG_HIGH = 256 * 1024;
+const BACKLOG_LOW = 32 * 1024;
+/** A pause lapses in the main process after three seconds; asked again before then. */
+const PAUSE_RENEW_MS = 2000;
+
+/** Which absolute paths are files, remembered briefly so hovering a line is not a trip each time. */
+const fileCache = new Map<string, { file: boolean; at: number }>();
+const FILE_CACHE_MS = 10_000;
+
+async function whichFiles(paths: string[]): Promise<Set<string>> {
+  const now = Date.now();
+  const unknown = paths.filter((one) => {
+    const known = fileCache.get(one);
+    return !known || now - known.at > FILE_CACHE_MS;
+  });
+  if (unknown.length) {
+    const found = new Set(await window.api.files.which(unknown).catch(() => [] as string[]));
+    for (const one of unknown) fileCache.set(one, { file: found.has(one), at: now });
+  }
+  return new Set(paths.filter((one) => fileCache.get(one)?.file));
+}
+
+/**
+ * Whether a paste would run something the moment it lands.
+ *
+ * A program that asked for bracketed paste — zsh, Claude, any editor — gets
+ * the text marked as a paste and decides what to do with it. One that did not
+ * reads each newline as Return, so every line runs as it arrives.
+ */
+function pasteRunsLines(term: Terminal, text: string) {
+  return /[\r\n]/.test(text) && !term.modes.bracketedPasteMode;
+}
+
+/**
+ * Paste, unless the paste would run lines in a program that did not ask for
+ * pastes — then ask first, through whatever is listening for the question.
+ */
+export function guardedPaste(id: string, text: string) {
+  const handle = handles.get(id);
+  if (!handle || !text) return false;
+  if (featureOn('paste-guard') && pasteRunsLines(handle.term, text)) {
+    window.dispatchEvent(new CustomEvent('terminal-paste-guard', { detail: { id, text } }));
+    return true;
+  }
+  handle.term.paste(text);
+  return true;
 }
 
 const handles = new Map<string, TerminalHandle>();
@@ -180,6 +293,8 @@ export function ensureTerminal(id: string, options: CreateOptions): TerminalHand
   const unicode = new Unicode11Addon();
   term.loadAddon(unicode);
   term.unicode.activeVersion = '11';
+  const serialize = new SerializeAddon();
+  term.loadAddon(serialize);
 
   const host = document.createElement('div');
   host.className = 'terminal-host';
@@ -235,7 +350,14 @@ export function ensureTerminal(id: string, options: CreateOptions): TerminalHand
     (event) => {
       const clipboard = (event as ClipboardEvent).clipboardData;
       if (!clipboard) return;
-      if (clipboard.getData('text/plain').trim()) return;
+      const pasted = clipboard.getData('text/plain');
+      if (pasted && featureOn('paste-guard') && pasteRunsLines(term, pasted)) {
+        event.preventDefault();
+        event.stopPropagation();
+        window.dispatchEvent(new CustomEvent('terminal-paste-guard', { detail: { id, text: pasted } }));
+        return;
+      }
+      if (pasted.trim()) return;
       const picture = [...clipboard.items].find((item) => item.type.startsWith('image/'));
       if (!picture) return;
       const file = picture.getAsFile();
@@ -263,6 +385,68 @@ export function ensureTerminal(id: string, options: CreateOptions): TerminalHand
     true,
   );
 
+  /*
+   * The Terminal extension's parts that live on the terminal itself. Each is
+   * set up for every terminal and asks `featureOn` when it acts, so switching
+   * the extension or one of its parts off takes effect at once, without
+   * rebuilding a terminal that has a program running in it.
+   */
+
+  // Selecting copies — after the drag settles, not on every cell it crosses.
+  let copyTimer = 0;
+  term.onSelectionChange(() => {
+    if (!featureOn('copy-on-select') || !term.hasSelection()) return;
+    window.clearTimeout(copyTimer);
+    copyTimer = window.setTimeout(() => {
+      if (term.hasSelection()) void navigator.clipboard.writeText(term.getSelection()).catch(() => {});
+    }, 150);
+  });
+
+  // Paths in the output open the file. Only ones that are really there are
+  // underlined: a link that opens nothing is worse than no link.
+  term.registerLinkProvider({
+    provideLinks(y, callback) {
+      if (!featureOn('path-links')) return callback(undefined);
+      const text = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? '';
+      const cwd = hooks.cwdOf(id);
+      const found = findPaths(text)
+        .map((one) => ({ ...one, absolute: resolvePath(one.path, cwd, hooks.home) }))
+        .filter((one): one is typeof one & { absolute: string } => Boolean(one.absolute));
+      if (!found.length) return callback(undefined);
+      void whichFiles(found.map((one) => one.absolute)).then((files) => {
+        const links = found
+          .filter((one) => files.has(one.absolute))
+          .map((one) => ({
+            range: { start: { x: one.start + 1, y }, end: { x: one.end, y } },
+            text: text.slice(one.start, one.end),
+            activate: () => hooks.openPath(id, one.absolute, one.line, one.column),
+          }));
+        callback(links.length ? links : undefined);
+      });
+    },
+  });
+
+  // Output arriving below where somebody is reading: say so, and offer the way down.
+  const jump = document.createElement('button');
+  jump.type = 'button';
+  jump.className = 'terminal-jump';
+  jump.textContent = 'New output below';
+  jump.hidden = true;
+  jump.addEventListener('mousedown', (event) => event.preventDefault());
+  jump.addEventListener('click', () => {
+    term.scrollToBottom();
+    jump.hidden = true;
+    term.focus();
+  });
+  host.appendChild(jump);
+  const atBottom = () => term.buffer.active.viewportY >= term.buffer.active.baseY;
+  term.onWriteParsed(() => {
+    if (jump.hidden && featureOn('jump-to-bottom') && !atBottom()) jump.hidden = false;
+  });
+  term.onScroll(() => {
+    if (!jump.hidden && atBottom()) jump.hidden = true;
+  });
+
   term.onData(options.onData);
   term.onBinary((data) => options.onData(data));
   term.onTitleChange(options.onTitle);
@@ -272,9 +456,75 @@ export function ensureTerminal(id: string, options: CreateOptions): TerminalHand
   // No GPU renderer yet: it is lent when the terminal goes on a pane. Terminals
   // are born parked, and eighteen of them asking for a context at startup is
   // exactly how the cap gets blown before anything is even on screen.
-  const handle: TerminalHandle = { id, term, fit, search, host, lastCols: 0, lastRows: 0, webgl: null };
+  const handle: TerminalHandle = {
+    id,
+    term,
+    fit,
+    search,
+    host,
+    lastCols: 0,
+    lastRows: 0,
+    webgl: null,
+    backlog: 0,
+    pausedAt: 0,
+    serialize,
+    dirty: false,
+    held: [],
+  };
   handles.set(id, handle);
+  restoreScreen(handle);
   return handle;
+}
+
+/**
+ * Put back what this terminal showed before the app restarted, if anything was kept.
+ *
+ * Asked once, as the terminal is made. Whatever the new shell prints in the
+ * meantime is held and written after, so the old screen is above the new
+ * prompt rather than torn through it. A file is only there if the Terminal
+ * extension was keeping screens; turning that off clears them.
+ */
+function restoreScreen(handle: TerminalHandle) {
+  let settled = false;
+  const release = (text: string | null) => {
+    if (settled) return;
+    settled = true;
+    const held = handle.held ?? [];
+    handle.held = null;
+    if (text) {
+      handle.term.write(text);
+      handle.term.write('\r\n\x1b[0m\x1b[2m── before the restart ──\x1b[0m\r\n');
+    }
+    for (const data of held) writeToTerminal(handle.id, data);
+  };
+  window.setTimeout(() => release(null), RESTORE_WAIT_MS);
+  void window.api.pty
+    .readScrollback(handle.id)
+    .then((text) => release(text || null))
+    .catch(() => release(null));
+}
+
+/** Keep the screens that changed. On a timer, and once more as the window goes. */
+function keepScreens() {
+  if (!featureOn('keep-scrollback')) return;
+  for (const handle of handles.values()) {
+    if (!handle.dirty || !hooks.keepsScreen(handle.id)) continue;
+    handle.dirty = false;
+    try {
+      const text = handle.serialize.serialize({ scrollback: KEPT_ROWS, excludeModes: true, excludeAltBuffer: true });
+      if (text.trim()) window.api.pty.saveScrollback(handle.id, text);
+    } catch {
+      /* a terminal mid-dispose has nothing worth keeping */
+    }
+  }
+}
+
+window.setInterval(() => keepScreens(), KEEP_EVERY_MS);
+window.addEventListener('beforeunload', () => keepScreens());
+
+/** Stop keeping screens, and forget the ones kept. */
+export function forgetScreens() {
+  window.api.pty.clearScrollback();
 }
 
 export function getTerminal(id: string) {
@@ -282,7 +532,37 @@ export function getTerminal(id: string) {
 }
 
 export function writeToTerminal(id: string, data: string) {
-  handles.get(id)?.term.write(data);
+  const handle = handles.get(id);
+  if (!handle) return;
+  handle.dirty = true;
+  // The last run's screen goes first; anything new waits behind it.
+  if (handle.held) {
+    handle.held.push(data);
+    return;
+  }
+  if (!featureOn('flow-control')) {
+    handle.term.write(data);
+    if (handle.pausedAt) {
+      handle.pausedAt = 0;
+      hooks.flow(id, false);
+    }
+    return;
+  }
+
+  const size = data.length;
+  handle.backlog += size;
+  handle.term.write(data, () => {
+    handle.backlog -= size;
+    if (handle.pausedAt && handle.backlog < BACKLOG_LOW) {
+      handle.pausedAt = 0;
+      hooks.flow(id, false);
+    }
+  });
+  const now = Date.now();
+  if (handle.backlog > BACKLOG_HIGH && (!handle.pausedAt || now - handle.pausedAt > PAUSE_RENEW_MS)) {
+    handle.pausedAt = now;
+    hooks.flow(id, true);
+  }
 }
 
 export function attachTerminal(id: string, slot: HTMLElement) {
@@ -470,6 +750,9 @@ export function disposeTerminal(id: string) {
   const handle = handles.get(id);
   if (!handle) return;
   dropWebgl(id);
+  if (handle.pausedAt) hooks.flow(id, false);
+  // Closed for good, so there is nothing to bring back.
+  window.api.pty.forgetScrollback(id);
   handle.host.remove();
   handle.term.dispose();
   handles.delete(id);

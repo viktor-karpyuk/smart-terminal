@@ -13,7 +13,7 @@ import { Sidebar, SIDEBAR_MIN } from './components/Sidebar';
 import { TitleBar } from './components/TitleBar';
 import { ProfileEditor } from './components/ProfileEditor';
 import { SessionContextMenu } from './components/SessionContextMenu';
-import { TerminalMenu, TerminalNotice } from './components/TerminalMenu';
+import { TerminalMenu, TerminalNotice, TerminalPasteGuard } from './components/TerminalMenu';
 import { UsagePanel } from './components/UsagePanel';
 import { AppearancePanel } from './components/AppearancePanel';
 import { UpdatePanel } from './components/UpdatePanel';
@@ -141,6 +141,7 @@ export function App() {
       <SessionContextMenu />
       <TerminalMenu />
       <TerminalNotice />
+      <TerminalPasteGuard />
       {profileEditorOpen && <ProfileEditor />}
       {usagePanelOpen && <UsagePanel />}
       {historyOpen && <HistoryPanel />}

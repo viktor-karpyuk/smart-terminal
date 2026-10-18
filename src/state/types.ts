@@ -463,6 +463,8 @@ export interface Settings {
   terminalPalette: string;
   /** Hand-picked colours layered over the chosen palette. */
   terminalOverrides: Record<string, string>;
+  /** Terminal extension features turned off by hand; the rest follow the extension. */
+  terminalFeaturesOff: string[];
   /**
    * How far a session can reach when it talks to other sessions through MCP.
    *

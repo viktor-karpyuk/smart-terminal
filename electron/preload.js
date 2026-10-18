@@ -43,6 +43,12 @@ contextBridge.exposeInMainWorld('api', {
     create: (options) => ipcRenderer.invoke('pty:create', options),
     write: (id, data) => ipcRenderer.send('pty:write', { id, data }),
     resize: (id, cols, rows) => ipcRenderer.send('pty:resize', { id, cols, rows }),
+    flow: (id, paused) => ipcRenderer.send('pty:flow', { id, paused }),
+    /** A terminal's screen, kept for after a restart. */
+    saveScrollback: (id, text) => ipcRenderer.send('scrollback:save', { id, text }),
+    readScrollback: (id) => ipcRenderer.invoke('scrollback:read', id),
+    forgetScrollback: (id) => ipcRenderer.send('scrollback:forget', id),
+    clearScrollback: () => ipcRenderer.send('scrollback:clear'),
     kill: (id) => ipcRenderer.send('pty:kill', { id }),
     releaseOrphans: () => ipcRenderer.send('pty:release-orphans'),
     launchLine: (sessionId, profileId) =>
@@ -164,6 +170,8 @@ contextBridge.exposeInMainWorld('api', {
     /** Files and folders whose name matches, under one root. Bounded; may come back cut short. */
     find: (root, query, options) => ipcRenderer.invoke('files:find', { root, query, ...options }),
     read: (file) => ipcRenderer.invoke('files:read', file),
+    /** Which of these absolute paths are files. */
+    which: (paths) => ipcRenderer.invoke('files:which', paths),
     // `expectedMtimeMs` is what the editor loaded; the main process refuses the
     // write if disk has moved on, unless `force` says to go over it anyway.
     write: (file, text, options) => ipcRenderer.invoke('files:write', { file, text, ...options }),

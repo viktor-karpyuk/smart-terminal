@@ -1,0 +1,63 @@
+{
+  "id": "terminal",
+  "name": "Terminal",
+  "version": "1.0.0",
+  "author": "Smart Terminal",
+  "installOnUpgrade": true,
+  "summary": "A terminal that keeps up, copies what you select and remembers what it showed.",
+  "description": "Pauses a program that writes faster than the screen can draw instead of freezing behind it. Selecting copies; file paths with a line number open the file there; a paste of several lines into a shell asks first. Scrolled up while output arrives, it says so and takes you back down. Find can match case, whole words and regular expressions, and what was on screen comes back after a restart. Brings Tokyo Night, One Dark and Kanagawa. Each part can be turned off in Appearance.",
+  "contributes": {
+    "terminal": {
+      "features": [
+        "flow-control",
+        "copy-on-select",
+        "path-links",
+        "paste-guard",
+        "jump-to-bottom",
+        "keep-scrollback",
+        "find-options"
+      ],
+      "palettes": [
+        {
+          "id": "tokyo-night",
+          "name": "Tokyo Night",
+          "mode": "dark",
+          "theme": {
+            "background": "#1a1b26", "foreground": "#c0caf5", "cursor": "#c0caf5", "cursorAccent": "#1a1b26",
+            "selectionBackground": "#33467c",
+            "black": "#15161e", "red": "#f7768e", "green": "#9ece6a", "yellow": "#e0af68",
+            "blue": "#7aa2f7", "magenta": "#bb9af7", "cyan": "#7dcfff", "white": "#a9b1d6",
+            "brightBlack": "#414868", "brightRed": "#f7768e", "brightGreen": "#9ece6a", "brightYellow": "#e0af68",
+            "brightBlue": "#7aa2f7", "brightMagenta": "#bb9af7", "brightCyan": "#7dcfff", "brightWhite": "#c0caf5"
+          }
+        },
+        {
+          "id": "one-dark",
+          "name": "One Dark",
+          "mode": "dark",
+          "theme": {
+            "background": "#282c34", "foreground": "#abb2bf", "cursor": "#528bff", "cursorAccent": "#282c34",
+            "selectionBackground": "#3e4451",
+            "black": "#282c34", "red": "#e06c75", "green": "#98c379", "yellow": "#e5c07b",
+            "blue": "#61afef", "magenta": "#c678dd", "cyan": "#56b6c2", "white": "#abb2bf",
+            "brightBlack": "#5c6370", "brightRed": "#e06c75", "brightGreen": "#98c379", "brightYellow": "#e5c07b",
+            "brightBlue": "#61afef", "brightMagenta": "#c678dd", "brightCyan": "#56b6c2", "brightWhite": "#ffffff"
+          }
+        },
+        {
+          "id": "kanagawa",
+          "name": "Kanagawa",
+          "mode": "dark",
+          "theme": {
+            "background": "#1f1f28", "foreground": "#dcd7ba", "cursor": "#c8c093", "cursorAccent": "#1f1f28",
+            "selectionBackground": "#2d4f67",
+            "black": "#16161d", "red": "#c34043", "green": "#76946a", "yellow": "#c0a36e",
+            "blue": "#7e9cd8", "magenta": "#957fb8", "cyan": "#6a9589", "white": "#c8c093",
+            "brightBlack": "#727169", "brightRed": "#e82424", "brightGreen": "#98bb6c", "brightYellow": "#e6c384",
+            "brightBlue": "#7fb4ca", "brightMagenta": "#938aa9", "brightCyan": "#7aa89f", "brightWhite": "#dcd7ba"
+          }
+        }
+      ]
+    }
+  }
+}

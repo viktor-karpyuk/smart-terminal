@@ -38,9 +38,11 @@ const {
   withSources,
   panelViews,
   withPanelSources,
+  terminalContributions,
   readPicture,
 } = require('./extensions');
 const { withCatalog } = require('./extensions');
+const { ScrollbackStore } = require('./scrollback-store');
 const { registry: makeRegistry } = require('./extension-registry');
 const { installer: makeInstaller } = require('./extension-installer');
 const { parseReport, replyFor, wantsBrief, compactionNote } = require('./hooks');
@@ -1205,6 +1207,19 @@ function registerIpc() {
     ptys.write(id, data);
   });
   ipcMain.on('pty:resize', (_e, { id, cols, rows }) => ptys.resize(id, cols, rows));
+  ipcMain.on('pty:flow', (_e, { id, paused }) => ptys.flow(id, paused));
+
+  /*
+   * What each terminal was showing, for after a restart. Only while the
+   * Terminal extension keeps screens: the renderer stops saving and clears them
+   * when that is switched off.
+   */
+  const scrollback = new ScrollbackStore(path.join(app.getPath('userData'), 'scrollback'));
+  setTimeout(() => scrollback.prune(), 30_000).unref?.();
+  ipcMain.on('scrollback:save', (_e, { id, text }) => scrollback.save(id, text));
+  ipcMain.handle('scrollback:read', (_e, id) => scrollback.read(id));
+  ipcMain.on('scrollback:forget', (_e, id) => scrollback.forget(id));
+  ipcMain.on('scrollback:clear', () => scrollback.clear());
   ipcMain.on('pty:kill', (_e, { id }) => {
     // Where it was standing, before the watcher forgets: a session closed in a finished worktree is the moment to offer the worktree.
     const cwd = cwdWatcher?.known?.get(id)?.cwd ?? null;
@@ -1919,6 +1934,19 @@ function registerIpc() {
     } catch (error) {
       return { ok: false, error: error.code === 'ENOENT' ? 'That file is not there any more.' : error.message };
     }
+  });
+
+  /**
+   * Which of these are files. Asked by the terminal before it underlines a path,
+   * so only something that would open looks like it would. Capped, absolute
+   * paths only, and the answer is a yes or no — nothing about what is inside.
+   */
+  ipcMain.handle('files:which', async (_e, paths) => {
+    const wanted = (Array.isArray(paths) ? paths : []).slice(0, 50).filter((one) => typeof one === 'string' && path.isAbsolute(one));
+    const found = await Promise.all(
+      wanted.map((one) => fs.promises.stat(one).then((stat) => (stat.isFile() ? one : null), () => null)),
+    );
+    return found.filter(Boolean);
   });
 
   ipcMain.handle('files:write', async (_e, { file, text, expectedMtimeMs = null, force = false }) => {
@@ -2962,7 +2990,8 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   monitor.start();
 
   // What shipped with the app starts installed; after that the table is the
-  // record of what was decided, and something new arriving later is an offer.
+  // record of what was decided, and something new arriving later is an offer
+  // unless its manifest asks to be installed on the upgrade that brings it.
   try {
     db.seedExtensions(builtInExtensions());
   } catch {
@@ -3331,6 +3360,7 @@ function extensionState() {
     rows,
     previews: withSources(previewRules(rows)),
     panels: withPanelSources(panelViews(rows)),
+    terminal: terminalContributions(rows),
   };
 }
 

@@ -1,5 +1,7 @@
 import { create } from 'zustand';
-import { FOLLOW_APP, resolveTerminalTheme } from '../terminals/themes';
+import { FOLLOW_APP, resolveTerminalTheme, setExtensionPalettes, type TerminalPalette } from '../terminals/themes';
+import { featureOn, setTerminalFeatures } from '../terminals/features';
+import { revealLine } from '../lib/editorReveal';
 import { activeTheme, isDarkMode, isLightSurface } from '../lib/looks';
 import { generateSessionName } from '../lib/names';
 import { shortContext, terminalSetup } from '../lib/extensionHost';
@@ -53,6 +55,8 @@ import {
 } from './layout';
 import {
   applyAppearance,
+  forgetScreens,
+  setTerminalHooks,
   setTerminalFontSize,
   announce,
   disposeTerminal,
@@ -113,6 +117,7 @@ const DEFAULT_SETTINGS: Settings = {
   cursorStyle: 'bar',
   terminalPalette: FOLLOW_APP,
   terminalOverrides: {},
+  terminalFeaturesOff: [],
   sessionMessaging: 'group',
   fileIcons: 'colour',
   folderColour: '#7aa2f7',
@@ -185,6 +190,27 @@ export function terminalLook(settings: Settings): TerminalLook {
     theme: currentTerminalTheme(settings),
   };
 }
+
+/**
+ * Hand the terminal what the Terminal extension switched on.
+ *
+ * Its palettes may be the one a person chose, so whoever calls this applies the
+ * look again when the palettes may have changed.
+ */
+function syncTerminalExtension(settings: Settings, extensions: ExtensionState) {
+  const contributed = extensions.terminal;
+  // Before the first real listing arrives every feature looks off, and that is
+  // not somebody switching screens off — so nothing is cleared until it has.
+  const known = extensions.rows.length > 0;
+  setTerminalFeatures(contributed?.features ?? [], settings.terminalFeaturesOff ?? []);
+  setExtensionPalettes((contributed?.palettes ?? []) as TerminalPalette[]);
+  const keeping = featureOn('keep-scrollback');
+  if (known && keptScreens && !keeping) forgetScreens();
+  if (known) keptScreens = keeping;
+}
+
+/** Whether screens were being kept, as of the last listing. */
+let keptScreens = false;
 
 /** Recent output per session, so a limit notice split across chunks is still matched. */
 const outputTails = new Map<string, string>();
@@ -1000,6 +1026,24 @@ export const useStore = create<State>((set, get) => ({
     window.api.updates.onState((update) => set({ update }));
     window.api.updates.state().then((update) => {
       if (update) set({ update });
+    });
+
+    // What the terminals need from the app: where each shell is, how to open a
+    // file its output points at, and how to make a program wait.
+    void window.api.system.homedir().then((home) => setTerminalHooks({ home }));
+    setTerminalHooks({
+      cwdOf: (id) => get().sessions[id]?.cwd || null,
+      keepsScreen: (id) => get().sessions[id]?.kind !== 'claude',
+      flow: (id, paused) => {
+        const ptyId = get().sessions[id]?.ptyId;
+        if (ptyId) window.api.pty.flow(ptyId, paused);
+      },
+      openPath: (id, path, line, column) => {
+        const cwd = get().sessions[id]?.cwd || '';
+        const root = cwd && path.startsWith(`${cwd.replace(/\/+$/, '')}/`) ? cwd : path.slice(0, path.lastIndexOf('/')) || '/';
+        get().revealFile(root, path);
+        if (line) revealLine(path, line, column);
+      },
     });
 
     window.api.pty.onData(({ id, data }) => {
@@ -2982,6 +3026,8 @@ export const useStore = create<State>((set, get) => ({
       window.api.history.setRecordDefault(after.recordConversations);
     }
 
+    if (after.terminalFeaturesOff !== before.terminalFeaturesOff) syncTerminalExtension(after, get().extensions);
+
     const look = terminalLook(after);
     const was = terminalLook(before);
     if (
@@ -3790,6 +3836,9 @@ export const useStore = create<State>((set, get) => ({
    */
   takeExtensions(state) {
     set({ extensions: state });
+    syncTerminalExtension(get().settings, state);
+    applyAppearance(terminalLook(get().settings));
+    applyGroupAppearance(get);
     /*
      * Installing the Kubernetes extension is what puts clusters on the sidebar,
      * so the list is read the moment it appears rather than at startup — an app

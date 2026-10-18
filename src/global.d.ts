@@ -638,6 +638,13 @@ export interface ExtensionState {
     error?: string;
   }>;
   panels: ExtensionPanelView[];
+  /** What switched-on extensions add to the terminal: features the app implements, and palettes. */
+  terminal?: {
+    features: string[];
+    palettes: Array<{ id: string; name: string; mode: 'light' | 'dark'; theme: Record<string, string>; from: string }>;
+    problems: Array<{ from: string; error: string }>;
+    from: string[];
+  };
 }
 
 /**
@@ -827,6 +834,11 @@ declare global {
         create(options: PtyCreateOptions): Promise<PtyCreateResult>;
         write(id: string, data: string): void;
         resize(id: string, cols: number, rows: number): void;
+        flow(id: string, paused: boolean): void;
+        saveScrollback(id: string, text: string): void;
+        readScrollback(id: string): Promise<string | null>;
+        forgetScrollback(id: string): void;
+        clearScrollback(): void;
         kill(id: string): void;
         releaseOrphans(): void;
         launchLine(sessionId: string, profileId?: string): Promise<string | null>;
@@ -1092,6 +1104,7 @@ declare global {
           options?: { hidden?: boolean },
         ): Promise<{ ok: boolean; results?: FoundEntry[]; scanned?: number; cut?: boolean; error?: string }>;
         read(file: string): Promise<FileRead>;
+        which(paths: string[]): Promise<string[]>;
         write(
           file: string,
           text: string,
