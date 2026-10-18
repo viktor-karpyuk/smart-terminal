@@ -4230,3 +4230,18 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-work.is-action-delete-sessions, .housekeeping-work.is-action-forget-transcripts { border-color: var(--danger, #d9534f); color: var(--danger, #d9534f); }
 .housekeeping-work.is-action-repair-worktree, .housekeeping-work.is-action-db-checkpoint, .housekeeping-work.is-action-db-reclaim { border-color: var(--accent); color: var(--accent); }
 .housekeeping-filters select { padding: 2px 6px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); font: inherit; }
+.housekeeping-finished { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-input); font-size: var(--fs-sm); }
+.housekeeping-finished-dot { width: 8px; height: 8px; border-radius: 50%; background: #3a9d5d; }
+.housekeeping-finished.is-cancelled .housekeeping-finished-dot, .housekeeping-finished.is-failed .housekeeping-finished-dot { background: var(--danger, #d9534f); }
+.housekeeping-finished-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50ch; }
+.housekeeping-finished-sum { color: var(--text-faint); }
+.housekeeping-finished-list { flex-basis: 100%; list-style: none; margin: 4px 0 0; padding: 0 0 0 16px; color: var(--text-dim); }
+.housekeeping-finished-list li { padding: 2px 0; }
+.housekeeping-finished-list .link-btn { margin-left: 8px; }
+.housekeeping-table tr.is-working td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.housekeeping-table tr.is-removing td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.housekeeping-working { display: inline-block; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; padding: 1px 6px; border-radius: 999px; margin-right: 6px; border: 1px solid var(--accent); color: var(--accent); }
+.housekeeping-working.is-queued, .housekeeping-working.is-paused { border-color: var(--text-faint); color: var(--text-faint); }
+.housekeeping-spinner { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--text-faint); vertical-align: middle; }
+.housekeeping-spinner.is-live { border-top-color: var(--accent); animation: hk-spin 0.9s linear infinite; }
+@keyframes hk-spin { to { transform: rotate(360deg); } }

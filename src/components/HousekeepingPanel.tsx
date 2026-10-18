@@ -48,7 +48,14 @@ export function HousekeepingPanel() {
   const [tab, setTab] = useState<Tab>('sessions');
   const [busy, setBusy] = useState<string | null>(null);
   const [measuring, setMeasuring] = useState(0);
-  const [said, setSaid] = useState<string | null>(null);
+  const [said, setSaidRaw] = useState<string | null>(null);
+  const saidTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** A short line that goes away by itself: the panel is not a log, the Log tab is. */
+  const setSaid = (text: string | null) => {
+    setSaidRaw(text);
+    if (saidTimer.current) clearTimeout(saidTimer.current);
+    if (text) saidTimer.current = setTimeout(() => alive.current && setSaidRaw(null), 7000);
+  };
   const [error, setError] = useState<string | null>(null);
   /** What a button is about to do, shown as a modal that lists every item before anything goes. */
   const [pending, setPending] = useState<PendingAction | null>(null);
@@ -163,6 +170,19 @@ export function HousekeepingPanel() {
     // Read once when it opens; "Refresh" reads again. Polling a disk to watch it not change is what makes a panel expensive to leave open.
   }, []);
 
+  /** Items a job holds right now: queued, or the one being removed. The rows show it and refuse a second click. */
+  const inFlight = useMemo(() => {
+    const map = new Map<string, 'removing' | 'queued' | 'paused'>();
+    for (const job of jobs) {
+      if (!['running', 'queued', 'paused', 'interrupted'].includes(job.status)) continue;
+      for (const id of job.ids) {
+        if (job.results[id]) continue;
+        map.set(id, job.status === 'running' ? (job.current === id ? 'removing' : 'queued') : 'paused');
+      }
+    }
+    return map;
+  }, [jobs]);
+
   const totals = useMemo(() => {
     const sum = (list: HousekeepingItem[]) => weigh(list);
     return {
@@ -238,7 +258,7 @@ export function HousekeepingPanel() {
       const list = items.filter((one) => ids.includes(one.id) || ids.includes(String(one.meta?.sessionId)));
       const job = await window.api.housekeeping.jobStart(action.id as HousekeepingJobKind, ids, Object.fromEntries(list.map((one) => [one.id, one.label])), proposal.title);
       setJobs((prev) => [job, ...prev.filter((one) => one.id !== job.id)]);
-      return `Started: ${proposal.title}. Follow it in the bar above.`;
+      return `Started — ${proposal.title}.`;
     });
   };
 
@@ -248,7 +268,7 @@ export function HousekeepingPanel() {
     const ids = list.map((one) => (kind === 'forget-transcripts' || kind === 'delete-sessions' ? String(one.meta?.sessionId ?? one.id) : one.id));
     const job = await window.api.housekeeping.jobStart(kind, ids, labels, title);
     setJobs((prev) => [job, ...prev.filter((one) => one.id !== job.id)]);
-    return `Started: ${title}. Follow it in the bar above; it can be paused or stopped, and it carries on after a restart.`;
+    return `Started — ${title}.`;
   };
 
   /** A proposal's action, shown as the same modal with the items it names. */
@@ -325,7 +345,7 @@ export function HousekeepingPanel() {
 
   const freeNow = freeable(items);
   const used = diskUsedPercent(inventory.disk);
-  const chosen = (list: HousekeepingItem[]) => list.filter((one) => selected.has(one.id) && one.blockers.length === 0);
+  const chosen = (list: HousekeepingItem[]) => list.filter((one) => selected.has(one.id) && one.blockers.length === 0 && !inFlight.has(one.id));
 
   const confirm = (key: string, label: string, detail: string, work: () => Promise<string>, danger = false, disabled = false, items: HousekeepingItem[] = []) => (
     <button
@@ -438,9 +458,12 @@ export function HousekeepingPanel() {
         )}
       </div>
 
-      {jobs.filter((job) => !['done', 'cancelled', 'failed'].includes(job.status) || Date.now() - (job.finishedAt ?? 0) < 60_000).map((job) => (
-        <JobStrip key={job.id} job={job} progress={progress} />
-      ))}
+      {jobs
+        .filter((job) => !['done', 'cancelled', 'failed'].includes(job.status))
+        .map((job) => (
+          <JobStrip key={job.id} job={job} progress={progress} />
+        ))}
+      <FinishedJobs jobs={jobs.filter((job) => ['done', 'cancelled', 'failed'].includes(job.status) && Date.now() - (job.finishedAt ?? job.updatedAt) < 15 * 60_000)} />
 
       {progress && !jobs.some((job) => job.status === 'running') && (
         <div className={`housekeeping-progress${progress.done ? ' is-done' : ''}`} role="status" aria-live="polite">
@@ -522,12 +545,13 @@ export function HousekeepingPanel() {
           confirm={confirm}
           quickRow={quickRow}
           startJob={startJob}
+          inFlight={inFlight}
         />
       )}
       {tab === 'worktrees' && (
-        <Worktrees items={items} roots={inventory.roots} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} quickRow={quickRow} startJob={startJob} reload={() => load()} onError={setError} />
+        <Worktrees items={items} roots={inventory.roots} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} quickRow={quickRow} startJob={startJob} inFlight={inFlight} reload={() => load()} onError={setError} />
       )}
-      {tab === 'app' && <AppFiles items={items} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} quickRow={quickRow} startJob={startJob} />}
+      {tab === 'app' && <AppFiles items={items} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} quickRow={quickRow} startJob={startJob} inFlight={inFlight} />}
       {tab === 'health' && <Health health={health} setHealth={setHealth} onError={setError} ask={askClaude} asking={busy === 'ask'} plan={plan} stats={stats} askPlan={askPlan} busy={Boolean(busy)} />}
       {tab === 'log' && <Log initial={inventory.log} />}
     </div>
@@ -549,6 +573,62 @@ interface ListProps {
   quickRow: (one: HousekeepingItem) => void;
   /** Queue a removal as a job and say so. */
   startJob: (kind: HousekeepingJobKind, list: HousekeepingItem[], title: string) => Promise<string>;
+  /** Items a job holds right now. */
+  inFlight: Map<string, 'removing' | 'queued' | 'paused'>;
+}
+
+/** Jobs that ended lately, as one line rather than a stack: how many, what they gave back, and one Dismiss. */
+function FinishedJobs({ jobs }: { jobs: HousekeepingJob[] }) {
+  const [open, setOpen] = useState(false);
+  if (!jobs.length) return null;
+  const freed = jobs.reduce((a, j) => a + j.freed, 0);
+  const refused = jobs.reduce((a, j) => a + j.failed, 0);
+  const bad = jobs.filter((j) => j.status !== 'done').length;
+  const dismissAll = () => jobs.forEach((j) => void window.api.housekeeping.jobDismiss(j.id));
+  if (jobs.length === 1) {
+    const j = jobs[0];
+    return (
+      <div className={`housekeeping-finished is-${j.status}`} role="status">
+        <span className="housekeeping-finished-dot" />
+        <strong>{j.status === 'done' ? 'Done' : j.status === 'cancelled' ? 'Stopped' : 'Failed'}</strong>
+        <span className="housekeeping-finished-title">{j.title}</span>
+        <span className="housekeeping-finished-sum">
+          {formatBytes(j.freed)} given back{j.failed ? ` · ${j.failed} refused` : ''}
+        </span>
+        <button className="ghost-btn tiny" onClick={dismissAll}>
+          Dismiss
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className={`housekeeping-finished${bad ? ' is-cancelled' : ' is-done'}`} role="status">
+      <span className="housekeeping-finished-dot" />
+      <strong>{jobs.length} jobs finished</strong>
+      <span className="housekeeping-finished-sum">
+        {formatBytes(freed)} given back{refused ? ` · ${refused} refused` : ''}{bad ? ` · ${bad} stopped or failed` : ''}
+      </span>
+      <button className="link-btn" onClick={() => setOpen((v) => !v)}>
+        {open ? 'hide' : 'show'}
+      </button>
+      <button className="ghost-btn tiny" onClick={dismissAll}>
+        Dismiss all
+      </button>
+      {open && (
+        <ul className="housekeeping-finished-list">
+          {jobs.map((j) => (
+            <li key={j.id}>
+              <span>{j.status === 'done' ? '✓' : '✕'}</span> {j.title} · {formatBytes(j.freed)}
+              {j.failed ? ` · ${j.failed} refused` : ''}
+              <button className="link-btn" onClick={() => void window.api.housekeeping.jobDismiss(j.id)}>
+                dismiss
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 /** One job, as a strip: what it is, where it is, what it gave back, and the buttons that stop or resume it. */
@@ -642,6 +722,7 @@ function Sessions({
   confirm,
   quickRow,
   startJob,
+  inFlight,
 }: ListProps & {
   olderThan: number;
   setOlderThan: (n: number) => void;
@@ -670,7 +751,7 @@ function Sessions({
           {rows.length} session{rows.length === 1 ? '' : 's'}, {formatBytes(weigh(rows))}
         </span>
       </div>
-      <Table rows={rows} selected={selected} toggle={toggle} selectAll={selectAll} empty="No session matches. Lower the days or the size." quick={{ label: 'Forget', run: quickRow }} />
+      <Table rows={rows} selected={selected} toggle={toggle} selectAll={selectAll} empty="No session matches. Lower the days or the size." quick={{ label: 'Forget', run: quickRow }} inFlight={inFlight} />
       <div className="storage-actions">
         {confirm(
           'forget',
@@ -695,7 +776,7 @@ function Sessions({
   );
 }
 
-function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm, quickRow, startJob, reload, onError }: ListProps & { roots: HousekeepingRoot[]; reload: () => void; onError: (message: string) => void }) {
+function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm, quickRow, startJob, inFlight, reload, onError }: ListProps & { roots: HousekeepingRoot[]; reload: () => void; onError: (message: string) => void }) {
   const caches = items.filter((one) => one.kind === 'build-cache');
   const shops = items.filter((one) => one.kind === 'workshop');
   const pickedCaches = chosen(caches);
@@ -788,7 +869,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
           {trees.length} of {allTrees.length} worktree{allTrees.length === 1 ? '' : 's'}, {formatBytes(weigh(trees))} · {finished.length} finished and clear
         </span>
       </div>
-      <Table rows={trees} selected={selected} toggle={toggle} selectAll={selectAll} empty={allTrees.length ? 'No worktree matches. Lower the days or untick finished only.' : 'No worktrees found. Add the folder they live in above.'} quick={{ label: 'Remove', run: quickRow }} />
+      <Table rows={trees} selected={selected} toggle={toggle} selectAll={selectAll} empty={allTrees.length ? 'No worktree matches. Lower the days or untick finished only.' : 'No worktrees found. Add the folder they live in above.'} quick={{ label: 'Remove', run: quickRow }} inFlight={inFlight} />
       <div className="storage-actions">
         {confirm(
           'trees',
@@ -829,7 +910,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
       <p className="usage-note">
         Folders a build writes and writes again: .angular, node_modules, target, dist. Removing one costs the next build a rebuild and nothing else. A folder git does not ignore is refused. A cache inside a worktree listed above is shown here but counted inside that worktree's size.
       </p>
-      <Table rows={caches} selected={selected} toggle={toggle} selectAll={selectAll} empty="No build caches under the folders above." quick={{ label: 'Clear', run: quickRow }} />
+      <Table rows={caches} selected={selected} toggle={toggle} selectAll={selectAll} empty="No build caches under the folders above." quick={{ label: 'Clear', run: quickRow }} inFlight={inFlight} />
       <div className="storage-actions">
         {confirm(
           'caches',
@@ -844,7 +925,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
 
       <h3 className="monitor-heading">Code Reviewer clones</h3>
       <p className="usage-note">A clone per pull request the reviewer wrote fixes in. One whose pull request is closed and whose fixes were handed back can go.</p>
-      <Table rows={shops} selected={selected} toggle={toggle} selectAll={selectAll} empty="No review clones on disk." quick={{ label: 'Discard', run: quickRow }} />
+      <Table rows={shops} selected={selected} toggle={toggle} selectAll={selectAll} empty="No review clones on disk." quick={{ label: 'Discard', run: quickRow }} inFlight={inFlight} />
       <div className="storage-actions">
         {confirm(
           'shops',
@@ -920,7 +1001,7 @@ function Regenerable({ reload, onError }: { reload: () => void; onError: (m: str
   );
 }
 
-function AppFiles({ items, selected, toggle, selectAll, chosen, confirm, quickRow, startJob }: ListProps) {
+function AppFiles({ items, selected, toggle, selectAll, chosen, confirm, quickRow, startJob, inFlight }: ListProps) {
   const rows = inBucket(items, 'app');
   const picked = chosen(rows);
   return (
@@ -928,7 +1009,7 @@ function AppFiles({ items, selected, toggle, selectAll, chosen, confirm, quickRo
       <p className="usage-note">
         What the app keeps beside its database: copies of the database and of whole data folders made before upgrades, installers already downloaded, pasted images, the window's own cache. The database itself is tended from the Monitor.
       </p>
-      <Table rows={rows} selected={selected} toggle={toggle} selectAll={selectAll} empty="Nothing beside the database." quick={{ label: 'Remove', run: quickRow }} />
+      <Table rows={rows} selected={selected} toggle={toggle} selectAll={selectAll} empty="Nothing beside the database." quick={{ label: 'Remove', run: quickRow }} inFlight={inFlight} />
       <div className="storage-actions">
         {confirm(
           'app',
@@ -1468,6 +1549,7 @@ function Table({
   selectAll,
   empty,
   quick,
+  inFlight,
 }: {
   rows: HousekeepingItem[];
   selected: Set<string>;
@@ -1476,10 +1558,11 @@ function Table({
   empty: string;
   /** The row's own button: selects the row alone and arms the list's confirm. */
   quick?: { label: string; run: (one: HousekeepingItem) => void };
+  inFlight?: Map<string, 'removing' | 'queued' | 'paused'>;
 }) {
   const [sort, setSort] = useState<'size' | 'idle' | 'name'>('size');
   if (!rows.length) return <p className="empty-state">{empty}</p>;
-  const free = rows.filter((one) => one.blockers.length === 0);
+  const free = rows.filter((one) => one.blockers.length === 0 && !inFlight?.has(one.id));
   const allOn = free.length > 0 && free.every((one) => selected.has(one.id));
   const picked = rows.filter((one) => selected.has(one.id));
   const ordered = [...rows].sort((a, b) =>
@@ -1519,10 +1602,15 @@ function Table({
         {ordered.map((one) => {
           const blocked = one.blockers.length > 0;
           const unsized = one.meta?.sized === false;
+          const working = inFlight?.get(one.id) ?? null;
           return (
-            <tr key={one.id} className={blocked ? 'is-blocked' : ''} title={one.path ?? undefined}>
+            <tr key={one.id} className={`${blocked ? 'is-blocked' : ''}${working ? ` is-working is-${working}` : ''}`} title={one.path ?? undefined}>
               <td>
-                <input type="checkbox" checked={selected.has(one.id)} disabled={blocked} onChange={() => toggle(one.id)} aria-label={`select ${one.label}`} />
+                {working ? (
+                  <span className={`housekeeping-spinner${working === 'removing' ? ' is-live' : ''}`} aria-label={working} />
+                ) : (
+                  <input type="checkbox" checked={selected.has(one.id)} disabled={blocked} onChange={() => toggle(one.id)} aria-label={`select ${one.label}`} />
+                )}
               </td>
               <td>
                 <span className="housekeeping-label">{one.label}</span>
@@ -1544,6 +1632,11 @@ function Table({
                 )}
               </td>
               <td>
+                {working && (
+                  <span className={`housekeeping-working is-${working}`}>
+                    {working === 'removing' ? 'Removing…' : working === 'queued' ? 'Queued' : 'Paused'}
+                  </span>
+                )}
                 {one.kind === 'worktree' && (
                   <span className={`housekeeping-work ${one.meta?.dirty ? 'is-unmerged' : 'is-done'}`} title={one.meta?.dirty ? 'git status lists files changed, staged or untracked' : 'git status is clean'}>
                     {one.meta?.dirty ? `${Number(one.meta?.dirtyCount) || '?'} uncommitted` : 'clean'}
@@ -1558,7 +1651,7 @@ function Table({
                 {blocked && <small className="housekeeping-blocker">{one.blockers.join(', ')}</small>}
               </td>
               <td className="is-num housekeeping-rowactions">
-                {quick && (!blocked || Boolean(one.meta?.broken)) && (
+                {quick && !working && (!blocked || Boolean(one.meta?.broken)) && (
                   <button className="ghost-btn tiny" onClick={() => quick.run(one)} title={`${one.meta?.broken ? 'Repair' : quick.label} only this one`}>
                     {one.meta?.broken ? 'Repair' : quick.label}
                   </button>
