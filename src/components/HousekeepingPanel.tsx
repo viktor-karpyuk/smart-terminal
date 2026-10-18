@@ -969,6 +969,7 @@ function Sessions({
         empty="No session matches. Lower the days or the size."
         quick={{ label: 'Forget', run: quickRow }}
         inFlight={inFlight}
+        pageSize={50}
         onClear={() => selectAll(rows, false)}
         actions={() => (
           <>
@@ -1120,6 +1121,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
         empty={allTrees.length ? 'No worktree matches. Lower the days or untick finished only.' : 'No worktrees found. Add the folder they live in above.'}
         quick={{ label: 'Remove', run: quickRow }}
         inFlight={inFlight}
+        pageSize={50}
         allowForce
         onClear={() => selectAll(trees, false)}
         actions={() => (
@@ -1886,6 +1888,7 @@ function Table({
   allowForce = false,
   actions,
   onClear,
+  pageSize: pageSizeDefault = 0,
 }: {
   rows: HousekeepingItem[];
   selected: Set<string>;
@@ -1900,15 +1903,68 @@ function Table({
   /** What can be done with the selection: shown in a bar above the list that stays while scrolling. */
   actions?: (picked: HousekeepingItem[]) => ReactElement | null;
   onClear?: () => void;
+  /** Rows per page; 0 shows them all. A list of four hundred sessions is read a page at a time. */
+  pageSize?: number;
 }) {
   const [sort, setSort] = useState<'size' | 'idle' | 'name'>('size');
+  const [pageSize, setPageSize] = useState(pageSizeDefault);
+  const [page, setPage] = useState(0);
+  // A filter that shrinks the list below the page you were on puts you on the last page, not on an empty one.
+  const pages = pageSize > 0 ? Math.max(1, Math.ceil(rows.length / pageSize)) : 1;
+  useEffect(() => {
+    if (page > pages - 1) setPage(pages - 1);
+  }, [page, pages]);
   if (!rows.length) return <p className="empty-state">{empty}</p>;
   const free = rows.filter((one) => one.blockers.length === 0 && !inFlight?.has(one.id));
   const allOn = free.length > 0 && free.every((one) => selected.has(one.id));
   const picked = rows.filter((one) => selected.has(one.id));
-  const ordered = [...rows].sort((a, b) =>
+  const sorted = [...rows].sort((a, b) =>
     sort === 'size' ? b.bytes - a.bytes : sort === 'idle' ? (idleDays(b.lastActivityAt) ?? -1) - (idleDays(a.lastActivityAt) ?? -1) : a.label.localeCompare(b.label),
   );
+  const current = Math.min(page, pages - 1);
+  const from = pageSize > 0 ? current * pageSize : 0;
+  const to = pageSize > 0 ? Math.min(rows.length, from + pageSize) : rows.length;
+  const ordered = sorted.slice(from, to);
+  const pager =
+    pageSize > 0 && (rows.length > pageSize || pageSizeDefault > 0) ? (
+      <div className="housekeeping-pager" role="navigation" aria-label="Pages">
+        <span className="usage-note">
+          {from + 1}–{to} of {rows.length}
+        </span>
+        <button className="ghost-btn tiny" disabled={current === 0} onClick={() => setPage(0)} aria-label="First page">
+          «
+        </button>
+        <button className="ghost-btn tiny" disabled={current === 0} onClick={() => setPage(current - 1)} aria-label="Previous page">
+          ‹
+        </button>
+        <span className="housekeeping-pager-page">
+          {current + 1} / {pages}
+        </span>
+        <button className="ghost-btn tiny" disabled={current >= pages - 1} onClick={() => setPage(current + 1)} aria-label="Next page">
+          ›
+        </button>
+        <button className="ghost-btn tiny" disabled={current >= pages - 1} onClick={() => setPage(pages - 1)} aria-label="Last page">
+          »
+        </button>
+        <label className="housekeeping-pager-size">
+          per page
+          <select
+            value={pageSize}
+            onChange={(e) => {
+              setPageSize(Number(e.target.value));
+              setPage(0);
+            }}
+          >
+            {[25, 50, 100, 200].map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+            <option value={0}>all</option>
+          </select>
+        </label>
+      </div>
+    ) : null;
   const head = (key: 'size' | 'idle' | 'name', label: string, className = '') => (
     <th className={className}>
       <button className={`housekeeping-sort${sort === key ? ' is-on' : ''}`} onClick={() => setSort(key)} title={`Sort by ${label.toLowerCase()}`}>
@@ -1930,11 +1986,12 @@ function Table({
           </button>
         </div>
       )}
+    {pager}
     <table className="housekeeping-table">
       <thead>
         <tr>
           <th>
-            <input type="checkbox" checked={allOn} disabled={!free.length} onChange={(e) => selectAll(rows, e.target.checked)} aria-label="select all" />
+            <input type="checkbox" checked={allOn} disabled={!free.length} onChange={(e) => selectAll(rows, e.target.checked)} aria-label="select all" title={pageSize > 0 && rows.length > pageSize ? `Select all ${free.length} that can be, on every page` : undefined} />
           </th>
           {head('name', 'What')}
           {head('idle', 'Idle')}
@@ -2027,6 +2084,7 @@ function Table({
         })}
       </tbody>
     </table>
+    {rows.length > 12 && pager}
     </>
   );
 }

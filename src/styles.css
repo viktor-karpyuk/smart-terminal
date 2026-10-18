@@ -4309,3 +4309,8 @@ button.ci-toast-main { cursor: pointer; }
 .sidebar-item.is-paused .sidebar-item-title { opacity: 0.75; }
 .sidebar-item-paused { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); border: 1px solid var(--border); border-radius: 999px; padding: 0 5px; }
 .section-open.is-on { color: var(--accent); }
+.housekeeping-pager { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 8px; }
+.housekeeping-pager .usage-note { margin: 0 6px 0 0; }
+.housekeeping-pager-page { font-variant-numeric: tabular-nums; color: var(--text-faint); padding: 0 4px; }
+.housekeeping-pager-size { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; color: var(--text-faint); font-size: var(--fs-xs); }
+.housekeeping-pager-size select { padding: 2px 6px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); font: inherit; }
