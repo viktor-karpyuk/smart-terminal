@@ -396,7 +396,13 @@ class Housekeeping {
       case 'build-cache':
       case 'trash': {
         const checkouts = this.#checkouts ?? this.checkouts();
-        if (!checkouts.some((checkout) => target && path.dirname(target) === path.resolve(checkout))) throw new Error(`${one.label} is not directly inside a checkout this app looks through.`);
+        const checkout = checkouts.find((candidate) => target && path.dirname(target) === path.resolve(candidate));
+        if (!checkout) throw new Error(`${one.label} is not directly inside a checkout this app looks through.`);
+        // Asked again now, not at inventory time: a session may have walked into this checkout since the list was made.
+        const root = path.resolve(checkout);
+        if (one.kind === 'build-cache' && this.live().some((cwd) => cwd && (cwd === root || cwd.startsWith(root + path.sep)))) {
+          throw new Error(`a session is working in ${path.basename(checkout)} right now; its cache is left alone.`);
+        }
         return;
       }
       case 'db-backup':

@@ -215,7 +215,10 @@ export function HousekeepingPanel() {
         <button className="ghost-btn tiny" disabled={Boolean(busy) || measuring > 0} onClick={() => {
             const own = items.filter((one) => one.kind !== 'session' && one.kind !== 'browser-cache' && one.path).map((one) => one.path as string);
             setMeasuring(own.length);
-            void window.api.housekeeping.measure(own, true).finally(() => setMeasuring(0));
+            void window.api.housekeeping
+              .measure(own, true)
+              .catch((e: unknown) => setError(String((e as Error)?.message ?? e)))
+              .finally(() => setMeasuring(0));
           }} title="Walk every folder again, ignoring the remembered sizes">
           Measure again
         </button>
@@ -247,7 +250,9 @@ export function HousekeepingPanel() {
           confirm={confirm}
         />
       )}
-      {tab === 'worktrees' && <Worktrees items={items} roots={inventory.roots} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} reload={() => load()} />}
+      {tab === 'worktrees' && (
+        <Worktrees items={items} roots={inventory.roots} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} reload={() => load()} onError={setError} />
+      )}
       {tab === 'app' && <AppFiles items={items} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} />}
       {tab === 'log' && <Log rows={inventory.log} />}
     </div>
@@ -337,7 +342,7 @@ function Sessions({
   );
 }
 
-function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm, reload }: ListProps & { roots: HousekeepingRoot[]; reload: () => void }) {
+function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm, reload, onError }: ListProps & { roots: HousekeepingRoot[]; reload: () => void; onError: (message: string) => void }) {
   const caches = items.filter((one) => one.kind === 'build-cache');
   const shops = items.filter((one) => one.kind === 'workshop');
   const pickedCaches = chosen(caches);
@@ -352,6 +357,8 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
         await window.api.housekeeping.addRoot(folder);
         reload();
       }
+    } catch (e) {
+      onError(String((e as Error)?.message ?? e));
     } finally {
       setAdding(false);
     }
@@ -367,10 +374,12 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
             <code>{root.path}</code>
             <button
               className="ghost-btn tiny"
-              onClick={async () => {
-                await window.api.housekeeping.removeRoot(root.path);
-                reload();
-              }}
+              onClick={() =>
+                window.api.housekeeping
+                  .removeRoot(root.path)
+                  .then(() => reload())
+                  .catch((e: unknown) => onError(String((e as Error)?.message ?? e)))
+              }
             >
               Forget
             </button>

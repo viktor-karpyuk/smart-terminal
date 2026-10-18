@@ -163,6 +163,15 @@ test('free refuses a path that is not where its kind lives, even with a well-for
     hk.last.items.push({ id: 'installbackup:self', kind: 'install-backup', reversible: true, label: 'self', path: hk.userData, bytes: 1, blockers: [] });
     const { results } = await hk.free(['dbbackup:stray', 'cache:stray', 'installbackup:self']);
     assert.deepEqual(results.map((one) => one.ok), [false, false, false]);
+
+    // A session walked into the checkout after the inventory was made: the cache is refused now, not by the stale list.
+    const cache = hk.last.items.find((one) => one.kind === 'build-cache' && one.meta?.name === 'node_modules');
+    hk.live = () => [path.join(cache.meta.checkout, 'src')];
+    const late = (await hk.free([cache.id])).results[0];
+    assert.equal(late.ok, false);
+    assert.match(late.error, /a session is working/);
+    assert.ok(fs.existsSync(cache.path));
+    hk.live = () => [];
     assert.ok(fs.existsSync(hk.userData), 'the data folder itself is never a candidate');
     assert.ok(fs.existsSync(path.join(stray, 'x')));
   } finally {
