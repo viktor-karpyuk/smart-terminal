@@ -86,6 +86,7 @@ export function TitleBar() {
 
       <div className="titlebar-actions">
         <UpdateNotice />
+        <HousekeepingButton />
         <CiBell />
         <button className="icon-btn" title="Split right (⌘D)" aria-label="Split right" onClick={() => splitActive('row')}>
           <SplitRightIcon />
@@ -205,6 +206,29 @@ function WaitingOnYou() {
       onClick={() => focusSession(waiting[0])}
     >
       {waiting.length} waiting on you
+    </button>
+  );
+}
+
+/**
+ * Housekeeping, from the window's own bar: the system menu bar belongs to
+ * whichever app is in front, and a person with two copies open was looking at
+ * the wrong one. The dot is the health job's status, the same as the sidebar's.
+ */
+function HousekeepingButton() {
+  const status = useStore((s) => s.housekeepingStatus);
+  const open = useStore((s) => s.openHousekeeping);
+  const title =
+    status === 'limit'
+      ? 'Housekeeping: something is at a limit (⇧⌘H)'
+      : status === 'attention'
+        ? 'Housekeeping: something needs attention (⇧⌘H)'
+        : 'Housekeeping: what is on disk, and how the machine is doing (⇧⌘H)';
+  return (
+    <button className={`icon-btn housekeeping-dot is-${status}`} title={title} aria-label="Housekeeping" onClick={() => open()}>
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden>
+        <path d="M3 3.5h8M4 3.5l.7 8h4.6l.7-8M5.8 3.5V2.2h2.4v1.3" />
+      </svg>
     </button>
   );
 }
