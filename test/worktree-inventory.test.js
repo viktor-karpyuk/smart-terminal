@@ -185,6 +185,29 @@ test('a detached worktree whose commit is on a base is finished, and the person\
   assert.ok(perf.mergedInto, 'its commit is on develop');
 });
 
+test('a worktree whose .git points at a repository that is gone is \'link broken\', and repair reconnects it', async () => {
+  const { main, wt } = repo();
+  const { linkedRepoExists } = require('../electron/worktree-inventory');
+  const dotGit = path.join(wt, 'done', '.git');
+  const original = fs.readFileSync(dotGit, 'utf8');
+  fs.writeFileSync(dotGit, 'gitdir: /nowhere/at/all/.git/worktrees/done\n');
+  assert.equal(linkedRepoExists(path.join(wt, 'done')), false);
+  assert.equal(linkedRepoExists(main), true);
+  const inv = new WorktreeInventory({ folders: () => [main], fetch: false });
+  let done = (await inv.list()).find((row) => row.label === 'done');
+  assert.equal(done.state, 'link broken');
+  assert.ok(done.blockers.some((b) => /repair it first/.test(b)));
+  const removed = await inv.remove([path.join(wt, 'done')]);
+  assert.equal(removed[0].ok, false, 'a broken one is not removed');
+  const repaired = await inv.repair([path.join(wt, 'done')]);
+  assert.equal(repaired[0].ok, true, repaired[0].error);
+  assert.notEqual(fs.readFileSync(dotGit, 'utf8'), 'gitdir: /nowhere/at/all/.git/worktrees/done\n');
+  done = (await inv.list()).find((row) => row.label === 'done');
+  assert.equal(done.state, 'merged into origin/develop');
+  assert.deepEqual(done.blockers, []);
+  void original;
+});
+
 test('finish derives state and blockers from a row, in the order a person reads them', () => {
   const row = { main: false, base: false, ownWork: true, locked: true, detached: false, prunable: false, branch: 'x', dirty: true, irreplaceable: ['.env', 'secrets', 'a', 'b'], mergedInto: null, upstreamGone: false, upstream: 'origin/x', ahead: 2, lastCommitAt: 10, gitMtime: 20 };
   const out = finish(row, false, 30);

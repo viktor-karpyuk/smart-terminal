@@ -227,6 +227,8 @@ class Housekeeping {
         return this.free(ids);
       case 'remove-worktrees':
         return this.removeWorktrees(ids);
+      case 'repair-worktrees':
+        return this.repairWorktrees(ids);
       case 'forget-transcripts':
         return this.forgetTranscripts(ids);
       case 'delete-sessions':
@@ -287,7 +289,7 @@ class Housekeeping {
           state: row.state,
           blockers: row.blockers,
           detail: [row.branch ? `branch ${row.branch}` : null, row.upstream ? `tracks ${row.upstream}` : row.ownWork ? 'no upstream' : null].filter(Boolean).join(' · ') || null,
-          meta: { root: row.root, branch: row.branch, finished: row.finished, prunable: row.prunable, work: row.work, aheadOfBase: row.aheadOfBase, sized: Boolean(known) || row.prunable },
+          meta: { root: row.root, branch: row.branch, finished: row.finished, prunable: row.prunable, broken: row.broken, work: row.work, aheadOfBase: row.aheadOfBase, sized: Boolean(known) || row.prunable },
         });
       });
   }
@@ -657,6 +659,14 @@ class Housekeeping {
     }
     this.emit('progress', { op: 'remove-worktrees', index: paths.length, total: paths.length, label: null, freed, done: true, failed: results.filter((one) => !one.ok).length });
     return { results: results.map((one) => ({ id: `worktree:${one.path}`, ok: one.ok, bytes: one.ok ? this.sizes.known(one.path)?.bytes ?? 0 : 0, error: one.error, note: one.branchKept ? 'branch kept' : undefined })), freed };
+  }
+
+  /** Point broken worktrees back at their repository. Nothing is removed. */
+  async repairWorktrees(ids = []) {
+    const paths = ids.map((id) => String(id)).filter((id) => id.startsWith('worktree:')).map((id) => id.slice('worktree:'.length));
+    const results = await this.worktrees.repair(paths);
+    for (const one of results) this.store.log({ action: 'repair-worktree', kind: 'worktree', label: path.basename(one.path), bytes: 0, ok: one.ok, detail: one.error ?? null });
+    return { results: results.map((one) => ({ id: `worktree:${one.path}`, ok: one.ok, error: one.error })) };
   }
 
   /** Discard the Code Reviewer's clones for pull requests that are finished. The reviewer's own checks still apply. */

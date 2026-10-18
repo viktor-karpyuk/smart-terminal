@@ -1342,6 +1342,7 @@ function registerIpc() {
   ipcMain.handle('housekeeping:forget-transcripts', (_e, ids = []) => housekeeping.forgetTranscripts(Array.isArray(ids) ? ids : []));
   ipcMain.handle('housekeeping:discard-workshops', (_e, ids = []) => housekeeping.discardWorkshops(Array.isArray(ids) ? ids : []));
   ipcMain.handle('housekeeping:remove-worktrees', (_e, ids = []) => housekeeping.removeWorktrees(Array.isArray(ids) ? ids : []));
+  ipcMain.handle('housekeeping:repair-worktrees', (_e, ids = []) => housekeeping.repairWorktrees(Array.isArray(ids) ? ids : []));
   ipcMain.handle('housekeeping:roots', () => housekeeping.roots());
   ipcMain.handle('housekeeping:add-root', (_e, folder) => housekeeping.addRoot(String(folder ?? '')));
   ipcMain.handle('housekeeping:remove-root', (_e, folder) => housekeeping.removeRoot(String(folder ?? '')));

@@ -330,6 +330,7 @@ contextBridge.exposeInMainWorld('api', {
     forgetTranscripts: (ids) => ipcRenderer.invoke('housekeeping:forget-transcripts', ids),
     discardWorkshops: (ids) => ipcRenderer.invoke('housekeeping:discard-workshops', ids),
     removeWorktrees: (ids) => ipcRenderer.invoke('housekeeping:remove-worktrees', ids),
+    repairWorktrees: (ids) => ipcRenderer.invoke('housekeeping:repair-worktrees', ids),
     roots: () => ipcRenderer.invoke('housekeeping:roots'),
     addRoot: (folder) => ipcRenderer.invoke('housekeeping:add-root', folder),
     removeRoot: (folder) => ipcRenderer.invoke('housekeeping:remove-root', folder),

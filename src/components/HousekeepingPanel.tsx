@@ -546,6 +546,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
   const [idleFor, setIdleFor] = useState(0);
   const [finishedOnly, setFinishedOnly] = useState(false);
   const trees = filterWorktrees(items, { olderThanDays: idleFor, finishedOnly });
+  const broken = items.filter((one) => one.kind === 'worktree' && one.meta?.broken);
   const allTrees = items.filter((one) => one.kind === 'worktree');
   const pickedTrees = chosen(trees);
   const finished = allTrees.filter((one) => one.meta?.finished && one.blockers.length === 0);
@@ -629,6 +630,17 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
           true,
           pickedTrees.length === 0,
         )}
+        {broken.length > 0 &&
+          confirm(
+            'repair',
+            `Repair ${broken.length} broken link${broken.length === 1 ? '' : 's'}`,
+            'git worktree repair points each one back at the repository that lists it. Nothing is removed; afterwards they can be read, and removed if finished.',
+            async () => {
+              const out = await window.api.housekeeping.repairWorktrees(broken.map((one) => one.id));
+              const failed = out.results.filter((one) => !one.ok);
+              return `Repaired ${out.results.length - failed.length}.${failed.length ? ` ${failed.length} could not be: ${failed[0].error}` : ''}`;
+            },
+          )}
         {finished.length > 0 &&
           confirm(
             'finished',

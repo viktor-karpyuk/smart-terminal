@@ -46,6 +46,21 @@ const inside = (child, parent) => {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 };
 
+/** Whether the repository a worktree's .git file points at is still there. A checkout with a .git directory always is. */
+function linkedRepoExists(dir) {
+  try {
+    const dotGit = path.join(dir, '.git');
+    if (fs.statSync(dotGit).isDirectory()) return true;
+    const text = fs.readFileSync(dotGit, 'utf8');
+    const m = text.match(/^gitdir:\s*(.+)$/m);
+    if (!m) return false;
+    const gitdir = path.isAbsolute(m[1].trim()) ? m[1].trim() : path.join(dir, m[1].trim());
+    return fs.existsSync(gitdir);
+  } catch {
+    return false;
+  }
+}
+
 /** A path as the filesystem spells it — git prints resolved paths, and on macOS /var is /private/var. */
 function real(one) {
   const resolved = path.resolve(one);
@@ -65,9 +80,15 @@ function real(one) {
 function isRegenerable(name, extra = []) {
   const clean = String(name).replace(/\/$/, '');
   const base = path.posix.basename(clean);
-  if (caches.KNOWN.some((known) => known.name === base) || caches.TRASH.test(base) || /\.(log|tsbuildinfo)$/.test(base) || base === '.DS_Store') return true;
+  // Any segment: git lists `.angular/cache` when only the cache inside is ignored, and that is still the cache.
+  const segments = clean.split('/').filter(Boolean);
+  if (segments.some((segment) => REGENERABLE_NAMES.has(segment) || caches.TRASH.test(segment))) return true;
+  if (/\.(log|tsbuildinfo)$/.test(base) || base === '.DS_Store' || base === 'Thumbs.db') return true;
   return extra.some((pattern) => globMatches(pattern, base) || globMatches(pattern, clean));
 }
+
+/** The cache list, plus output folders a build writes that the panel does not offer to delete on their own. */
+const REGENERABLE_NAMES = new Set([...caches.KNOWN.map((known) => known.name), 'release', '.test-build', '.idea', '.vscode', 'venv', 'tmp', 'temp', '.tmp']);
 
 /** `*` matches anything but a slash; everything else is literal. */
 function globMatches(pattern, text) {
@@ -192,6 +213,8 @@ class WorktreeInventory {
       locked: entry.locked,
       prunable: entry.prunable,
       base: Boolean(entry.branch && BASES.has(entry.branch)),
+      /** Its .git file points at a repository folder that is not there: moved or deleted. git can neither read nor remove it. */
+      broken: !entry.prunable && fs.existsSync(entry.path) && !linkedRepoExists(entry.path),
       dirty: false,
       irreplaceable: [],
       mergedInto: null,
@@ -205,7 +228,7 @@ class WorktreeInventory {
       gitMtime,
     };
 
-    if (!entry.prunable && fs.existsSync(entry.path)) {
+    if (!entry.prunable && fs.existsSync(entry.path) && !row.broken) {
       const [status, commit] = await Promise.all([git(entry.path, ['status', '--porcelain']), git(entry.path, ['log', '-1', '--format=%ct'])]);
       row.dirty = !status.ok || Boolean(status.stdout.trim());
       row.lastCommitAt = commit.ok && commit.stdout.trim() ? Number(commit.stdout.trim()) * 1000 : null;
@@ -238,6 +261,27 @@ class WorktreeInventory {
     }
     this.memo.set(entry.path, { stamp, at: this.now(), row });
     return finish(row, liveInside, sessionAt);
+  }
+
+  /**
+   * Point broken worktrees back at the repository that lists them: `git worktree
+   * repair` rewrites the .git file and the repository's record of it, and touches
+   * nothing else. Safe, and the only way such a worktree becomes readable again.
+   */
+  async repair(paths) {
+    const rows = new Map((await this.list()).map((row) => [row.path, row]));
+    const results = [];
+    for (const target of paths) {
+      const row = rows.get(target) ?? rows.get(real(target));
+      if (!row) {
+        results.push({ path: target, ok: false, error: 'That is not a worktree the app knows; look again.' });
+        continue;
+      }
+      const done = await git(row.root, ['worktree', 'repair', row.path]);
+      this.memo.delete(row.path);
+      results.push(done.ok ? { path: target, ok: true } : { path: target, ok: false, error: done.stderr.trim().split('\n').pop() || 'git could not repair it' });
+    }
+    return results;
   }
 
   /**
@@ -295,6 +339,7 @@ function finish(row, liveInside, sessionAt) {
   const finished = Boolean(row.mergedInto || row.upstreamGone);
   const blockers = [];
   if (row.main) blockers.push('the main working tree');
+  if (row.broken) blockers.push('its .git points at a repository folder that is gone; repair it first');
   if (row.base) blockers.push(`${row.branch} is a base branch`);
   if (row.locked) blockers.push('locked');
   if (row.detached && !row.prunable && !row.mergedInto) blockers.push('detached HEAD, and its commit is on no base branch');
@@ -309,6 +354,8 @@ function finish(row, liveInside, sessionAt) {
   const unmerged = row.aheadOfBase ? `${row.aheadOfBase} commit${row.aheadOfBase === 1 ? '' : 's'} not merged` : null;
   const state = row.prunable
     ? 'folder gone'
+    : row.broken
+      ? 'link broken'
     : row.main
       ? 'main working tree'
       : row.mergedInto
@@ -329,4 +376,4 @@ function finish(row, liveInside, sessionAt) {
   return { ...row, liveInside, sessionAt, lastActivityAt, finished, blockers, state, work };
 }
 
-module.exports = { WorktreeInventory, finish, mapLimit, isRegenerable, globMatches, ignoredIn };
+module.exports = { WorktreeInventory, finish, mapLimit, isRegenerable, globMatches, ignoredIn, linkedRepoExists };
