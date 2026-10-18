@@ -59,6 +59,7 @@ export function HousekeepingPanel() {
   const [plan, setPlan] = useState<HousekeepingProposal[]>([]);
   const [stats, setStats] = useState<HousekeepingStats | null>(null);
   const [progress, setProgress] = useState<HousekeepingProgress | null>(null);
+  const [jobs, setJobs] = useState<HousekeepingJob[]>([]);
   const [stale, setStale] = useState(false);
   const alive = useRef(true);
   // A menu entry or a notification named a tab: go there, on mount and whenever it changes.
@@ -126,6 +127,22 @@ export function HousekeepingPanel() {
       .then((h) => alive.current && setHealth(h))
       .catch(() => {});
     const offHealth = window.api.housekeeping.onHealth(({ status, conditions }) => setHealth((prev) => (prev ? { ...prev, status, conditions } : prev)));
+    window.api.housekeeping
+      .jobs()
+      .then((list) => alive.current && setJobs(list))
+      .catch(() => {});
+    let refreshAfterJob: ReturnType<typeof setTimeout> | null = null;
+    const offJob = window.api.housekeeping.onJob((job) => {
+      setJobs((prev) => {
+        const rest = prev.filter((one) => one.id !== job.id);
+        return [job, ...rest].sort((a, b) => b.createdAt - a.createdAt);
+      });
+      // A job that ended changed the disk: read it again, once it has had a moment.
+      if (['done', 'cancelled', 'failed', 'paused', 'interrupted'].includes(job.status)) {
+        if (refreshAfterJob) clearTimeout(refreshAfterJob);
+        refreshAfterJob = setTimeout(() => alive.current && void load(), 800);
+      }
+    });
     let clear: ReturnType<typeof setTimeout> | null = null;
     const offProgress = window.api.housekeeping.onProgress((p) => {
       setProgress(p);
@@ -138,7 +155,9 @@ export function HousekeepingPanel() {
       off();
       offHealth();
       offProgress();
+      offJob();
       if (clear) clearTimeout(clear);
+      if (refreshAfterJob) clearTimeout(refreshAfterJob);
     };
     // Read once when it opens; "Refresh" reads again. Polling a disk to watch it not change is what makes a panel expensive to leave open.
   }, []);
@@ -211,11 +230,25 @@ export function HousekeepingPanel() {
     if (action.id === 'show-sessions') return setTab('sessions');
     if (action.id === 'show-worktrees') return setTab('worktrees');
     void run(`plan:${proposal.id}`, async () => {
-      const out = await window.api.housekeeping.act(action.id, action.ids ?? []);
-      const failed = (out.results ?? []).filter((one) => !one.ok).length;
-      const freed = out.freed ?? out.bytes ?? 0;
-      return `${proposal.title}: done, ${formatBytes(freed)} given back${failed ? `, ${failed} refused` : ''}.`;
+      if (action.id === 'db-checkpoint' || action.id === 'db-reclaim') {
+        const out = await window.api.housekeeping.act(action.id, []);
+        return `${proposal.title}: done, ${formatBytes(out.freed ?? 0)} given back.`;
+      }
+      const ids = action.ids ?? [];
+      const list = items.filter((one) => ids.includes(one.id) || ids.includes(String(one.meta?.sessionId)));
+      const job = await window.api.housekeeping.jobStart(action.id as HousekeepingJobKind, ids, Object.fromEntries(list.map((one) => [one.id, one.label])), proposal.title);
+      setJobs((prev) => [job, ...prev.filter((one) => one.id !== job.id)]);
+      return `Started: ${proposal.title}. Follow it in the bar above.`;
     });
+  };
+
+  /** The long removals go as jobs: queued in the database, one item at a time, stoppable, resumable. */
+  const startJob = async (kind: HousekeepingJobKind, list: HousekeepingItem[], title: string) => {
+    const labels = Object.fromEntries(list.map((one) => [one.id, one.label]));
+    const ids = list.map((one) => (kind === 'forget-transcripts' || kind === 'delete-sessions' ? String(one.meta?.sessionId ?? one.id) : one.id));
+    const job = await window.api.housekeeping.jobStart(kind, ids, labels, title);
+    setJobs((prev) => [job, ...prev.filter((one) => one.id !== job.id)]);
+    return `Started: ${title}. Follow it in the bar above; it can be paused or stopped, and it carries on after a restart.`;
   };
 
   const pick = (id: string) => setSelected(new Set([id]));
@@ -327,11 +360,7 @@ export function HousekeepingPanel() {
           'free',
           `Free ${formatBytes(totals.free)} now`,
           `Removes ${freeNow.length} build caches, old installers, backups and browser caches. Every one is rebuilt or redownloaded when needed.`,
-          async () => {
-            const out = await window.api.housekeeping.free(freeNow.map((one) => one.id));
-            const failed = out.results.filter((one) => !one.ok);
-            return `Gave back ${formatBytes(out.freed)}.${failed.length ? ` ${failed.length} could not be removed: ${failed[0].error}` : ''}`;
-          },
+          () => startJob('free', freeNow, `Free ${formatBytes(totals.free)}`),
           false,
           freeNow.length === 0,
         )}
@@ -360,7 +389,11 @@ export function HousekeepingPanel() {
         )}
       </div>
 
-      {progress && (
+      {jobs.filter((job) => !['done', 'cancelled', 'failed'].includes(job.status) || Date.now() - (job.finishedAt ?? 0) < 60_000).map((job) => (
+        <JobStrip key={job.id} job={job} progress={progress} />
+      ))}
+
+      {progress && !jobs.some((job) => job.status === 'running') && (
         <div className={`housekeeping-progress${progress.done ? ' is-done' : ''}`} role="status" aria-live="polite">
           <div className="housekeeping-progress-text">
             <strong>{progressTitle(progress)}</strong>
@@ -425,12 +458,13 @@ export function HousekeepingPanel() {
           confirm={confirm}
           pick={pick}
           arm={arm}
+          startJob={startJob}
         />
       )}
       {tab === 'worktrees' && (
-        <Worktrees items={items} roots={inventory.roots} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} pick={pick} arm={arm} reload={() => load()} onError={setError} />
+        <Worktrees items={items} roots={inventory.roots} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} pick={pick} arm={arm} startJob={startJob} reload={() => load()} onError={setError} />
       )}
-      {tab === 'app' && <AppFiles items={items} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} pick={pick} arm={arm} />}
+      {tab === 'app' && <AppFiles items={items} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} pick={pick} arm={arm} startJob={startJob} />}
       {tab === 'health' && <Health health={health} setHealth={setHealth} onError={setError} ask={askClaude} asking={busy === 'ask'} plan={plan} stats={stats} doAction={doAction} confirming={confirming} setConfirming={setConfirming} busy={Boolean(busy)} />}
       {tab === 'log' && <Log rows={inventory.log} />}
     </div>
@@ -451,6 +485,72 @@ interface ListProps {
   /** Select only this row, and arm the confirm named: the row's own button. */
   pick: (id: string) => void;
   arm: (key: string) => void;
+  /** Queue a removal as a job and say so. */
+  startJob: (kind: HousekeepingJobKind, list: HousekeepingItem[], title: string) => Promise<string>;
+}
+
+/** One job, as a strip: what it is, where it is, what it gave back, and the buttons that stop or resume it. */
+function JobStrip({ job, progress }: { job: HousekeepingJob; progress: HousekeepingProgress | null }) {
+  const total = job.ids.length;
+  const done = Object.keys(job.results).length;
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  const live = job.status === 'running';
+  const label = job.current ? (job.labels[job.current] ?? job.current) : null;
+  const inside = live && progress && progress.op === 'delete' && !progress.done ? progress : null;
+  const verb: Record<HousekeepingJobStatus, string> = { queued: 'Waiting', running: 'Running', paused: 'Paused', interrupted: 'Interrupted by a restart', done: 'Done', cancelled: 'Stopped', failed: 'Failed' };
+  return (
+    <div className={`housekeeping-progress housekeeping-job is-${job.status}`} role="status" aria-live="polite">
+      <div className="housekeeping-progress-text">
+        <strong>{verb[job.status]}</strong> · {job.title} · {done} of {total}
+        {job.freed ? ` · ${formatBytes(job.freed)} given back` : ''}
+        {job.failed ? <span className="is-error"> · {job.failed} refused</span> : null}
+        {live && label ? <span> · now: {label}</span> : null}
+        {inside ? (
+          <span>
+            {' '}
+            · {formatBytes(inside.itemBytes ?? 0)}
+            {inside.itemExpected ? ` of ${formatBytes(inside.itemExpected)}` : ''} deleted{inside.files ? `, ${inside.files} files` : ''}
+          </span>
+        ) : null}
+        <span className="housekeeping-job-actions">
+          {live && (
+            <>
+              <button className="ghost-btn tiny" onClick={() => void window.api.housekeeping.jobPause(job.id)}>
+                Pause
+              </button>
+              <button className="ghost-btn tiny" onClick={() => void window.api.housekeeping.jobCancel(job.id)}>
+                Stop
+              </button>
+            </>
+          )}
+          {['paused', 'interrupted', 'failed'].includes(job.status) && (
+            <>
+              <button className="ghost-btn tiny" onClick={() => void window.api.housekeeping.jobResume(job.id)}>
+                Resume
+              </button>
+              <button className="ghost-btn tiny" onClick={() => void window.api.housekeeping.jobCancel(job.id)}>
+                Drop
+              </button>
+            </>
+          )}
+          {job.status === 'queued' && (
+            <button className="ghost-btn tiny" onClick={() => void window.api.housekeeping.jobCancel(job.id)}>
+              Drop
+            </button>
+          )}
+          {['done', 'cancelled'].includes(job.status) && (
+            <button className="ghost-btn tiny" onClick={() => void window.api.housekeeping.jobDismiss(job.id)}>
+              Dismiss
+            </button>
+          )}
+        </span>
+      </div>
+      <div className="housekeeping-progress-bar">
+        <div style={{ width: `${pct}%` }} />
+        {inside && inside.itemExpected ? <div className="is-inner" style={{ width: `${Math.min(100, Math.round(((inside.itemBytes ?? 0) / inside.itemExpected) * 100))}%` }} /> : null}
+      </div>
+    </div>
+  );
 }
 
 /** What a progress event is about, in words. */
@@ -480,6 +580,7 @@ function Sessions({
   confirm,
   pick,
   arm,
+  startJob,
 }: ListProps & {
   olderThan: number;
   setOlderThan: (n: number) => void;
@@ -514,10 +615,7 @@ function Sessions({
           'forget',
           `Forget ${picked.length} conversation${picked.length === 1 ? '' : 's'} (${formatBytes(weigh(picked))})`,
           'Deletes the kept conversations and their saved copies. The record of what ran, when and where stays in History.',
-          async () => {
-            const out = await window.api.housekeeping.forgetTranscripts(picked.map((one) => String(one.meta?.sessionId)));
-            return `Forgot ${out.count} conversation${out.count === 1 ? '' : 's'}, ${formatBytes(out.bytes)}.`;
-          },
+          () => startJob('forget-transcripts', picked, `Forget ${picked.length} conversation${picked.length === 1 ? '' : 's'}`),
           false,
           picked.length === 0,
         )}
@@ -525,10 +623,7 @@ function Sessions({
           'delete',
           `Delete ${picked.length} session${picked.length === 1 ? '' : 's'} entirely`,
           'Removes the sessions — record, conversation, messages and readings. This cannot be undone.',
-          async () => {
-            const out = await window.api.housekeeping.deleteSessions(picked.map((one) => String(one.meta?.sessionId)));
-            return `Deleted ${out.deleted.length} session${out.deleted.length === 1 ? '' : 's'}${out.skipped.length ? `, left ${out.skipped.length} running` : ''}.`;
-          },
+          () => startJob('delete-sessions', picked, `Delete ${picked.length} session${picked.length === 1 ? '' : 's'}`),
           true,
           picked.length === 0,
         )}
@@ -537,7 +632,7 @@ function Sessions({
   );
 }
 
-function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm, pick, arm, reload, onError }: ListProps & { roots: HousekeepingRoot[]; reload: () => void; onError: (message: string) => void }) {
+function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm, pick, arm, startJob, reload, onError }: ListProps & { roots: HousekeepingRoot[]; reload: () => void; onError: (message: string) => void }) {
   const caches = items.filter((one) => one.kind === 'build-cache');
   const shops = items.filter((one) => one.kind === 'workshop');
   const pickedCaches = chosen(caches);
@@ -622,11 +717,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
           'trees',
           `Remove ${pickedTrees.length} worktree${pickedTrees.length === 1 ? '' : 's'} (${formatBytes(weigh(pickedTrees))})`,
           'git worktree remove, never forced: anything that changed since it was looked at is refused. A finished branch is deleted; an unfinished one keeps its commits.',
-          async () => {
-            const out = await window.api.housekeeping.removeWorktrees(pickedTrees.map((one) => one.id));
-            const failed = out.results.filter((one) => !one.ok);
-            return `Removed ${out.results.length - failed.length}, ${formatBytes(out.freed)}.${failed.length ? ` ${failed.length} refused: ${failed[0].error}` : ''}`;
-          },
+          () => startJob('remove-worktrees', pickedTrees, `Remove ${pickedTrees.length} worktree${pickedTrees.length === 1 ? '' : 's'} (${formatBytes(weigh(pickedTrees))})`),
           true,
           pickedTrees.length === 0,
         )}
@@ -646,11 +737,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
             'finished',
             `Remove all ${finished.length} finished (${formatBytes(weigh(finished))})`,
             'Only worktrees whose work is merged or whose branch is gone on origin, with nothing of their own and nobody inside.',
-            async () => {
-              const out = await window.api.housekeeping.removeWorktrees(finished.map((one) => one.id));
-              const failed = out.results.filter((one) => !one.ok);
-              return `Removed ${out.results.length - failed.length}, ${formatBytes(out.freed)}.${failed.length ? ` ${failed.length} refused: ${failed[0].error}` : ''}`;
-            },
+            () => startJob('remove-worktrees', finished, `Remove all ${finished.length} finished (${formatBytes(weigh(finished))})`),
             true,
           )}
       </div>
@@ -665,11 +752,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
           'caches',
           `Clear ${pickedCaches.length} cache${pickedCaches.length === 1 ? '' : 's'} (${formatBytes(weigh(pickedCaches))})`,
           'Each folder is renamed aside at once and deleted in the background. The next build rewrites it.',
-          async () => {
-            const out = await window.api.housekeeping.free(pickedCaches.map((one) => one.id));
-            const failed = out.results.filter((one) => !one.ok);
-            return `Cleared ${formatBytes(out.freed)}.${failed.length ? ` ${failed.length} refused: ${failed[0].error}` : ''}`;
-          },
+          () => startJob('free', pickedCaches, `Clear ${pickedCaches.length} cache${pickedCaches.length === 1 ? '' : 's'} (${formatBytes(weigh(pickedCaches))})`),
           false,
           pickedCaches.length === 0,
         )}
@@ -683,11 +766,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
           'shops',
           `Discard ${pickedShops.length} clone${pickedShops.length === 1 ? '' : 's'} (${formatBytes(weigh(pickedShops))})`,
           'The reviewer refuses any clone with a fix still waiting to be handed back.',
-          async () => {
-            const out = await window.api.housekeeping.discardWorkshops(pickedShops.map((one) => one.id));
-            const failed = out.results.filter((one) => !one.ok);
-            return `Discarded ${out.results.length - failed.length}.${failed.length ? ` ${failed.length} refused: ${failed[0].error}` : ''}`;
-          },
+          () => startJob('discard-workshops', pickedShops, `Discard ${pickedShops.length} clone${pickedShops.length === 1 ? '' : 's'}`),
           true,
           pickedShops.length === 0,
         )}
@@ -728,7 +807,7 @@ function Regenerable({ reload, onError }: { reload: () => void; onError: (m: str
   );
 }
 
-function AppFiles({ items, selected, toggle, selectAll, chosen, confirm, pick, arm }: ListProps) {
+function AppFiles({ items, selected, toggle, selectAll, chosen, confirm, pick, arm, startJob }: ListProps) {
   const rows = inBucket(items, 'app');
   const picked = chosen(rows);
   return (
@@ -742,11 +821,7 @@ function AppFiles({ items, selected, toggle, selectAll, chosen, confirm, pick, a
           'app',
           `Remove ${picked.length} item${picked.length === 1 ? '' : 's'} (${formatBytes(weigh(picked))})`,
           'Backups older than the running version, installers, pasted images and caches. The newest downloaded update is the one waiting to be installed.',
-          async () => {
-            const out = await window.api.housekeeping.free(picked.map((one) => one.id));
-            const failed = out.results.filter((one) => !one.ok);
-            return `Removed ${formatBytes(out.freed)}.${failed.length ? ` ${failed.length} refused: ${failed[0].error}` : ''}`;
-          },
+          () => startJob('free', picked, `Remove ${picked.length} item${picked.length === 1 ? '' : 's'} (${formatBytes(weigh(picked))})`),
           false,
           picked.length === 0,
         )}
@@ -1128,6 +1203,11 @@ function Table({
                 )}
               </td>
               <td>
+                {one.kind === 'worktree' && (
+                  <span className={`housekeeping-work ${one.meta?.dirty ? 'is-unmerged' : 'is-done'}`} title={one.meta?.dirty ? 'git status lists files changed, staged or untracked' : 'git status is clean'}>
+                    {one.meta?.dirty ? `${Number(one.meta?.dirtyCount) || '?'} uncommitted` : 'clean'}
+                  </span>
+                )}
                 {one.kind === 'worktree' && typeof one.meta?.work === 'string' && (
                   <span className={`housekeeping-work is-${String(one.meta.work)}`} title={one.meta.work === 'done' ? 'Its work is on a base branch, or its branch is gone on origin' : one.meta.work === 'unmerged' ? 'Commits or changes no base branch has' : one.meta.work === 'empty' ? 'No commit of its own' : ''}>
                     {one.meta.work === 'done' ? 'done' : one.meta.work === 'unmerged' ? 'unmerged' : one.meta.work === 'empty' ? 'empty' : ''}

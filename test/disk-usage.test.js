@@ -126,3 +126,28 @@ test('known sizes from the store are trusted on start and forgotten on request',
   sizes.forget('/x');
   assert.equal(sizes.known('/x'), null);
 });
+
+test('remove deletes a tree on the worker, reporting bytes on the way, and forgets its size', async () => {
+  const { remove } = require('../electron/disk-usage-worker');
+  const dir = tree();
+  const seen = [];
+  const out = remove(dir, (p) => seen.push(p.files), 1);
+  assert.equal(out.files, 3);
+  assert.equal(out.bytes, 1374);
+  assert.ok(!fs.existsSync(dir));
+  assert.ok(seen.length >= 2);
+
+  const again = tree();
+  const sizes = new DiskUsage({ ttl: 60_000 });
+  try {
+    await sizes.measure([again]);
+    assert.ok(sizes.known(again));
+    const progress = [];
+    const result = await sizes.remove(again, { onProgress: (p) => progress.push(p) });
+    assert.equal(result.bytes, 1374);
+    assert.ok(!fs.existsSync(again));
+    assert.equal(sizes.known(again), null);
+  } finally {
+    sizes.stop();
+  }
+});

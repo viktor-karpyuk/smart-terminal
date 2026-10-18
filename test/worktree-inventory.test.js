@@ -104,7 +104,8 @@ test('every worktree is listed with its state, and only the finished clean one h
   assert.equal(by.app.work, 'base');
 
   assert.equal(by.dirty.state, 'uncommitted changes');
-  assert.deepEqual(by.dirty.blockers, ['changes not committed']);
+  assert.deepEqual(by.dirty.blockers, ['1 file not committed']);
+  assert.equal(by.dirty.dirtyCount, 1);
 
   assert.equal(by.gone.state, 'folder gone');
   assert.equal(by.gone.prunable, true);
@@ -172,7 +173,7 @@ test('a detached worktree whose commit is on a base is finished, and the person\
   let perf = (await inv.list()).find((row) => row.label === 'perf');
   assert.equal(perf.detached, true);
   // The gitignore change is uncommitted in main, so the worktree sees the old rules: the file is untracked there.
-  assert.ok(perf.blockers.includes('changes not committed'));
+  assert.ok(perf.blockers.some((b) => /not committed/.test(b)));
   execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-am', 'ignore build number'], { cwd: main });
   execFileSync('git', ['checkout', '-q', 'develop', '--', '.gitignore'], { cwd: path.join(wt, 'perf') });
   inv.memo.clear();
@@ -181,7 +182,7 @@ test('a detached worktree whose commit is on a base is finished, and the person\
   extra = ['buildNumber.properties'];
   inv.memo.clear();
   perf = (await inv.list()).find((row) => row.label === 'perf');
-  assert.deepEqual(perf.blockers.filter((b) => !/changes not committed/.test(b)), [], 'named as regenerable, it no longer keeps it; detached but on a base is not a blocker');
+  assert.deepEqual(perf.blockers.filter((b) => !/not committed/.test(b)), [], 'named as regenerable, it no longer keeps it; detached but on a base is not a blocker');
   assert.ok(perf.mergedInto, 'its commit is on develop');
 });
 

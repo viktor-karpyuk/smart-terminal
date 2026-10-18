@@ -73,8 +73,70 @@ function measure(root, onProgress = null, every = PROGRESS_EVERY) {
   return { bytes, files };
 }
 
+/**
+ * Delete a tree, saying how far it got: bytes and files every `every` files.
+ * Files first, then the now-empty directories, deepest first. An entry that
+ * will not go is skipped and counted, so one stubborn file does not stop a
+ * seventy-gigabyte removal. Symbolic links are unlinked, never followed.
+ */
+function remove(root, onProgress = null, every = 2000) {
+  let bytes = 0;
+  let files = 0;
+  let failed = 0;
+  let nextReport = every;
+  const dirs = [];
+  const stack = [root];
+  while (stack.length) {
+    const dir = stack.pop();
+    dirs.push(dir);
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        stack.push(full);
+        continue;
+      }
+      try {
+        const size = entry.isSymbolicLink() ? 0 : fs.lstatSync(full).size;
+        fs.unlinkSync(full);
+        bytes += size;
+        files += 1;
+      } catch {
+        failed += 1;
+      }
+      if (onProgress && files + failed >= nextReport) {
+        onProgress({ bytes, files, failed });
+        nextReport = files + failed + every;
+      }
+    }
+  }
+  for (const dir of dirs.reverse()) {
+    try {
+      fs.rmdirSync(dir);
+    } catch {
+      failed += 1;
+    }
+  }
+  return { bytes, files, failed };
+}
+
 if (parentPort) {
-  parentPort.on('message', ({ id, paths }) => {
+  parentPort.on('message', ({ id, paths, remove: target }) => {
+    if (target) {
+      try {
+        const result = remove(target, (partial) => parentPort.postMessage({ id, path: target, ...partial, partial: true }));
+        parentPort.postMessage({ id, path: target, ...result });
+      } catch (error) {
+        parentPort.postMessage({ id, path: target, bytes: 0, files: 0, failed: 1, error: String(error?.message ?? error) });
+      }
+      parentPort.postMessage({ id, done: true });
+      return;
+    }
     for (const target of paths) {
       let result;
       try {
@@ -95,4 +157,4 @@ if (parentPort) {
   console.log(measure(workerData.selfTest));
 }
 
-module.exports = { measure };
+module.exports = { measure, remove };

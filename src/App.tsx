@@ -39,12 +39,23 @@ export function App() {
 
   useEffect(() => window.api.onMenuAction(({ id }) => handleMenuAction(id)), []);
   // The health job: its status for the sidebar's dot, and a clicked notification opens the panel.
-  useEffect(() => window.api.housekeeping.onHealth(({ status }) => useStore.getState().setHousekeepingStatus(status)), []);
+  useEffect(
+    () =>
+      window.api.housekeeping.onHealth(({ status, vitals }) => {
+        useStore.getState().setHousekeepingStatus(status);
+        if (vitals) useStore.getState().setHousekeepingVitals(vitals);
+      }),
+    [],
+  );
   useEffect(() => window.api.housekeeping.onOpen(({ metric, tab }) => useStore.getState().openHousekeeping(isTab(tab) ? tab : tabFor(metric))), []);
   useEffect(() => {
     window.api.housekeeping
       .health()
-      .then((health) => health && useStore.getState().setHousekeepingStatus(health.status))
+      .then((health) => {
+        if (!health) return;
+        useStore.getState().setHousekeepingStatus(health.status);
+        useStore.getState().setHousekeepingVitals(health.vitals ?? null);
+      })
       .catch(() => {});
   }, []);
 

@@ -216,6 +216,8 @@ class WorktreeInventory {
       /** Its .git file points at a repository folder that is not there: moved or deleted. git can neither read nor remove it. */
       broken: !entry.prunable && fs.existsSync(entry.path) && !linkedRepoExists(entry.path),
       dirty: false,
+      /** How many paths git status lists: changed, staged or untracked. */
+      dirtyCount: 0,
       irreplaceable: [],
       mergedInto: null,
       upstreamGone: false,
@@ -231,6 +233,7 @@ class WorktreeInventory {
     if (!entry.prunable && fs.existsSync(entry.path) && !row.broken) {
       const [status, commit] = await Promise.all([git(entry.path, ['status', '--porcelain']), git(entry.path, ['log', '-1', '--format=%ct'])]);
       row.dirty = !status.ok || Boolean(status.stdout.trim());
+      row.dirtyCount = status.ok ? status.stdout.split('\n').filter(Boolean).length : 0;
       row.lastCommitAt = commit.ok && commit.stdout.trim() ? Number(commit.stdout.trim()) * 1000 : null;
       // Ignored files a build cannot make again. A build cache by any name on the list is not one of them:
       // .angular at seventy gigabytes is the thing to remove, not the thing that keeps the worktree.
@@ -344,7 +347,7 @@ function finish(row, liveInside, sessionAt) {
   if (row.locked) blockers.push('locked');
   if (row.detached && !row.prunable && !row.mergedInto) blockers.push('detached HEAD, and its commit is on no base branch');
   if (liveInside) blockers.push('a session is inside it');
-  if (row.dirty) blockers.push('changes not committed');
+  if (row.dirty) blockers.push(row.dirtyCount ? `${row.dirtyCount} file${row.dirtyCount === 1 ? '' : 's'} not committed` : 'changes not committed');
   if (row.irreplaceable.length) blockers.push(`ignored files nothing could rebuild: ${row.irreplaceable.slice(0, 3).join(', ')}${row.irreplaceable.length > 3 ? '…' : ''}`);
   // Only work of its own can be lost by removal: a branch with no commit of its own has nothing to push.
   if (!finished && !row.main && !row.base && !row.prunable && row.branch && row.ownWork) {

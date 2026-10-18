@@ -4158,3 +4158,16 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-regenerable { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 12px; }
 .housekeeping-regenerable textarea { width: 320px; max-width: 100%; padding: 4px 8px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); font: inherit; font-family: var(--font-mono, monospace); font-size: var(--fs-xs); resize: vertical; }
 .activity.housekeeping-dot.is-attention::after, .activity.housekeeping-dot.is-limit::after { top: 6px; right: 6px; width: 7px; height: 7px; }
+.titlebar-vitals { -webkit-app-region: no-drag; display: inline-flex; gap: 10px; align-items: center; margin-left: 10px; padding: 2px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-input); color: var(--text-faint); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.titlebar-vitals:hover { color: var(--text); background: var(--bg-hover); }
+.titlebar-vitals.is-attention { border-color: #c9a227; }
+.titlebar-vitals.is-limit { border-color: var(--danger, #d9534f); }
+.titlebar-vital { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.titlebar-vital small { font-size: 9px; letter-spacing: 0.06em; opacity: 0.7; margin-right: 2px; }
+.titlebar-vital.is-attention { color: #c9a227; }
+.titlebar-vital.is-limit { color: var(--danger, #d9534f); }
+.housekeeping-job.is-paused, .housekeeping-job.is-interrupted { border-color: #c9a227; }
+.housekeeping-job.is-cancelled, .housekeeping-job.is-failed { border-color: var(--danger, #d9534f); }
+.housekeeping-job .housekeeping-progress-bar { position: relative; height: 6px; }
+.housekeeping-job .housekeeping-progress-bar > div.is-inner { position: absolute; left: 0; top: 0; height: 100%; background: var(--text-faint); opacity: 0.5; }
+.housekeeping-job-actions { margin-left: 10px; display: inline-flex; gap: 4px; }

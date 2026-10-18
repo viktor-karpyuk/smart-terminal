@@ -24,6 +24,7 @@ const { DiskUsage } = require('./disk-usage');
 const { HousekeepingMonitor, topProcesses } = require('./housekeeping-monitor');
 const { composeBrief } = require('./housekeeping-brief');
 const { proposals } = require('./housekeeping-advice');
+const { JobRunner } = require('./housekeeping-jobs');
 const rules = require('./review-rules');
 const { SessionMonitor } = require('./session-monitor');
 const { summarise, oneLine } = require('./session-analysis');
@@ -234,6 +235,8 @@ let housekeeping = null;
 let diskUsage = null;
 /** The health job: readings on a clock, said when they cross a line. */
 let housekeepingMonitor = null;
+/** Removals as jobs: queued, stoppable, resumable after a restart. */
+let housekeepingJobs = null;
 let worktreeCleanup = null;
 let worktreeOffer = null;
 let teamsService = null;
@@ -1372,6 +1375,13 @@ function registerIpc() {
     return proposals({ report: housekeepingMonitor?.report() ?? null, inventory, processes: topProcesses(8), dbHealth });
   });
   ipcMain.handle('housekeeping:act', (_e, { id, ids = [] } = {}) => housekeeping.act(String(id), Array.isArray(ids) ? ids : []));
+  // Jobs: the long removals, one item at a time, with their place kept in the database.
+  ipcMain.handle('housekeeping:jobs', () => housekeepingJobs?.list() ?? []);
+  ipcMain.handle('housekeeping:job-start', (_e, { kind, ids = [], labels = {}, title = null } = {}) => housekeepingJobs.start({ kind: String(kind), ids: Array.isArray(ids) ? ids : [], labels: labels && typeof labels === 'object' ? labels : {}, title: title ? String(title).slice(0, 120) : null }));
+  ipcMain.handle('housekeeping:job-pause', (_e, id) => housekeepingJobs.pause(Number(id)));
+  ipcMain.handle('housekeeping:job-resume', (_e, id) => housekeepingJobs.resume(Number(id)));
+  ipcMain.handle('housekeeping:job-cancel', (_e, id) => housekeepingJobs.cancel(Number(id)));
+  ipcMain.handle('housekeeping:job-dismiss', (_e, id) => housekeepingJobs.dismiss(Number(id)));
   /** What Ask Claude hands over: the health report, the inventory, the processes, as text. Nothing is run. */
   ipcMain.handle('housekeeping:brief', async (_e, { question = null } = {}) => {
     await housekeepingMonitor?.tickSystem();
@@ -2849,6 +2859,7 @@ if (isPrimaryInstance) app.whenReady().then(() => {
     emit: (name, payload) => send(`housekeeping:${name}`, payload),
   });
   housekeepingMonitor.start();
+  housekeepingJobs = new JobRunner({ store: housekeeping.store, housekeeping, emit: (name, payload) => send(`housekeeping:${name}`, payload) });
   // Watching how sessions behave is a separate job from keeping copies of them,
   // but it needs the same two things — where a transcript is, and which sessions
   // have one — so it is handed the store rather than working them out again.

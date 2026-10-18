@@ -353,6 +353,14 @@ contextBridge.exposeInMainWorld('api', {
     advice: () => ipcRenderer.invoke('housekeeping:advice'),
     /** One quick action by name, over the ids the plan named. */
     act: (id, ids) => ipcRenderer.invoke('housekeeping:act', { id, ids }),
+    /** Removals as jobs: queued, one item at a time, stoppable, resumable after the app was closed. */
+    jobs: () => ipcRenderer.invoke('housekeeping:jobs'),
+    jobStart: (kind, ids, labels, title) => ipcRenderer.invoke('housekeeping:job-start', { kind, ids, labels, title }),
+    jobPause: (id) => ipcRenderer.invoke('housekeeping:job-pause', id),
+    jobResume: (id) => ipcRenderer.invoke('housekeeping:job-resume', id),
+    jobCancel: (id) => ipcRenderer.invoke('housekeeping:job-cancel', id),
+    jobDismiss: (id) => ipcRenderer.invoke('housekeeping:job-dismiss', id),
+    onJob: (handler) => on('housekeeping:job', handler),
     /** The briefing Ask Claude hands to a session: health, memory, processes, disk, worktrees. */
     brief: (question) => ipcRenderer.invoke('housekeeping:brief', { question }),
     onHealth: (handler) => on('housekeeping:health', handler),
