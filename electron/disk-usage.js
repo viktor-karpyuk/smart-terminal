@@ -21,6 +21,8 @@ const path = require('node:path');
 const fs = require('node:fs');
 
 const MINUTE = 60_000;
+/** A thread nobody has asked anything for this long is stopped; the next question starts another. */
+const WORKER_IDLE_MS = 2 * MINUTE;
 
 /** Where the worker's file is: beside this one, and in a packaged app in the unpacked folder, since a Worker cannot be read out of an asar. */
 function workerPath(dir = __dirname, sep = path.sep) {
@@ -34,9 +36,11 @@ class DiskUsage {
    * @param {number} [options.ttl] how long a measurement is trusted without re-walking
    * @param {() => number} [options.now]
    */
-  constructor({ store = null, ttl = 60 * MINUTE, now = () => Date.now(), workerFile = workerPath() } = {}) {
+  constructor({ store = null, ttl = 60 * MINUTE, now = () => Date.now(), workerFile = workerPath(), idleMs = WORKER_IDLE_MS } = {}) {
     this.store = store;
     this.ttl = ttl;
+    this.idleMs = idleMs;
+    this.idleTimer = null;
     this.now = now;
     this.workerFile = workerFile;
     /** @type {Map<string, {bytes:number, files:number, mtime:number, measuredAt:number}>} */
@@ -143,6 +147,7 @@ class DiskUsage {
           if (message.done) {
             this.asking.delete(message.id);
             entry.resolve();
+            this.#rest();
           } else entry.onRow(message);
         });
         const lost = (error) => {
@@ -157,6 +162,8 @@ class DiskUsage {
         worker.on('exit', () => lost(new Error('The measuring thread stopped')));
         this.worker = worker;
       }
+      if (this.idleTimer) clearTimeout(this.idleTimer);
+      this.idleTimer = null;
       this.askId += 1;
       const id = this.askId;
       this.asking.set(id, { resolve, reject, onRow });
@@ -169,8 +176,21 @@ class DiskUsage {
     });
   }
 
+  /** Nothing in flight: start the clock that stops the thread. A thread holding a walk's worth of memory should not outlive its use. */
+  #rest() {
+    if (this.asking.size || !this.worker) return;
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      if (!this.asking.size) this.stop();
+    }, this.idleMs);
+    this.idleTimer.unref?.();
+  }
+
   /** Stop the thread. Whatever was being measured is asked again next time. */
   stop() {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
     const worker = this.worker;
     this.worker = null;
     if (worker) worker.terminate().catch(() => {});

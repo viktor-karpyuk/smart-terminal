@@ -104,6 +104,21 @@ test('a path that does not exist measures as nothing rather than failing the bat
   }
 });
 
+test('the thread is stopped after sitting idle, and started again by the next question', async () => {
+  const dir = tree();
+  const sizes = new DiskUsage({ ttl: 0, idleMs: 30 });
+  try {
+    await sizes.measure([dir]);
+    assert.ok(sizes.worker, 'running right after a question');
+    await new Promise((r) => setTimeout(r, 120));
+    assert.equal(sizes.worker, null, 'stopped once idle');
+    const again = await sizes.measure([dir]);
+    assert.equal(again.get(dir).bytes, 1374);
+  } finally {
+    sizes.stop();
+  }
+});
+
 test('known sizes from the store are trusted on start and forgotten on request', () => {
   const store = { sizes: () => [{ path: '/x', bytes: 7, files: 1, mtime: 0, measuredAt: 0 }], rememberSize: () => {}, forgetSize: () => {} };
   const sizes = new DiskUsage({ store });

@@ -206,6 +206,9 @@ test('roots must be folders, and checkouts are the root and its direct children 
   const { hk, sizes, home, checkout } = world();
   try {
     assert.throws(() => hk.addRoot(path.join(home, 'missing')), /not a folder/);
+    assert.throws(() => hk.addRoot('/'), /whole disk/);
+    assert.throws(() => hk.addRoot(os.homedir()), /home folder/);
+    assert.throws(() => hk.addRoot('~'), /home folder/);
     assert.deepEqual(hk.checkouts(), [checkout]);
     hk.removeRoot(path.dirname(checkout));
     assert.deepEqual(hk.checkouts(), []);

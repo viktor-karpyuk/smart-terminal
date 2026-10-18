@@ -73,6 +73,9 @@ class Housekeeping {
   addRoot(folder) {
     const resolved = path.resolve(String(folder || '').replace(/^~(?=$|\/)/, os.homedir()));
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) throw new Error(`${resolved} is not a folder.`);
+    // The root of the disk or a home folder is not a folder of worktrees. Only their direct children would be looked at
+    // anyway, and a cache found directly under one of them is somebody's, not a build's.
+    if (resolved === path.parse(resolved).root || resolved === os.homedir()) throw new Error('Choose a folder of worktrees or a checkout, not the whole disk or your home folder.');
     this.store.addRoot(resolved);
     return this.roots();
   }
