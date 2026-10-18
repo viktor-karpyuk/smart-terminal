@@ -1,8 +1,10 @@
 # Housekeeping
 
 What Smart Terminal and the work around it leave on disk, and giving it back.
-Open it from **Session › Housekeeping…**, from the bin icon in the sidebar's
-Monitor header, or from the link in the Monitor's database view.
+It has a menu of its own in the menu bar — **Housekeeping › Open Housekeeping**
+(⌘⇧H), one entry per tab, Clean Up Finished Worktrees, Weigh Everything Now,
+Check Health Now — and is also reachable from the bin icon in the sidebar's
+Monitor header and from the link in the Monitor's database view.
 
 ## What it lists
 
@@ -65,8 +67,11 @@ Each row carries:
   ahead of the upstream; ignored files nothing could rebuild (an `.env`, a
   key); a session inside; locked; detached HEAD; a base branch.
 
-A worktree whose branch has no commit of its own and is clean has nothing to
-lose and no push blocker.
+Each row also answers "is the work in it done" in one word: **done** (merged,
+or branch gone on origin), **unmerged** (commits no base branch has, or
+uncommitted changes; the state says how many, e.g. `3 commits not merged`),
+**empty** (no commit of its own). A worktree whose branch has no commit of
+its own and is clean has nothing to lose and no push blocker.
 
 Filter by idle days (default fourteen) and **finished only**. **Remove** takes
 the selection through `git worktree remove` without `--force`, so git refuses
@@ -107,6 +112,19 @@ to fine may be said again the next time it crosses. Clicking the notification
 opens the panel on the tab the metric belongs to. The sidebar's housekeeping
 button carries a dot while anything is crossed, and the panel opens with a
 strip naming the conditions.
+
+Swap is read too (`sysctl vm.swapusage` on macOS, `/proc/meminfo` on Linux):
+swap in use above 50% is attention and above 80% a limit, because swap is what
+makes typing in the terminals lag.
+
+**Ask Claude** — in the strip at the top, in the bar, and in the Health tab —
+opens a Claude session (one per panel, on a signed-in account) and hands it the
+machine's state as text: the lines crossed and why they matter, memory and
+swap, the processes holding the most memory, the disk and the buckets, the
+worktrees with whether their work is merged, the largest caches, and a
+question: which processes or sessions to close first, what to free on disk
+without losing unmerged work, and what would stop it happening again. The
+session proposes; nothing is run by the panel.
 
 Readings are kept for a month in `hk_reading`. From them the tab shows how
 fast the disk, the worktrees and the app's data are growing per week (a

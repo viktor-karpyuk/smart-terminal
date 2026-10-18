@@ -340,6 +340,8 @@ contextBridge.exposeInMainWorld('api', {
     health: (fresh = false) => ipcRenderer.invoke('housekeeping:health', { fresh }),
     setThreshold: (metric, level, value) => ipcRenderer.invoke('housekeeping:set-threshold', { metric, level, value }),
     measureNow: () => ipcRenderer.invoke('housekeeping:measure-now'),
+    /** The briefing Ask Claude hands to a session: health, memory, processes, disk, worktrees. */
+    brief: (question) => ipcRenderer.invoke('housekeeping:brief', { question }),
     onHealth: (handler) => on('housekeeping:health', handler),
     // A notification was clicked: show the panel.
     onOpen: (handler) => on('housekeeping:open', handler),

@@ -4128,3 +4128,7 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-dot { position: relative; }
 .housekeeping-dot.is-attention::after, .housekeeping-dot.is-limit::after { content: ''; position: absolute; top: 1px; right: 1px; width: 6px; height: 6px; border-radius: 50%; background: #c9a227; }
 .housekeeping-dot.is-limit::after { background: var(--danger, #d9534f); }
+.housekeeping-work { display: inline-block; font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; padding: 1px 6px; border-radius: 999px; margin-right: 6px; border: 1px solid var(--border); color: var(--text-faint); }
+.housekeeping-work.is-done { border-color: #3a9d5d; color: #3a9d5d; }
+.housekeeping-work.is-unmerged { border-color: #c9a227; color: #c9a227; }
+.housekeeping-table td small.housekeeping-blocker { display: block; white-space: normal; max-width: 40ch; }

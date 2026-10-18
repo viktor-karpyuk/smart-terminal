@@ -85,11 +85,18 @@ test('every worktree is listed with its state, and only the finished clean one h
   assert.equal(by.done.finished, true);
   assert.deepEqual(by.done.blockers, []);
 
-  assert.equal(by.open.state, 'open');
+  assert.equal(by.open.state, '1 commit not merged');
   assert.deepEqual(by.open.blockers, ['never pushed']);
 
-  assert.equal(by.pushed.state, 'open');
+  assert.equal(by.pushed.state, '1 commit not merged');
+  assert.equal(by.pushed.work, 'unmerged');
+  assert.equal(by.pushed.aheadOfBase, 1);
   assert.deepEqual(by.pushed.blockers, [], 'pushed and clean: removable as inactive, the branch stays');
+  assert.equal(by.done.work, 'done');
+  assert.equal(by.open.work, 'unmerged');
+  assert.equal(by.dirty.work, 'unmerged');
+  assert.equal(by.dirty.state, 'uncommitted changes');
+  assert.equal(by.app.work, 'base');
 
   assert.equal(by.dirty.state, 'uncommitted changes');
   assert.deepEqual(by.dirty.blockers, ['changes not committed']);

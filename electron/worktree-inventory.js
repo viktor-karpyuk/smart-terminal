@@ -160,6 +160,8 @@ class WorktreeInventory {
       upstreamGone: false,
       upstream: null,
       ahead: 0,
+      /** Commits on this worktree that no base branch has: the work that would be lost. */
+      aheadOfBase: null,
       ownWork: false,
       lastCommitAt: null,
       gitMtime,
@@ -180,6 +182,10 @@ class WorktreeInventory {
         row.mergedInto = into && own ? into : null;
         row.upstreamGone = gone;
         row.ownWork = own;
+        if (bases.length) {
+          const count = await git(root, ['rev-list', '--count', `${bases[0]}..${entry.head}`]);
+          row.aheadOfBase = count.ok ? Number(count.stdout.trim()) || 0 : null;
+        }
         const [upstream, ...rest] = track.ok ? track.stdout.trim().split(' ') : [''];
         row.upstream = upstream || null;
         const aheadMatch = rest.join(' ').match(/ahead (\d+)/);
@@ -253,6 +259,7 @@ function finish(row, liveInside, sessionAt) {
     if (!row.upstream) blockers.push('never pushed');
     else if (row.ahead > 0) blockers.push(`${row.ahead} commit${row.ahead === 1 ? '' : 's'} not pushed`);
   }
+  const unmerged = row.aheadOfBase ? `${row.aheadOfBase} commit${row.aheadOfBase === 1 ? '' : 's'} not merged` : null;
   const state = row.prunable
     ? 'folder gone'
     : row.main
@@ -264,9 +271,15 @@ function finish(row, liveInside, sessionAt) {
           : row.detached
             ? 'detached'
             : row.dirty
-              ? 'uncommitted changes'
-              : 'open';
-  return { ...row, liveInside, sessionAt, lastActivityAt, finished, blockers, state };
+              ? `uncommitted changes${unmerged ? `, ${unmerged}` : ''}`
+              : unmerged
+                ? unmerged
+                : row.ownWork
+                  ? 'open'
+                  : 'nothing of its own';
+  /** The one-word answer to "is the work in it done": done, unmerged, or empty. */
+  const work = row.main || row.base ? 'base' : finished ? 'done' : row.dirty || (row.aheadOfBase ?? 0) > 0 ? 'unmerged' : row.ownWork ? 'unknown' : 'empty';
+  return { ...row, liveInside, sessionAt, lastActivityAt, finished, blockers, state, work };
 }
 
 module.exports = { WorktreeInventory, finish, mapLimit };

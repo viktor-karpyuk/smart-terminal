@@ -21,7 +21,8 @@ const { ContextStore, transcriptPath, locateTranscript, readTurnState } = requir
 const { Housekeeping } = require('./housekeeping');
 const { HousekeepingStore } = require('./housekeeping-store');
 const { DiskUsage } = require('./disk-usage');
-const { HousekeepingMonitor } = require('./housekeeping-monitor');
+const { HousekeepingMonitor, topProcesses } = require('./housekeeping-monitor');
+const { composeBrief } = require('./housekeeping-brief');
 const rules = require('./review-rules');
 const { SessionMonitor } = require('./session-monitor');
 const { summarise, oneLine } = require('./session-analysis');
@@ -1351,6 +1352,12 @@ function registerIpc() {
   ipcMain.handle('housekeeping:set-threshold', (_e, { metric, level, value } = {}) => {
     housekeepingMonitor?.setThreshold(String(metric), String(level), value);
     return housekeepingMonitor?.report() ?? null;
+  });
+  /** What Ask Claude hands over: the health report, the inventory, the processes, as text. Nothing is run. */
+  ipcMain.handle('housekeeping:brief', async (_e, { question = null } = {}) => {
+    await housekeepingMonitor?.tickSystem();
+    const inventory = housekeeping.last && Date.now() - housekeeping.last.at < 10 * 60_000 ? { items: housekeeping.last.items, totals: require('./housekeeping-items').totals(housekeeping.last.items), disk: require('./housekeeping').diskFree(app.getPath('userData')) } : await housekeeping.inventory();
+    return composeBrief({ report: housekeepingMonitor?.report() ?? null, inventory, processes: topProcesses(12), openSessions: ptys?.list().length ?? 0, question: question ? String(question).slice(0, 2000) : null });
   });
   ipcMain.handle('housekeeping:measure-now', async () => {
     await housekeepingMonitor?.tickInventory();

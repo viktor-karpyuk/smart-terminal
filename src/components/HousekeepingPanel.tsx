@@ -134,6 +134,37 @@ export function HousekeepingPanel() {
     }
   };
 
+  /**
+   * Hand the machine's state to a Claude session and ask for a plan. One
+   * session per panel, opened the first time it is wanted; the account is
+   * one that is signed in, or the brief sits behind a sign-in prompt.
+   */
+  const askRef = useRef<string | null>(null);
+  const askClaude = async (question?: string) => {
+    setBusy('ask');
+    setError(null);
+    try {
+      const store = useStore.getState();
+      const brief = await window.api.housekeeping.brief(question ?? null);
+      let sessionId = askRef.current && store.sessions[askRef.current] ? askRef.current : null;
+      if (!sessionId) {
+        const { profiles, settings, authByProfile } = store;
+        const usual = profiles.find((p) => p.id === settings.defaultProfileId) ?? profiles[0];
+        const profileId = usual && authByProfile[usual.id]?.loggedIn !== false ? usual.id : (profiles.find((p) => authByProfile[p.id]?.loggedIn)?.id ?? usual?.id);
+        sessionId = await store.newSession({ kind: 'claude', title: 'ask housekeeping', profileId });
+        if (!sessionId) throw new Error('the app could not open a session');
+        askRef.current = sessionId;
+      }
+      store.focusSession(sessionId);
+      const handed = await window.api.analysis.handOver(sessionId, brief);
+      setSaid(handed.ok ? 'Handed the machine\'s state to a Claude session.' : (handed.error ?? 'The brief could not be handed over.'));
+    } catch (e) {
+      setError(String((e as Error)?.message ?? e));
+    } finally {
+      if (alive.current) setBusy(null);
+    }
+  };
+
   const toggle = (id: string) =>
     setSelected((prev) => {
       const next = new Set(prev);
@@ -225,6 +256,9 @@ export function HousekeepingPanel() {
           <button className="link-btn" onClick={() => setTab('health')}>
             see why
           </button>
+          <button className="ghost-btn tiny" disabled={Boolean(busy)} onClick={() => askClaude()} title="Open a Claude session with the machine's state and ask how to free memory and disk">
+            {busy === 'ask' ? 'Asking…' : 'Ask Claude'}
+          </button>
         </div>
       )}
       <div className="housekeeping-bar">
@@ -242,6 +276,9 @@ export function HousekeepingPanel() {
         )}
         <button className="ghost-btn tiny" disabled={Boolean(busy)} onClick={() => load()}>
           {busy === 'reading' ? 'Reading…' : 'Refresh'}
+        </button>
+        <button className="ghost-btn tiny" disabled={Boolean(busy)} onClick={() => askClaude()} title="Open a Claude session with the machine's state and ask how to free memory and disk">
+          {busy === 'ask' ? 'Asking…' : 'Ask Claude'}
         </button>
         <button className="ghost-btn tiny" disabled={Boolean(busy) || measuring > 0} onClick={() => {
             const own = items.filter((one) => one.kind !== 'session' && one.kind !== 'browser-cache' && one.path).map((one) => one.path as string);
@@ -285,7 +322,7 @@ export function HousekeepingPanel() {
         <Worktrees items={items} roots={inventory.roots} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} reload={() => load()} onError={setError} />
       )}
       {tab === 'app' && <AppFiles items={items} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} />}
-      {tab === 'health' && <Health health={health} setHealth={setHealth} onError={setError} />}
+      {tab === 'health' && <Health health={health} setHealth={setHealth} onError={setError} ask={askClaude} asking={busy === 'ask'} />}
       {tab === 'log' && <Log rows={inventory.log} />}
     </div>
   );
@@ -542,7 +579,7 @@ function AppFiles({ items, selected, toggle, selectAll, chosen, confirm }: ListP
   );
 }
 
-const METRIC_ORDER = ['disk.free.bytes', 'disk.free.pct', 'mem.free.bytes', 'load.per.core', 'app.rss.bytes', 'sessions.open', 'db.bytes', 'db.wal.bytes', 'worktrees.inactive', 'budget.app.bytes', 'budget.worktrees.bytes'];
+const METRIC_ORDER = ['disk.free.bytes', 'disk.free.pct', 'mem.free.bytes', 'swap.used.pct', 'swap.used.bytes', 'load.per.core', 'app.rss.bytes', 'sessions.open', 'db.bytes', 'db.wal.bytes', 'worktrees.inactive', 'budget.app.bytes', 'budget.worktrees.bytes'];
 
 function showValue(value: number | null | undefined, unit: string): string {
   if (value === null || value === undefined) return '—';
@@ -572,7 +609,7 @@ function ThresholdInput({ metric, level, unit, value, onSave }: { metric: string
   );
 }
 
-function Health({ health, setHealth, onError }: { health: HousekeepingHealth | null; setHealth: (h: HousekeepingHealth | null) => void; onError: (m: string) => void }) {
+function Health({ health, setHealth, onError, ask, asking }: { health: HousekeepingHealth | null; setHealth: (h: HousekeepingHealth | null) => void; onError: (m: string) => void; ask: (question?: string) => void; asking: boolean }) {
   const [busy, setBusy] = useState(false);
   if (!health) return <p className="empty-state">The first reading lands a few seconds after start.</p>;
   const save = (metric: string, level: 'attention' | 'limit', value: number | null) =>
@@ -628,6 +665,12 @@ function Health({ health, setHealth, onError }: { health: HousekeepingHealth | n
       <div className="housekeeping-bar">
         <button className="ghost-btn tiny" disabled={busy} onClick={measureNow}>
           {busy ? 'Weighing…' : 'Weigh everything now'}
+        </button>
+        <button className="ghost-btn tiny" disabled={asking} onClick={() => ask()} title="A Claude session is handed the readings, the processes holding memory, the swap, the disk and the worktrees, and asked for a plan">
+          {asking ? 'Asking…' : 'Ask Claude how to free memory'}
+        </button>
+        <button className="ghost-btn tiny" disabled={asking} onClick={() => ask('The disk is filling. From the numbers above, say what to remove first and in which order without losing unmerged work, name the worktrees and caches with their sizes, and say what to keep.')}>
+          Ask Claude about the disk
         </button>
       </div>
 
@@ -796,7 +839,15 @@ function Table({
                   formatBytes(one.bytes)
                 )}
               </td>
-              <td>{blocked ? <span className="housekeeping-blocker">{one.blockers.join(', ')}</span> : (one.state ?? '')}</td>
+              <td>
+                {one.kind === 'worktree' && typeof one.meta?.work === 'string' && (
+                  <span className={`housekeeping-work is-${String(one.meta.work)}`} title={one.meta.work === 'done' ? 'Its work is on a base branch, or its branch is gone on origin' : one.meta.work === 'unmerged' ? 'Commits or changes no base branch has' : one.meta.work === 'empty' ? 'No commit of its own' : ''}>
+                    {one.meta.work === 'done' ? 'done' : one.meta.work === 'unmerged' ? 'unmerged' : one.meta.work === 'empty' ? 'empty' : ''}
+                  </span>
+                )}
+                {one.state ?? ''}
+                {blocked && <small className="housekeeping-blocker">{one.blockers.join(', ')}</small>}
+              </td>
               <td className="is-num">
                 {one.path && one.kind !== 'browser-cache' && (
                   <button className="ghost-btn tiny" title={`Show ${one.path} in the file manager`} onClick={() => window.api.files.reveal(one.path as string)}>

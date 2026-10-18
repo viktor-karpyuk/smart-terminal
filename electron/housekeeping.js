@@ -239,7 +239,7 @@ class Housekeeping {
           state: row.state,
           blockers: row.blockers,
           detail: [row.branch ? `branch ${row.branch}` : null, row.upstream ? `tracks ${row.upstream}` : row.ownWork ? 'no upstream' : null].filter(Boolean).join(' · ') || null,
-          meta: { root: row.root, branch: row.branch, finished: row.finished, prunable: row.prunable, sized: Boolean(known) || row.prunable },
+          meta: { root: row.root, branch: row.branch, finished: row.finished, prunable: row.prunable, work: row.work, aheadOfBase: row.aheadOfBase, sized: Boolean(known) || row.prunable },
         });
       });
   }

@@ -1153,6 +1153,7 @@ declare global {
         health(fresh?: boolean): Promise<HousekeepingHealth | null>;
         setThreshold(metric: string, level: 'attention' | 'limit', value: number | null): Promise<HousekeepingHealth | null>;
         measureNow(): Promise<HousekeepingHealth | null>;
+        brief(question?: string | null): Promise<string>;
         onHealth(handler: (payload: { status: HousekeepingStatus; conditions: HousekeepingCondition[] }) => void): () => void;
         onOpen(handler: (payload: { metric?: string; tab?: string }) => void): () => void;
       };
