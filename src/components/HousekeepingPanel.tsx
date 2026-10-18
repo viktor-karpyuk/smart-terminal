@@ -698,6 +698,59 @@ function JobStrip({ job, progress }: { job: HousekeepingJob; progress: Housekeep
   );
 }
 
+interface WorktreeSessionRef {
+  id: string;
+  title: string | null;
+  kind: string;
+  live: boolean;
+  resumable: boolean;
+  lastActivityAt: number | null;
+  profile: string | null;
+}
+
+/**
+ * The ways into a worktree from its row: the session that worked in it —
+ * brought forward if it is open, picked up from history if it ended with a
+ * conversation — or a fresh terminal standing in it. For the one with
+ * unmerged work, this is how it gets finished rather than removed.
+ */
+function WorktreeDoors({ item }: { item: HousekeepingItem }) {
+  const session = (item.meta?.session ?? null) as WorktreeSessionRef | null;
+  const openSession = () => {
+    if (!session) return;
+    const store = useStore.getState();
+    if (session.live && store.sessions[session.id]) {
+      store.restoreMinimized(session.id);
+      store.focusSession(session.id);
+      return;
+    }
+    void store.reopenSession(session.id, undefined, { closeHistory: false });
+  };
+  const openShell = () => {
+    void useStore.getState().newSession({ kind: 'shell', cwd: item.path ?? undefined, title: `sh ${item.label.split('/').pop() ?? ''}`.slice(0, 28) });
+  };
+  return (
+    <>
+      {session && (session.live || session.resumable) && (
+        <button
+          className="ghost-btn tiny"
+          onClick={openSession}
+          title={
+            session.live
+              ? `Bring forward the session working here${session.title ? `: ${session.title}` : ''}`
+              : `Pick up the last session that worked here${session.title ? `: ${session.title}` : ''}${session.lastActivityAt ? ` (${describeIdle(session.lastActivityAt)} ago)` : ''}, on its conversation`
+          }
+        >
+          {session.live ? 'Go to session' : 'Pick up session'}
+        </button>
+      )}
+      <button className="ghost-btn tiny" onClick={openShell} title={`A terminal in ${item.path}`}>
+        Terminal
+      </button>
+    </>
+  );
+}
+
 /** What a progress event is about, in words. */
 function progressTitle(p: HousekeepingProgress): string {
   const names: Record<string, string> = {
@@ -1917,6 +1970,7 @@ function Table({
                     {one.meta?.broken ? 'Repair' : blocked ? 'Remove anyway' : quick.label}
                   </button>
                 )}
+                {one.kind === 'worktree' && one.path && <WorktreeDoors item={one} />}
                 {one.path && one.kind !== 'browser-cache' && (
                   <button className="ghost-btn tiny" title={`Show ${one.path} in the file manager`} onClick={() => window.api.files.reveal(one.path as string)}>
                     Show

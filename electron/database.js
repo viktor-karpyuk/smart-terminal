@@ -1643,6 +1643,7 @@ class Database {
     return this.db
       .prepare(
         `SELECT id, profile_name AS profileName, title, kind, start_cwd AS startCwd, last_cwd AS lastCwd,
+                claude_session_id AS claudeSessionId,
                 started_at AS startedAt, ended_at AS endedAt,
                 COALESCE(last_worked_at, last_active_at, ended_at, started_at) AS lastActivityAt,
                 COALESCE(transcript_bytes, 0) AS transcriptBytes, store_transcript AS recording

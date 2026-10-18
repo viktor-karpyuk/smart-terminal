@@ -77,6 +77,22 @@ class Housekeeping {
   }
 
   #activity = [];
+  #footprints = [];
+
+  /** The session that last worked in or under a folder — open, or one that can be picked up. */
+  #sessionUnder(dir) {
+    let best = null;
+    for (const row of this.#footprints) {
+      const cwd = row.lastCwd || row.startCwd;
+      if (!cwd || !(cwd === dir || cwd.startsWith(dir + path.sep))) continue;
+      const live = row.endedAt === null;
+      const score = (live ? 1e15 : 0) + (row.lastActivityAt ?? 0);
+      if (!best || score > best.score) best = { score, row };
+    }
+    if (!best) return null;
+    const row = best.row;
+    return { id: row.id, title: row.title ?? null, kind: row.kind, live: row.endedAt === null, resumable: row.kind === 'claude' && Boolean(row.claudeSessionId), lastActivityAt: row.lastActivityAt, profile: row.profileName ?? null };
+  }
 
   /** The latest a session was active in or under a folder, or null. */
   #sessionActivityUnder(dir) {
@@ -151,6 +167,8 @@ class Housekeeping {
     // The checkouts are read once per inventory: three of the lists below want them, and a root of
     // two hundred worktrees is two hundred stats each time it is asked.
     this.#checkouts = this.checkouts();
+    // Sessions first: the worktree rows name the session that worked in each.
+    this.sessionItems();
     this.emit('progress', { op: 'inventory', phase: 'worktrees', detail: `${this.#checkouts.length} checkouts, asking git`, done: false });
     const worktrees = await this.worktreeItems();
     this.emit('progress', { op: 'inventory', phase: 'caches', detail: 'build caches and the app\'s own folders', done: false });
@@ -293,7 +311,7 @@ class Housekeeping {
           state: row.state,
           blockers: row.blockers,
           detail: [row.branch ? `branch ${row.branch}` : null, row.upstream ? `tracks ${row.upstream}` : row.ownWork ? 'no upstream' : null].filter(Boolean).join(' · ') || null,
-          meta: { root: row.root, branch: row.branch, finished: row.finished, prunable: row.prunable, broken: row.broken, work: row.work, aheadOfBase: row.aheadOfBase, dirtyCount: row.dirtyCount, dirty: row.dirty, forceable: row.forceable, loses: row.loses, sized: Boolean(known) || row.prunable },
+          meta: { root: row.root, branch: row.branch, finished: row.finished, prunable: row.prunable, broken: row.broken, work: row.work, aheadOfBase: row.aheadOfBase, dirtyCount: row.dirtyCount, dirty: row.dirty, forceable: row.forceable, loses: row.loses, session: this.#sessionUnder(row.path), sized: Boolean(known) || row.prunable },
         });
       });
   }
@@ -303,6 +321,7 @@ class Housekeeping {
     const snapshots = path.join(this.userData, 'context-snapshots');
     const footprints = this.db.sessionFootprints();
     this.#activity = footprints.flatMap((row) => [row.lastCwd, row.startCwd].filter(Boolean).map((cwd) => [cwd, row.lastActivityAt]));
+    this.#footprints = footprints;
     return footprints.map((row) => {
       const snapshot = snapshotBytes(path.join(snapshots, row.id));
       const blockers = [];
