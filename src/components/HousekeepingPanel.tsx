@@ -50,7 +50,8 @@ export function HousekeepingPanel() {
   const [measuring, setMeasuring] = useState(0);
   const [said, setSaid] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState<string | null>(null);
+  /** What a button is about to do, shown as a modal that lists every item before anything goes. */
+  const [pending, setPending] = useState<PendingAction | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [olderThan, setOlderThan] = useState(30);
   const [minMb, setMinMb] = useState(0);
@@ -174,7 +175,6 @@ export function HousekeepingPanel() {
 
   const run = async (key: string, work: () => Promise<string>) => {
     setBusy(key);
-    setConfirming(null);
     setError(null);
     try {
       const message = await work();
@@ -251,8 +251,51 @@ export function HousekeepingPanel() {
     return `Started: ${title}. Follow it in the bar above; it can be paused or stopped, and it carries on after a restart.`;
   };
 
-  const pick = (id: string) => setSelected(new Set([id]));
-  const arm = (key: string) => setConfirming(key);
+  /** A proposal's action, shown as the same modal with the items it names. */
+  const askPlan = (proposal: HousekeepingProposal) => {
+    const action = proposal.action;
+    if (!action) return;
+    if (action.id === 'show-sessions' || action.id === 'show-worktrees') return doAction(proposal);
+    const ids = new Set(action.ids ?? []);
+    const list = items.filter((one) => ids.has(one.id) || ids.has(String(one.meta?.sessionId)));
+    setPending({
+      key: `plan:${proposal.id}`,
+      title: action.label,
+      detail: proposal.detail,
+      danger: Boolean(action.danger),
+      items: list,
+      work: async () => {
+        doAction(proposal);
+        return '';
+      },
+    });
+  };
+
+  /** The row's own button: the same modal, for this one item. */
+  const quickRow = (one: HousekeepingItem) => {
+    const kind: HousekeepingJobKind | null =
+      one.kind === 'session' ? 'forget-transcripts' : one.kind === 'worktree' ? (one.meta?.broken ? 'repair-worktrees' : 'remove-worktrees') : one.kind === 'workshop' ? 'discard-workshops' : one.reversible ? 'free' : null;
+    if (!kind) return;
+    const verb = kind === 'forget-transcripts' ? 'Forget the conversation of' : kind === 'repair-worktrees' ? 'Repair' : kind === 'remove-worktrees' ? 'Remove' : kind === 'discard-workshops' ? 'Discard' : 'Remove';
+    const danger = kind !== 'free' && kind !== 'repair-worktrees';
+    setPending({
+      key: `row:${one.id}`,
+      title: `${verb} ${one.label}`,
+      detail:
+        kind === 'remove-worktrees'
+          ? 'git worktree remove, never forced. A merged branch is deleted; an unmerged one keeps its commits.'
+          : kind === 'forget-transcripts'
+            ? 'The kept conversation and its saved copy go; the record of the session stays in History.'
+            : kind === 'repair-worktrees'
+              ? 'git worktree repair points it back at the repository that lists it. Nothing is removed.'
+              : kind === 'discard-workshops'
+                ? "The reviewer's own rules apply: a clone with a fix not handed back is refused."
+                : 'It comes back by itself when needed.',
+      danger,
+      items: [one],
+      work: () => startJob(kind, [one], `${verb} ${one.label}`),
+    });
+  };
 
   const toggle = (id: string) =>
     setSelected((prev) => {
@@ -284,25 +327,30 @@ export function HousekeepingPanel() {
   const used = diskUsedPercent(inventory.disk);
   const chosen = (list: HousekeepingItem[]) => list.filter((one) => selected.has(one.id) && one.blockers.length === 0);
 
-  const confirm = (key: string, label: string, detail: string, work: () => Promise<string>, danger = false, disabled = false) =>
-    confirming === key ? (
-      <span className="storage-confirm">
-        <em>{detail}</em>
-        <button className={danger ? 'danger-btn tiny' : 'ghost-btn tiny'} onClick={() => run(key, work)}>
-          Yes, do it
-        </button>
-        <button className="ghost-btn tiny" onClick={() => setConfirming(null)}>
-          No
-        </button>
-      </span>
-    ) : (
-      <button className={danger ? 'danger-btn tiny' : 'ghost-btn tiny'} disabled={disabled || Boolean(busy)} onClick={() => setConfirming(key)}>
-        {label}
-      </button>
-    );
+  const confirm = (key: string, label: string, detail: string, work: () => Promise<string>, danger = false, disabled = false, items: HousekeepingItem[] = []) => (
+    <button
+      className={danger ? 'danger-btn tiny' : 'ghost-btn tiny'}
+      disabled={disabled || Boolean(busy)}
+      onClick={() => setPending({ key, title: label, detail, work, danger, items })}
+    >
+      {label}
+    </button>
+  );
 
   return (
     <div className="housekeeping">
+      {pending && (
+        <ConfirmModal
+          pending={pending}
+          busy={Boolean(busy)}
+          onCancel={() => setPending(null)}
+          onConfirm={() => {
+            const todo = pending;
+            setPending(null);
+            void run(todo.key, todo.work);
+          }}
+        />
+      )}
       <div className="monitor-stats">
         <div className="monitor-stat">
           <span className="monitor-stat-label">Disk</span>
@@ -363,6 +411,7 @@ export function HousekeepingPanel() {
           () => startJob('free', freeNow, `Free ${formatBytes(totals.free)}`),
           false,
           freeNow.length === 0,
+          freeNow,
         )}
         <button className="ghost-btn tiny" disabled={Boolean(busy)} onClick={() => load()}>
           {busy === 'reading' ? 'Reading…' : 'Refresh'}
@@ -414,23 +463,11 @@ export function HousekeepingPanel() {
           {plan
             .filter((one) => one.action && one.action.id !== 'show-sessions' && one.action.id !== 'show-worktrees')
             .slice(0, 5)
-            .map((one) =>
-              confirming === `quick:${one.id}` ? (
-                <span key={one.id} className="storage-confirm">
-                  <em>{one.detail}</em>
-                  <button className={one.action?.danger ? 'danger-btn tiny' : 'ghost-btn tiny'} onClick={() => doAction(one)}>
-                    Yes, do it
-                  </button>
-                  <button className="ghost-btn tiny" onClick={() => setConfirming(null)}>
-                    No
-                  </button>
-                </span>
-              ) : (
-                <button key={one.id} className={`ghost-btn tiny housekeeping-chip is-${one.priority}`} disabled={Boolean(busy)} title={one.detail} onClick={() => setConfirming(`quick:${one.id}`)}>
-                  {one.action?.label}
-                </button>
-              ),
-            )}
+            .map((one) => (
+              <button key={one.id} className={`ghost-btn tiny housekeeping-chip is-${one.priority}`} disabled={Boolean(busy)} title={one.detail} onClick={() => askPlan(one)}>
+                {one.action?.label}
+              </button>
+            ))}
         </div>
       )}
 
@@ -456,16 +493,15 @@ export function HousekeepingPanel() {
           selectAll={selectAll}
           chosen={chosen}
           confirm={confirm}
-          pick={pick}
-          arm={arm}
+          quickRow={quickRow}
           startJob={startJob}
         />
       )}
       {tab === 'worktrees' && (
-        <Worktrees items={items} roots={inventory.roots} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} pick={pick} arm={arm} startJob={startJob} reload={() => load()} onError={setError} />
+        <Worktrees items={items} roots={inventory.roots} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} quickRow={quickRow} startJob={startJob} reload={() => load()} onError={setError} />
       )}
-      {tab === 'app' && <AppFiles items={items} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} pick={pick} arm={arm} startJob={startJob} />}
-      {tab === 'health' && <Health health={health} setHealth={setHealth} onError={setError} ask={askClaude} asking={busy === 'ask'} plan={plan} stats={stats} doAction={doAction} confirming={confirming} setConfirming={setConfirming} busy={Boolean(busy)} />}
+      {tab === 'app' && <AppFiles items={items} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} quickRow={quickRow} startJob={startJob} />}
+      {tab === 'health' && <Health health={health} setHealth={setHealth} onError={setError} ask={askClaude} asking={busy === 'ask'} plan={plan} stats={stats} askPlan={askPlan} busy={Boolean(busy)} />}
       {tab === 'log' && <Log rows={inventory.log} />}
     </div>
   );
@@ -473,7 +509,7 @@ export function HousekeepingPanel() {
 
 // --- the tabs --------------------------------------------------------------------
 
-type Confirm = (key: string, label: string, detail: string, work: () => Promise<string>, danger?: boolean, disabled?: boolean) => ReactElement;
+type Confirm = (key: string, label: string, detail: string, work: () => Promise<string>, danger?: boolean, disabled?: boolean, items?: HousekeepingItem[]) => ReactElement;
 
 interface ListProps {
   items: HousekeepingItem[];
@@ -482,9 +518,8 @@ interface ListProps {
   selectAll: (list: HousekeepingItem[], on: boolean) => void;
   chosen: (list: HousekeepingItem[]) => HousekeepingItem[];
   confirm: Confirm;
-  /** Select only this row, and arm the confirm named: the row's own button. */
-  pick: (id: string) => void;
-  arm: (key: string) => void;
+  /** The row's own button: the same modal, for this one item. */
+  quickRow: (one: HousekeepingItem) => void;
   /** Queue a removal as a job and say so. */
   startJob: (kind: HousekeepingJobKind, list: HousekeepingItem[], title: string) => Promise<string>;
 }
@@ -578,8 +613,7 @@ function Sessions({
   selectAll,
   chosen,
   confirm,
-  pick,
-  arm,
+  quickRow,
   startJob,
 }: ListProps & {
   olderThan: number;
@@ -609,7 +643,7 @@ function Sessions({
           {rows.length} session{rows.length === 1 ? '' : 's'}, {formatBytes(weigh(rows))}
         </span>
       </div>
-      <Table rows={rows} selected={selected} toggle={toggle} selectAll={selectAll} empty="No session matches. Lower the days or the size." quick={{ label: 'Forget', run: (one) => { pick(one.id); arm('forget'); } }} />
+      <Table rows={rows} selected={selected} toggle={toggle} selectAll={selectAll} empty="No session matches. Lower the days or the size." quick={{ label: 'Forget', run: quickRow }} />
       <div className="storage-actions">
         {confirm(
           'forget',
@@ -618,6 +652,7 @@ function Sessions({
           () => startJob('forget-transcripts', picked, `Forget ${picked.length} conversation${picked.length === 1 ? '' : 's'}`),
           false,
           picked.length === 0,
+          picked,
         )}
         {confirm(
           'delete',
@@ -626,13 +661,14 @@ function Sessions({
           () => startJob('delete-sessions', picked, `Delete ${picked.length} session${picked.length === 1 ? '' : 's'}`),
           true,
           picked.length === 0,
+          picked,
         )}
       </div>
     </>
   );
 }
 
-function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm, pick, arm, startJob, reload, onError }: ListProps & { roots: HousekeepingRoot[]; reload: () => void; onError: (message: string) => void }) {
+function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm, quickRow, startJob, reload, onError }: ListProps & { roots: HousekeepingRoot[]; reload: () => void; onError: (message: string) => void }) {
   const caches = items.filter((one) => one.kind === 'build-cache');
   const shops = items.filter((one) => one.kind === 'workshop');
   const pickedCaches = chosen(caches);
@@ -661,8 +697,14 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
     }
   };
 
-  return (
-    <>
+  const settings = (
+    <details className="housekeeping-settings" open={!roots.length}>
+      <summary>
+        Where to look, and what counts as a build's own
+        <small>
+          {roots.length} folder{roots.length === 1 ? '' : 's'} · offer at session close · regenerable names
+        </small>
+      </summary>
       <h3 className="monitor-heading">Folders looked through</h3>
       <p className="usage-note">A folder of worktrees, or a checkout. Its direct children that are git checkouts are listed; nothing deeper is crawled.</p>
       <ul className="housekeeping-roots">
@@ -688,14 +730,20 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
         {adding ? 'Choosing…' : 'Add a folder…'}
       </button>
 
-      <OfferOnClose onError={onError} />
-
       <h3 className="monitor-heading">Files a build makes again</h3>
       <p className="usage-note">
         A worktree with an ignored file nothing could rebuild (an .env, a key) is kept. Build caches on the list are not counted; add here the other names your builds write, one per line, * allowed: for example <code>dist-*</code>, <code>buildNumber.properties</code>.
       </p>
       <Regenerable reload={reload} onError={onError} />
 
+      <h3 className="monitor-heading">When a session closes</h3>
+      <OfferOnClose onError={onError} />
+    </details>
+  );
+
+  return (
+    <>
+      {!roots.length && settings}
       <h3 className="monitor-heading">Worktrees</h3>
       <p className="usage-note">
         Every worktree of the repositories above and of the ones your sessions are in, except each repository's main working tree. Idle is the latest of its last commit, its last checkout, and the last time a session was inside it. One
@@ -713,7 +761,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
           {trees.length} of {allTrees.length} worktree{allTrees.length === 1 ? '' : 's'}, {formatBytes(weigh(trees))} · {finished.length} finished and clear
         </span>
       </div>
-      <Table rows={trees} selected={selected} toggle={toggle} selectAll={selectAll} empty={allTrees.length ? 'No worktree matches. Lower the days or untick finished only.' : 'No worktrees found. Add the folder they live in above.'} quick={{ label: 'Remove', run: (one) => { pick(one.id); arm('trees'); } }} />
+      <Table rows={trees} selected={selected} toggle={toggle} selectAll={selectAll} empty={allTrees.length ? 'No worktree matches. Lower the days or untick finished only.' : 'No worktrees found. Add the folder they live in above.'} quick={{ label: 'Remove', run: quickRow }} />
       <div className="storage-actions">
         {confirm(
           'trees',
@@ -722,6 +770,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
           () => startJob('remove-worktrees', pickedTrees, `Remove ${pickedTrees.length} worktree${pickedTrees.length === 1 ? '' : 's'} (${formatBytes(weigh(pickedTrees))})`),
           true,
           pickedTrees.length === 0,
+          pickedTrees,
         )}
         {broken.length > 0 &&
           confirm(
@@ -733,6 +782,9 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
               const failed = out.results.filter((one) => !one.ok);
               return `Repaired ${out.results.length - failed.length}.${failed.length ? ` ${failed.length} could not be: ${failed[0].error}` : ''}`;
             },
+            false,
+            false,
+            broken,
           )}
         {finished.length > 0 &&
           confirm(
@@ -741,6 +793,8 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
             'Only worktrees whose work is merged or whose branch is gone on origin, with nothing of their own and nobody inside.',
             () => startJob('remove-worktrees', finished, `Remove all ${finished.length} finished (${formatBytes(weigh(finished))})`),
             true,
+            false,
+            finished,
           )}
       </div>
 
@@ -748,7 +802,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
       <p className="usage-note">
         Folders a build writes and writes again: .angular, node_modules, target, dist. Removing one costs the next build a rebuild and nothing else. A folder git does not ignore is refused. A cache inside a worktree listed above is shown here but counted inside that worktree's size.
       </p>
-      <Table rows={caches} selected={selected} toggle={toggle} selectAll={selectAll} empty="No build caches under the folders above." quick={{ label: 'Clear', run: (one) => { pick(one.id); arm('caches'); } }} />
+      <Table rows={caches} selected={selected} toggle={toggle} selectAll={selectAll} empty="No build caches under the folders above." quick={{ label: 'Clear', run: quickRow }} />
       <div className="storage-actions">
         {confirm(
           'caches',
@@ -757,12 +811,13 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
           () => startJob('free', pickedCaches, `Clear ${pickedCaches.length} cache${pickedCaches.length === 1 ? '' : 's'} (${formatBytes(weigh(pickedCaches))})`),
           false,
           pickedCaches.length === 0,
+          pickedCaches,
         )}
       </div>
 
       <h3 className="monitor-heading">Code Reviewer clones</h3>
       <p className="usage-note">A clone per pull request the reviewer wrote fixes in. One whose pull request is closed and whose fixes were handed back can go.</p>
-      <Table rows={shops} selected={selected} toggle={toggle} selectAll={selectAll} empty="No review clones on disk." quick={{ label: 'Discard', run: (one) => { pick(one.id); arm('shops'); } }} />
+      <Table rows={shops} selected={selected} toggle={toggle} selectAll={selectAll} empty="No review clones on disk." quick={{ label: 'Discard', run: quickRow }} />
       <div className="storage-actions">
         {confirm(
           'shops',
@@ -771,8 +826,11 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
           () => startJob('discard-workshops', pickedShops, `Discard ${pickedShops.length} clone${pickedShops.length === 1 ? '' : 's'}`),
           true,
           pickedShops.length === 0,
+          pickedShops,
         )}
       </div>
+
+      {roots.length > 0 && settings}
     </>
   );
 }
@@ -835,7 +893,7 @@ function Regenerable({ reload, onError }: { reload: () => void; onError: (m: str
   );
 }
 
-function AppFiles({ items, selected, toggle, selectAll, chosen, confirm, pick, arm, startJob }: ListProps) {
+function AppFiles({ items, selected, toggle, selectAll, chosen, confirm, quickRow, startJob }: ListProps) {
   const rows = inBucket(items, 'app');
   const picked = chosen(rows);
   return (
@@ -843,7 +901,7 @@ function AppFiles({ items, selected, toggle, selectAll, chosen, confirm, pick, a
       <p className="usage-note">
         What the app keeps beside its database: copies of the database and of whole data folders made before upgrades, installers already downloaded, pasted images, the window's own cache. The database itself is tended from the Monitor.
       </p>
-      <Table rows={rows} selected={selected} toggle={toggle} selectAll={selectAll} empty="Nothing beside the database." quick={{ label: 'Remove', run: (one) => { pick(one.id); arm('app'); } }} />
+      <Table rows={rows} selected={selected} toggle={toggle} selectAll={selectAll} empty="Nothing beside the database." quick={{ label: 'Remove', run: quickRow }} />
       <div className="storage-actions">
         {confirm(
           'app',
@@ -852,6 +910,7 @@ function AppFiles({ items, selected, toggle, selectAll, chosen, confirm, pick, a
           () => startJob('free', picked, `Remove ${picked.length} item${picked.length === 1 ? '' : 's'} (${formatBytes(weigh(picked))})`),
           false,
           picked.length === 0,
+          picked,
         )}
       </div>
     </>
@@ -896,9 +955,7 @@ function Health({
   asking,
   plan,
   stats,
-  doAction,
-  confirming,
-  setConfirming,
+  askPlan,
   busy: parentBusy,
 }: {
   health: HousekeepingHealth | null;
@@ -908,9 +965,7 @@ function Health({
   asking: boolean;
   plan: HousekeepingProposal[];
   stats: HousekeepingStats | null;
-  doAction: (p: HousekeepingProposal) => void;
-  confirming: string | null;
-  setConfirming: (k: string | null) => void;
+  askPlan: (p: HousekeepingProposal) => void;
   busy: boolean;
 }) {
   const [busy, setBusy] = useState(false);
@@ -990,26 +1045,11 @@ function Health({
                 {one.effect && <em> — {one.effect}</em>}
               </div>
               <p>{one.detail}</p>
-              {one.action &&
-                (confirming === `plan:${one.id}` ? (
-                  <span className="storage-confirm">
-                    <em>{one.action.danger ? 'This cannot be undone.' : 'It comes back by itself when needed.'}</em>
-                    <button className={one.action.danger ? 'danger-btn tiny' : 'ghost-btn tiny'} onClick={() => doAction(one)}>
-                      Yes, do it
-                    </button>
-                    <button className="ghost-btn tiny" onClick={() => setConfirming(null)}>
-                      No
-                    </button>
-                  </span>
-                ) : (
-                  <button
-                    className={one.action.danger ? 'danger-btn tiny' : 'ghost-btn tiny'}
-                    disabled={parentBusy}
-                    onClick={() => (one.action?.id === 'show-sessions' || one.action?.id === 'show-worktrees' ? doAction(one) : setConfirming(`plan:${one.id}`))}
-                  >
-                    {one.action.label}
-                  </button>
-                ))}
+              {one.action && (
+                <button className={one.action.danger ? 'danger-btn tiny' : 'ghost-btn tiny'} disabled={parentBusy} onClick={() => askPlan(one)}>
+                  {one.action.label}
+                </button>
+              )}
             </li>
           ))}
         </ol>
@@ -1101,6 +1141,77 @@ function Health({
         </tbody>
       </table>
     </>
+  );
+}
+
+interface PendingAction {
+  key: string;
+  title: string;
+  detail: string;
+  danger: boolean;
+  items: HousekeepingItem[];
+  work: () => Promise<string>;
+}
+
+/**
+ * The question before anything goes, as a modal: what, how many, how much,
+ * and every item by name with its state and size — so a selection of thirty
+ * worktrees is read, not guessed from a count at the bottom of a long list.
+ */
+function ConfirmModal({ pending, busy, onCancel, onConfirm }: { pending: PendingAction; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
+  const bytes = weigh(pending.items);
+  const blocked = pending.items.filter((one) => one.blockers.length);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onCancel]);
+  return (
+    <div className="modal-backdrop" onMouseDown={onCancel}>
+      <div className="confirm housekeeping-confirm" role="dialog" aria-modal="true" aria-labelledby="hk-confirm-title" onMouseDown={(event) => event.stopPropagation()}>
+        <h3 id="hk-confirm-title">{pending.title}</h3>
+        <p className={pending.danger ? 'confirm-warn' : undefined}>{pending.detail}</p>
+        {pending.items.length > 0 && (
+          <>
+            <p className="housekeeping-confirm-sum">
+              <strong>{pending.items.length}</strong> item{pending.items.length === 1 ? '' : 's'}
+              {bytes ? (
+                <>
+                  {' '}
+                  · <strong>{formatBytes(bytes)}</strong>
+                </>
+              ) : null}
+              {blocked.length ? <span className="is-error"> · {blocked.length} will be refused</span> : null}
+            </p>
+            <ul className="housekeeping-confirm-list">
+              {[...pending.items]
+                .sort((a, b) => b.bytes - a.bytes)
+                .map((one) => (
+                  <li key={one.id} className={one.blockers.length ? 'is-blocked' : ''} title={one.path ?? undefined}>
+                    <span className="housekeeping-confirm-name">{one.label}</span>
+                    <span className="housekeeping-confirm-state">
+                      {one.kind === 'worktree' && typeof one.meta?.work === 'string' ? <span className={`housekeeping-work is-${String(one.meta.work)}`}>{String(one.meta.work)}</span> : null}
+                      {one.state ?? KIND_LABEL[one.kind]}
+                      {one.blockers.length ? <small> · {one.blockers.join(', ')}</small> : null}
+                    </span>
+                    <span className="housekeeping-confirm-size">{one.meta?.sized === false ? '…' : formatBytes(one.bytes)}</span>
+                  </li>
+                ))}
+            </ul>
+          </>
+        )}
+        <div className="confirm-actions">
+          <button className="ghost-btn" onClick={onCancel} autoFocus>
+            Cancel
+          </button>
+          <button className={pending.danger ? 'danger-btn' : 'primary-btn'} disabled={busy} onClick={onConfirm}>
+            {pending.danger ? 'Yes, remove' : 'Yes, do it'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1245,9 +1356,9 @@ function Table({
                 {blocked && <small className="housekeeping-blocker">{one.blockers.join(', ')}</small>}
               </td>
               <td className="is-num housekeeping-rowactions">
-                {quick && !blocked && (
-                  <button className="ghost-btn tiny" onClick={() => quick.run(one)} title={`${quick.label} only this one`}>
-                    {quick.label}
+                {quick && (!blocked || Boolean(one.meta?.broken)) && (
+                  <button className="ghost-btn tiny" onClick={() => quick.run(one)} title={`${one.meta?.broken ? 'Repair' : quick.label} only this one`}>
+                    {one.meta?.broken ? 'Repair' : quick.label}
                   </button>
                 )}
                 {one.path && one.kind !== 'browser-cache' && (

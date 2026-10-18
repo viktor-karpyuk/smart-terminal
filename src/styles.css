@@ -4172,3 +4172,23 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-job .housekeeping-progress-bar > div.is-inner { position: absolute; left: 0; top: 0; height: 100%; background: var(--text-faint); opacity: 0.5; }
 .housekeeping-job-actions { margin-left: 10px; display: inline-flex; gap: 4px; }
 .housekeeping-switch { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 14px; color: var(--text-faint); font-size: var(--fs-sm); }
+.housekeeping-confirm { width: min(calc(640px * var(--ui-scale)), 94vw); max-height: 84vh; }
+.housekeeping-confirm-sum { color: var(--text) !important; }
+.housekeeping-confirm-sum .is-error { color: var(--danger, #d9534f); }
+.housekeeping-confirm-list { list-style: none; margin: 0; padding: 0; max-height: 46vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-input); }
+.housekeeping-confirm-list li { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto; gap: 10px; align-items: baseline; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }
+.housekeeping-confirm-list li:last-child { border-bottom: 0; }
+.housekeeping-confirm-list li.is-blocked { opacity: 0.55; }
+.housekeeping-confirm-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.housekeeping-confirm-state { color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.housekeeping-confirm-state .housekeeping-work { margin-right: 6px; }
+.housekeeping-confirm-size { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.housekeeping-settings { margin: 18px 0 8px; border: 1px solid var(--border); border-radius: var(--r-md); padding: 0 14px 10px; background: var(--bg-input); }
+.housekeeping-settings > summary { cursor: pointer; padding: 10px 0; font-weight: 500; list-style: none; display: flex; gap: 10px; align-items: baseline; }
+.housekeeping-settings > summary::-webkit-details-marker { display: none; }
+.housekeeping-settings > summary::before { content: '▸'; color: var(--text-faint); }
+.housekeeping-settings[open] > summary::before { content: '▾'; }
+.housekeeping-settings > summary small { color: var(--text-faint); font-weight: 400; }
+.housekeeping-settings .monitor-heading { margin-top: 12px; }
+.housekeeping-switch { align-items: center; max-width: 80ch; }
+.housekeeping-switch input { flex: 0 0 auto; }
