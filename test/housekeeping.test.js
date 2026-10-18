@@ -268,6 +268,12 @@ test('the last inventory is kept and answers at once as a snapshot; quick action
     const kept = hk.snapshot();
     assert.equal(kept.stale, true, 'from the store once the run forgot it');
     assert.equal(kept.items.length, inv.items.length);
+    assert.ok(Array.isArray(kept.roots) && kept.roots.length === 1, 'roots are the list the panel maps over');
+    assert.ok(Array.isArray(kept.log));
+    assert.equal(typeof kept.checkouts, 'number');
+    // An older snapshot that kept a count instead of the list is still answered in the panel's shape.
+    hk.store.setSetting('last-inventory', { items: inv.items, totals: inv.totals, roots: 1, checkouts: '1', readAt: NOW });
+    assert.ok(Array.isArray(hk.snapshot().roots));
 
     const events = [];
     hk.emit = (name, payload) => events.push([name, payload]);

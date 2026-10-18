@@ -88,7 +88,7 @@ export function HousekeepingPanel() {
       if (!inventory) {
         const kept = await window.api.housekeeping.snapshot().catch(() => null);
         if (kept && alive.current) {
-          setInventory({ ...kept, unsized: [], roots: kept.roots ?? [], checkouts: kept.checkouts ?? 0, log: kept.log ?? [] } as HousekeepingInventory);
+          setInventory({ ...kept, unsized: [], roots: Array.isArray(kept.roots) ? kept.roots : [], checkouts: kept.checkouts ?? 0, log: Array.isArray(kept.log) ? kept.log : [] } as HousekeepingInventory);
           setItems(kept.items);
           setStale(true);
         }

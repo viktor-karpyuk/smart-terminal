@@ -171,7 +171,7 @@ class Housekeeping {
     this.emit('progress', { op: 'inventory', phase: 'done', detail: `${items.length} items`, done: true });
     // Kept, so the next open of the panel shows this at once while a fresh one is read.
     try {
-      this.store.setSetting('last-inventory', { items, totals: totals(items), checkouts: this.#checkouts.length, roots: this.roots().length, disk: diskFree(this.userData), readAt: this.now() });
+      this.store.setSetting('last-inventory', { items, totals: totals(items), checkouts: this.#checkouts.length, roots: this.roots(), disk: diskFree(this.userData), readAt: this.now() });
     } catch {
       /* a snapshot not kept costs one slow open */
     }
@@ -211,10 +211,12 @@ class Housekeeping {
 
   /** The last inventory kept, for a panel to open on while a fresh one is read; null when there is none yet. */
   snapshot() {
-    if (this.last) return { items: this.last.items, totals: totals(this.last.items), readAt: this.last.at, disk: diskFree(this.userData), stale: this.now() - this.last.at > 10 * 60_000 };
+    const roots = this.roots();
+    if (this.last) return { items: this.last.items, totals: totals(this.last.items), readAt: this.last.at, disk: diskFree(this.userData), roots, checkouts: this.#checkouts?.length ?? 0, log: this.store.recentLog(20), unsized: [], stale: this.now() - this.last.at > 10 * 60_000 };
     const kept = this.store.setting?.('last-inventory');
     if (!kept?.items) return null;
-    return { ...kept, stale: true };
+    // The shape the window expects, whatever an older snapshot kept: roots are the list, never a count.
+    return { ...kept, roots: Array.isArray(kept.roots) ? kept.roots : roots, checkouts: Number(kept.checkouts) || 0, log: this.store.recentLog(20), unsized: [], stale: true };
   }
 
   /**
