@@ -4081,7 +4081,8 @@ button.ci-toast-main { cursor: pointer; }
 .ci-inbox-when { flex: 0 0 auto; font-size: var(--fs-xs, 10.5px); color: var(--text-faint); font-variant-numeric: tabular-nums; }
 
 /* --- Housekeeping: what is on disk, and giving it back ----------------------- */
-.housekeeping { padding: 14px 16px 24px; overflow: auto; height: 100%; box-sizing: border-box; font-size: var(--fs-sm); }
+.housekeeping { padding: 14px 16px 24px; overflow: auto; height: 100%; width: 100%; flex: 1 1 auto; min-width: 0; box-sizing: border-box; font-size: var(--fs-sm); }
+.housekeeping-log, .housekeeping-table { width: 100%; }
 .housekeeping .monitor-stat.is-free { border-color: var(--accent); }
 .housekeeping-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
 .housekeeping-bar .usage-note { margin: 0; }
