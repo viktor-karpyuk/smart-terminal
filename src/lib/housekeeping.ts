@@ -1,3 +1,4 @@
+/// <reference path="../global.d.ts" />
 /**
  * The housekeeping panel's arithmetic, kept out of the component so it can be
  * tested without a window: which items the one big button takes, how a list is
@@ -89,13 +90,17 @@ export function diskUsedPercent(disk: { free: number | null; total: number | nul
   return Math.round(((disk.total - disk.free) / disk.total) * 100);
 }
 
-/** Items with a size that landed, by path, folded into the list without reordering it. */
-export function withSize(items: HousekeepingItem[], path: string, bytes: number): HousekeepingItem[] {
+/**
+ * Items with a size that landed, by path, folded into the list without
+ * reordering it. A partial size is a walk still going: the number is shown,
+ * the row stays marked unmeasured.
+ */
+export function withSize(items: HousekeepingItem[], path: string, bytes: number, partial = false): HousekeepingItem[] {
   let changed = false;
   const next = items.map((one) => {
     if (one.path !== path) return one;
     changed = true;
-    return { ...one, bytes, meta: { ...(one.meta ?? {}), sized: true } };
+    return { ...one, bytes, meta: { ...(one.meta ?? {}), sized: partial ? false : true, partial } };
   });
   return changed ? next : items;
 }

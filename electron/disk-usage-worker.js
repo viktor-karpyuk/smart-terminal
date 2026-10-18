@@ -18,11 +18,26 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { parentPort, workerData } = require('node:worker_threads');
 
-/** Add up one tree. Errors on single entries are skipped: a file that vanished mid-walk is not a reason to give up on the rest. */
-function measure(root) {
+/** How many files between two progress reports: often enough that a number is seen moving, rare enough to cost nothing. */
+const PROGRESS_EVERY = 20_000;
+
+/**
+ * Add up one tree. Errors on single entries are skipped: a file that vanished
+ * mid-walk is not a reason to give up on the rest. `onProgress` hears the
+ * running total every `every` files, so a tree of a million entries shows a
+ * number growing rather than a dash for a minute.
+ */
+function measure(root, onProgress = null, every = PROGRESS_EVERY) {
   let bytes = 0;
   let files = 0;
+  let nextReport = every;
   const stack = [root];
+  const report = () => {
+    if (onProgress && files >= nextReport) {
+      onProgress({ bytes, files });
+      nextReport = files + every;
+    }
+  };
   while (stack.length) {
     const dir = stack.pop();
     let entries;
@@ -52,6 +67,7 @@ function measure(root) {
       } catch {
         /* vanished between readdir and stat */
       }
+      report();
     }
   }
   return { bytes, files };
@@ -63,7 +79,9 @@ if (parentPort) {
       let result;
       try {
         const stat = fs.statSync(target);
-        result = stat.isDirectory() ? measure(target) : { bytes: stat.size, files: 1 };
+        result = stat.isDirectory()
+          ? measure(target, (partial) => parentPort.postMessage({ id, path: target, ...partial, partial: true }))
+          : { bytes: stat.size, files: 1 };
         result.mtime = Math.floor(stat.mtimeMs);
       } catch (error) {
         result = { bytes: 0, files: 0, mtime: 0, error: String(error?.code ?? error?.message ?? error) };

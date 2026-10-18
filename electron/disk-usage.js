@@ -107,6 +107,11 @@ class DiskUsage {
     }
     if (!pending.length) return out;
     await this.#ask(pending, (row) => {
+      if (row.partial) {
+        // A running total, for the eye only: nothing is remembered until the walk ends.
+        onEach?.(row.path, { bytes: row.bytes, files: row.files, partial: true });
+        return;
+      }
       const kept = { bytes: row.bytes, files: row.files, mtime: row.mtime, measuredAt: this.now() };
       this.cache.set(row.path, kept);
       try {

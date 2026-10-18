@@ -49,6 +49,8 @@ test('a size that lands replaces the row without reordering, and an unknown path
   assert.notEqual(next, items);
   assert.deepEqual(next.map((i) => [i.id, i.bytes, i.meta?.sized]), [['a', 42, true], ['b', 3, undefined]]);
   assert.equal(lib.withSize(items, '/zzz', 1), items, 'same array back when nothing matched');
+  const partial = lib.withSize(items, '/a', 7, true);
+  assert.deepEqual([partial[0].bytes, partial[0].meta.sized, partial[0].meta.partial], [7, false, true]);
 });
 
 test('ages and sizes read the way a person says them', () => {

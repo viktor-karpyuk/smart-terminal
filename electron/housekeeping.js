@@ -149,8 +149,8 @@ class Housekeeping {
     await this.sizes.measure(wanted, {
       force,
       onEach: (target, kept) => {
-        out[target] = kept.bytes;
-        this.emit('size', { path: target, bytes: kept.bytes, files: kept.files });
+        if (!kept.partial) out[target] = kept.bytes;
+        this.emit('size', { path: target, bytes: kept.bytes, files: kept.files, partial: Boolean(kept.partial) });
       },
     });
     return out;

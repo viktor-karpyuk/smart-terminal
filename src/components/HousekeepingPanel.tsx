@@ -79,9 +79,9 @@ export function HousekeepingPanel() {
   useEffect(() => {
     alive.current = true;
     void load();
-    const off = window.api.housekeeping.onSize(({ path, bytes }) => {
-      setItems((prev) => withSize(prev, path, bytes));
-      setMeasuring((n) => Math.max(0, n - 1));
+    const off = window.api.housekeeping.onSize(({ path, bytes, partial }) => {
+      setItems((prev) => withSize(prev, path, bytes, partial));
+      if (!partial) setMeasuring((n) => Math.max(0, n - 1));
     });
     return () => {
       alive.current = false;
@@ -523,7 +523,17 @@ function Table({
                 </small>
               </td>
               <td>{describeIdle(one.lastActivityAt)}</td>
-              <td className="is-num">{unsized ? <span className="housekeeping-measuring">…</span> : formatBytes(one.bytes)}</td>
+              <td className="is-num">
+                {unsized && one.meta?.partial ? (
+                  <span className="housekeeping-measuring" title="still measuring">
+                    {formatBytes(one.bytes)}…
+                  </span>
+                ) : unsized ? (
+                  <span className="housekeeping-measuring">…</span>
+                ) : (
+                  formatBytes(one.bytes)
+                )}
+              </td>
               <td>{blocked ? <span className="housekeeping-blocker">{one.blockers.join(', ')}</span> : (one.state ?? '')}</td>
             </tr>
           );

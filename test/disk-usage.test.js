@@ -37,6 +37,16 @@ test('a tree adds up to the bytes of the files in it', () => {
   assert.equal(files, 3);
 });
 
+test('a long walk reports its running total on the way', () => {
+  const dir = tree();
+  for (let i = 0; i < 12; i++) fs.writeFileSync(path.join(dir, `f${i}`), 'a');
+  const seen = [];
+  const { files } = measure(dir, (p) => seen.push(p.files), 5);
+  assert.equal(files, 15);
+  assert.ok(seen.length >= 2, 'reported more than once');
+  assert.ok(seen.every((n, i) => i === 0 || n > seen[i - 1]), 'totals only grow');
+});
+
 test('a symbolic link is counted as the link and never followed', () => {
   const dir = tree();
   const other = tree();

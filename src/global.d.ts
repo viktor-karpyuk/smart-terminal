@@ -1148,7 +1148,7 @@ declare global {
         addRoot(folder: string): Promise<HousekeepingRoot[]>;
         removeRoot(folder: string): Promise<HousekeepingRoot[]>;
         log(limit?: number): Promise<HousekeepingLogRow[]>;
-        onSize(handler: (payload: { path: string; bytes: number; files: number }) => void): () => void;
+        onSize(handler: (payload: { path: string; bytes: number; files: number; partial?: boolean }) => void): () => void;
       };
       onMenuAction(handler: (payload: { id: string }) => void): () => void;
     };
