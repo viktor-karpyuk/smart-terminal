@@ -209,7 +209,7 @@ test('sweep finishes old removals, forgets sizes of folders that are gone, and t
   try {
     fs.mkdirSync(path.join(checkout, 'target.trash-1'));
     sizes.cache.set(path.join(checkout, 'vanished'), { bytes: 1, files: 1, mtime: 0, measuredAt: NOW });
-    hk.store.log({ action: 'free', kind: 'build-cache', label: 'ancient', bytes: 1, at: NOW - 400 * DAY });
+    hk.store.log({ action: 'free', kind: 'build-cache', label: 'ancient', bytes: 1, at: NOW - 800 * DAY });
     hk.store.log({ action: 'free', kind: 'build-cache', label: 'recent', bytes: 1, at: NOW - DAY });
     const out = await hk.sweep();
     assert.equal(out.swept.length, 1);

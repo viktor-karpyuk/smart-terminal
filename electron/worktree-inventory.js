@@ -293,7 +293,7 @@ class WorktreeInventory {
    * with `-d`, which refuses what is not merged, so the commits of an
    * unfinished one stay on their branch.
    */
-  async remove(paths, { onEach = null } = {}) {
+  async remove(paths, { onEach = null, force = false } = {}) {
     const rows = new Map((await this.list()).map((row) => [row.path, row]));
     const results = [];
     let index = 0;
@@ -305,8 +305,15 @@ class WorktreeInventory {
         results.push({ path: target, ok: false, error: 'That is not a worktree the app knows; look again.' });
         continue;
       }
-      if (row.blockers.length) {
-        results.push({ path: target, ok: false, error: row.blockers.join('; ') });
+      /*
+       * Forced: the person said, in a modal that named what would be lost, to take it anyway.
+       * What is forced is the work inside — changes not committed, commits never pushed,
+       * ignored files, a detached head. What is never forced: the main working tree, a base
+       * branch, a session standing inside, a lock, a link that is broken (repair it first).
+       */
+      const hard = row.hardBlockers ?? [];
+      if (row.blockers.length && (!force || hard.length)) {
+        results.push({ path: target, ok: false, error: (force ? hard : row.blockers).join('; ') });
         continue;
       }
       try {
@@ -314,7 +321,7 @@ class WorktreeInventory {
           const done = await git(row.root, ['worktree', 'prune']);
           if (!done.ok) throw new Error(done.stderr.trim() || 'git could not prune');
         } else {
-          const done = await git(row.root, ['worktree', 'remove', row.path]);
+          const done = await git(row.root, force ? ['worktree', 'remove', '--force', row.path] : ['worktree', 'remove', row.path]);
           if (!done.ok) throw new Error(done.stderr.trim().split('\n').pop() || 'git refused');
           let branchKept = false;
           if (row.branch && row.finished) {
@@ -323,7 +330,7 @@ class WorktreeInventory {
           } else branchKept = Boolean(row.branch);
           await git(row.root, ['worktree', 'prune']);
           this.memo.delete(row.path);
-          results.push({ path: target, ok: true, branchKept });
+          results.push({ path: target, ok: true, branchKept, forced: Boolean(force && row.blockers.length) });
           continue;
         }
         this.memo.delete(row.path);
@@ -341,6 +348,8 @@ function finish(row, liveInside, sessionAt) {
   const lastActivityAt = Math.max(row.lastCommitAt ?? 0, row.gitMtime ?? 0, sessionAt ?? 0) || null;
   const finished = Boolean(row.mergedInto || row.upstreamGone);
   const blockers = [];
+  /** The blockers no force overrides: not the work inside, but the ground it stands on. */
+  const hardBlockers = [];
   if (row.main) blockers.push('the main working tree');
   if (row.broken) blockers.push('its .git points at a repository folder that is gone; repair it first');
   if (row.base) blockers.push(`${row.branch} is a base branch`);
@@ -355,6 +364,14 @@ function finish(row, liveInside, sessionAt) {
     else if (row.ahead > 0) blockers.push(`${row.ahead} commit${row.ahead === 1 ? '' : 's'} not pushed`);
   }
   const unmerged = row.aheadOfBase ? `${row.aheadOfBase} commit${row.aheadOfBase === 1 ? '' : 's'} not merged` : null;
+  for (const b of blockers) {
+    if (/main working tree|base branch|^locked$|a session is inside it|repair it first/.test(b)) hardBlockers.push(b);
+  }
+  /** What a forced removal would throw away, in words — for the modal that asks. */
+  const loses = [];
+  if (row.dirty) loses.push(row.dirtyCount ? `${row.dirtyCount} file${row.dirtyCount === 1 ? '' : 's'} not committed` : 'uncommitted changes');
+  if (!finished && row.ownWork && (row.aheadOfBase ?? 0) > 0) loses.push(`${row.aheadOfBase} commit${row.aheadOfBase === 1 ? '' : 's'} on no base branch (the branch is kept)`);
+  if (row.irreplaceable.length) loses.push(`ignored files: ${row.irreplaceable.slice(0, 3).join(', ')}${row.irreplaceable.length > 3 ? '…' : ''}`);
   const state = row.prunable
     ? 'folder gone'
     : row.broken
@@ -376,7 +393,7 @@ function finish(row, liveInside, sessionAt) {
                   : 'nothing of its own';
   /** The one-word answer to "is the work in it done": done, unmerged, or empty. */
   const work = row.main || row.base ? 'base' : finished ? 'done' : row.dirty || (row.aheadOfBase ?? 0) > 0 ? 'unmerged' : row.ownWork ? 'unknown' : 'empty';
-  return { ...row, liveInside, sessionAt, lastActivityAt, finished, blockers, state, work };
+  return { ...row, liveInside, sessionAt, lastActivityAt, finished, blockers, hardBlockers, forceable: blockers.length > 0 && hardBlockers.length === 0 && !row.prunable, loses, state, work };
 }
 
 module.exports = { WorktreeInventory, finish, mapLimit, isRegenerable, globMatches, ignoredIn, linkedRepoExists };

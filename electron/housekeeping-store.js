@@ -63,6 +63,13 @@ const MIGRATIONS = [
      finished_at INTEGER
    );
    CREATE INDEX IF NOT EXISTS hk_job_status ON hk_job (status, created_at);`,
+  `CREATE TABLE IF NOT EXISTS hk_daily (
+     day    INTEGER NOT NULL,
+     metric TEXT NOT NULL,
+     first  REAL NOT NULL,
+     last   REAL NOT NULL,
+     PRIMARY KEY (day, metric)
+   );`,
 ];
 
 class HousekeepingStore {
@@ -144,8 +151,8 @@ class HousekeepingStore {
       .map((row) => ({ ...row, ok: Boolean(row.ok) }));
   }
 
-  /** Keep the log from growing without bound: a year is more than anybody reads back. */
-  trimLog({ keepDays = 365 } = {}) {
+  /** Keep the log from growing without bound: two years, so a year's balance has a year to compare with. */
+  trimLog({ keepDays = 730 } = {}) {
     return this.db.prepare('DELETE FROM hk_log WHERE at < ?').run(Date.now() - keepDays * 86_400_000).changes;
   }
 
@@ -241,6 +248,30 @@ class HousekeepingStore {
   /** A month of readings is enough for a trend; a minute's worth a day for a year is not worth keeping. */
   trimReadings({ keepDays = 30 } = {}) {
     return this.db.prepare('DELETE FROM hk_reading WHERE at < ?').run(Date.now() - keepDays * 86_400_000).changes;
+  }
+
+  // --- daily roll-up ------------------------------------------------------------
+
+  /** The first and last value of a metric on a day, kept for years where minute readings are kept a month. */
+  rollup(metric, value, at = Date.now()) {
+    const day = Math.floor(at / 86_400_000);
+    this.db
+      .prepare(
+        `INSERT INTO hk_daily (day, metric, first, last) VALUES (?, ?, ?, ?)
+         ON CONFLICT(day, metric) DO UPDATE SET last = excluded.last`,
+      )
+      .run(day, metric, Number(value), Number(value));
+  }
+
+  /** How a metric moved from the first reading on or after a day to the latest: {from, to, fromDay, toDay}, or null. */
+  dailyRange(metric, sinceDay) {
+    const first = this.db.prepare('SELECT day, first FROM hk_daily WHERE metric = ? AND day >= ? ORDER BY day LIMIT 1').get(metric, sinceDay);
+    const last = this.db.prepare('SELECT day, last FROM hk_daily WHERE metric = ? AND day >= ? ORDER BY day DESC LIMIT 1').get(metric, sinceDay);
+    return first && last ? { from: first.first, to: last.last, fromDay: first.day, toDay: last.day } : null;
+  }
+
+  trimDaily({ keepDays = 800 } = {}) {
+    return this.db.prepare('DELETE FROM hk_daily WHERE day < ?').run(Math.floor(Date.now() / 86_400_000) - keepDays).changes;
   }
 
   // --- settings ---------------------------------------------------------------

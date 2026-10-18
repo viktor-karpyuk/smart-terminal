@@ -18,7 +18,7 @@
  */
 
 const STATES = ['queued', 'running', 'paused', 'interrupted', 'done', 'cancelled', 'failed'];
-const KINDS = new Set(['free', 'remove-worktrees', 'forget-transcripts', 'delete-sessions', 'discard-workshops', 'repair-worktrees']);
+const KINDS = new Set(['free', 'remove-worktrees', 'remove-worktrees-forced', 'forget-transcripts', 'delete-sessions', 'discard-workshops', 'repair-worktrees']);
 
 class JobRunner {
   /**

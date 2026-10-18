@@ -1275,7 +1275,7 @@ declare global {
     readAt: number;
   }
 
-  type HousekeepingJobKind = 'free' | 'remove-worktrees' | 'forget-transcripts' | 'delete-sessions' | 'discard-workshops' | 'repair-worktrees';
+  type HousekeepingJobKind = 'free' | 'remove-worktrees' | 'remove-worktrees-forced' | 'forget-transcripts' | 'delete-sessions' | 'discard-workshops' | 'repair-worktrees';
   type HousekeepingJobStatus = 'queued' | 'running' | 'paused' | 'interrupted' | 'done' | 'cancelled' | 'failed';
 
   interface HousekeepingJob {
@@ -1307,6 +1307,11 @@ declare global {
     diskFreePct: number | null;
     load: number | null;
     sessions: number | null;
+    /** Today's balance: what housekeeping freed, what the disk consumed, how used space moved and by what share of its start. */
+    todayFreed: number;
+    todayConsumed: number | null;
+    todayUsedDelta: number | null;
+    todayUsedPct: number | null;
     at: number;
   }
 
@@ -1336,7 +1341,20 @@ declare global {
     action: { id: string; label: string; ids?: string[]; danger?: boolean } | null;
   }
 
+  interface HousekeepingBalance {
+    days: number;
+    freed: number;
+    removals: number;
+    /** How the disk's used bytes moved over the period; null without readings covering it. */
+    usedDelta: number | null;
+    /** The movement plus what was freed: what would have been consumed had nothing been removed. */
+    consumed: number | null;
+    /** Days of readings the period actually has. */
+    covered: number;
+  }
+
   interface HousekeepingStats {
+    balance: Record<'day' | 'week' | 'month' | 'year', HousekeepingBalance>;
     days: number;
     freed: { n: number; bytes: number; byAction: Record<string, { n: number; bytes: number }> };
     moved: Record<string, { from: number; to: number; fromAt: number; toAt: number } | null>;
