@@ -15,6 +15,7 @@ const { JsonStore } = require('./store');
 const { Database } = require('./database');
 const { buildMenu } = require('./menu');
 const { WorktreeCleanup } = require('./worktree-cleanup');
+const { createOffer } = require('./worktree-offer');
 const { CwdWatcher, worthRemembering } = require('./cwd-watcher');
 const { ContextStore, transcriptPath, locateTranscript, readTurnState } = require('./context-store');
 const { SessionMonitor } = require('./session-monitor');
@@ -222,8 +223,7 @@ let db = null;
  */
 let reviewService = null;
 let worktreeCleanup = null;
-/** What the person said no to in this run, so a background check does not ask about it again. */
-const declinedWorktrees = new Set();
+let worktreeOffer = null;
 let teamsService = null;
 /** Jenkins: the credentials, the poller, and the verbs the panel may call. Its tables live in this app's own database. */
 let jenkinsService = null;
@@ -736,46 +736,27 @@ function friendlyFileError(error) {
 
 /**
  * A finished task leaves its worktree behind, and the Code Reviewer its workshop. This finds them and asks before
- * taking them away. `quiet` is the background check: it says nothing when there is nothing, and it does not ask
- * again about what was declined. From the menu it always answers.
+ * taking them away (see worktree-offer.js for the questions).
  */
-async function offerWorktreeCleanup({ quiet = false } = {}) {
-  worktreeCleanup ??= new WorktreeCleanup({
-    folders: () => [
-      // Where each live session is standing right now, as the cwd watcher last saw it.
-      ...ptys.list().map((one) => cwdWatcher?.known?.get(one.id)?.cwd),
-      ...(reviewService?.store?.repos?.() ?? []).map((repo) => repo.localPath),
-    ].filter(Boolean),
-    workshops: async () => reviewService?.finishedWorkshops?.() ?? [],
+function offerWorktreeCleanup(options) {
+  worktreeOffer ??= createOffer({
+    cleanup: (worktreeCleanup ??= new WorktreeCleanup({
+      folders: () => [
+        // Where each live session is standing right now, as the cwd watcher last saw it.
+        ...ptys.list().map((one) => cwdWatcher?.known?.get(one.id)?.cwd),
+        ...(reviewService?.store?.repos?.() ?? []).map((repo) => repo.localPath),
+      ].filter(Boolean),
+      workshops: async () => reviewService?.finishedWorkshops?.() ?? [],
+    })),
+    sessionsKnown: () => ptys.list().every((one) => cwdWatcher?.known?.get(one.id)?.cwd),
+    ask: async ({ message, detail, buttons }) => {
+      const owner = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined;
+      const answer = await dialog.showMessageBox(owner, { type: 'question', buttons, defaultId: buttons.length - 1, cancelId: buttons.length - 1, message, detail });
+      return answer.response;
+    },
+    tell: ({ type, message, detail }) => dialog.showMessageBox(BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined, { type, message, detail }),
   });
-  // A session whose folder is not known yet might be standing in one of them: wait for the next check.
-  if (quiet && ptys.list().some((one) => !cwdWatcher?.known?.get(one.id)?.cwd)) return;
-  const owner = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined;
-  let found;
-  try { found = (await worktreeCleanup.scan()).filter((one) => !quiet || !declinedWorktrees.has(one.path)); } catch (error) {
-    if (!quiet) await dialog.showMessageBox(owner, { type: 'error', message: 'The worktrees could not be checked.', detail: String(error.message ?? error) });
-    return;
-  }
-  if (!found.length) {
-    if (!quiet) await dialog.showMessageBox(owner, { type: 'info', message: 'There are no finished worktrees to clean up.', detail: 'A worktree is finished when its work is merged, it has no changes of its own, and no session is inside it.' });
-    return;
-  }
-  const lines = found.slice(0, 12).map((one) => `• ${one.label} — ${one.why}`);
-  if (found.length > 12) lines.push(`…and ${found.length - 12} more`);
-  const answer = await dialog.showMessageBox(owner, {
-    type: 'question',
-    buttons: [`Clean up ${found.length}`, 'Not now'],
-    defaultId: 1,
-    cancelId: 1,
-    message: found.length === 1 ? 'Clean up 1 finished worktree?' : `Clean up ${found.length} finished worktrees?`,
-    detail: `${lines.join('\n')}\n\nOnly what has no changes of its own is removed. git refuses the rest.`,
-  });
-  if (answer.response !== 0) { for (const one of found) declinedWorktrees.add(one.path); return; }
-  const results = await worktreeCleanup.clean(found.map((one) => one.path));
-  const failed = results.filter((one) => !one.ok);
-  if (failed.length) {
-    await dialog.showMessageBox(owner, { type: 'warning', message: `${failed.length} could not be cleaned up.`, detail: failed.map((one) => `• ${path.basename(one.path)}: ${one.error}`).join('\n') });
-  }
+  return worktreeOffer.offer(options);
 }
 
 /** Menu commands act on the window in front. */

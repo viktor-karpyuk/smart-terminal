@@ -110,3 +110,64 @@ test('a finished Code Reviewer workshop is offered and discarded through its own
   assert.deepEqual(await c.clean([shop]), [{ path: shop, ok: true }]);
   assert.equal(discarded, 1);
 });
+
+test('merged into develop counts even when main is behind it, which is how a release flow works', async () => {
+  const w = world();
+  sh(w.repo, 'checkout', '-q', '-b', 'main'); sh(w.repo, 'push', '-q', 'origin', 'main'); sh(w.repo, 'checkout', '-q', 'develop');
+  sh(w.repo, 'remote', 'set-head', 'origin', 'main');
+  const wt = w.tree('feature'); w.work(wt); w.merge('feature');
+  const found = await w.cleanup({ fetch: false }).scan();
+  assert.deepEqual(found.map((one) => [one.label, one.why]), [['feature', 'merged into origin/develop']], 'origin/HEAD is main, and the work is in develop');
+});
+
+test('an ignored file that is not regenerable keeps the worktree: git would delete it without a word', async () => {
+  const w = world();
+  fs.writeFileSync(path.join(w.repo, '.gitignore'), '.env\nnode_modules\ndist\n*.log\n');
+  sh(w.repo, 'add', '.gitignore'); sh(w.repo, 'commit', '-q', '-m', 'ignore'); sh(w.repo, 'push', '-q', 'origin', 'develop');
+  const safe = w.tree('safe'); w.work(safe); w.merge('safe');
+  fs.mkdirSync(path.join(safe, 'node_modules')); fs.writeFileSync(path.join(safe, 'node_modules', 'x'), 'x'); fs.writeFileSync(path.join(safe, 'build.log'), 'x');
+  fs.mkdirSync(path.join(safe, 'dist')); fs.writeFileSync(path.join(safe, 'dist', 'a.js'), 'x');
+  const secret = w.tree('secret'); w.work(secret); w.merge('secret');
+  fs.writeFileSync(path.join(secret, '.env'), 'TOKEN=abc');
+  const found = await w.cleanup({ fetch: false }).scan();
+  assert.deepEqual(found.map((one) => one.label), ['safe'], 'node_modules, dist and logs may go; .env may not');
+});
+
+test('a session standing in a worktree through a symlinked path is still inside it', async () => {
+  const w = world();
+  const wt = w.tree('linked'); w.work(wt); w.merge('linked');
+  const link = path.join(w.dir, 'shortcut'); fs.symlinkSync(wt, link);
+  const found = await w.cleanup({ fetch: false, folders: () => [w.repo, path.join(link)] }).scan();
+  assert.deepEqual(found, [], 'the symlink points into the worktree');
+});
+
+test('a branch deleted on origin but with commits that never went anywhere keeps its branch when the worktree goes', async () => {
+  const w = world();
+  const wt = w.tree('late'); w.work(wt, 'one.txt');
+  sh(wt, 'push', '-q', '-u', 'origin', 'late');
+  sh(w.repo, 'push', '-q', 'origin', '--delete', 'late');
+  w.work(wt, 'two.txt');
+  const c = w.cleanup();
+  const found = await c.scan();
+  assert.deepEqual(found.map((one) => one.label), ['late']);
+  const out = await c.clean([found[0].path]);
+  assert.equal(out[0].ok, true);
+  assert.equal(fs.existsSync(wt), false);
+  assert.match(sh(w.repo, 'branch', '--list', 'late'), /late/, 'the branch, and the commit that is only on it, are kept');
+  assert.equal(out[0].branchKept, true, 'and it is said');
+});
+
+test('two scans at once give the same answer and do not remove anything', async () => {
+  const w = world();
+  const wt = w.tree('twice'); w.work(wt); w.merge('twice');
+  const c = w.cleanup({ fetch: false });
+  const [a, b] = await Promise.all([c.scan(), c.scan()]);
+  assert.deepEqual(a.map((x) => x.path), b.map((x) => x.path));
+  assert.ok(fs.existsSync(wt));
+});
+
+test('a worktree in the middle of a merge, or detached, is left alone', async () => {
+  const w = world();
+  const det = w.tree('det'); w.work(det); w.merge('det'); sh(det, 'checkout', '-q', '--detach');
+  assert.deepEqual(await w.cleanup({ fetch: false }).scan(), []);
+});
