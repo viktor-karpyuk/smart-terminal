@@ -243,6 +243,29 @@ function SystemVitals() {
   const vitals = useStore((s) => s.housekeepingVitals);
   const status = useStore((s) => s.housekeepingStatus);
   const open = useStore((s) => s.openHousekeeping);
+  const cap = useStore((s) => s.settings.maxRunningClaude);
+  // The renderer knows what the main process cannot: which running sessions are on screen and which are set aside.
+  const counts = useStore(
+    useShallow((s) => {
+      const away = new Set([...s.minimized.map((m) => m.sessionId), ...s.minimizedSections.flatMap((m) => m.tabs)]);
+      let running = 0;
+      let visible = 0;
+      let minimized = 0;
+      let paused = 0;
+      let shells = 0;
+      for (const one of Object.values(s.sessions)) {
+        if (one.status === 'paused') paused += 1;
+        else if (one.status === 'running' || one.status === 'starting') {
+          if (one.kind === 'claude') {
+            running += 1;
+            if (away.has(one.id)) minimized += 1;
+            else visible += 1;
+          } else shells += 1;
+        }
+      }
+      return { running, visible, minimized, paused, shells };
+    }),
+  );
   if (!vitals) return null;
   const gb = (n: number | null) => (n === null ? '—' : n >= 100 * 1024 ** 3 ? `${Math.round(n / 1024 ** 3)} GB` : `${(n / 1024 ** 3).toFixed(1)} GB`);
   const level = (value: number | null, warn: number, bad: number, below = false) => {
@@ -265,6 +288,13 @@ function SystemVitals() {
       ].join('\n')}
       aria-label="System vitals"
     >
+      <span
+        className={`titlebar-vital${cap && counts.running > cap ? ' is-attention' : ''}`}
+        title={`${counts.running} Claude session${counts.running === 1 ? '' : 's'} running: ${counts.visible} on screen, ${counts.minimized} minimized${counts.paused ? `; ${counts.paused} paused` : ''}${counts.shells ? `; ${counts.shells} shell${counts.shells === 1 ? '' : 's'}` : ''}${cap ? `; cap ${cap}` : ''}\nThey hold ${gb(vitals.sessionsRss)} of memory`}
+      >
+        <small>SESSIONS</small> {counts.running}
+        {counts.minimized ? <em> ({counts.visible} active)</em> : null} · {gb(vitals.sessionsRss)}
+      </span>
       <span className={`titlebar-vital${level(vitals.memUsedPct, 85, 93)}`}>
         <small>MEM</small> {vitals.memUsedPct ?? '—'}%
       </span>

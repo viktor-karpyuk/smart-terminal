@@ -147,6 +147,18 @@ export function isTab(value: unknown): value is HousekeepingTab {
   return value === 'sessions' || value === 'worktrees' || value === 'app' || value === 'health' || value === 'log';
 }
 
+/**
+ * Which running Claude sessions to pause to get under the cap: minimized ones
+ * only, the longest quiet first; never a visible one, never one mid-turn.
+ */
+export function pickToPause(sessions: { id: string; minimized: boolean; busy: boolean; lastActivityAt: number }[], count: number): string[] {
+  return sessions
+    .filter((s) => s.minimized && !s.busy)
+    .sort((a, b) => a.lastActivityAt - b.lastActivityAt)
+    .slice(0, Math.max(0, count))
+    .map((s) => s.id);
+}
+
 /** The items in one bucket, largest first. */
 export function inBucket(items: HousekeepingItem[], bucket: HousekeepingBucket): HousekeepingItem[] {
   return items.filter((one) => one.bucket === bucket);

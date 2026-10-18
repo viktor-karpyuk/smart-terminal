@@ -1320,6 +1320,8 @@ declare global {
     diskFreePct: number | null;
     load: number | null;
     sessions: number | null;
+    /** Resident memory of every process under the terminals, added up. */
+    sessionsRss: number | null;
     /** Today's balance: what housekeeping freed, what the disk consumed, how used space moved and by what share of its start. */
     todayFreed: number;
     todayConsumed: number | null;

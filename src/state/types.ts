@@ -110,6 +110,14 @@ export interface Session {
   /** True while output is still arriving — a rough "Claude is working" light. */
   busy: boolean;
   createdAt: number;
+  /**
+   * Who paused it: the person, the minimize policy, or the running cap. A
+   * session the policy paused is resumed by the policy when it comes back;
+   * one the person paused waits for the person.
+   */
+  pausedBy?: 'user' | 'minimize' | 'cap' | null;
+  /** Minimized mid-turn under a pause policy: paused the moment it goes quiet. */
+  pauseWhenIdle?: boolean;
 }
 
 export interface Profile {
@@ -139,6 +147,11 @@ export interface SessionGroup {
   color: string;
   /** Overrides the global text size for every session in the group. */
   fontSize: number | null;
+  /**
+   * Whether its Claude sessions are paused when minimized: a process given back
+   * while nobody is looking at the tab. null follows the app's own setting.
+   */
+  pauseOnMinimize?: boolean | null;
   /** Collapsed in the tab strip, the way a browser folds a tab group away. */
   collapsed: boolean;
   /**
@@ -498,6 +511,10 @@ export interface Settings {
   sidebarShowFolders: boolean;
   /** The fleet's health, as a list beside the other two. */
   sidebarShowMonitor: boolean;
+  /** Pause a Claude session when its tab is minimized, unless its group says otherwise. */
+  pauseOnMinimize: boolean;
+  /** Keep at most this many Claude sessions running; the rest, minimized ones first, are paused. 0 is no cap. */
+  maxRunningClaude: number;
   /**
    * The clusters, when the Kubernetes extension is on.
    *
