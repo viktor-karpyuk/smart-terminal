@@ -934,6 +934,15 @@ function createHousekeeping() {
           }
           return out;
         },
+        /** The clone folders on disk, for the sizes to be allowed to walk them. */
+        dirs: () => {
+          const root = reviewService.fixer?.root;
+          try {
+            return root ? fs.readdirSync(root).map((name) => path.join(root, name)) : [];
+          } catch {
+            return [];
+          }
+        },
         dirOf: (repoId, prId) => {
           const repo = reviewService.store.repos().find((one) => one.id === repoId);
           return repo && reviewService.fixer?.root ? path.join(reviewService.fixer.root, `${rules.slug(repo.name)}-pr${prId}`) : null;

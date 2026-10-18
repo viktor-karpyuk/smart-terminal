@@ -27,7 +27,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
-const { item, totals, byWeight, KINDS } = require('./housekeeping-items');
+const { item, totals, byWeight, formatBytes, KINDS } = require('./housekeeping-items');
 const caches = require('./build-caches');
 const { fileSize } = require('./disk-usage');
 
@@ -107,6 +107,9 @@ class Housekeeping {
 
   /** Everything, as items, with the sizes already known. Unknown sizes are 0 and `sized: false`. */
   async inventory() {
+    // The checkouts are read once per inventory: three of the lists below want them, and a root of
+    // two hundred worktrees is two hundred stats each time it is asked.
+    this.#checkouts = this.checkouts();
     const items = [
       ...this.sessionItems(),
       ...this.buildCacheItems(),
@@ -120,16 +123,23 @@ class Housekeeping {
       totals: totals(items),
       unsized: sized,
       roots: this.roots(),
-      checkouts: this.checkouts().length,
+      checkouts: this.#checkouts.length,
       disk: diskFree(this.userData),
       log: this.store.recentLog(20),
       readAt: this.now(),
     };
   }
 
-  /** Walk the paths whose size is not known or not fresh, telling the window about each. */
+  /**
+   * Walk the paths whose size is not known or not fresh, telling the window about each.
+   *
+   * Only paths that are an item's own folder are walked — a cache, a clone, a copied data folder. A
+   * session's path is the folder it worked in, which may be a whole repository, and walking that
+   * because somebody pressed "measure again" would be minutes spent on a number nobody asked for.
+   */
   async measure(paths = [], { force = false } = {}) {
-    const wanted = paths.filter((one) => typeof one === 'string' && one);
+    const allowed = new Set(this.measurable());
+    const wanted = paths.filter((one) => typeof one === 'string' && allowed.has(one));
     if (!wanted.length) return {};
     const out = {};
     await this.sizes.measure(wanted, {
@@ -139,6 +149,19 @@ class Housekeeping {
         this.emit('size', { path: target, bytes: kept.bytes, files: kept.files });
       },
     });
+    return out;
+  }
+
+  /** The folders whose size is a thing of their own: what `measure` agrees to walk. */
+  measurable() {
+    const checkouts = this.#checkouts ?? this.checkouts();
+    const out = [];
+    for (const checkout of checkouts) for (const found of caches.findIn(checkout)) out.push(found.path);
+    for (const trash of caches.pendingTrash(checkouts)) out.push(trash);
+    const parent = path.dirname(this.userData);
+    const aside = new RegExp(`^${escapeRegExp(path.basename(this.userData))}[.-](backup|state)[-.]`);
+    for (const name of readdir(parent)) if (aside.test(name) && isDir(path.join(parent, name))) out.push(path.join(parent, name));
+    if (this.review?.dirs) for (const dir of this.review.dirs()) out.push(dir);
     return out;
   }
 
@@ -166,10 +189,13 @@ class Housekeeping {
     });
   }
 
+  /** The checkouts as of the last inventory, so one pass does not stat the roots three times. */
+  #checkouts = null;
+
   buildCacheItems() {
     const live = this.live().filter(Boolean);
     const out = [];
-    for (const checkout of this.checkouts()) {
+    for (const checkout of this.#checkouts ?? this.checkouts()) {
       const inside = live.some((cwd) => cwd === checkout || cwd.startsWith(checkout + path.sep));
       for (const found of caches.findIn(checkout)) {
         const known = this.sizes.known(found.path);
@@ -282,7 +308,7 @@ class Housekeeping {
     }
 
     // Removals a previous run started and did not finish.
-    for (const trash of caches.pendingTrash(this.checkouts())) {
+    for (const trash of caches.pendingTrash(this.#checkouts ?? this.checkouts())) {
       out.push(item({ id: `trash:${trash}`, kind: 'trash', label: path.basename(trash), path: trash, bytes: this.sizes.known(trash)?.bytes ?? 0, lastActivityAt: mtime(trash), detail: 'being deleted in the background', meta: { sized: Boolean(this.sizes.known(trash)) } }));
     }
     return out;
@@ -484,8 +510,6 @@ function diskFree(where) {
   }
 }
 
-function fmt(n) {
-  return require('./housekeeping-items').formatBytes(n);
-}
+const fmt = formatBytes;
 
 module.exports = { Housekeeping, diskFree, snapshotBytes };

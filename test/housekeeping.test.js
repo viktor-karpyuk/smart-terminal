@@ -95,8 +95,9 @@ test('the inventory lists sessions, caches and the folders beside the database, 
     assert.equal(cache.meta.sized, false, 'not walked yet');
     assert.ok(first.unsized.includes(cache.path));
 
-    const measured = await hk.measure(first.unsized);
+    const measured = await hk.measure([...first.unsized, old.path]);
     assert.equal(measured[cache.path], 700);
+    assert.equal(measured[old.path], undefined, 'a session\'s working folder is never walked');
     const second = await hk.inventory();
     assert.equal(second.items.find((one) => one.kind === 'build-cache').bytes, 700);
     assert.equal(second.items.find((one) => one.kind === 'install-backup').bytes, 4096);

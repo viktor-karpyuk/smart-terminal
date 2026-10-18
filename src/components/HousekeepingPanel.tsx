@@ -212,7 +212,11 @@ export function HousekeepingPanel() {
         <button className="ghost-btn tiny" disabled={Boolean(busy)} onClick={() => load()}>
           {busy === 'reading' ? 'Reading…' : 'Refresh'}
         </button>
-        <button className="ghost-btn tiny" disabled={Boolean(busy) || measuring > 0} onClick={() => window.api.housekeeping.measure(items.map((one) => one.path).filter((p): p is string => Boolean(p) && p !== null), true)} title="Walk every folder again, ignoring the remembered sizes">
+        <button className="ghost-btn tiny" disabled={Boolean(busy) || measuring > 0} onClick={() => {
+            const own = items.filter((one) => one.kind !== 'session' && one.kind !== 'browser-cache' && one.path).map((one) => one.path as string);
+            setMeasuring(own.length);
+            void window.api.housekeeping.measure(own, true).finally(() => setMeasuring(0));
+          }} title="Walk every folder again, ignoring the remembered sizes">
           Measure again
         </button>
         {said && <span className="usage-note">{said}</span>}
