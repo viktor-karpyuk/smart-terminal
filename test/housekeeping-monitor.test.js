@@ -161,6 +161,40 @@ test('swap is parsed from sysctl, crosses its lines, and the brief says what to 
   assert.match(composeBrief({ report: null, inventory: null, question: 'Why?' }), /Why\?$/);
 });
 
+test('stats: what was given back by week and how the readings moved', { skip }, async () => {
+  const { monitor, store, tick, clockNow } = world();
+  store.log({ action: 'free', kind: 'build-cache', label: 'a', bytes: 10 * GB, at: clockNow() - 20 * DAY });
+  store.log({ action: 'free', kind: 'build-cache', label: 'b', bytes: 5 * GB, at: clockNow() - 2 * DAY });
+  store.log({ action: 'remove-worktree', kind: 'worktree', label: 'c', bytes: 1 * GB, at: clockNow() - DAY });
+  store.log({ action: 'free', kind: 'build-cache', label: 'refused', bytes: 0, ok: false, at: clockNow() - DAY });
+  store.recordReading('disk.used.bytes', 1000 * GB, clockNow() - 10 * DAY);
+  store.recordReading('disk.used.bytes', 1200 * GB, clockNow());
+  const s = monitor.stats(30);
+  assert.equal(s.freed.n, 3);
+  assert.equal(s.freed.bytes, 16 * GB);
+  assert.deepEqual(s.freed.byAction['remove-worktree'], { n: 1, bytes: 1 * GB });
+  assert.equal(s.moved['disk.used.bytes'].from, 1000 * GB);
+  assert.equal(s.moved['disk.used.bytes'].to, 1200 * GB);
+  assert.equal(s.moved['bucket.app.bytes'], null);
+  const last = s.weeks[s.weeks.length - 1];
+  assert.equal(last.bytes, 6 * GB, 'this week: the cache and the worktree');
+  assert.equal(s.weeks.reduce((a, w) => a + w.bytes, 0), 16 * GB);
+  tick(DAY);
+});
+
+test('a pageouts counter becomes a rate per minute between two readings', { skip }, async () => {
+  const { monitor, sys, tick } = world();
+  let count = 1000;
+  sys.pageouts = () => count;
+  await monitor.tickSystem();
+  assert.equal(monitor.latest['swap.pageouts.perMin'], undefined, 'one reading is not a rate');
+  tick(60_000);
+  count = 1000 + 3000;
+  const out = await monitor.tickSystem();
+  assert.equal(monitor.latest['swap.pageouts.perMin'].value, 3000);
+  assert.ok(out.conditions.some((c) => c.metric === 'swap.pageouts.perMin' && c.level === 'limit'));
+});
+
 test('readings older than a month are trimmed, settings round-trip through JSON', { skip }, () => {
   const { store, clockNow } = world();
   store.recordReading('x', 1, clockNow() - 40 * DAY);

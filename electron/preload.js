@@ -336,10 +336,20 @@ contextBridge.exposeInMainWorld('api', {
     log: (limit) => ipcRenderer.invoke('housekeeping:log', limit),
     // A size landed while measuring: the row can fill in.
     onSize: (handler) => on('housekeeping:size', handler),
+    // An action or an inventory moved on: which item, how many of how many, how much so far.
+    onProgress: (handler) => on('housekeeping:progress', handler),
     /** The health job: readings against lines, and where things are heading. */
     health: (fresh = false) => ipcRenderer.invoke('housekeeping:health', { fresh }),
     setThreshold: (metric, level, value) => ipcRenderer.invoke('housekeeping:set-threshold', { metric, level, value }),
     measureNow: () => ipcRenderer.invoke('housekeeping:measure-now'),
+    /** The last inventory kept, for an instant open; `stale` says a fresh one is worth reading. */
+    snapshot: () => ipcRenderer.invoke('housekeeping:snapshot'),
+    /** What was given back and how things moved over the last days. */
+    stats: (days) => ipcRenderer.invoke('housekeeping:stats', days),
+    /** The panel's own plan, in order, with actions. */
+    advice: () => ipcRenderer.invoke('housekeeping:advice'),
+    /** One quick action by name, over the ids the plan named. */
+    act: (id, ids) => ipcRenderer.invoke('housekeeping:act', { id, ids }),
     /** The briefing Ask Claude hands to a session: health, memory, processes, disk, worktrees. */
     brief: (question) => ipcRenderer.invoke('housekeeping:brief', { question }),
     onHealth: (handler) => on('housekeeping:health', handler),

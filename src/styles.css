@@ -4132,3 +4132,26 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-work.is-done { border-color: #3a9d5d; color: #3a9d5d; }
 .housekeeping-work.is-unmerged { border-color: #c9a227; color: #c9a227; }
 .housekeeping-table td small.housekeeping-blocker { display: block; white-space: normal; max-width: 40ch; }
+.housekeeping-progress { margin: 0 0 12px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--bg-input); }
+.housekeeping-progress.is-done { border-color: #3a9d5d; }
+.housekeeping-progress-text { font-size: var(--fs-sm); margin-bottom: 6px; }
+.housekeeping-progress-text .is-error { color: var(--danger, #d9534f); }
+.housekeeping-progress-bar { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+.housekeeping-progress-bar > div { height: 100%; background: var(--accent); transition: width 0.2s ease; }
+.housekeeping-progress-bar > div.is-indeterminate { animation: hk-slide 1.2s ease-in-out infinite; }
+@keyframes hk-slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+.housekeeping-quick { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; }
+.housekeeping-chip.is-now { border-color: var(--danger, #d9534f); }
+.housekeeping-chip.is-soon { border-color: #c9a227; }
+.housekeeping-plan { margin: 0 0 14px; padding-left: 18px; }
+.housekeeping-plan li { margin-bottom: 10px; }
+.housekeeping-plan li p { margin: 2px 0 6px; color: var(--text-faint); max-width: 90ch; }
+.housekeeping-plan-head em { color: var(--text-faint); font-style: normal; }
+.housekeeping-plan li.is-now .housekeeping-work { border-color: var(--danger, #d9534f); color: var(--danger, #d9534f); }
+.housekeeping-plan li.is-soon .housekeeping-work { border-color: #c9a227; color: #c9a227; }
+.housekeeping-weeks { display: flex; gap: 10px; align-items: flex-end; margin: 0 0 14px; }
+.housekeeping-week { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.housekeeping-week > div { width: 28px; background: var(--accent); border-radius: 2px 2px 0 0; opacity: 0.8; }
+.housekeeping-week small { font-size: var(--fs-xs); color: var(--text-faint); }
+.housekeeping-rowactions { white-space: nowrap; }
+.housekeeping-rowactions .ghost-btn + .ghost-btn { margin-left: 4px; }

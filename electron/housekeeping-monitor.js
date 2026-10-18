@@ -41,6 +41,7 @@ const THRESHOLDS = Object.freeze({
   'mem.free.bytes': { label: 'Memory free', unit: 'bytes', direction: 'below', attention: 2 * GB, limit: 1 * GB, why: 'With little memory free the system swaps, and typing in the terminals starts to lag.' },
   'swap.used.pct': { label: 'Swap in use', unit: '%', direction: 'above', attention: 50, limit: 80, why: 'Swap is memory on disk: every page the system has to bring back is a pause, and the terminals feel every one. This is what makes the machine lag.' },
   'swap.used.bytes': { label: 'Swap used', unit: 'bytes', direction: 'above', attention: 2 * GB, limit: 6 * GB, why: 'Gigabytes of swap mean the programs open do not fit in memory together; closing some is the only real fix.' },
+  'swap.pageouts.perMin': { label: 'Pages swapped out', unit: '/min', direction: 'above', attention: 200, limit: 2000, why: 'Swap in use is history; pages going out per minute is swapping happening now, and each one is a pause the terminals feel.' },
   'load.per.core': { label: 'Load per core', unit: 'x', direction: 'above', attention: 1, limit: 2, why: 'More runnable work than cores for five minutes means everything waits its turn, the terminals included.' },
   'app.rss.bytes': { label: 'App memory', unit: 'bytes', direction: 'above', attention: 3 * GB, limit: 6 * GB, why: 'The app itself holding this much is usually many open sessions with long scrollback.' },
   'sessions.open': { label: 'Open sessions', unit: '', direction: 'above', attention: 30, limit: 60, why: 'Each open Claude session is a process and a conversation in memory; past a point, the machine is the limit.' },
@@ -81,6 +82,8 @@ class HousekeepingMonitor {
     this.latest = {};
     this.lastInventoryAt = 0;
     this.conditions = [];
+    /** The last pageouts counter, so the next reading can be a rate. */
+    this.lastPageouts = null;
   }
 
   start() {
@@ -114,6 +117,13 @@ class HousekeepingMonitor {
     const rss = this.sys.rss?.() ?? process.memoryUsage().rss;
     const disk = this.sys.statfs?.() ?? diskOf(this.userData);
     const swap = this.sys.swap?.() ?? readSwap();
+    const pageouts = this.sys.pageouts?.() ?? readPageouts();
+    let pageoutRate = null;
+    if (pageouts !== null && this.lastPageouts) {
+      const minutes = (this.now() - this.lastPageouts.at) / MINUTE;
+      if (minutes > 0.2) pageoutRate = Math.max(0, Math.round((pageouts - this.lastPageouts.value) / minutes));
+    }
+    if (pageouts !== null) this.lastPageouts = { value: pageouts, at: this.now() };
     const dbFile = path.join(this.userData, 'smart-terminal.db');
     const readings = {
       'disk.free.bytes': disk.free,
@@ -124,6 +134,7 @@ class HousekeepingMonitor {
       'swap.used.bytes': swap.used,
       'swap.total.bytes': swap.total,
       'swap.used.pct': swap.total ? Math.round((swap.used / swap.total) * 1000) / 10 : null,
+      'swap.pageouts.perMin': pageoutRate,
       // The five-minute average: a one-minute spike is a build starting, not a condition.
       'load.per.core': cores ? Math.round((load[1] / cores) * 100) / 100 : null,
       'app.rss.bytes': rss,
@@ -276,6 +287,30 @@ class HousekeepingMonitor {
     return den ? (num / den) * DAY : 0;
   }
 
+  /**
+   * What happened over a stretch of days: what housekeeping gave back and how
+   * the disk, the worktrees and the app's data moved. Kept figures, not a
+   * guess — from the log and the readings.
+   */
+  stats(days = 30) {
+    const since = this.now() - days * DAY;
+    const freed = this.store.logTotals(since);
+    const moved = {};
+    for (const metric of ['disk.used.bytes', 'disk.free.bytes', 'bucket.worktrees.bytes', 'bucket.sessions.bytes', 'bucket.app.bytes', 'worktrees.count', 'worktrees.inactive', 'db.bytes', 'swap.used.pct']) {
+      const range = this.store.firstLast(metric, since);
+      moved[metric] = range ? { from: range.first.value, to: range.last.value, fromAt: range.first.at, toAt: range.last.at } : null;
+    }
+    const weeks = [];
+    for (let w = 0; w < Math.min(8, Math.ceil(days / 7)); w++) {
+      const end = this.now() - w * 7 * DAY;
+      const start = end - 7 * DAY;
+      const row = this.store.logTotals(start);
+      const after = this.store.logTotals(end);
+      weeks.unshift({ start, end, bytes: Math.max(0, row.bytes - after.bytes), n: Math.max(0, row.n - after.n) });
+    }
+    return { days, freed, moved, weeks };
+  }
+
   /** What the panel shows: the latest of everything, the conditions, the lines, and where things are heading. */
   report() {
     const usedSlope = this.slopePerDay('disk.used.bytes');
@@ -321,6 +356,18 @@ function readSwap() {
     /* no swap reading on this machine */
   }
   return { total: null, used: null };
+}
+
+/** The pageouts counter from vm_stat on macOS: pages the kernel wrote to swap since boot. Null elsewhere. */
+function readPageouts() {
+  if (process.platform !== 'darwin') return null;
+  try {
+    const out = execFileSync('vm_stat', [], { encoding: 'utf8', timeout: 2000 });
+    const m = out.match(/^Pageouts:\s+(\d+)/m);
+    return m ? Number(m[1]) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** "total = 4096.00M  used = 2818.38M  free = 1277.62M  (encrypted)" → bytes. */
@@ -387,4 +434,4 @@ function sizeOf(file) {
   }
 }
 
-module.exports = { HousekeepingMonitor, THRESHOLDS, LEVELS, levelOf, describe, readSwap, parseSwapUsage, topProcesses, DAY, HOUR, MINUTE };
+module.exports = { HousekeepingMonitor, THRESHOLDS, LEVELS, levelOf, describe, readSwap, parseSwapUsage, readPageouts, topProcesses, DAY, HOUR, MINUTE };

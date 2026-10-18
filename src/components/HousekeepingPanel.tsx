@@ -56,6 +56,10 @@ export function HousekeepingPanel() {
   const [minMb, setMinMb] = useState(0);
   const [includeOpen, setIncludeOpen] = useState(false);
   const [health, setHealth] = useState<HousekeepingHealth | null>(null);
+  const [plan, setPlan] = useState<HousekeepingProposal[]>([]);
+  const [stats, setStats] = useState<HousekeepingStats | null>(null);
+  const [progress, setProgress] = useState<HousekeepingProgress | null>(null);
+  const [stale, setStale] = useState(false);
   const alive = useRef(true);
   // A menu entry or a notification named a tab: go there, on mount and whenever it changes.
   const wantedTab = useStore((s) => s.housekeepingTab);
@@ -65,14 +69,36 @@ export function HousekeepingPanel() {
     useStore.getState().clearHousekeepingTab();
   }, [wantedTab]);
 
+  const refreshPlan = () => {
+    window.api.housekeeping
+      .advice()
+      .then((p) => alive.current && setPlan(p))
+      .catch(() => {});
+    window.api.housekeeping
+      .stats(30)
+      .then((s) => alive.current && setStats(s))
+      .catch(() => {});
+  };
+
   const load = async ({ measure = true } = {}) => {
     setBusy('reading');
     setError(null);
     try {
+      // The last inventory kept opens the panel at once; the fresh one replaces it when it lands.
+      if (!inventory) {
+        const kept = await window.api.housekeeping.snapshot().catch(() => null);
+        if (kept && alive.current) {
+          setInventory({ ...kept, unsized: [], roots: kept.roots ?? [], checkouts: kept.checkouts ?? 0, log: kept.log ?? [] } as HousekeepingInventory);
+          setItems(kept.items);
+          setStale(true);
+        }
+      }
       const next = await window.api.housekeeping.inventory();
       if (!alive.current) return;
+      setStale(false);
       setInventory(next);
       setItems(next.items);
+      refreshPlan();
       setSelected((prev) => new Set([...prev].filter((id) => next.items.some((one) => one.id === id))));
       if (measure && next.unsized.length) {
         setMeasuring(next.unsized.length);
@@ -100,10 +126,19 @@ export function HousekeepingPanel() {
       .then((h) => alive.current && setHealth(h))
       .catch(() => {});
     const offHealth = window.api.housekeeping.onHealth(({ status, conditions }) => setHealth((prev) => (prev ? { ...prev, status, conditions } : prev)));
+    let clear: ReturnType<typeof setTimeout> | null = null;
+    const offProgress = window.api.housekeeping.onProgress((p) => {
+      setProgress(p);
+      if (clear) clearTimeout(clear);
+      // A finished bar stays long enough to be read, then goes.
+      if (p.done) clear = setTimeout(() => alive.current && setProgress((cur) => (cur?.done ? null : cur)), 2500);
+    });
     return () => {
       alive.current = false;
       off();
       offHealth();
+      offProgress();
+      if (clear) clearTimeout(clear);
     };
     // Read once when it opens; "Refresh" reads again. Polling a disk to watch it not change is what makes a panel expensive to leave open.
   }, []);
@@ -127,6 +162,10 @@ export function HousekeepingPanel() {
       setSaid(message);
       setSelected(new Set());
       await load();
+      window.api.housekeeping
+        .health(true)
+        .then((h) => alive.current && h && setHealth(h))
+        .catch(() => {});
     } catch (e) {
       setError(String((e as Error)?.message ?? e));
     } finally {
@@ -164,6 +203,23 @@ export function HousekeepingPanel() {
       if (alive.current) setBusy(null);
     }
   };
+
+  /** One of the plan's actions. The ones that remove go through the same confirm as the buttons below. */
+  const doAction = (proposal: HousekeepingProposal) => {
+    const action = proposal.action;
+    if (!action) return;
+    if (action.id === 'show-sessions') return setTab('sessions');
+    if (action.id === 'show-worktrees') return setTab('worktrees');
+    void run(`plan:${proposal.id}`, async () => {
+      const out = await window.api.housekeeping.act(action.id, action.ids ?? []);
+      const failed = (out.results ?? []).filter((one) => !one.ok).length;
+      const freed = out.freed ?? out.bytes ?? 0;
+      return `${proposal.title}: done, ${formatBytes(freed)} given back${failed ? `, ${failed} refused` : ''}.`;
+    });
+  };
+
+  const pick = (id: string) => setSelected(new Set([id]));
+  const arm = (key: string) => setConfirming(key);
 
   const toggle = (id: string) =>
     setSelected((prev) => {
@@ -256,6 +312,11 @@ export function HousekeepingPanel() {
           <button className="link-btn" onClick={() => setTab('health')}>
             see why
           </button>
+          {plan.length > 0 && (
+            <button className="link-btn" onClick={() => setTab('health')}>
+              {plan.length} proposal{plan.length === 1 ? '' : 's'}
+            </button>
+          )}
           <button className="ghost-btn tiny" disabled={Boolean(busy)} onClick={() => askClaude()} title="Open a Claude session with the machine's state and ask how to free memory and disk">
             {busy === 'ask' ? 'Asking…' : 'Ask Claude'}
           </button>
@@ -292,7 +353,53 @@ export function HousekeepingPanel() {
         </button>
         {said && <span className="usage-note">{said}</span>}
         {error && <span className="usage-note is-error">{error}</span>}
+        {stale && inventory && (
+          <span className="usage-note">
+            showing the inventory from {describeIdle(inventory.readAt) === 'today' ? 'earlier today' : describeIdle(inventory.readAt) + ' ago'} while a fresh one is read…
+          </span>
+        )}
       </div>
+
+      {progress && (
+        <div className={`housekeeping-progress${progress.done ? ' is-done' : ''}`} role="status" aria-live="polite">
+          <div className="housekeeping-progress-text">
+            <strong>{progressTitle(progress)}</strong>
+            {progress.label ? <span> · {progress.label}</span> : progress.detail ? <span> · {progress.detail}</span> : null}
+            {progress.total ? <span> · {progress.index ?? 0} of {progress.total}</span> : null}
+            {progress.freed ? <span> · {formatBytes(progress.freed)} given back</span> : null}
+            {progress.failed ? <span className="is-error"> · {progress.failed} refused</span> : null}
+          </div>
+          <div className="housekeeping-progress-bar">
+            <div style={{ width: progress.done ? '100%' : progress.total ? `${Math.min(100, Math.round(((progress.index ?? 0) / progress.total) * 100))}%` : '35%' }} className={progress.total || progress.done ? '' : 'is-indeterminate'} />
+          </div>
+        </div>
+      )}
+
+      {plan.some((one) => one.action && one.action.id !== 'show-sessions' && one.action.id !== 'show-worktrees') && (
+        <div className="housekeeping-quick">
+          <span className="monitor-stat-label">Quick actions</span>
+          {plan
+            .filter((one) => one.action && one.action.id !== 'show-sessions' && one.action.id !== 'show-worktrees')
+            .slice(0, 5)
+            .map((one) =>
+              confirming === `quick:${one.id}` ? (
+                <span key={one.id} className="storage-confirm">
+                  <em>{one.detail}</em>
+                  <button className={one.action?.danger ? 'danger-btn tiny' : 'ghost-btn tiny'} onClick={() => doAction(one)}>
+                    Yes, do it
+                  </button>
+                  <button className="ghost-btn tiny" onClick={() => setConfirming(null)}>
+                    No
+                  </button>
+                </span>
+              ) : (
+                <button key={one.id} className={`ghost-btn tiny housekeeping-chip is-${one.priority}`} disabled={Boolean(busy)} title={one.detail} onClick={() => setConfirming(`quick:${one.id}`)}>
+                  {one.action?.label}
+                </button>
+              ),
+            )}
+        </div>
+      )}
 
       <div className="housekeeping-tabs" role="tablist">
         {TABS.map((one) => (
@@ -316,13 +423,15 @@ export function HousekeepingPanel() {
           selectAll={selectAll}
           chosen={chosen}
           confirm={confirm}
+          pick={pick}
+          arm={arm}
         />
       )}
       {tab === 'worktrees' && (
-        <Worktrees items={items} roots={inventory.roots} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} reload={() => load()} onError={setError} />
+        <Worktrees items={items} roots={inventory.roots} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} pick={pick} arm={arm} reload={() => load()} onError={setError} />
       )}
-      {tab === 'app' && <AppFiles items={items} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} />}
-      {tab === 'health' && <Health health={health} setHealth={setHealth} onError={setError} ask={askClaude} asking={busy === 'ask'} />}
+      {tab === 'app' && <AppFiles items={items} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} pick={pick} arm={arm} />}
+      {tab === 'health' && <Health health={health} setHealth={setHealth} onError={setError} ask={askClaude} asking={busy === 'ask'} plan={plan} stats={stats} doAction={doAction} confirming={confirming} setConfirming={setConfirming} busy={Boolean(busy)} />}
       {tab === 'log' && <Log rows={inventory.log} />}
     </div>
   );
@@ -339,6 +448,21 @@ interface ListProps {
   selectAll: (list: HousekeepingItem[], on: boolean) => void;
   chosen: (list: HousekeepingItem[]) => HousekeepingItem[];
   confirm: Confirm;
+  /** Select only this row, and arm the confirm named: the row's own button. */
+  pick: (id: string) => void;
+  arm: (key: string) => void;
+}
+
+/** What a progress event is about, in words. */
+function progressTitle(p: HousekeepingProgress): string {
+  const names: Record<string, string> = {
+    inventory: p.done ? 'Inventory read' : 'Reading the disk',
+    free: p.done ? 'Freed' : 'Freeing',
+    'remove-worktrees': p.done ? 'Worktrees removed' : 'Removing worktrees',
+    'delete-sessions': 'Sessions deleted',
+    'forget-transcripts': 'Conversations forgotten',
+  };
+  return names[p.op] ?? (p.done ? 'Done' : 'Working');
 }
 
 function Sessions({
@@ -354,6 +478,8 @@ function Sessions({
   selectAll,
   chosen,
   confirm,
+  pick,
+  arm,
 }: ListProps & {
   olderThan: number;
   setOlderThan: (n: number) => void;
@@ -382,7 +508,7 @@ function Sessions({
           {rows.length} session{rows.length === 1 ? '' : 's'}, {formatBytes(weigh(rows))}
         </span>
       </div>
-      <Table rows={rows} selected={selected} toggle={toggle} selectAll={selectAll} empty="No session matches. Lower the days or the size." />
+      <Table rows={rows} selected={selected} toggle={toggle} selectAll={selectAll} empty="No session matches. Lower the days or the size." quick={{ label: 'Forget', run: (one) => { pick(one.id); arm('forget'); } }} />
       <div className="storage-actions">
         {confirm(
           'forget',
@@ -411,7 +537,7 @@ function Sessions({
   );
 }
 
-function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm, reload, onError }: ListProps & { roots: HousekeepingRoot[]; reload: () => void; onError: (message: string) => void }) {
+function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm, pick, arm, reload, onError }: ListProps & { roots: HousekeepingRoot[]; reload: () => void; onError: (message: string) => void }) {
   const caches = items.filter((one) => one.kind === 'build-cache');
   const shops = items.filter((one) => one.kind === 'workshop');
   const pickedCaches = chosen(caches);
@@ -483,7 +609,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
           {trees.length} of {allTrees.length} worktree{allTrees.length === 1 ? '' : 's'}, {formatBytes(weigh(trees))} · {finished.length} finished and clear
         </span>
       </div>
-      <Table rows={trees} selected={selected} toggle={toggle} selectAll={selectAll} empty={allTrees.length ? 'No worktree matches. Lower the days or untick finished only.' : 'No worktrees found. Add the folder they live in above.'} />
+      <Table rows={trees} selected={selected} toggle={toggle} selectAll={selectAll} empty={allTrees.length ? 'No worktree matches. Lower the days or untick finished only.' : 'No worktrees found. Add the folder they live in above.'} quick={{ label: 'Remove', run: (one) => { pick(one.id); arm('trees'); } }} />
       <div className="storage-actions">
         {confirm(
           'trees',
@@ -515,7 +641,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
       <p className="usage-note">
         Folders a build writes and writes again: .angular, node_modules, target, dist. Removing one costs the next build a rebuild and nothing else. A folder git does not ignore is refused. A cache inside a worktree listed above is shown here but counted inside that worktree's size.
       </p>
-      <Table rows={caches} selected={selected} toggle={toggle} selectAll={selectAll} empty="No build caches under the folders above." />
+      <Table rows={caches} selected={selected} toggle={toggle} selectAll={selectAll} empty="No build caches under the folders above." quick={{ label: 'Clear', run: (one) => { pick(one.id); arm('caches'); } }} />
       <div className="storage-actions">
         {confirm(
           'caches',
@@ -533,7 +659,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
 
       <h3 className="monitor-heading">Code Reviewer clones</h3>
       <p className="usage-note">A clone per pull request the reviewer wrote fixes in. One whose pull request is closed and whose fixes were handed back can go.</p>
-      <Table rows={shops} selected={selected} toggle={toggle} selectAll={selectAll} empty="No review clones on disk." />
+      <Table rows={shops} selected={selected} toggle={toggle} selectAll={selectAll} empty="No review clones on disk." quick={{ label: 'Discard', run: (one) => { pick(one.id); arm('shops'); } }} />
       <div className="storage-actions">
         {confirm(
           'shops',
@@ -552,7 +678,7 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
   );
 }
 
-function AppFiles({ items, selected, toggle, selectAll, chosen, confirm }: ListProps) {
+function AppFiles({ items, selected, toggle, selectAll, chosen, confirm, pick, arm }: ListProps) {
   const rows = inBucket(items, 'app');
   const picked = chosen(rows);
   return (
@@ -560,7 +686,7 @@ function AppFiles({ items, selected, toggle, selectAll, chosen, confirm }: ListP
       <p className="usage-note">
         What the app keeps beside its database: copies of the database and of whole data folders made before upgrades, installers already downloaded, pasted images, the window's own cache. The database itself is tended from the Monitor.
       </p>
-      <Table rows={rows} selected={selected} toggle={toggle} selectAll={selectAll} empty="Nothing beside the database." />
+      <Table rows={rows} selected={selected} toggle={toggle} selectAll={selectAll} empty="Nothing beside the database." quick={{ label: 'Remove', run: (one) => { pick(one.id); arm('app'); } }} />
       <div className="storage-actions">
         {confirm(
           'app',
@@ -609,7 +735,31 @@ function ThresholdInput({ metric, level, unit, value, onSave }: { metric: string
   );
 }
 
-function Health({ health, setHealth, onError, ask, asking }: { health: HousekeepingHealth | null; setHealth: (h: HousekeepingHealth | null) => void; onError: (m: string) => void; ask: (question?: string) => void; asking: boolean }) {
+function Health({
+  health,
+  setHealth,
+  onError,
+  ask,
+  asking,
+  plan,
+  stats,
+  doAction,
+  confirming,
+  setConfirming,
+  busy: parentBusy,
+}: {
+  health: HousekeepingHealth | null;
+  setHealth: (h: HousekeepingHealth | null) => void;
+  onError: (m: string) => void;
+  ask: (question?: string) => void;
+  asking: boolean;
+  plan: HousekeepingProposal[];
+  stats: HousekeepingStats | null;
+  doAction: (p: HousekeepingProposal) => void;
+  confirming: string | null;
+  setConfirming: (k: string | null) => void;
+  busy: boolean;
+}) {
   const [busy, setBusy] = useState(false);
   if (!health) return <p className="empty-state">The first reading lands a few seconds after start.</p>;
   const save = (metric: string, level: 'attention' | 'limit', value: number | null) =>
@@ -673,6 +823,74 @@ function Health({ health, setHealth, onError, ask, asking }: { health: Housekeep
           Ask Claude about the disk
         </button>
       </div>
+
+      <h3 className="monitor-heading">What to do, in order</h3>
+      {plan.length === 0 ? (
+        <p className="usage-note">Nothing to propose: nothing is crossed and nothing large is idle.</p>
+      ) : (
+        <ol className="housekeeping-plan">
+          {plan.map((one) => (
+            <li key={one.id} className={`is-${one.priority}`}>
+              <div className="housekeeping-plan-head">
+                <span className="housekeeping-work">{one.priority}</span>
+                <strong>{one.title}</strong>
+                {one.effect && <em> — {one.effect}</em>}
+              </div>
+              <p>{one.detail}</p>
+              {one.action &&
+                (confirming === `plan:${one.id}` ? (
+                  <span className="storage-confirm">
+                    <em>{one.action.danger ? 'This cannot be undone.' : 'It comes back by itself when needed.'}</em>
+                    <button className={one.action.danger ? 'danger-btn tiny' : 'ghost-btn tiny'} onClick={() => doAction(one)}>
+                      Yes, do it
+                    </button>
+                    <button className="ghost-btn tiny" onClick={() => setConfirming(null)}>
+                      No
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    className={one.action.danger ? 'danger-btn tiny' : 'ghost-btn tiny'}
+                    disabled={parentBusy}
+                    onClick={() => (one.action?.id === 'show-sessions' || one.action?.id === 'show-worktrees' ? doAction(one) : setConfirming(`plan:${one.id}`))}
+                  >
+                    {one.action.label}
+                  </button>
+                ))}
+            </li>
+          ))}
+        </ol>
+      )}
+
+      {stats && (
+        <>
+          <h3 className="monitor-heading">The last {stats.days} days</h3>
+          <div className="monitor-stats">
+            <div className="monitor-stat">
+              <span className="monitor-stat-label">Given back</span>
+              <strong>{formatBytes(stats.freed.bytes)}</strong>
+              <small>{stats.freed.n} removal{stats.freed.n === 1 ? '' : 's'}</small>
+            </div>
+            {moved(stats, 'disk.used.bytes', 'Disk used', true)}
+            {moved(stats, 'bucket.worktrees.bytes', 'Worktrees', true)}
+            {moved(stats, 'worktrees.inactive', 'Inactive worktrees', false)}
+            {moved(stats, 'db.bytes', 'Database', true)}
+          </div>
+          {stats.weeks.some((w) => w.bytes > 0) && (
+            <div className="housekeeping-weeks" title="Given back, by week">
+              {stats.weeks.map((w) => {
+                const max = Math.max(...stats.weeks.map((x) => x.bytes), 1);
+                return (
+                  <div key={w.start} className="housekeeping-week" title={`${new Date(w.start).toLocaleDateString()} – ${new Date(w.end).toLocaleDateString()}: ${formatBytes(w.bytes)} in ${w.n}`}>
+                    <div style={{ height: `${Math.max(2, Math.round((w.bytes / max) * 40))}px` }} />
+                    <small>{formatBytes(w.bytes)}</small>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
 
       {health.conditions.length > 0 && (
         <>
@@ -760,18 +978,38 @@ function Log({ rows }: { rows: HousekeepingLogRow[] }) {
   );
 }
 
+/** "went from A to B" for one metric over the stats window, as a stat card. */
+function moved(stats: HousekeepingStats, metric: string, label: string, bytes: boolean) {
+  const m = stats.moved[metric];
+  if (!m) return null;
+  const show = (v: number) => (bytes ? formatBytes(v) : String(Math.round(v)));
+  const delta = m.to - m.from;
+  return (
+    <div className="monitor-stat" key={metric}>
+      <span className="monitor-stat-label">{label}</span>
+      <strong>{show(m.to)}</strong>
+      <small>
+        {delta === 0 ? 'unchanged' : `${delta > 0 ? '+' : '−'}${show(Math.abs(delta))} since ${new Date(m.fromAt).toLocaleDateString()}`}
+      </small>
+    </div>
+  );
+}
+
 function Table({
   rows,
   selected,
   toggle,
   selectAll,
   empty,
+  quick,
 }: {
   rows: HousekeepingItem[];
   selected: Set<string>;
   toggle: (id: string) => void;
   selectAll: (list: HousekeepingItem[], on: boolean) => void;
   empty: string;
+  /** The row's own button: selects the row alone and arms the list's confirm. */
+  quick?: { label: string; run: (one: HousekeepingItem) => void };
 }) {
   const [sort, setSort] = useState<'size' | 'idle' | 'name'>('size');
   if (!rows.length) return <p className="empty-state">{empty}</p>;
@@ -848,7 +1086,12 @@ function Table({
                 {one.state ?? ''}
                 {blocked && <small className="housekeeping-blocker">{one.blockers.join(', ')}</small>}
               </td>
-              <td className="is-num">
+              <td className="is-num housekeeping-rowactions">
+                {quick && !blocked && (
+                  <button className="ghost-btn tiny" onClick={() => quick.run(one)} title={`${quick.label} only this one`}>
+                    {quick.label}
+                  </button>
+                )}
                 {one.path && one.kind !== 'browser-cache' && (
                   <button className="ghost-btn tiny" title={`Show ${one.path} in the file manager`} onClick={() => window.api.files.reveal(one.path as string)}>
                     Show

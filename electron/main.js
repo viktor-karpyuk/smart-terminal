@@ -23,6 +23,7 @@ const { HousekeepingStore } = require('./housekeeping-store');
 const { DiskUsage } = require('./disk-usage');
 const { HousekeepingMonitor, topProcesses } = require('./housekeeping-monitor');
 const { composeBrief } = require('./housekeeping-brief');
+const { proposals } = require('./housekeeping-advice');
 const rules = require('./review-rules');
 const { SessionMonitor } = require('./session-monitor');
 const { summarise, oneLine } = require('./session-analysis');
@@ -1353,6 +1354,22 @@ function registerIpc() {
     housekeepingMonitor?.setThreshold(String(metric), String(level), value);
     return housekeepingMonitor?.report() ?? null;
   });
+  ipcMain.handle('housekeeping:snapshot', () => housekeeping.snapshot());
+  ipcMain.handle('housekeeping:stats', (_e, days) => housekeepingMonitor?.stats(Number(days) || 30) ?? null);
+  /** The panel's own plan: what to do, in order, with the action that does it when there is one. */
+  ipcMain.handle('housekeeping:advice', async () => {
+    const snapshot = housekeeping.snapshot();
+    const inventory = snapshot && !snapshot.stale ? snapshot : await housekeeping.inventory();
+    let dbHealth = null;
+    try {
+      const health = db.health();
+      dbHealth = { bytes: health.bytes, wasted: health.wasted };
+    } catch {
+      /* the plan does without */
+    }
+    return proposals({ report: housekeepingMonitor?.report() ?? null, inventory, processes: topProcesses(8), dbHealth });
+  });
+  ipcMain.handle('housekeeping:act', (_e, { id, ids = [] } = {}) => housekeeping.act(String(id), Array.isArray(ids) ? ids : []));
   /** What Ask Claude hands over: the health report, the inventory, the processes, as text. Nothing is run. */
   ipcMain.handle('housekeeping:brief', async (_e, { question = null } = {}) => {
     await housekeepingMonitor?.tickSystem();

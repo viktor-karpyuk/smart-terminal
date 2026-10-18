@@ -202,10 +202,13 @@ class WorktreeInventory {
    * with `-d`, which refuses what is not merged, so the commits of an
    * unfinished one stay on their branch.
    */
-  async remove(paths) {
+  async remove(paths, { onEach = null } = {}) {
     const rows = new Map((await this.list()).map((row) => [row.path, row]));
     const results = [];
+    let index = 0;
     for (const target of paths) {
+      index += 1;
+      onEach?.({ index, total: paths.length, path: target, label: path.basename(target) });
       const row = rows.get(target) ?? rows.get(real(target));
       if (!row) {
         results.push({ path: target, ok: false, error: 'That is not a worktree the app knows; look again.' });

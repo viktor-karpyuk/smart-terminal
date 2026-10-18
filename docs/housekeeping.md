@@ -117,6 +117,26 @@ Swap is read too (`sysctl vm.swapusage` on macOS, `/proc/meminfo` on Linux):
 swap in use above 50% is attention and above 80% a limit, because swap is what
 makes typing in the terminals lag.
 
+**What to do, in order** — the Health tab's own plan, before anybody asks
+Claude: memory first when the machine is swapping (which processes hold it,
+how many sessions are open), then the disk by what is largest and safest
+(build caches in worktrees idle for two weeks, finished worktrees, old
+installations and backups, conversations of sessions idle three months), then
+the database (fold the log, compact the file). Each proposal says what it
+frees and carries the button that does it; the same ones appear as **Quick
+actions** under the bar. Nothing that would lose unmerged work is ever
+proposed for removal; it is pointed at.
+
+**Progress** — every action and every inventory report as they go: which item,
+how many of how many, how much given back so far, how many refused. The panel
+opens on the last inventory kept and says so while a fresh one is read.
+
+**The last 30 days** — what housekeeping gave back (by week), and how the disk,
+the worktrees and the database moved, from the kept log and readings.
+
+Swap in use is history; **pages swapped out per minute** (from `vm_stat` on
+macOS) is swapping happening now, with lines at 200 and 2000 a minute.
+
 **Ask Claude** — in the strip at the top, in the bar, and in the Health tab —
 opens a Claude session (one per panel, on a signed-in account) and hands it the
 machine's state as text: the lines crossed and why they matter, memory and

@@ -131,6 +131,22 @@ class HousekeepingStore {
     return this.db.prepare('DELETE FROM hk_log WHERE at < ?').run(Date.now() - keepDays * 86_400_000).changes;
   }
 
+  /** What was given back since a time: bytes and actions, by action. */
+  logTotals(since = 0) {
+    const rows = this.db
+      .prepare('SELECT action, COUNT(*) AS n, COALESCE(SUM(bytes), 0) AS bytes FROM hk_log WHERE ok = 1 AND at >= ? GROUP BY action')
+      .all(since);
+    const total = rows.reduce((acc, row) => ({ n: acc.n + row.n, bytes: acc.bytes + row.bytes }), { n: 0, bytes: 0 });
+    return { ...total, byAction: Object.fromEntries(rows.map((row) => [row.action, { n: row.n, bytes: row.bytes }])) };
+  }
+
+  /** The first and last reading of a metric since a time, for "went from A to B". */
+  firstLast(metric, since = 0) {
+    const first = this.db.prepare('SELECT at, value FROM hk_reading WHERE metric = ? AND at >= ? ORDER BY at LIMIT 1').get(metric, since);
+    const last = this.db.prepare('SELECT at, value FROM hk_reading WHERE metric = ? AND at >= ? ORDER BY at DESC LIMIT 1').get(metric, since);
+    return first && last ? { first, last } : null;
+  }
+
   // --- readings ---------------------------------------------------------------
 
   recordReading(metric, value, at = Date.now()) {

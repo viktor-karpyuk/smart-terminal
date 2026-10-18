@@ -256,6 +256,35 @@ test('worktrees of a checkout under a root are items, their caches are nested, a
   }
 });
 
+test('the last inventory is kept and answers at once as a snapshot; quick actions run through the same checks', { skip }, async () => {
+  const { hk, sizes } = world();
+  try {
+    assert.equal(hk.snapshot(), null, 'nothing kept yet');
+    const inv = await hk.inventory();
+    const snap = hk.snapshot();
+    assert.equal(snap.items.length, inv.items.length);
+    assert.equal(snap.stale, false);
+    hk.last = null;
+    const kept = hk.snapshot();
+    assert.equal(kept.stale, true, 'from the store once the run forgot it');
+    assert.equal(kept.items.length, inv.items.length);
+
+    const events = [];
+    hk.emit = (name, payload) => events.push([name, payload]);
+    const backup = inv.items.find((one) => one.kind === 'db-backup');
+    const out = await hk.act('free', [backup.id]);
+    assert.equal(out.freed, 2048);
+    const progress = events.filter(([name]) => name === 'progress').map(([, p]) => p);
+    assert.ok(progress.some((p) => p.op === 'free' && !p.done && p.label === backup.label));
+    assert.ok(progress.some((p) => p.op === 'free' && p.done && p.freed === 2048));
+    await assert.rejects(hk.act('explode', []), /Not an action/);
+    const folded = await hk.act('db-checkpoint', []);
+    assert.equal(folded.results[0].ok, true);
+  } finally {
+    sizes.stop();
+  }
+});
+
 test('roots must be folders, and checkouts are the root and its direct children that are git checkouts', { skip }, () => {
   const { hk, sizes, home, checkout } = world();
   try {
