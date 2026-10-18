@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { pickToPause } from '../lib/housekeeping';
 import { FOLLOW_APP, resolveTerminalTheme, setExtensionPalettes, type TerminalPalette } from '../terminals/themes';
 import { featureOn, setTerminalFeatures } from '../terminals/features';
 import { revealLine } from '../lib/editorReveal';
@@ -125,6 +126,8 @@ const DEFAULT_SETTINGS: Settings = {
   sidebarShowSessions: true,
   sidebarShowFolders: true,
   sidebarShowMonitor: true,
+  pauseOnMinimize: false,
+  maxRunningClaude: 0,
   sidebarShowClusters: true,
   sidebarShowReviewer: true,
   sidebarShowJenkins: true,
@@ -631,7 +634,9 @@ interface State {
   closeSession(sessionId: string): void;
   restartSession(sessionId: string, options?: { fresh?: boolean }): Promise<void>;
   /** Stop it where it is, keeping everything, so it can be picked up later. */
-  pauseSession(sessionId: string): Promise<void>;
+  pauseSession(sessionId: string, by?: 'user' | 'minimize' | 'cap'): Promise<void>;
+  /** Pause minimized Claude sessions until no more than the cap are running; the oldest idle go first. */
+  enforceSessionCap(): void;
   /** Pick a paused session up again, on the same conversation. */
   resumeSession(sessionId: string): Promise<void>;
   duplicateSession(sessionId: string): Promise<void>;
@@ -1640,7 +1645,7 @@ export const useStore = create<State>((set, get) => ({
    * are several gigabytes of Claude that a paused one gives back, and it stops
    * being something to keep an eye on.
    */
-  async pauseSession(sessionId) {
+  async pauseSession(sessionId, by = 'user') {
     const session = get().sessions[sessionId];
     if (!session || session.status === 'paused') return;
 
@@ -1665,6 +1670,8 @@ export const useStore = create<State>((set, get) => ({
           ptyId: null,
           pid: null,
           busy: false,
+          pausedBy: by,
+          pauseWhenIdle: false,
           // Kept, because it is the whole of what makes picking it up possible.
           claudeSessionId: result?.conversation ?? state.sessions[sessionId].claudeSessionId,
         },
@@ -1691,6 +1698,7 @@ export const useStore = create<State>((set, get) => ({
 
     const profile = get().profiles.find((p) => p.id === session.profileId) ?? get().profiles[0];
     if (!profile) return;
+    set((state) => ({ sessions: { ...state.sessions, [sessionId]: { ...state.sessions[sessionId], pausedBy: null, pauseWhenIdle: false } } }));
 
     getTerminal(sessionId)?.term.reset();
     await spawnInto(set, get, {
@@ -1922,6 +1930,8 @@ export const useStore = create<State>((set, get) => ({
     if (!state.sessions[sessionId] && !state.panels[sessionId]) return;
     if (state.minimized.some((entry) => entry.sessionId === sessionId)) return;
     const from = leafOfTab(state.layout, sessionId);
+    // Once it is out of the layout, the pause policy has its say.
+    queueMicrotask(() => pauseMinimized(get, [sessionId]));
 
     set((prev) => {
       const layout = removeTab(prev.layout, sessionId);
@@ -2055,6 +2065,7 @@ export const useStore = create<State>((set, get) => ({
       };
     });
     schedulePersist(get);
+    pauseMinimized(get, [...leaf.tabs]);
   },
 
   /** Put a section back where it was, with everything it was holding. */
@@ -2095,6 +2106,25 @@ export const useStore = create<State>((set, get) => ({
     const front = alive.includes(section.active ?? '') ? section.active : alive[0];
     if (front && get().sessions[front]) get().focusSession(front);
     schedulePersist(get);
+    resumeRestored(get, alive);
+  },
+
+  enforceSessionCap() {
+    const state = get();
+    const cap = state.settings.maxRunningClaude ?? 0;
+    if (!cap) return;
+    const running = Object.values(state.sessions).filter((s) => s.kind === 'claude' && (s.status === 'running' || s.status === 'starting'));
+    if (running.length <= cap) return;
+    const away = new Set([...state.minimized.map((m) => m.sessionId), ...state.minimizedSections.flatMap((m) => m.tabs)]);
+    const over = running.length - cap;
+    const victims = pickToPause(
+      running.map((s) => ({ id: s.id, minimized: away.has(s.id), busy: s.busy, lastActivityAt: lastSeen.get(s.id) ?? s.createdAt })),
+      over,
+    );
+    for (const id of victims) void get().pauseSession(id, 'cap');
+    if (victims.length < over) {
+      announce(state.activeSessionId ?? running[running.length - 1].id, `\r\n\x1b[38;5;244m── ${running.length - victims.length} Claude sessions running, over your cap of ${cap}; minimize or pause some ──\x1b[0m\r\n`);
+    }
   },
 
   /** Set aside a group wherever its sessions happen to be sitting. */
@@ -2990,11 +3020,19 @@ export const useStore = create<State>((set, get) => ({
       sessionId,
       window.setTimeout(() => {
         busyTimers.delete(sessionId);
+        lastSeen.set(sessionId, Date.now());
         set((prev) =>
           prev.sessions[sessionId]
             ? { sessions: { ...prev.sessions, [sessionId]: { ...prev.sessions[sessionId], busy: false } } }
             : prev,
         );
+        // Minimized while it was still talking: now that it is quiet, the pause policy gets its turn.
+        const quiet = get().sessions[sessionId];
+        if (quiet?.pauseWhenIdle && quiet.status === 'running') {
+          const away = get().minimized.some((m) => m.sessionId === sessionId) || get().minimizedSections.some((m) => m.tabs.includes(sessionId));
+          if (away && pausesOnMinimize(get, sessionId)) void get().pauseSession(sessionId, 'minimize');
+          else set((prev) => ({ sessions: { ...prev.sessions, [sessionId]: { ...prev.sessions[sessionId], pauseWhenIdle: false } } }));
+        }
         // A session that has stopped printing is showing its final screen, which
         // is the only place some questions ever appear.
         if (get().sessions[sessionId]?.autopilot) reportScreen(sessionId);
@@ -3027,6 +3065,11 @@ export const useStore = create<State>((set, get) => ({
     }
 
     if (after.terminalFeaturesOff !== before.terminalFeaturesOff) syncTerminalExtension(after, get().extensions);
+    if (after.maxRunningClaude !== before.maxRunningClaude) {
+      // The cap is also the health job's attention line for open sessions, so a crossing is said.
+      void window.api.housekeeping.setThreshold('sessions.open', 'attention', after.maxRunningClaude > 0 ? after.maxRunningClaude : null).catch(() => {});
+      get().enforceSessionCap();
+    }
 
     const look = terminalLook(after);
     const was = terminalLook(before);
@@ -4564,7 +4607,52 @@ function restoreTabs(
 
   get().focusSession(entries[entries.length - 1].sessionId);
   schedulePersist(get);
+  resumeRestored(get, [...restored]);
 }
+
+/** When each session last printed anything: the order in which the cap picks what to pause. */
+const lastSeen = new Map<string, number>();
+
+/** Whether this session's tab is paused when minimized: its group's answer, else the app's. */
+function pausesOnMinimize(get: () => State, sessionId: string): boolean {
+  const state = get();
+  const session = state.sessions[sessionId];
+  if (!session || session.kind !== 'claude') return false;
+  const group = session.groupId ? state.groups.find((g) => g.id === session.groupId) : null;
+  const own = group?.pauseOnMinimize;
+  return own === true || own === false ? own : Boolean(state.settings.pauseOnMinimize);
+}
+
+/**
+ * Minimized under a pause policy: the process is given back. One in the middle
+ * of a turn is left to finish it and paused the moment it goes quiet, so the
+ * policy never cuts a thought in half.
+ */
+function pauseMinimized(get: () => State, sessionIds: string[]) {
+  for (const id of sessionIds) {
+    const session = get().sessions[id];
+    if (!session || session.status !== 'running' || !pausesOnMinimize(get, id)) continue;
+    if (session.busy) {
+      useStore.setState((state) => ({ sessions: { ...state.sessions, [id]: { ...state.sessions[id], pauseWhenIdle: true } } }));
+    } else {
+      void get().pauseSession(id, 'minimize');
+    }
+  }
+}
+
+/** Back on screen: what the policy or the cap paused, the policy brings back; what the person paused waits. */
+function resumeRestored(get: () => State, sessionIds: string[]) {
+  for (const id of sessionIds) {
+    const session = get().sessions[id];
+    if (!session) continue;
+    if (session.pauseWhenIdle) useStore.setState((state) => ({ sessions: { ...state.sessions, [id]: { ...state.sessions[id], pauseWhenIdle: false } } }));
+    if (session.status === 'paused' && (session.pausedBy === 'minimize' || session.pausedBy === 'cap')) void get().resumeSession(id);
+  }
+  // Something came back running: the cap may now be exceeded by one that is minimized.
+  setTimeout(() => get().enforceSessionCap(), 1500);
+}
+
+
 
 async function spawnInto(
   set: (fn: (state: State) => Partial<State>) => void,
@@ -4709,6 +4797,8 @@ async function spawnInto(
     // A session that was left on autopilot comes back on it. The pty has to exist
     // first — there is nothing to watch until then.
     if (args.autopilot) window.api.pty.autopilot(sessionId, true);
+    // One more running: if that is over the cap, a minimized one gives its process back.
+    if (kind === 'claude') setTimeout(() => get().enforceSessionCap(), 500);
     // Its text size is stored, but a terminal is born at the global size. Without
     // this, a group's size — or a tab's own — is remembered everywhere except in
     // the one place it shows.

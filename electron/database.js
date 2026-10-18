@@ -344,6 +344,10 @@ class Database {
     const groupColumns = new Set(
       this.db.prepare('PRAGMA table_info(groups)').all().map((column) => column.name),
     );
+    if (groupColumns.size && !groupColumns.has('pause_on_minimize')) {
+      // null = follow the app's setting; 1 / 0 = this group's own answer.
+      this.db.exec('ALTER TABLE groups ADD COLUMN pause_on_minimize INTEGER');
+    }
     if (groupColumns.size && !groupColumns.has('arrangement')) {
       this.db.exec('ALTER TABLE groups ADD COLUMN arrangement TEXT');
     }
@@ -1404,11 +1408,12 @@ class Database {
    */
   saveGroups(windowId, groups) {
     const upsert = this.db.prepare(
-      `INSERT INTO groups (id, name, color, font_size, arrangement, window_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO groups (id, name, color, font_size, arrangement, pause_on_minimize, window_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          name = excluded.name, color = excluded.color,
          font_size = excluded.font_size, arrangement = excluded.arrangement,
+         pause_on_minimize = excluded.pause_on_minimize,
          window_id = excluded.window_id, updated_at = excluded.updated_at`,
     );
     for (const group of groups ?? []) {
@@ -1418,6 +1423,7 @@ class Database {
         group.color ?? null,
         group.fontSize ?? null,
         group.arrangement ?? null,
+        group.pauseOnMinimize === null || group.pauseOnMinimize === undefined ? null : group.pauseOnMinimize ? 1 : 0,
         windowId,
         Date.now(),
         Date.now(),
@@ -1447,10 +1453,10 @@ class Database {
   allGroups() {
     return this.db
       .prepare(
-        'SELECT id, name, color, font_size AS fontSize, arrangement FROM groups ORDER BY created_at',
+        'SELECT id, name, color, font_size AS fontSize, arrangement, pause_on_minimize AS pauseOnMinimize FROM groups ORDER BY created_at',
       )
       .all()
-      .map((row) => ({ ...row, collapsed: false }));
+      .map((row) => ({ ...row, pauseOnMinimize: row.pauseOnMinimize === null || row.pauseOnMinimize === undefined ? null : Boolean(row.pauseOnMinimize), collapsed: false }));
   }
 
   /** Groups with what is left of them, newest activity first. */
@@ -1637,6 +1643,7 @@ class Database {
     return this.db
       .prepare(
         `SELECT id, profile_name AS profileName, title, kind, start_cwd AS startCwd, last_cwd AS lastCwd,
+                claude_session_id AS claudeSessionId,
                 started_at AS startedAt, ended_at AS endedAt,
                 COALESCE(last_worked_at, last_active_at, ended_at, started_at) AS lastActivityAt,
                 COALESCE(transcript_bytes, 0) AS transcriptBytes, store_transcript AS recording

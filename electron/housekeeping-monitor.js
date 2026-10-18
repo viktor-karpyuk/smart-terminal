@@ -45,6 +45,7 @@ const THRESHOLDS = Object.freeze({
   'load.per.core': { label: 'Load per core', unit: 'x', direction: 'above', attention: 1, limit: 2, why: 'More runnable work than cores for five minutes means everything waits its turn, the terminals included.' },
   'app.rss.bytes': { label: 'App memory', unit: 'bytes', direction: 'above', attention: 3 * GB, limit: 6 * GB, why: 'The app itself holding this much is usually many open sessions with long scrollback.' },
   'sessions.open': { label: 'Open sessions', unit: '', direction: 'above', attention: 30, limit: 60, why: 'Each open Claude session is a process and a conversation in memory; past a point, the machine is the limit.' },
+  'sessions.rss.bytes': { label: 'Memory of sessions', unit: 'bytes', direction: 'above', attention: 6 * GB, limit: 12 * GB, why: 'What the terminals and the Claude processes under them hold together. Pausing minimized sessions gives it back; nothing on disk does.' },
   'db.bytes': { label: 'Database', unit: 'bytes', direction: 'above', attention: 1 * GB, limit: 2 * GB, why: 'Searching and opening history take longer as the file grows; most of it is kept conversations.' },
   'db.wal.bytes': { label: 'Database log', unit: 'bytes', direction: 'above', attention: 256 * MB, limit: 1 * GB, why: 'The write-ahead log grows while the app runs and is folded back only now and then; a large one slows every read.' },
   'worktrees.inactive': { label: 'Inactive worktrees', unit: '', direction: 'above', attention: 20, limit: 50, why: 'Worktrees nobody has touched in two weeks are mostly build caches, and Spotlight indexes every one.' },
@@ -70,8 +71,9 @@ class HousekeepingMonitor {
    * @param {object} [deps.sys]        overrides for tests: freemem, totalmem, loadavg, cpus, rss, statfs
    * @param {() => number} [deps.now]
    */
-  constructor({ store, housekeeping, userData, openSessions = () => 0, notify = () => {}, emit = () => {}, sys = {}, now = () => Date.now(), systemEvery = MINUTE, inventoryEvery = HOUR }) {
+  constructor({ store, housekeeping, userData, openSessions = () => 0, sessionPids = () => [], notify = () => {}, emit = () => {}, sys = {}, now = () => Date.now(), systemEvery = MINUTE, inventoryEvery = HOUR }) {
     this.store = store;
+    this.sessionPids = sessionPids;
     this.housekeeping = housekeeping;
     this.userData = userData;
     this.openSessions = openSessions;
@@ -144,6 +146,7 @@ class HousekeepingMonitor {
       'load.per.core': cores ? Math.round((load[1] / cores) * 100) / 100 : null,
       'app.rss.bytes': rss,
       'sessions.open': this.openSessions(),
+      'sessions.rss.bytes': this.sys.sessionsRss?.() ?? sessionsRss(this.sessionPids()),
       'db.bytes': sizeOf(dbFile),
       'db.wal.bytes': sizeOf(`${dbFile}-wal`),
     };
@@ -363,6 +366,7 @@ class HousekeepingMonitor {
       diskFreePct: diskTotal ? Math.round((v('disk.free.bytes') / diskTotal) * 100) : v('disk.free.pct'),
       load: v('load.per.core'),
       sessions: v('sessions.open'),
+      sessionsRss: v('sessions.rss.bytes'),
       todayFreed: today.freed,
       todayConsumed: today.consumed,
       todayUsedDelta: today.usedDelta,
@@ -430,6 +434,50 @@ function readMemoryAvailable() {
     return available > 0 ? available * page : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * What the sessions hold in memory: the resident size of every process under
+ * each terminal's shell, added up. One `ps` for the whole table, then the tree
+ * walked from the pids the app owns — a Claude session is a shell, a node, and
+ * whatever that node spawned.
+ */
+function sessionsRss(pids, table = null) {
+  const roots = new Set((pids ?? []).map((one) => Number(typeof one === 'object' ? one.pid : one)).filter(Boolean));
+  if (!roots.size) return 0;
+  const rows = table ?? readProcessTable();
+  if (!rows.length) return null;
+  const children = new Map();
+  for (const row of rows) {
+    if (!children.has(row.ppid)) children.set(row.ppid, []);
+    children.get(row.ppid).push(row);
+  }
+  const byPid = new Map(rows.map((row) => [row.pid, row]));
+  let total = 0;
+  const seen = new Set();
+  const stack = [...roots];
+  while (stack.length) {
+    const pid = stack.pop();
+    if (seen.has(pid)) continue;
+    seen.add(pid);
+    total += byPid.get(pid)?.rss ?? 0;
+    for (const child of children.get(pid) ?? []) stack.push(child.pid);
+  }
+  return total;
+}
+
+/** pid, ppid and resident bytes of every process; empty when ps is not there. */
+function readProcessTable() {
+  try {
+    const out = execFileSync('ps', ['-axo', 'pid=,ppid=,rss='], { encoding: 'utf8', timeout: 3000, maxBuffer: 8 * 1024 * 1024 });
+    return out
+      .split('\n')
+      .map((line) => line.trim().split(/\s+/))
+      .filter((parts) => parts.length >= 3)
+      .map(([pid, ppid, rss]) => ({ pid: Number(pid), ppid: Number(ppid), rss: Number(rss) * 1024 }));
+  } catch {
+    return [];
   }
 }
 
@@ -509,4 +557,4 @@ function sizeOf(file) {
   }
 }
 
-module.exports = { HousekeepingMonitor, THRESHOLDS, LEVELS, levelOf, describe, readSwap, parseSwapUsage, readPageouts, readMemoryAvailable, topProcesses, DAY, HOUR, MINUTE };
+module.exports = { HousekeepingMonitor, THRESHOLDS, LEVELS, levelOf, describe, readSwap, parseSwapUsage, readPageouts, readMemoryAvailable, topProcesses, sessionsRss, readProcessTable, DAY, HOUR, MINUTE };

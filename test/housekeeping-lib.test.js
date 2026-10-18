@@ -90,6 +90,18 @@ test('a metric names its tab, and only real tab names are tabs', () => {
   assert.equal(lib.isTab('nope'), false);
 });
 
+test('the running cap pauses minimized, quiet sessions first and never a visible or busy one', () => {
+  const sessions = [
+    { id: 'vis', minimized: false, busy: false, lastActivityAt: 1 },
+    { id: 'old', minimized: true, busy: false, lastActivityAt: 10 },
+    { id: 'busy', minimized: true, busy: true, lastActivityAt: 5 },
+    { id: 'new', minimized: true, busy: false, lastActivityAt: 100 },
+  ];
+  assert.deepEqual(lib.pickToPause(sessions, 1), ['old']);
+  assert.deepEqual(lib.pickToPause(sessions, 5), ['old', 'new']);
+  assert.deepEqual(lib.pickToPause(sessions, 0), []);
+});
+
 test('a size that lands replaces the row without reordering, and an unknown path changes nothing', () => {
   const items = [one({ id: 'a', path: '/a', meta: { sized: false } }), one({ id: 'b', path: '/b', bytes: 3 })];
   const next = lib.withSize(items, '/a', 42);

@@ -654,6 +654,25 @@ function TerminalSection() {
       <TerminalExtensionGroup />
 
       <Group title="Memory">
+        <Toggle
+          label="Pause Claude sessions when minimized"
+          hint="A minimized tab gives its process back and comes back on the same conversation when restored. One mid-turn finishes first. A group can say otherwise from its own menu."
+          checked={settings.pauseOnMinimize}
+          onChange={(pauseOnMinimize) => updateSettings({ pauseOnMinimize })}
+        />
+        <Row
+          label="Running Claude sessions, at most"
+          hint={settings.maxRunningClaude ? `Past ${settings.maxRunningClaude}, minimized ones are paused, the longest quiet first. A visible one is never paused.` : 'No cap. Set one and the health job says when it is crossed.'}
+        >
+          <Slider
+            value={settings.maxRunningClaude}
+            min={0}
+            max={40}
+            step={1}
+            format={(v) => (v ? `${v}` : 'no cap')}
+            onChange={(maxRunningClaude) => updateSettings({ maxRunningClaude })}
+          />
+        </Row>
         <Row
           label="Scrollback"
           hint={`For new sessions. About ${(settings.scrollback * 0.0026).toFixed(0)} MB in each one that fills it; a Claude session's transcript is kept in full regardless.`}

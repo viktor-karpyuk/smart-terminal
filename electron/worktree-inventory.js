@@ -253,8 +253,10 @@ class WorktreeInventory {
         row.upstreamGone = gone;
         row.ownWork = own;
         if (bases.length) {
-          const count = await git(root, ['rev-list', '--count', `${bases[0]}..${entry.head}`]);
-          row.aheadOfBase = count.ok ? Number(count.stdout.trim()) || 0 : null;
+          // Against the nearest base: a branch cut from main is not eight hundred commits ahead of develop in any sense that matters.
+          const counts = await Promise.all(bases.map((base) => git(root, ['rev-list', '--count', `${base}..${entry.head}`])));
+          const numbers = counts.filter((one) => one.ok).map((one) => Number(one.stdout.trim()) || 0);
+          row.aheadOfBase = numbers.length ? Math.min(...numbers) : null;
         }
         const [upstream, ...rest] = track.ok ? track.stdout.trim().split(' ') : [''];
         row.upstream = upstream || null;

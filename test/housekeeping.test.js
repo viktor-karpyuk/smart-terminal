@@ -224,7 +224,7 @@ test('sweep finishes old removals, forgets sizes of folders that are gone, and t
 });
 
 test('worktrees of a checkout under a root are items, their caches are nested, and removing one goes through git', { skip }, async () => {
-  const { hk, sizes, checkout } = world();
+  const { hk, db, sizes, checkout } = world();
   try {
     const sh = (cwd, args) => execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd, stdio: 'pipe' });
     fs.writeFileSync(path.join(checkout, 'README'), 'hi');
@@ -235,9 +235,14 @@ test('worktrees of a checkout under a root are items, their caches are nested, a
     fs.mkdirSync(path.join(wt, 'node_modules'));
     fs.writeFileSync(path.join(wt, 'node_modules', 'y.js'), 'q'.repeat(50));
 
+    db.openSession({ id: 'inwt', profileId: 'p', profileName: 'Default', kind: 'claude', title: 'task work', startCwd: wt, startedAt: NOW - DAY, claudeSessionId: 'c-1' });
+    db.db.prepare('UPDATE sessions SET ended_at = ?, last_active_at = ? WHERE id = ?').run(NOW - 3600_000, NOW - 3600_000, 'inwt');
     const inv = await hk.inventory();
     const tree = inv.items.find((one) => one.kind === 'worktree');
     assert.ok(tree, 'the worktree is listed');
+    assert.equal(tree.meta.session?.id, 'inwt', 'the session that worked in it is named');
+    assert.equal(tree.meta.session?.resumable, true);
+    assert.equal(tree.meta.session?.live, false);
     assert.equal(tree.label, 'app/app-task');
     assert.deepEqual(tree.blockers, [], 'no commit of its own, clean: nothing to lose');
     const nested = inv.items.find((one) => one.kind === 'build-cache' && one.meta.checkout === fs.realpathSync(wt));

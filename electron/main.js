@@ -2956,6 +2956,7 @@ if (isPrimaryInstance) app.whenReady().then(() => {
     housekeeping,
     userData: app.getPath('userData'),
     openSessions: () => ptys?.list().length ?? 0,
+    sessionPids: () => (ptys?.list() ?? []).map((one) => one.pid).filter(Boolean),
     notify: ({ title, body, metric }) => {
       if (!Notification.isSupported()) return;
       const note = new Notification({ title, body });

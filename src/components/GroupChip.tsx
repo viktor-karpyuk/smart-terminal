@@ -132,6 +132,23 @@ export function GroupChip({ groupId, leafId }: { groupId: string; leafId: string
             </div>
           </div>
           <div className="menu-row">
+            <span>When minimized</span>
+            <div className="segmented is-compact" role="radiogroup" aria-label="Pause this group's Claude sessions when minimized">
+              {([null, true, false] as const).map((value) => (
+                <button
+                  key={String(value)}
+                  className={(group.pauseOnMinimize ?? null) === value ? 'is-on' : ''}
+                  role="radio"
+                  aria-checked={(group.pauseOnMinimize ?? null) === value}
+                  title={value === null ? "Follow the app's setting" : value ? 'Pause its Claude sessions when minimized; they resume when restored' : 'Keep them running while minimized'}
+                  onClick={() => updateGroup(groupId, { pauseOnMinimize: value })}
+                >
+                  {value === null ? 'auto' : value ? 'pause' : 'keep'}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="menu-row">
             <span>Text size</span>
             <div className="segmented is-compact" role="radiogroup" aria-label="Text size for this group">
               {SIZES.map((size) => (

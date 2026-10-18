@@ -4292,3 +4292,4 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-chip-toggle.is-on { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--bg-elevated)); }
 .housekeeping-filter-sum { margin-left: auto; color: var(--text-faint); align-self: center; display: inline-flex; gap: 10px; align-items: center; }
 .housekeeping-filter input[type='date'] { padding: 3px 8px; background: var(--bg-elevated); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); font: inherit; font-size: var(--fs-sm); color-scheme: dark; }
+.titlebar-vital em { font-style: normal; opacity: 0.7; }

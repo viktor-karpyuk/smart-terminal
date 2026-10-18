@@ -195,6 +195,27 @@ fast the disk, the worktrees and the app's data are growing per week (a
 least-squares slope over the last two weeks, nothing with fewer than two days
 of readings) and, for the disk, how many days are left at that rate.
 
+## Sessions that are not on screen
+
+What costs memory is not the tabs but the Claude processes under them, and
+most of them belong to tabs nobody is looking at. Two controls, both under
+Settings › Memory:
+
+- **Pause Claude sessions when minimized.** A minimized tab gives its process
+  back (the existing pause: the conversation is kept and resumes where it was)
+  and comes back running when the tab is restored. One in the middle of a turn
+  finishes first and is paused the moment it goes quiet. A group can answer for
+  itself from its own menu — auto, pause, keep — and that wins over the setting.
+- **Running Claude sessions, at most.** Past the cap, minimized sessions are
+  paused, the longest quiet first; a visible one or one mid-turn is never
+  paused by the cap. The cap is also the health job's attention line for open
+  sessions, so crossing it is said. What the cap or the policy paused, the
+  policy resumes on restore; what you paused waits for you.
+
+The title bar shows **SESSIONS n (k active) · memory**: how many Claude
+sessions are running, how many of those are on screen, and the resident memory
+of every process under the terminals, read every minute.
+
 ## What each action does
 
 - **Free … now** — removes every reversible, unblocked item, except the newest

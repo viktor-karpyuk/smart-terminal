@@ -225,6 +225,22 @@ test('the balance: freed from the log, consumed from how the disk moved, by peri
   assert.ok(monitor.stats().balance.week);
 });
 
+test('the memory of the sessions is the resident size of every process under their shells', () => {
+  const { sessionsRss } = require('../electron/housekeeping-monitor');
+  const table = [
+    { pid: 1, ppid: 0, rss: 100 },
+    { pid: 10, ppid: 1, rss: 50 }, // a shell the app owns
+    { pid: 11, ppid: 10, rss: 2000 }, // node under it
+    { pid: 12, ppid: 11, rss: 300 }, // a child of node
+    { pid: 20, ppid: 1, rss: 999 }, // somebody else's
+    { pid: 30, ppid: 1, rss: 40 }, // another shell the app owns, nothing under it
+  ];
+  assert.equal(sessionsRss([10, 30], table), 50 + 2000 + 300 + 40);
+  assert.equal(sessionsRss([{ pid: 10 }], table), 2350);
+  assert.equal(sessionsRss([], table), 0);
+  assert.equal(sessionsRss([10], []), null, 'no table: no claim');
+});
+
 test('readings older than a month are trimmed, settings round-trip through JSON', { skip }, () => {
   const { store, clockNow } = world();
   store.recordReading('x', 1, clockNow() - 40 * DAY);
