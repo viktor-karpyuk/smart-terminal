@@ -1007,6 +1007,73 @@ function createHousekeeping() {
   });
 }
 
+/** What was declined in this run, by worktree path, so a background offer does not ask twice. */
+const declinedWorktreeOffers = new Set();
+
+/**
+ * A session closed, or the person asked: is the folder it stood in a worktree
+ * whose work is done? If so, offer to remove it — as a job, with the same
+ * checks and the same progress as the panel. `quiet` says nothing when there
+ * is nothing to say; from the menu, there is always an answer.
+ */
+async function offerWorktreeFor(cwd, { quiet = true, exceptPty = null } = {}) {
+  const owner = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined;
+  const say = async (type, message, detail) => {
+    if (quiet) return;
+    await dialog.showMessageBox(owner, { type, message, detail });
+  };
+  if (!cwd || !housekeeping) {
+    await say('info', 'This session is not standing in a folder the app knows.', 'Open a terminal in a worktree and try again.');
+    return { found: false };
+  }
+  let rows;
+  try {
+    // The session asking is not "inside": it is the one being closed, or the one that asked.
+    const live = housekeeping.live;
+    if (exceptPty) housekeeping.live = () => (ptys?.list() ?? []).filter((one) => one.id !== exceptPty).map((one) => cwdWatcher?.known?.get(one.id)?.cwd).filter(Boolean);
+    try {
+      rows = await housekeeping.worktrees.list();
+    } finally {
+      housekeeping.live = live;
+    }
+  } catch (error) {
+    await say('error', 'The worktrees could not be checked.', String(error?.message ?? error));
+    return { found: false };
+  }
+  const real = (one) => { try { return fs.realpathSync(one); } catch { return path.resolve(one); } };
+  const here = real(cwd);
+  const row = rows.filter((one) => !one.main).find((one) => here === one.path || here.startsWith(one.path + path.sep));
+  if (!row) {
+    await say('info', 'This session is not in a worktree.', `${cwd} is a main working tree or no checkout at all; there is nothing to tidy.`);
+    return { found: false };
+  }
+  if (!row.finished) {
+    await say('info', `${row.label} is still in progress.`, `Its state is "${row.state}". Housekeeping offers a worktree only once its work is merged, or its branch is gone on origin.`);
+    return { found: true, path: row.path, finished: false, state: row.state };
+  }
+  if (row.blockers.length) {
+    await say('warning', `${row.label} is finished, but cannot go yet.`, row.blockers.join('\n'));
+    return { found: true, path: row.path, finished: true, blockers: row.blockers };
+  }
+  if (quiet && declinedWorktreeOffers.has(row.path)) return { found: true, path: row.path, finished: true, declined: true };
+  const bytes = housekeeping.sizes.known(row.path)?.bytes ?? 0;
+  const answer = await dialog.showMessageBox(owner, {
+    type: 'question',
+    buttons: ['Remove it', 'Keep it'],
+    defaultId: 1,
+    cancelId: 1,
+    message: `Remove the worktree ${row.label}?`,
+    detail: `Its work is ${row.state}${bytes ? `, and it weighs ${require('./housekeeping-items').formatBytes(bytes)}` : ''}. It is clean and nobody is inside it. Removal runs as a Housekeeping job: git worktree remove, never forced; a merged branch is deleted, an unmerged one kept.`,
+  });
+  if (answer.response !== 0) {
+    declinedWorktreeOffers.add(row.path);
+    return { found: true, path: row.path, finished: true, declined: true };
+  }
+  const job = housekeepingJobs.start({ kind: 'remove-worktrees', ids: [`worktree:${row.path}`], labels: { [`worktree:${row.path}`]: row.label }, title: `Remove ${row.label} after its session closed` });
+  send('housekeeping:open', { tab: 'worktrees' });
+  return { found: true, path: row.path, finished: true, job: job.id };
+}
+
 function registerIpc() {
   ipcMain.handle('pty:create', (_e, options = {}) => {
     const profile = profiles.get(options.profileId);
@@ -1139,9 +1206,21 @@ function registerIpc() {
   });
   ipcMain.on('pty:resize', (_e, { id, cols, rows }) => ptys.resize(id, cols, rows));
   ipcMain.on('pty:kill', (_e, { id }) => {
+    // Where it was standing, before the watcher forgets: a session closed in a finished worktree is the moment to offer the worktree.
+    const cwd = cwdWatcher?.known?.get(id)?.cwd ?? null;
     cwdWatcher.forget(id);
     ptys.kill(id);
+    if (cwd && housekeeping?.pref?.('offer-on-close', true)) {
+      const timer = setTimeout(() => offerWorktreeFor(cwd, { quiet: true }).catch(() => {}), 1500);
+      timer.unref?.();
+    }
   });
+  /** The menu's check of the session in front: the folder its pty is in, and the offer, with an answer even when there is nothing. */
+  ipcMain.handle('housekeeping:check-session-worktree', (_e, ptyId) => {
+    const cwd = cwdWatcher?.known?.get(String(ptyId))?.cwd ?? null;
+    return offerWorktreeFor(cwd, { quiet: false, exceptPty: String(ptyId) });
+  });
+  ipcMain.handle('housekeeping:pref', (_e, { key, value } = {}) => (value === undefined ? housekeeping.pref(String(key), null) : housekeeping.setPref(String(key), value)));
 
   /**
    * The command to start Claude inside a session that already has a shell. The

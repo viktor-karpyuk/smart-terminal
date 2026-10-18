@@ -4171,3 +4171,4 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-job .housekeeping-progress-bar { position: relative; height: 6px; }
 .housekeeping-job .housekeeping-progress-bar > div.is-inner { position: absolute; left: 0; top: 0; height: 100%; background: var(--text-faint); opacity: 0.5; }
 .housekeeping-job-actions { margin-left: 10px; display: inline-flex; gap: 4px; }
+.housekeeping-switch { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 14px; color: var(--text-faint); font-size: var(--fs-sm); }

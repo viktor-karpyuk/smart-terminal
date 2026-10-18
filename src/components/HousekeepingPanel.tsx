@@ -688,6 +688,8 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
         {adding ? 'Choosing…' : 'Add a folder…'}
       </button>
 
+      <OfferOnClose onError={onError} />
+
       <h3 className="monitor-heading">Files a build makes again</h3>
       <p className="usage-note">
         A worktree with an ignored file nothing could rebuild (an .env, a key) is kept. Build caches on the list are not counted; add here the other names your builds write, one per line, * allowed: for example <code>dist-*</code>, <code>buildNumber.properties</code>.
@@ -772,6 +774,32 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
         )}
       </div>
     </>
+  );
+}
+
+/** The switch for the offer made when a session closes in a finished worktree. */
+function OfferOnClose({ onError }: { onError: (m: string) => void }) {
+  const [on, setOn] = useState<boolean | null>(null);
+  useEffect(() => {
+    window.api.housekeeping
+      .pref('offer-on-close')
+      .then((v) => setOn(v === null || v === undefined ? true : Boolean(v)))
+      .catch(() => setOn(true));
+  }, []);
+  if (on === null) return null;
+  return (
+    <label className="housekeeping-switch">
+      <input
+        type="checkbox"
+        checked={on}
+        onChange={(e) => {
+          const next = e.target.checked;
+          setOn(next);
+          window.api.housekeeping.pref('offer-on-close', next).catch((err: unknown) => onError(String((err as Error)?.message ?? err)));
+        }}
+      />{' '}
+      When a session closes in a worktree whose work is merged and clean, offer to remove it (also from Housekeeping › Check This Session's Worktree…)
+    </label>
   );
 }
 

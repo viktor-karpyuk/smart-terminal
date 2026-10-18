@@ -248,6 +248,11 @@ export function handleMenuAction(id: string) {
     case 'housekeeping:log':
       store.openHousekeeping(id.slice('housekeeping:'.length) as HousekeepingTab);
       break;
+    case 'housekeeping:worktree-here': {
+      const ptyId = sessionId ? store.sessions[sessionId]?.ptyId : null;
+      void window.api.housekeeping.checkSessionWorktree(ptyId ?? null).catch(() => {});
+      break;
+    }
     case 'housekeeping:weigh':
       store.openHousekeeping('health');
       void window.api.housekeeping.measureNow().catch(() => {});

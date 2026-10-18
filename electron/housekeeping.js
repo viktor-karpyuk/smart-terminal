@@ -322,6 +322,17 @@ class Housekeeping {
     });
   }
 
+  /** A preference by name, with a default: a small switch the panel shows. */
+  pref(key, fallback = null) {
+    const kept = this.store.setting?.(`pref:${key}`);
+    return kept === undefined ? fallback : kept;
+  }
+
+  setPref(key, value) {
+    this.store.setSetting(`pref:${key}`, value);
+    return value;
+  }
+
   /** Names or globs the person said a build makes again, beyond the cache list. */
   regenerable() {
     const kept = this.store.setting?.('regenerable');

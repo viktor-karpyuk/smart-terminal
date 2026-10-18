@@ -361,6 +361,10 @@ contextBridge.exposeInMainWorld('api', {
     jobCancel: (id) => ipcRenderer.invoke('housekeeping:job-cancel', id),
     jobDismiss: (id) => ipcRenderer.invoke('housekeeping:job-dismiss', id),
     onJob: (handler) => on('housekeeping:job', handler),
+    /** Is the session's folder a finished worktree? The main process asks, and offers. */
+    checkSessionWorktree: (ptyId) => ipcRenderer.invoke('housekeeping:check-session-worktree', ptyId),
+    /** A small switch by name; with a value, sets it. */
+    pref: (key, value) => ipcRenderer.invoke('housekeeping:pref', { key, value }),
     /** The briefing Ask Claude hands to a session: health, memory, processes, disk, worktrees. */
     brief: (question) => ipcRenderer.invoke('housekeeping:brief', { question }),
     onHealth: (handler) => on('housekeeping:health', handler),

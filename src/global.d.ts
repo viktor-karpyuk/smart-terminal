@@ -1168,6 +1168,8 @@ declare global {
         jobCancel(id: number): Promise<HousekeepingJob>;
         jobDismiss(id: number): Promise<boolean>;
         onJob(handler: (job: HousekeepingJob) => void): () => void;
+        checkSessionWorktree(ptyId: string | null): Promise<{ found: boolean; path?: string; finished?: boolean; state?: string; blockers?: string[]; declined?: boolean; job?: number }>;
+        pref(key: string, value?: unknown): Promise<unknown>;
         onHealth(handler: (payload: { status: HousekeepingStatus; conditions: HousekeepingCondition[]; vitals?: HousekeepingVitals }) => void): () => void;
         onOpen(handler: (payload: { metric?: string; tab?: string }) => void): () => void;
       };
