@@ -171,7 +171,7 @@ class Housekeeping {
     this.emit('progress', { op: 'inventory', phase: 'done', detail: `${items.length} items`, done: true });
     // Kept, so the next open of the panel shows this at once while a fresh one is read.
     try {
-      this.store.setSetting('last-inventory', { items, totals: totals(items), checkouts: this.#checkouts.length, roots: this.roots().length, disk: diskFree(this.userData), readAt: this.now() });
+      this.store.setSetting('last-inventory', { items, totals: totals(items), checkouts: this.#checkouts.length, roots: this.roots(), disk: diskFree(this.userData), readAt: this.now() });
     } catch {
       /* a snapshot not kept costs one slow open */
     }
@@ -211,10 +211,12 @@ class Housekeeping {
 
   /** The last inventory kept, for a panel to open on while a fresh one is read; null when there is none yet. */
   snapshot() {
-    if (this.last) return { items: this.last.items, totals: totals(this.last.items), readAt: this.last.at, disk: diskFree(this.userData), stale: this.now() - this.last.at > 10 * 60_000 };
+    const roots = this.roots();
+    if (this.last) return { items: this.last.items, totals: totals(this.last.items), readAt: this.last.at, disk: diskFree(this.userData), roots, checkouts: this.#checkouts?.length ?? 0, log: this.store.recentLog(20), unsized: [], stale: this.now() - this.last.at > 10 * 60_000 };
     const kept = this.store.setting?.('last-inventory');
     if (!kept?.items) return null;
-    return { ...kept, stale: true };
+    // The shape the window expects, whatever an older snapshot kept: roots are the list, never a count.
+    return { ...kept, roots: Array.isArray(kept.roots) ? kept.roots : roots, checkouts: Number(kept.checkouts) || 0, log: this.store.recentLog(20), unsized: [], stale: true };
   }
 
   /**
@@ -289,7 +291,7 @@ class Housekeeping {
           state: row.state,
           blockers: row.blockers,
           detail: [row.branch ? `branch ${row.branch}` : null, row.upstream ? `tracks ${row.upstream}` : row.ownWork ? 'no upstream' : null].filter(Boolean).join(' · ') || null,
-          meta: { root: row.root, branch: row.branch, finished: row.finished, prunable: row.prunable, broken: row.broken, work: row.work, aheadOfBase: row.aheadOfBase, sized: Boolean(known) || row.prunable },
+          meta: { root: row.root, branch: row.branch, finished: row.finished, prunable: row.prunable, broken: row.broken, work: row.work, aheadOfBase: row.aheadOfBase, dirtyCount: row.dirtyCount, dirty: row.dirty, sized: Boolean(known) || row.prunable },
         });
       });
   }
@@ -318,6 +320,17 @@ class Housekeeping {
         meta: { sessionId: row.id, transcriptBytes: row.transcriptBytes, snapshotBytes: snapshot, sized: true },
       });
     });
+  }
+
+  /** A preference by name, with a default: a small switch the panel shows. */
+  pref(key, fallback = null) {
+    const kept = this.store.setting?.(`pref:${key}`);
+    return kept === undefined ? fallback : kept;
+  }
+
+  setPref(key, value) {
+    this.store.setSetting(`pref:${key}`, value);
+    return value;
   }
 
   /** Names or globs the person said a build makes again, beyond the cache list. */
@@ -566,7 +579,9 @@ class Housekeeping {
   async #freeOne(one) {
     switch (one.kind) {
       case 'build-cache': {
-        const result = await caches.discard(one.path, { now: this.now() });
+        // Renamed aside at once, then deleted here with the worker saying how far it is: a cache can be seventy gigabytes.
+        const result = await caches.discard(one.path, { now: this.now(), remove: async () => {} });
+        if (result.trash) await this.#removeTree(result.trash, one.label, one.bytes);
         this.sizes.forget(one.path);
         return result;
       }
@@ -647,18 +662,51 @@ class Housekeeping {
   async removeWorktrees(ids = []) {
     const paths = ids.map((id) => String(id)).filter((id) => id.startsWith('worktree:')).map((id) => id.slice('worktree:'.length));
     this.emit('progress', { op: 'remove-worktrees', index: 0, total: paths.length, label: 'looking at each worktree again', freed: 0, done: false });
-    const results = await this.worktrees.remove(paths, { onEach: ({ index, total, label }) => this.emit('progress', { op: 'remove-worktrees', index, total, label, freed: 0, done: false }) });
-    let freed = 0;
+    /*
+     * The caches inside go first, by hand and with progress: git worktree remove deletes the
+     * folder in one opaque call, and a worktree is mostly its .angular and node_modules. Once
+     * those are gone the git step is instant. Only caches git ignores, only in worktrees the
+     * inventory says are removable — the same checks the removal itself makes a moment later.
+     */
+    const rows = new Map((await this.worktrees.list()).map((row) => [row.path, row]));
+    let cleared = 0;
+    /** Bytes of caches deleted per worktree, so each result says what it gave back even after its size was forgotten. */
+    const clearedBy = new Map();
+    for (const target of paths) {
+      const row = rows.get(target);
+      if (!row || row.blockers.length) continue;
+      const inside = caches.findIn(target);
+      const ignored = await caches.ignoredIn(target, inside.map((one) => one.name));
+      for (const found of inside) {
+        if (!ignored.has(found.name)) continue;
+        try {
+          const expected = this.sizes.known(found.path)?.bytes ?? 0;
+          const aside = await caches.discard(found.path, { now: this.now(), confirmIgnored: false, remove: async () => {} });
+          if (aside.trash) {
+            const out = await this.#removeTree(aside.trash, `${path.basename(target)}/${found.name}`, expected);
+            cleared += out.bytes;
+            clearedBy.set(target, (clearedBy.get(target) ?? 0) + out.bytes);
+          }
+        } catch {
+          /* git will say if the worktree cannot go */
+        }
+      }
+    }
+    const results = await this.worktrees.remove(paths, { onEach: ({ index, total, label }) => this.emit('progress', { op: 'remove-worktrees', index, total, label, freed: cleared, done: false }) });
+    let freed = cleared;
+    const bytesOf = new Map();
     for (const one of results) {
-      const bytes = this.sizes.known(one.path)?.bytes ?? 0;
+      const rest = Math.max(0, (this.sizes.known(one.path)?.bytes ?? 0) - (clearedBy.get(one.path) ?? 0));
+      const bytes = one.ok ? rest + (clearedBy.get(one.path) ?? 0) : clearedBy.get(one.path) ?? 0;
+      bytesOf.set(one.path, bytes);
       if (one.ok) {
-        freed += bytes;
+        freed += rest;
         this.sizes.forget(one.path);
       }
-      this.store.log({ action: 'remove-worktree', kind: 'worktree', label: path.basename(one.path), bytes: one.ok ? bytes : 0, ok: one.ok, detail: one.ok ? (one.branchKept ? 'branch kept' : null) : one.error });
+      this.store.log({ action: 'remove-worktree', kind: 'worktree', label: path.basename(one.path), bytes, ok: one.ok, detail: one.ok ? (one.branchKept ? 'branch kept' : null) : one.error });
     }
     this.emit('progress', { op: 'remove-worktrees', index: paths.length, total: paths.length, label: null, freed, done: true, failed: results.filter((one) => !one.ok).length });
-    return { results: results.map((one) => ({ id: `worktree:${one.path}`, ok: one.ok, bytes: one.ok ? this.sizes.known(one.path)?.bytes ?? 0 : 0, error: one.error, note: one.branchKept ? 'branch kept' : undefined })), freed };
+    return { results: results.map((one) => ({ id: `worktree:${one.path}`, ok: one.ok, bytes: bytesOf.get(one.path) ?? 0, error: one.error, note: one.branchKept ? 'branch kept' : undefined })), freed };
   }
 
   /** Point broken worktrees back at their repository. Nothing is removed. */
@@ -667,6 +715,15 @@ class Housekeeping {
     const results = await this.worktrees.repair(paths);
     for (const one of results) this.store.log({ action: 'repair-worktree', kind: 'worktree', label: path.basename(one.path), bytes: 0, ok: one.ok, detail: one.error ?? null });
     return { results: results.map((one) => ({ id: `worktree:${one.path}`, ok: one.ok, error: one.error })) };
+  }
+
+  /** Delete a tree on the worker, telling the window every few thousand files how many bytes are gone. */
+  async #removeTree(target, label, expected = 0) {
+    const out = await this.sizes.remove(target, {
+      onProgress: ({ bytes, files }) => this.emit('progress', { op: 'delete', label, itemBytes: bytes, itemExpected: expected, files, done: false }),
+    });
+    this.emit('progress', { op: 'delete', label, itemBytes: out.bytes, itemExpected: expected, files: out.files, failed: out.failed, done: true });
+    return out;
   }
 
   /** Discard the Code Reviewer's clones for pull requests that are finished. The reviewer's own checks still apply. */
@@ -702,7 +759,8 @@ class Housekeeping {
     const forgotten = this.sizes.pruneMissing?.() ?? 0;
     const trimmed = this.store.trimLog();
     const readings = this.store.trimReadings?.() ?? 0;
-    return { swept, forgotten, trimmed, readings };
+    const jobs = this.store.trimJobs?.() ?? 0;
+    return { swept, forgotten, trimmed, readings, jobs };
   }
 
   log(limit = 50) {

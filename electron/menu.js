@@ -100,6 +100,8 @@ function buildMenu(send, newWindow, reopenWindow = () => {}, cleanWorktrees = ()
         { type: 'separator' },
         // Asks before it removes anything: see offerWorktreeCleanup in main.js.
         { label: 'Clean Up Finished Worktrees…', click: () => cleanWorktrees() },
+        // The session in front: is its worktree done, and may it go? Asked before closing, or any time.
+        { label: "Check This Session's Worktree…", click: action('housekeeping:worktree-here') },
         { label: 'Weigh Everything Now', click: action('housekeeping:weigh') },
         { label: 'Check Health Now', click: action('housekeeping:check') },
       ],

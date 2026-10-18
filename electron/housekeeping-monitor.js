@@ -110,7 +110,9 @@ class HousekeepingMonitor {
 
   /** The cheap readings: a few syscalls. */
   async tickSystem() {
-    const free = this.sys.freemem?.() ?? os.freemem();
+    // "Free" as macOS means it is nearly nothing on a busy machine: file cache counts as used. What a new
+    // process can have is free plus inactive plus purgeable, which vm_stat reports; elsewhere os.freemem.
+    const free = this.sys.freemem?.() ?? readMemoryAvailable() ?? os.freemem();
     const total = this.sys.totalmem?.() ?? os.totalmem();
     const load = this.sys.loadavg?.() ?? os.loadavg();
     const cores = this.sys.cpus?.() ?? os.cpus().length;
@@ -234,7 +236,7 @@ class HousekeepingMonitor {
     this.conditions = conditions;
     this.#say(conditions);
     const status = conditions.some((one) => one.level === 'limit') ? 'limit' : conditions.length ? 'attention' : 'fine';
-    this.emit('health', { status, conditions });
+    this.emit('health', { status, conditions, vitals: this.vitals() });
     return { status, conditions };
   }
 
@@ -311,6 +313,26 @@ class HousekeepingMonitor {
     return { days, freed, moved, weeks };
   }
 
+  /** The few numbers a title bar can carry: memory, swap, disk, load, sessions. */
+  vitals() {
+    const v = (metric) => this.latest[metric]?.value ?? null;
+    const memTotal = v('mem.total.bytes');
+    const memFree = v('mem.free.bytes');
+    const diskTotal = this.latest['disk.free.bytes'] && this.latest['disk.used.bytes'] ? v('disk.free.bytes') + v('disk.used.bytes') : null;
+    return {
+      memUsedPct: memTotal && memFree !== null ? Math.round(((memTotal - memFree) / memTotal) * 100) : null,
+      memFree,
+      swapPct: v('swap.used.pct'),
+      swapUsed: v('swap.used.bytes'),
+      pageouts: v('swap.pageouts.perMin'),
+      diskFree: v('disk.free.bytes'),
+      diskFreePct: diskTotal ? Math.round((v('disk.free.bytes') / diskTotal) * 100) : v('disk.free.pct'),
+      load: v('load.per.core'),
+      sessions: v('sessions.open'),
+      at: this.now(),
+    };
+  }
+
   /** What the panel shows: the latest of everything, the conditions, the lines, and where things are heading. */
   report() {
     const usedSlope = this.slopePerDay('disk.used.bytes');
@@ -325,6 +347,7 @@ class HousekeepingMonitor {
     return {
       status,
       conditions: this.conditions,
+      vitals: this.vitals(),
       latest: this.latest,
       thresholds: this.thresholds(),
       growthPerWeek: growth,
@@ -356,6 +379,20 @@ function readSwap() {
     /* no swap reading on this machine */
   }
   return { total: null, used: null };
+}
+
+/** Memory a new process could have on macOS: free + inactive + purgeable + speculative pages, from vm_stat. Null elsewhere. */
+function readMemoryAvailable() {
+  if (process.platform !== 'darwin') return null;
+  try {
+    const out = execFileSync('vm_stat', [], { encoding: 'utf8', timeout: 2000 });
+    const page = Number((out.match(/page size of (\d+) bytes/) ?? [])[1] ?? 16384);
+    const pages = (name) => Number((out.match(new RegExp(`^${name}:\\s+(\\d+)`, 'm')) ?? [])[1] ?? 0);
+    const available = pages('Pages free') + pages('Pages inactive') + pages('Pages purgeable') + pages('Pages speculative');
+    return available > 0 ? available * page : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The pageouts counter from vm_stat on macOS: pages the kernel wrote to swap since boot. Null elsewhere. */
@@ -434,4 +471,4 @@ function sizeOf(file) {
   }
 }
 
-module.exports = { HousekeepingMonitor, THRESHOLDS, LEVELS, levelOf, describe, readSwap, parseSwapUsage, readPageouts, topProcesses, DAY, HOUR, MINUTE };
+module.exports = { HousekeepingMonitor, THRESHOLDS, LEVELS, levelOf, describe, readSwap, parseSwapUsage, readPageouts, readMemoryAvailable, topProcesses, DAY, HOUR, MINUTE };
