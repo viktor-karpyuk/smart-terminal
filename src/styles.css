@@ -4201,3 +4201,23 @@ button.ci-toast-main { cursor: pointer; }
 .titlebar-today { padding-left: 10px; border-left: 1px solid var(--border); }
 .titlebar-today.is-good { color: #3a9d5d; }
 .titlebar-today.is-warm { color: #c9a227; }
+.housekeeping-log { list-style: none; margin: 0 0 12px; padding: 0; border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+.housekeeping-log-group + .housekeeping-log-group { border-top: 1px solid var(--border); }
+.housekeeping-log-head { display: grid; grid-template-columns: 7.5em auto minmax(0, 1fr) auto 1em; gap: 10px; align-items: center; width: 100%; padding: 8px 12px; background: none; border: 0; color: var(--text); font: inherit; text-align: left; cursor: default; }
+.housekeeping-log-group:not(.is-free) .housekeeping-log-head[aria-expanded] { cursor: pointer; }
+.housekeeping-log-head:hover { background: var(--bg-hover); }
+.housekeeping-log-when { color: var(--text-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.housekeeping-log-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.housekeeping-log-title small { color: var(--text-faint); }
+.housekeeping-log-title small.is-error { color: var(--danger, #d9534f); }
+.housekeeping-log-bytes { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; font-weight: 500; }
+.housekeeping-log-caret { color: var(--text-faint); text-align: right; }
+.housekeeping-log-group.is-refused .housekeeping-log-bytes { color: var(--danger, #d9534f); font-weight: 400; }
+.housekeeping-log-items { list-style: none; margin: 0; padding: 0 12px 8px 12px; background: var(--bg-input); }
+.housekeeping-log-items li { display: grid; grid-template-columns: 7.5em minmax(0, 1fr) auto; gap: 10px; padding: 4px 0 4px calc(7.5em + 10px); font-size: var(--fs-sm); color: var(--text-dim); border-top: 1px dashed var(--border); }
+.housekeeping-log-items li.is-refused .housekeeping-log-bytes { color: var(--danger, #d9534f); }
+.housekeeping-work.is-action-free { border-color: #3a9d5d; color: #3a9d5d; }
+.housekeeping-work.is-action-remove-worktree, .housekeeping-work.is-action-discard-workshop { border-color: #c9a227; color: #c9a227; }
+.housekeeping-work.is-action-delete-sessions, .housekeeping-work.is-action-forget-transcripts { border-color: var(--danger, #d9534f); color: var(--danger, #d9534f); }
+.housekeeping-work.is-action-repair-worktree, .housekeeping-work.is-action-db-checkpoint, .housekeeping-work.is-action-db-reclaim { border-color: var(--accent); color: var(--accent); }
+.housekeeping-filters select { padding: 2px 6px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); font: inherit; }

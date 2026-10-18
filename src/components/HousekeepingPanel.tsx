@@ -502,7 +502,7 @@ export function HousekeepingPanel() {
       )}
       {tab === 'app' && <AppFiles items={items} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} quickRow={quickRow} startJob={startJob} />}
       {tab === 'health' && <Health health={health} setHealth={setHealth} onError={setError} ask={askClaude} asking={busy === 'ask'} plan={plan} stats={stats} askPlan={askPlan} busy={Boolean(busy)} />}
-      {tab === 'log' && <Log rows={inventory.log} />}
+      {tab === 'log' && <Log initial={inventory.log} />}
     </div>
   );
 }
@@ -1260,30 +1260,160 @@ function ConfirmModal({ pending, busy, onCancel, onConfirm }: { pending: Pending
   );
 }
 
-function Log({ rows }: { rows: HousekeepingLogRow[] }) {
-  if (!rows.length) return <p className="empty-state">Nothing removed yet.</p>;
+const ACTION_LABEL: Record<string, string> = {
+  free: 'Freed',
+  'remove-worktree': 'Worktree removed',
+  'repair-worktree': 'Worktree repaired',
+  'delete-sessions': 'Sessions deleted',
+  'forget-transcripts': 'Conversations forgotten',
+  'discard-workshop': 'Clone discarded',
+  'db-checkpoint': 'Database log folded',
+  'db-reclaim': 'Database compacted',
+};
+
+/** "11:23" today, "yesterday 09:20", or the date — enough to place a removal without reading a timestamp. */
+function whenLabel(at: number, now = Date.now()): string {
+  const d = new Date(at);
+  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  const today = new Date(now);
+  const sameDay = (a: Date, b: Date) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  if (sameDay(d, today)) return time;
+  const yesterday = new Date(now - 86_400_000);
+  if (sameDay(d, yesterday)) return `yesterday ${time}`;
+  return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${time}`;
+}
+
+interface LogGroup {
+  key: string;
+  action: string;
+  at: number;
+  rows: HousekeepingLogRow[];
+  bytes: number;
+  refused: number;
+}
+
+/** Rows of one action within a minute of each other are one pass: a job, or one button. */
+function groupLog(rows: HousekeepingLogRow[]): LogGroup[] {
+  const groups: LogGroup[] = [];
+  for (const row of rows) {
+    const last = groups[groups.length - 1];
+    if (last && last.action === row.action && Math.abs(last.rows[last.rows.length - 1].at - row.at) <= 90_000) {
+      last.rows.push(row);
+      last.bytes += row.ok ? row.bytes : 0;
+      last.refused += row.ok ? 0 : 1;
+    } else {
+      groups.push({ key: `${row.action}:${row.id}`, action: row.action, at: row.at, rows: [row], bytes: row.ok ? row.bytes : 0, refused: row.ok ? 0 : 1 });
+    }
+  }
+  return groups;
+}
+
+/**
+ * What housekeeping did, as passes rather than lines: one row per button
+ * press or job, with its total and what it refused, opening to the items.
+ */
+function Log({ initial }: { initial: HousekeepingLogRow[] }) {
+  const [rows, setRows] = useState<HousekeepingLogRow[]>(initial);
+  const [limit, setLimit] = useState(200);
+  const [filter, setFilter] = useState<string>('all');
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    window.api.housekeeping
+      .log(limit)
+      .then(setRows)
+      .catch(() => {});
+  }, [limit]);
+  const actions = [...new Set(rows.map((r) => r.action))];
+  const shown = filter === 'all' ? rows : rows.filter((r) => r.action === filter);
+  const groups = groupLog(shown);
+  const now = Date.now();
+  const sum = (since: number) => rows.filter((r) => r.ok && r.at >= since).reduce((a, r) => a + r.bytes, 0);
+  const dayStart = new Date(now).setHours(0, 0, 0, 0);
+  if (!rows.length) return <p className="empty-state">Nothing removed yet. What housekeeping gives back is written here, one line per item.</p>;
+  const toggleGroup = (key: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   return (
-    <table className="housekeeping-table">
-      <thead>
-        <tr>
-          <th>When</th>
-          <th>What</th>
-          <th className="is-num">Gave back</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <tr key={row.id} className={row.ok ? '' : 'is-failed'}>
-            <td>{new Date(row.at).toLocaleString()}</td>
-            <td>
-              {row.action.replace(/-/g, ' ')} · {row.label}
-              {row.detail && <small> — {row.detail}</small>}
-            </td>
-            <td className="is-num">{row.ok ? formatBytes(row.bytes) : 'refused'}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <>
+      <div className="monitor-stats">
+        <div className="monitor-stat">
+          <span className="monitor-stat-label">Today</span>
+          <strong>{formatBytes(sum(dayStart))}</strong>
+          <small>{rows.filter((r) => r.ok && r.at >= dayStart).length} items</small>
+        </div>
+        <div className="monitor-stat">
+          <span className="monitor-stat-label">Last 7 days</span>
+          <strong>{formatBytes(sum(now - 7 * 86_400_000))}</strong>
+          <small>{rows.filter((r) => r.ok && r.at >= now - 7 * 86_400_000).length} items</small>
+        </div>
+        <div className="monitor-stat">
+          <span className="monitor-stat-label">In this log</span>
+          <strong>{formatBytes(sum(0))}</strong>
+          <small>
+            {rows.length} line{rows.length === 1 ? '' : 's'}, {rows.filter((r) => !r.ok).length} refused
+          </small>
+        </div>
+      </div>
+      <div className="housekeeping-filters">
+        <label>
+          Show
+          <select value={filter} onChange={(e) => setFilter(e.target.value)}>
+            <option value="all">everything</option>
+            {actions.map((a) => (
+              <option key={a} value={a}>
+                {ACTION_LABEL[a] ?? a}
+              </option>
+            ))}
+          </select>
+        </label>
+        <span className="usage-note">
+          {groups.length} pass{groups.length === 1 ? '' : 'es'} · click one to see its items
+        </span>
+      </div>
+      <ul className="housekeeping-log">
+        {groups.map((g) => {
+          const isOpen = open.has(g.key) || g.rows.length === 1;
+          return (
+            <li key={g.key} className={`housekeeping-log-group is-${g.action}${g.refused && !g.bytes ? ' is-refused' : ''}`}>
+              <button className="housekeeping-log-head" onClick={() => g.rows.length > 1 && toggleGroup(g.key)} aria-expanded={isOpen}>
+                <span className="housekeeping-log-when">{whenLabel(g.at, now)}</span>
+                <span className={`housekeeping-work is-action-${g.action}`}>{ACTION_LABEL[g.action] ?? g.action}</span>
+                <span className="housekeeping-log-title">
+                  {g.rows.length === 1 ? g.rows[0].label : `${g.rows.length} items`}
+                  {g.rows.length === 1 && g.rows[0].detail ? <small> — {g.rows[0].detail}</small> : null}
+                  {g.refused ? <small className="is-error"> · {g.refused} refused</small> : null}
+                </span>
+                <span className="housekeeping-log-bytes">{g.bytes ? formatBytes(g.bytes) : g.refused ? 'refused' : '—'}</span>
+                {g.rows.length > 1 && <span className="housekeeping-log-caret">{isOpen ? '▾' : '▸'}</span>}
+              </button>
+              {isOpen && g.rows.length > 1 && (
+                <ul className="housekeeping-log-items">
+                  {g.rows.map((row) => (
+                    <li key={row.id} className={row.ok ? '' : 'is-refused'}>
+                      <span className="housekeeping-log-when">{new Date(row.at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                      <span className="housekeeping-log-title">
+                        {row.label}
+                        {row.detail ? <small> — {row.detail}</small> : null}
+                      </span>
+                      <span className="housekeeping-log-bytes">{row.ok ? formatBytes(row.bytes) : 'refused'}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {rows.length >= limit && (
+        <button className="ghost-btn tiny" onClick={() => setLimit((n) => n + 500)}>
+          Show older
+        </button>
+      )}
+    </>
   );
 }
 
