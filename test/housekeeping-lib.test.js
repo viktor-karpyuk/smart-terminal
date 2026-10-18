@@ -56,6 +56,17 @@ test('the worktree filter keeps by idle days and finished state', () => {
   assert.deepEqual(ids({ olderThanDays: 14, finishedOnly: true }), ['done']);
 });
 
+test('a metric names its tab, and only real tab names are tabs', () => {
+  assert.equal(lib.tabFor('worktrees.inactive'), 'worktrees');
+  assert.equal(lib.tabFor('budget.worktrees.bytes'), 'worktrees');
+  assert.equal(lib.tabFor('db.wal.bytes'), 'app');
+  assert.equal(lib.tabFor('budget.app.bytes'), 'app');
+  assert.equal(lib.tabFor('disk.free.pct'), 'health');
+  assert.equal(lib.tabFor(undefined), 'health');
+  assert.equal(lib.isTab('log'), true);
+  assert.equal(lib.isTab('nope'), false);
+});
+
 test('a size that lands replaces the row without reordering, and an unknown path changes nothing', () => {
   const items = [one({ id: 'a', path: '/a', meta: { sized: false } }), one({ id: 'b', path: '/b', bytes: 3 })];
   const next = lib.withSize(items, '/a', 42);

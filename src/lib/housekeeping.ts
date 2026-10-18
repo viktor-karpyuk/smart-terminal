@@ -94,6 +94,21 @@ export function filterWorktrees(items: HousekeepingItem[], filter: WorktreeFilte
   });
 }
 
+export type HousekeepingTab = 'sessions' | 'worktrees' | 'app' | 'health' | 'log';
+
+/** The tab a health metric belongs to, for a notification or a menu entry. */
+export function tabFor(metric: string | null | undefined): HousekeepingTab {
+  if (!metric) return 'health';
+  if (metric.startsWith('worktrees') || metric === 'budget.worktrees.bytes') return 'worktrees';
+  if (metric.startsWith('db.') || metric === 'budget.app.bytes') return 'app';
+  return 'health';
+}
+
+/** Whether a string names a tab. */
+export function isTab(value: unknown): value is HousekeepingTab {
+  return value === 'sessions' || value === 'worktrees' || value === 'app' || value === 'health' || value === 'log';
+}
+
 /** The items in one bucket, largest first. */
 export function inBucket(items: HousekeepingItem[], bucket: HousekeepingBucket): HousekeepingItem[] {
   return items.filter((one) => one.bucket === bucket);

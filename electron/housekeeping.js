@@ -72,6 +72,7 @@ class Housekeeping {
       sessionActivity: (dir) => this.#sessionActivityUnder(dir),
       fetch,
       now,
+      regenerable: () => this.regenerable(),
     });
   }
 
@@ -150,7 +151,9 @@ class Housekeeping {
     // The checkouts are read once per inventory: three of the lists below want them, and a root of
     // two hundred worktrees is two hundred stats each time it is asked.
     this.#checkouts = this.checkouts();
+    this.emit('progress', { op: 'inventory', phase: 'worktrees', detail: `${this.#checkouts.length} checkouts, asking git`, done: false });
     const worktrees = await this.worktreeItems();
+    this.emit('progress', { op: 'inventory', phase: 'caches', detail: 'build caches and the app\'s own folders', done: false });
     const inside = new Set(worktrees.map((one) => one.path));
     const cacheItems = (await this.buildCacheItems()).map((one) =>
       inside.has(one.meta?.checkout) ? { ...one, meta: { ...one.meta, nested: true } } : one,
@@ -165,6 +168,13 @@ class Housekeeping {
     ];
     const sized = items.filter((one) => one.meta?.sized === false).map((one) => one.path);
     this.last = { items, at: this.now() };
+    this.emit('progress', { op: 'inventory', phase: 'done', detail: `${items.length} items`, done: true });
+    // Kept, so the next open of the panel shows this at once while a fresh one is read.
+    try {
+      this.store.setSetting('last-inventory', { items, totals: totals(items), checkouts: this.#checkouts.length, roots: this.roots().length, disk: diskFree(this.userData), readAt: this.now() });
+    } catch {
+      /* a snapshot not kept costs one slow open */
+    }
     return {
       items: byWeight(items, this.now()),
       totals: totals(items),
@@ -197,6 +207,46 @@ class Housekeeping {
       },
     });
     return out;
+  }
+
+  /** The last inventory kept, for a panel to open on while a fresh one is read; null when there is none yet. */
+  snapshot() {
+    if (this.last) return { items: this.last.items, totals: totals(this.last.items), readAt: this.last.at, disk: diskFree(this.userData), stale: this.now() - this.last.at > 10 * 60_000 };
+    const kept = this.store.setting?.('last-inventory');
+    if (!kept?.items) return null;
+    return { ...kept, stale: true };
+  }
+
+  /**
+   * One of the panel's quick actions, by name. Each maps onto a removal this
+   * file already does, with the same checks; the name is only the shortcut.
+   */
+  async act(id, ids = []) {
+    switch (id) {
+      case 'free':
+        return this.free(ids);
+      case 'remove-worktrees':
+        return this.removeWorktrees(ids);
+      case 'repair-worktrees':
+        return this.repairWorktrees(ids);
+      case 'forget-transcripts':
+        return this.forgetTranscripts(ids);
+      case 'delete-sessions':
+        return this.deleteSessions(ids);
+      case 'db-checkpoint': {
+        const out = this.db.maintain({ checkpoint: true });
+        const bytes = out.done.find((d) => d.op === 'checkpoint')?.bytes ?? 0;
+        this.store.log({ action: 'db-checkpoint', kind: 'db-backup', label: 'write-ahead log', bytes, ok: true });
+        return { freed: bytes, results: [{ id, ok: true, bytes }] };
+      }
+      case 'db-reclaim': {
+        const out = this.db.maintain({ reclaim: true });
+        this.store.log({ action: 'db-reclaim', kind: 'db-backup', label: 'database file', bytes: out.freed, ok: true });
+        return { freed: out.freed, results: [{ id, ok: true, bytes: out.freed }] };
+      }
+      default:
+        throw new Error(`Not an action: ${id}`);
+    }
   }
 
   /** The folders whose size is a thing of their own: what `measure` agrees to walk. */
@@ -239,7 +289,7 @@ class Housekeeping {
           state: row.state,
           blockers: row.blockers,
           detail: [row.branch ? `branch ${row.branch}` : null, row.upstream ? `tracks ${row.upstream}` : row.ownWork ? 'no upstream' : null].filter(Boolean).join(' · ') || null,
-          meta: { root: row.root, branch: row.branch, finished: row.finished, prunable: row.prunable, sized: Boolean(known) || row.prunable },
+          meta: { root: row.root, branch: row.branch, finished: row.finished, prunable: row.prunable, broken: row.broken, work: row.work, aheadOfBase: row.aheadOfBase, sized: Boolean(known) || row.prunable },
         });
       });
   }
@@ -268,6 +318,19 @@ class Housekeeping {
         meta: { sessionId: row.id, transcriptBytes: row.transcriptBytes, snapshotBytes: snapshot, sized: true },
       });
     });
+  }
+
+  /** Names or globs the person said a build makes again, beyond the cache list. */
+  regenerable() {
+    const kept = this.store.setting?.('regenerable');
+    return Array.isArray(kept) ? kept.filter((one) => typeof one === 'string' && one.trim()).map((one) => one.trim()) : [];
+  }
+
+  setRegenerable(list) {
+    const clean = [...new Set((Array.isArray(list) ? list : String(list ?? '').split(/[\n,]/)).map((one) => String(one).trim()).filter(Boolean))].slice(0, 100);
+    this.store.setSetting('regenerable', clean);
+    this.worktrees.memo.clear();
+    return clean;
   }
 
   /** The checkouts as of the last inventory, so one pass does not stat the roots three times. */
@@ -429,8 +492,11 @@ class Housekeeping {
     const byId = new Map(current.items.map((one) => [one.id, one]));
     const results = [];
     let freed = 0;
+    let index = 0;
     for (const id of ids) {
       const one = byId.get(id);
+      index += 1;
+      this.emit('progress', { op: 'free', index, total: ids.length, label: one?.label ?? id, freed, done: false });
       if (!one) {
         results.push({ id, ok: true, bytes: 0, note: 'already gone' });
         continue;
@@ -451,6 +517,7 @@ class Housekeeping {
         results.push({ id, ok: false, error: message });
       }
     }
+    this.emit('progress', { op: 'free', index: ids.length, total: ids.length, label: null, freed, done: true, failed: results.filter((one) => !one.ok).length });
     return { results, freed };
   }
 
@@ -545,6 +612,7 @@ class Housekeeping {
       fs.rmSync(dir, { recursive: true, force: true });
     }
     if (gone.length) this.store.log({ action: 'delete-sessions', kind: 'session', label: `${gone.length} session${gone.length === 1 ? '' : 's'}`, bytes, ok: true });
+    this.emit('progress', { op: 'delete-sessions', index: gone.length, total: wanted.length, label: null, freed: bytes, done: true });
     return { deleted: gone, skipped: sessionIds.filter((id) => !gone.includes(id)), bytes };
   }
 
@@ -567,6 +635,7 @@ class Housekeeping {
       count += 1;
     }
     if (count) this.store.log({ action: 'forget-transcripts', kind: 'session', label: `${count} conversation${count === 1 ? '' : 's'}`, bytes, ok: true });
+    this.emit('progress', { op: 'forget-transcripts', index: count, total: count, label: null, freed: bytes, done: true });
     return { count, bytes };
   }
 
@@ -577,7 +646,8 @@ class Housekeeping {
    */
   async removeWorktrees(ids = []) {
     const paths = ids.map((id) => String(id)).filter((id) => id.startsWith('worktree:')).map((id) => id.slice('worktree:'.length));
-    const results = await this.worktrees.remove(paths);
+    this.emit('progress', { op: 'remove-worktrees', index: 0, total: paths.length, label: 'looking at each worktree again', freed: 0, done: false });
+    const results = await this.worktrees.remove(paths, { onEach: ({ index, total, label }) => this.emit('progress', { op: 'remove-worktrees', index, total, label, freed: 0, done: false }) });
     let freed = 0;
     for (const one of results) {
       const bytes = this.sizes.known(one.path)?.bytes ?? 0;
@@ -587,7 +657,16 @@ class Housekeeping {
       }
       this.store.log({ action: 'remove-worktree', kind: 'worktree', label: path.basename(one.path), bytes: one.ok ? bytes : 0, ok: one.ok, detail: one.ok ? (one.branchKept ? 'branch kept' : null) : one.error });
     }
+    this.emit('progress', { op: 'remove-worktrees', index: paths.length, total: paths.length, label: null, freed, done: true, failed: results.filter((one) => !one.ok).length });
     return { results: results.map((one) => ({ id: `worktree:${one.path}`, ok: one.ok, bytes: one.ok ? this.sizes.known(one.path)?.bytes ?? 0 : 0, error: one.error, note: one.branchKept ? 'branch kept' : undefined })), freed };
+  }
+
+  /** Point broken worktrees back at their repository. Nothing is removed. */
+  async repairWorktrees(ids = []) {
+    const paths = ids.map((id) => String(id)).filter((id) => id.startsWith('worktree:')).map((id) => id.slice('worktree:'.length));
+    const results = await this.worktrees.repair(paths);
+    for (const one of results) this.store.log({ action: 'repair-worktree', kind: 'worktree', label: path.basename(one.path), bytes: 0, ok: one.ok, detail: one.error ?? null });
+    return { results: results.map((one) => ({ id: `worktree:${one.path}`, ok: one.ok, error: one.error })) };
   }
 
   /** Discard the Code Reviewer's clones for pull requests that are finished. The reviewer's own checks still apply. */

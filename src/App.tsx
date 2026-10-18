@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { isTab, tabFor, type HousekeepingTab } from './lib/housekeeping';
 import { CiToasts } from './components/CiNotices';
 import { startDrag } from './lib/resize';
 import { reapplyTerminalSizes, terminalLook, useStore } from './state/store';
@@ -39,7 +40,7 @@ export function App() {
   useEffect(() => window.api.onMenuAction(({ id }) => handleMenuAction(id)), []);
   // The health job: its status for the sidebar's dot, and a clicked notification opens the panel.
   useEffect(() => window.api.housekeeping.onHealth(({ status }) => useStore.getState().setHousekeepingStatus(status)), []);
-  useEffect(() => window.api.housekeeping.onOpen(() => useStore.getState().openHousekeeping()), []);
+  useEffect(() => window.api.housekeeping.onOpen(({ metric, tab }) => useStore.getState().openHousekeeping(isTab(tab) ? tab : tabFor(metric))), []);
   useEffect(() => {
     window.api.housekeeping
       .health()
@@ -228,6 +229,21 @@ export function handleMenuAction(id: string) {
       break;
     case 'housekeeping':
       store.openHousekeeping();
+      break;
+    case 'housekeeping:sessions':
+    case 'housekeeping:worktrees':
+    case 'housekeeping:app':
+    case 'housekeeping:health':
+    case 'housekeeping:log':
+      store.openHousekeeping(id.slice('housekeeping:'.length) as HousekeepingTab);
+      break;
+    case 'housekeeping:weigh':
+      store.openHousekeeping('health');
+      void window.api.housekeeping.measureNow().catch(() => {});
+      break;
+    case 'housekeeping:check':
+      store.openHousekeeping('health');
+      void window.api.housekeeping.health(true).catch(() => {});
       break;
     case 'updates':
       store.setUpdatePanelOpen(true);

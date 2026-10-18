@@ -26,6 +26,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { WorktreeCleanup, parseWorktrees } = require('./worktree-cleanup');
+const caches = require('./build-caches');
 const { execFile } = require('node:child_process');
 
 const MINUTE = 60_000;
@@ -45,6 +46,21 @@ const inside = (child, parent) => {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 };
 
+/** Whether the repository a worktree's .git file points at is still there. A checkout with a .git directory always is. */
+function linkedRepoExists(dir) {
+  try {
+    const dotGit = path.join(dir, '.git');
+    if (fs.statSync(dotGit).isDirectory()) return true;
+    const text = fs.readFileSync(dotGit, 'utf8');
+    const m = text.match(/^gitdir:\s*(.+)$/m);
+    if (!m) return false;
+    const gitdir = path.isAbsolute(m[1].trim()) ? m[1].trim() : path.join(dir, m[1].trim());
+    return fs.existsSync(gitdir);
+  } catch {
+    return false;
+  }
+}
+
 /** A path as the filesystem spells it — git prints resolved paths, and on macOS /var is /private/var. */
 function real(one) {
   const resolved = path.resolve(one);
@@ -55,6 +71,46 @@ function real(one) {
     const parent = path.dirname(resolved);
     return parent === resolved ? resolved : path.join(real(parent), path.basename(resolved));
   }
+}
+
+/**
+ * A name a build writes again: the cache list, a cache already renamed aside,
+ * logs, and whatever the person added — a name, or a glob with `*`.
+ */
+function isRegenerable(name, extra = []) {
+  const clean = String(name).replace(/\/$/, '');
+  const base = path.posix.basename(clean);
+  // Any segment: git lists `.angular/cache` when only the cache inside is ignored, and that is still the cache.
+  const segments = clean.split('/').filter(Boolean);
+  if (segments.some((segment) => REGENERABLE_NAMES.has(segment) || caches.TRASH.test(segment))) return true;
+  if (/\.(log|tsbuildinfo)$/.test(base) || base === '.DS_Store' || base === 'Thumbs.db') return true;
+  return extra.some((pattern) => globMatches(pattern, base) || globMatches(pattern, clean));
+}
+
+/** The cache list, plus output folders a build writes that the panel does not offer to delete on their own. */
+const REGENERABLE_NAMES = new Set([...caches.KNOWN.map((known) => known.name), 'release', '.test-build', '.idea', '.vscode', 'venv', 'tmp', 'temp', '.tmp']);
+
+/** `*` matches anything but a slash; everything else is literal. */
+function globMatches(pattern, text) {
+  const source = String(pattern)
+    .trim()
+    .split('*')
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('[^/]*');
+  return source !== '' && new RegExp(`^${source}$`).test(text);
+}
+
+/**
+ * The ignored entries of a worktree, top-level ones collapsed, without walking
+ * inside them: `ls-files --directory` stops at an ignored folder, where
+ * `status --ignored` walks every file in a seventy-gigabyte cache and
+ * times out — which was read as "something irreplaceable", and kept the
+ * worktree. A failure here is said as such, not as a file.
+ */
+async function ignoredIn(dir) {
+  const out = await git(dir, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'], { timeout: 60_000 });
+  if (!out.ok) return ['(could not read ignored files)'];
+  return out.stdout.split('\0').filter(Boolean).map((name) => name.replace(/\/$/, ''));
 }
 
 function mtimeOf(target) {
@@ -87,12 +143,14 @@ class WorktreeInventory {
    * @param {() => string[]} [deps.live]           folders live sessions are standing in
    * @param {(dir: string) => number|null} [deps.sessionActivity] when a session was last active inside a folder, or null
    * @param {boolean} [deps.fetch]                 `git fetch --prune` each repository once per `ttl`
+   * @param {() => string[]} [deps.regenerable]    extra names or globs a build makes again, beyond the cache list
    * @param {number} [deps.ttl]
    * @param {number} [deps.concurrency]
    * @param {() => number} [deps.now]
    */
-  constructor({ folders, live = () => [], sessionActivity = () => null, fetch = true, ttl = 10 * MINUTE, concurrency = 6, now = () => Date.now() }) {
+  constructor({ folders, live = () => [], sessionActivity = () => null, fetch = true, ttl = 10 * MINUTE, concurrency = 6, now = () => Date.now(), regenerable = () => [] }) {
     this.folders = folders;
+    this.regenerable = regenerable;
     this.live = live;
     this.sessionActivity = sessionActivity;
     this.fetch = fetch;
@@ -136,7 +194,8 @@ class WorktreeInventory {
 
   async describe(root, entry, isMain, bases, live) {
     const gitMtime = mtimeOf(path.join(entry.path, '.git'));
-    const stamp = `${entry.head}:${gitMtime}:${entry.branch}:${entry.locked}:${entry.prunable}`;
+    const extra = this.regenerable() ?? [];
+    const stamp = `${entry.head}:${gitMtime}:${entry.branch}:${entry.locked}:${entry.prunable}:${extra.join(',')}`;
     const kept = this.memo.get(entry.path);
     const liveInside = live.some((folder) => inside(folder, entry.path));
     const sessionAt = this.sessionActivity(entry.path);
@@ -154,22 +213,32 @@ class WorktreeInventory {
       locked: entry.locked,
       prunable: entry.prunable,
       base: Boolean(entry.branch && BASES.has(entry.branch)),
+      /** Its .git file points at a repository folder that is not there: moved or deleted. git can neither read nor remove it. */
+      broken: !entry.prunable && fs.existsSync(entry.path) && !linkedRepoExists(entry.path),
       dirty: false,
       irreplaceable: [],
       mergedInto: null,
       upstreamGone: false,
       upstream: null,
       ahead: 0,
+      /** Commits on this worktree that no base branch has: the work that would be lost. */
+      aheadOfBase: null,
       ownWork: false,
       lastCommitAt: null,
       gitMtime,
     };
 
-    if (!entry.prunable && fs.existsSync(entry.path)) {
+    if (!entry.prunable && fs.existsSync(entry.path) && !row.broken) {
       const [status, commit] = await Promise.all([git(entry.path, ['status', '--porcelain']), git(entry.path, ['log', '-1', '--format=%ct'])]);
       row.dirty = !status.ok || Boolean(status.stdout.trim());
       row.lastCommitAt = commit.ok && commit.stdout.trim() ? Number(commit.stdout.trim()) * 1000 : null;
-      if (!isMain) row.irreplaceable = await this.helper.irreplaceable(entry.path);
+      // Ignored files a build cannot make again. A build cache by any name on the list is not one of them:
+      // .angular at seventy gigabytes is the thing to remove, not the thing that keeps the worktree.
+      if (!isMain) row.irreplaceable = (await ignoredIn(entry.path)).filter((name) => !isRegenerable(name, extra));
+      // A detached worktree can still be finished: its commit may already be on a base branch.
+      if (entry.detached && !isMain && bases.length) {
+        row.mergedInto = await this.helper.mergedInto(root, entry.head, bases);
+      }
       if (entry.branch && !isMain && !row.base) {
         const [into, gone, own, track] = await Promise.all([
           this.helper.mergedInto(root, entry.head, bases),
@@ -180,6 +249,10 @@ class WorktreeInventory {
         row.mergedInto = into && own ? into : null;
         row.upstreamGone = gone;
         row.ownWork = own;
+        if (bases.length) {
+          const count = await git(root, ['rev-list', '--count', `${bases[0]}..${entry.head}`]);
+          row.aheadOfBase = count.ok ? Number(count.stdout.trim()) || 0 : null;
+        }
         const [upstream, ...rest] = track.ok ? track.stdout.trim().split(' ') : [''];
         row.upstream = upstream || null;
         const aheadMatch = rest.join(' ').match(/ahead (\d+)/);
@@ -191,15 +264,39 @@ class WorktreeInventory {
   }
 
   /**
+   * Point broken worktrees back at the repository that lists them: `git worktree
+   * repair` rewrites the .git file and the repository's record of it, and touches
+   * nothing else. Safe, and the only way such a worktree becomes readable again.
+   */
+  async repair(paths) {
+    const rows = new Map((await this.list()).map((row) => [row.path, row]));
+    const results = [];
+    for (const target of paths) {
+      const row = rows.get(target) ?? rows.get(real(target));
+      if (!row) {
+        results.push({ path: target, ok: false, error: 'That is not a worktree the app knows; look again.' });
+        continue;
+      }
+      const done = await git(row.root, ['worktree', 'repair', row.path]);
+      this.memo.delete(row.path);
+      results.push(done.ok ? { path: target, ok: true } : { path: target, ok: false, error: done.stderr.trim().split('\n').pop() || 'git could not repair it' });
+    }
+    return results;
+  }
+
+  /**
    * Remove worktrees by path, each on its own. Never `--force`: git refuses
    * anything that changed since it was looked at. A finished branch is deleted
    * with `-d`, which refuses what is not merged, so the commits of an
    * unfinished one stay on their branch.
    */
-  async remove(paths) {
+  async remove(paths, { onEach = null } = {}) {
     const rows = new Map((await this.list()).map((row) => [row.path, row]));
     const results = [];
+    let index = 0;
     for (const target of paths) {
+      index += 1;
+      onEach?.({ index, total: paths.length, path: target, label: path.basename(target) });
       const row = rows.get(target) ?? rows.get(real(target));
       if (!row) {
         results.push({ path: target, ok: false, error: 'That is not a worktree the app knows; look again.' });
@@ -242,9 +339,10 @@ function finish(row, liveInside, sessionAt) {
   const finished = Boolean(row.mergedInto || row.upstreamGone);
   const blockers = [];
   if (row.main) blockers.push('the main working tree');
+  if (row.broken) blockers.push('its .git points at a repository folder that is gone; repair it first');
   if (row.base) blockers.push(`${row.branch} is a base branch`);
   if (row.locked) blockers.push('locked');
-  if (row.detached && !row.prunable) blockers.push('detached HEAD');
+  if (row.detached && !row.prunable && !row.mergedInto) blockers.push('detached HEAD, and its commit is on no base branch');
   if (liveInside) blockers.push('a session is inside it');
   if (row.dirty) blockers.push('changes not committed');
   if (row.irreplaceable.length) blockers.push(`ignored files nothing could rebuild: ${row.irreplaceable.slice(0, 3).join(', ')}${row.irreplaceable.length > 3 ? '…' : ''}`);
@@ -253,8 +351,11 @@ function finish(row, liveInside, sessionAt) {
     if (!row.upstream) blockers.push('never pushed');
     else if (row.ahead > 0) blockers.push(`${row.ahead} commit${row.ahead === 1 ? '' : 's'} not pushed`);
   }
+  const unmerged = row.aheadOfBase ? `${row.aheadOfBase} commit${row.aheadOfBase === 1 ? '' : 's'} not merged` : null;
   const state = row.prunable
     ? 'folder gone'
+    : row.broken
+      ? 'link broken'
     : row.main
       ? 'main working tree'
       : row.mergedInto
@@ -264,9 +365,15 @@ function finish(row, liveInside, sessionAt) {
           : row.detached
             ? 'detached'
             : row.dirty
-              ? 'uncommitted changes'
-              : 'open';
-  return { ...row, liveInside, sessionAt, lastActivityAt, finished, blockers, state };
+              ? `uncommitted changes${unmerged ? `, ${unmerged}` : ''}`
+              : unmerged
+                ? unmerged
+                : row.ownWork
+                  ? 'open'
+                  : 'nothing of its own';
+  /** The one-word answer to "is the work in it done": done, unmerged, or empty. */
+  const work = row.main || row.base ? 'base' : finished ? 'done' : row.dirty || (row.aheadOfBase ?? 0) > 0 ? 'unmerged' : row.ownWork ? 'unknown' : 'empty';
+  return { ...row, liveInside, sessionAt, lastActivityAt, finished, blockers, state, work };
 }
 
-module.exports = { WorktreeInventory, finish, mapLimit };
+module.exports = { WorktreeInventory, finish, mapLimit, isRegenerable, globMatches, ignoredIn, linkedRepoExists };

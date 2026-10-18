@@ -23,6 +23,7 @@
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -38,6 +39,9 @@ const THRESHOLDS = Object.freeze({
   'disk.free.pct': { label: 'Disk free', unit: '%', direction: 'below', attention: 15, limit: 8, why: 'A nearly full volume slows every build, the database and the system itself; APFS needs room to write.' },
   'disk.free.bytes': { label: 'Disk free', unit: 'bytes', direction: 'below', attention: 50 * GB, limit: 20 * GB, why: 'Below this, one large build cache or one container image can fill the disk.' },
   'mem.free.bytes': { label: 'Memory free', unit: 'bytes', direction: 'below', attention: 2 * GB, limit: 1 * GB, why: 'With little memory free the system swaps, and typing in the terminals starts to lag.' },
+  'swap.used.pct': { label: 'Swap in use', unit: '%', direction: 'above', attention: 50, limit: 80, why: 'Swap is memory on disk: every page the system has to bring back is a pause, and the terminals feel every one. This is what makes the machine lag.' },
+  'swap.used.bytes': { label: 'Swap used', unit: 'bytes', direction: 'above', attention: 2 * GB, limit: 6 * GB, why: 'Gigabytes of swap mean the programs open do not fit in memory together; closing some is the only real fix.' },
+  'swap.pageouts.perMin': { label: 'Pages swapped out', unit: '/min', direction: 'above', attention: 200, limit: 2000, why: 'Swap in use is history; pages going out per minute is swapping happening now, and each one is a pause the terminals feel.' },
   'load.per.core': { label: 'Load per core', unit: 'x', direction: 'above', attention: 1, limit: 2, why: 'More runnable work than cores for five minutes means everything waits its turn, the terminals included.' },
   'app.rss.bytes': { label: 'App memory', unit: 'bytes', direction: 'above', attention: 3 * GB, limit: 6 * GB, why: 'The app itself holding this much is usually many open sessions with long scrollback.' },
   'sessions.open': { label: 'Open sessions', unit: '', direction: 'above', attention: 30, limit: 60, why: 'Each open Claude session is a process and a conversation in memory; past a point, the machine is the limit.' },
@@ -78,6 +82,8 @@ class HousekeepingMonitor {
     this.latest = {};
     this.lastInventoryAt = 0;
     this.conditions = [];
+    /** The last pageouts counter, so the next reading can be a rate. */
+    this.lastPageouts = null;
   }
 
   start() {
@@ -110,6 +116,14 @@ class HousekeepingMonitor {
     const cores = this.sys.cpus?.() ?? os.cpus().length;
     const rss = this.sys.rss?.() ?? process.memoryUsage().rss;
     const disk = this.sys.statfs?.() ?? diskOf(this.userData);
+    const swap = this.sys.swap?.() ?? readSwap();
+    const pageouts = this.sys.pageouts?.() ?? readPageouts();
+    let pageoutRate = null;
+    if (pageouts !== null && this.lastPageouts) {
+      const minutes = (this.now() - this.lastPageouts.at) / MINUTE;
+      if (minutes > 0.2) pageoutRate = Math.max(0, Math.round((pageouts - this.lastPageouts.value) / minutes));
+    }
+    if (pageouts !== null) this.lastPageouts = { value: pageouts, at: this.now() };
     const dbFile = path.join(this.userData, 'smart-terminal.db');
     const readings = {
       'disk.free.bytes': disk.free,
@@ -117,6 +131,10 @@ class HousekeepingMonitor {
       'disk.used.bytes': disk.total && disk.free !== null ? disk.total - disk.free : null,
       'mem.free.bytes': free,
       'mem.total.bytes': total,
+      'swap.used.bytes': swap.used,
+      'swap.total.bytes': swap.total,
+      'swap.used.pct': swap.total ? Math.round((swap.used / swap.total) * 1000) / 10 : null,
+      'swap.pageouts.perMin': pageoutRate,
       // The five-minute average: a one-minute spike is a build starting, not a condition.
       'load.per.core': cores ? Math.round((load[1] / cores) * 100) / 100 : null,
       'app.rss.bytes': rss,
@@ -269,6 +287,30 @@ class HousekeepingMonitor {
     return den ? (num / den) * DAY : 0;
   }
 
+  /**
+   * What happened over a stretch of days: what housekeeping gave back and how
+   * the disk, the worktrees and the app's data moved. Kept figures, not a
+   * guess — from the log and the readings.
+   */
+  stats(days = 30) {
+    const since = this.now() - days * DAY;
+    const freed = this.store.logTotals(since);
+    const moved = {};
+    for (const metric of ['disk.used.bytes', 'disk.free.bytes', 'bucket.worktrees.bytes', 'bucket.sessions.bytes', 'bucket.app.bytes', 'worktrees.count', 'worktrees.inactive', 'db.bytes', 'swap.used.pct']) {
+      const range = this.store.firstLast(metric, since);
+      moved[metric] = range ? { from: range.first.value, to: range.last.value, fromAt: range.first.at, toAt: range.last.at } : null;
+    }
+    const weeks = [];
+    for (let w = 0; w < Math.min(8, Math.ceil(days / 7)); w++) {
+      const end = this.now() - w * 7 * DAY;
+      const start = end - 7 * DAY;
+      const row = this.store.logTotals(start);
+      const after = this.store.logTotals(end);
+      weeks.unshift({ start, end, bytes: Math.max(0, row.bytes - after.bytes), n: Math.max(0, row.n - after.n) });
+    }
+    return { days, freed, moved, weeks };
+  }
+
   /** What the panel shows: the latest of everything, the conditions, the lines, and where things are heading. */
   report() {
     const usedSlope = this.slopePerDay('disk.used.bytes');
@@ -290,6 +332,70 @@ class HousekeepingMonitor {
       lastInventoryAt: this.lastInventoryAt || null,
       readAt: this.now(),
     };
+  }
+}
+
+/**
+ * Swap, as the system reports it. macOS: `sysctl vm.swapusage` says
+ * "total = 4096.00M  used = 2818.38M  free = 1277.62M". Linux: /proc/meminfo.
+ * Elsewhere, or when the question fails, nothing — a reading not taken is
+ * better than one made up.
+ */
+function readSwap() {
+  try {
+    if (process.platform === 'darwin') {
+      return parseSwapUsage(execFileSync('sysctl', ['-n', 'vm.swapusage'], { encoding: 'utf8', timeout: 2000 }));
+    }
+    if (process.platform === 'linux') {
+      const info = fs.readFileSync('/proc/meminfo', 'utf8');
+      const kb = (name) => Number((info.match(new RegExp(`^${name}:\\s+(\\d+)`, 'm')) ?? [])[1] ?? 0) * 1024;
+      const total = kb('SwapTotal');
+      return { total, used: total - kb('SwapFree') };
+    }
+  } catch {
+    /* no swap reading on this machine */
+  }
+  return { total: null, used: null };
+}
+
+/** The pageouts counter from vm_stat on macOS: pages the kernel wrote to swap since boot. Null elsewhere. */
+function readPageouts() {
+  if (process.platform !== 'darwin') return null;
+  try {
+    const out = execFileSync('vm_stat', [], { encoding: 'utf8', timeout: 2000 });
+    const m = out.match(/^Pageouts:\s+(\d+)/m);
+    return m ? Number(m[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** "total = 4096.00M  used = 2818.38M  free = 1277.62M  (encrypted)" → bytes. */
+function parseSwapUsage(text) {
+  const unit = { K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4 };
+  const grab = (name) => {
+    const m = String(text).match(new RegExp(`${name}\\s*=\\s*([\\d.]+)([KMGT])`));
+    return m ? Math.round(Number(m[1]) * unit[m[2]]) : null;
+  };
+  return { total: grab('total'), used: grab('used') };
+}
+
+/**
+ * The processes holding the most memory, by resident size. What a person asks
+ * first when the machine swaps, and what Claude needs to say which to close.
+ */
+function topProcesses(limit = 12) {
+  try {
+    const out = execFileSync('ps', ['-axo', 'pid=,rss=,comm='], { encoding: 'utf8', timeout: 3000, maxBuffer: 8 * 1024 * 1024 });
+    return out
+      .split('\n')
+      .map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/))
+      .filter(Boolean)
+      .map((m) => ({ pid: Number(m[1]), bytes: Number(m[2]) * 1024, command: m[3] }))
+      .sort((a, b) => b.bytes - a.bytes)
+      .slice(0, limit);
+  } catch {
+    return [];
   }
 }
 
@@ -328,4 +434,4 @@ function sizeOf(file) {
   }
 }
 
-module.exports = { HousekeepingMonitor, THRESHOLDS, LEVELS, levelOf, describe, DAY, HOUR, MINUTE };
+module.exports = { HousekeepingMonitor, THRESHOLDS, LEVELS, levelOf, describe, readSwap, parseSwapUsage, readPageouts, topProcesses, DAY, HOUR, MINUTE };

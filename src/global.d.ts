@@ -1145,16 +1145,24 @@ declare global {
         forgetTranscripts(ids: string[]): Promise<{ count: number; bytes: number }>;
         discardWorkshops(ids: string[]): Promise<{ results: HousekeepingResult[] }>;
         removeWorktrees(ids: string[]): Promise<{ results: HousekeepingResult[]; freed: number }>;
+        repairWorktrees(ids: string[]): Promise<{ results: HousekeepingResult[] }>;
         roots(): Promise<HousekeepingRoot[]>;
         addRoot(folder: string): Promise<HousekeepingRoot[]>;
         removeRoot(folder: string): Promise<HousekeepingRoot[]>;
         log(limit?: number): Promise<HousekeepingLogRow[]>;
         onSize(handler: (payload: { path: string; bytes: number; files: number; partial?: boolean }) => void): () => void;
+        onProgress(handler: (payload: HousekeepingProgress) => void): () => void;
         health(fresh?: boolean): Promise<HousekeepingHealth | null>;
         setThreshold(metric: string, level: 'attention' | 'limit', value: number | null): Promise<HousekeepingHealth | null>;
         measureNow(): Promise<HousekeepingHealth | null>;
+        brief(question?: string | null): Promise<string>;
+        snapshot(): Promise<(HousekeepingInventory & { stale: boolean }) | null>;
+        regenerable(list?: string[] | string): Promise<string[]>;
+        stats(days?: number): Promise<HousekeepingStats | null>;
+        advice(): Promise<HousekeepingProposal[]>;
+        act(id: string, ids?: string[]): Promise<{ freed?: number; results?: HousekeepingResult[]; deleted?: string[]; count?: number; bytes?: number }>;
         onHealth(handler: (payload: { status: HousekeepingStatus; conditions: HousekeepingCondition[] }) => void): () => void;
-        onOpen(handler: (payload: { metric?: string }) => void): () => void;
+        onOpen(handler: (payload: { metric?: string; tab?: string }) => void): () => void;
       };
       onMenuAction(handler: (payload: { id: string }) => void): () => void;
     };
@@ -1255,6 +1263,35 @@ declare global {
     daysUntilFull: number | null;
     lastInventoryAt: number | null;
     readAt: number;
+  }
+
+  interface HousekeepingProgress {
+    op: string;
+    index?: number;
+    total?: number;
+    label?: string | null;
+    phase?: string;
+    detail?: string;
+    freed?: number;
+    failed?: number;
+    done: boolean;
+  }
+
+  interface HousekeepingProposal {
+    id: string;
+    priority: 'now' | 'soon' | 'later';
+    title: string;
+    detail: string;
+    effect: string | null;
+    bytes: number;
+    action: { id: string; label: string; ids?: string[]; danger?: boolean } | null;
+  }
+
+  interface HousekeepingStats {
+    days: number;
+    freed: { n: number; bytes: number; byAction: Record<string, { n: number; bytes: number }> };
+    moved: Record<string, { from: number; to: number; fromAt: number; toAt: number } | null>;
+    weeks: { start: number; end: number; bytes: number; n: number }[];
   }
 
   interface HousekeepingInventory {

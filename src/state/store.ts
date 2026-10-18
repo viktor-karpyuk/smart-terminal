@@ -684,7 +684,11 @@ interface State {
   setUsagePanelOpen(open: boolean): void;
   openMonitor(sessionId?: string | null): void;
   openExtensions(): void;
-  openHousekeeping(): void;
+  /** Open housekeeping, on a tab when one is named. */
+  openHousekeeping(tab?: 'sessions' | 'worktrees' | 'app' | 'health' | 'log' | null): void;
+  /** The tab the last open asked for; the panel reads it on mount and when it changes, then clears it. */
+  housekeepingTab: 'sessions' | 'worktrees' | 'app' | 'health' | 'log' | null;
+  clearHousekeepingTab(): void;
   /** Open a view an extension contributes, on a folder. */
   openExtensionView(viewId: string, root: string | null): void;
   /**
@@ -923,6 +927,7 @@ export const useStore = create<State>((set, get) => ({
   groups: [],
   historyOpen: false,
   housekeepingStatus: 'fine',
+  housekeepingTab: null,
   appearanceOpen: false,
   update: null,
   updatePanelOpen: false,
@@ -3269,7 +3274,12 @@ export const useStore = create<State>((set, get) => ({
   },
 
   /** Open housekeeping, or bring the one that is already open forward. One is enough: it shows the whole disk. */
-  openHousekeeping() {
+  clearHousekeepingTab() {
+    if (get().housekeepingTab !== null) set({ housekeepingTab: null });
+  },
+
+  openHousekeeping(tab = null) {
+    if (tab) set({ housekeepingTab: tab });
     const state = get();
     const existing = Object.values(state.panels).find((panel) => panel.kind === 'housekeeping');
     if (existing) {
