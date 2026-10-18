@@ -79,6 +79,13 @@ class Database {
         enabled      INTEGER NOT NULL DEFAULT 1
       );
 
+      -- Built-ins that have been put in front of this install once: the first
+      -- run's, and any a later version installed. Never again after that.
+      CREATE TABLE IF NOT EXISTS extension_arrivals (
+        id         TEXT PRIMARY KEY,
+        arrived_at INTEGER NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS session_compactions (
         session_id      TEXT NOT NULL,
         at              INTEGER NOT NULL,
@@ -659,19 +666,37 @@ class Database {
   }
 
   /**
-   * The first run, and only the first.
+   * What ships with the app, put in place.
    *
-   * Everything that shipped with the app starts installed, because it was
+   * On the first run everything that shipped starts installed, because it was
    * working yesterday and an upgrade that quietly switches features off is an
    * upgrade that broke them. After that the table is the record of decisions,
    * and something new arriving in a later version is an offer rather than a
-   * change made on somebody's behalf.
+   * change made on somebody's behalf — unless its manifest says
+   * `installOnUpgrade`, and then only the once.
    */
   seedExtensions(builtIns) {
     const already = this.db.prepare('SELECT COUNT(*) AS n FROM extensions').get().n ?? 0;
-    if (already > 0) return false;
-    for (const manifest of builtIns) this.installExtension(manifest);
-    return true;
+    const arrived = new Set(this.db.prepare('SELECT id FROM extension_arrivals').all().map((row) => row.id));
+    const note = this.db.prepare('INSERT OR IGNORE INTO extension_arrivals (id, arrived_at) VALUES (?, ?)');
+    const installed = [];
+    for (const manifest of builtIns) {
+      if (arrived.has(manifest.id)) continue;
+      /*
+       * A later version may bring a built-in that is part of how the app
+       * works rather than an add-on — the Terminal extension is one — and
+       * says so with `installOnUpgrade`. It is installed once, on the first
+       * run that sees it; removed or switched off after that, it stays so.
+       */
+      if (already === 0 || manifest.installOnUpgrade === true) {
+        if (!this.installedExtensions().some((row) => row.id === manifest.id)) {
+          this.installExtension(manifest);
+          installed.push(manifest.id);
+        }
+        note.run(manifest.id, Date.now());
+      }
+    }
+    return installed.length > 0;
   }
 
   /**

@@ -2866,7 +2866,8 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   monitor.start();
 
   // What shipped with the app starts installed; after that the table is the
-  // record of what was decided, and something new arriving later is an offer.
+  // record of what was decided, and something new arriving later is an offer
+  // unless its manifest asks to be installed on the upgrade that brings it.
   try {
     db.seedExtensions(builtInExtensions());
   } catch {

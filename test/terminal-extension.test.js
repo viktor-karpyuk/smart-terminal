@@ -116,3 +116,63 @@ test('a pty paused for a terminal that fell behind resumes on its own if nobody 
   assert.deepEqual(calls, ['pause', 'resume', 'pause', 'resume'], 'resumed by hand, the lapse does nothing more');
   ptys.flow('gone', true);
 });
+
+// --- installed on the upgrade that brings it, once -------------------------
+
+let sqlite = null;
+try {
+  sqlite = require('node:sqlite');
+} catch {
+  sqlite = null;
+}
+const { Database } = sqlite ? require('../electron/database') : {};
+const skipDb = sqlite ? false : 'node:sqlite needs Node 22 or newer';
+
+function freshDb() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'st-arrivals-'));
+  return { db: new Database(path.join(dir, 'test.db')), dir };
+}
+
+const markdown = { id: 'markdown', name: 'Markdown', version: '1.0.0' };
+const yaml = { id: 'yaml', name: 'YAML', version: '1.0.0' };
+const terminal = { id: 'terminal', name: 'Terminal', version: '1.0.0', installOnUpgrade: true };
+const ids = (db) => db.installedExtensions().map((row) => row.id).sort();
+
+test('an existing install gets the Terminal extension on the upgrade, and an ordinary newcomer is only offered', { skip: skipDb }, () => {
+  const { db, dir } = freshDb();
+  try {
+    db.seedExtensions([markdown]);
+    assert.deepEqual(ids(db), ['markdown'], 'the first run installs what shipped');
+
+    db.seedExtensions([markdown, yaml, terminal]);
+    assert.deepEqual(ids(db), ['markdown', 'terminal'], 'yaml is an offer; terminal asked to be installed');
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('removed or switched off after it arrived, it stays that way', { skip: skipDb }, () => {
+  const { db, dir } = freshDb();
+  try {
+    db.seedExtensions([markdown]);
+    db.seedExtensions([markdown, terminal]);
+    db.removeExtension('terminal');
+    db.seedExtensions([markdown, terminal]);
+    assert.deepEqual(ids(db), ['markdown'], 'not put back after being removed');
+
+    db.installExtension(terminal);
+    db.enableExtension('terminal', false);
+    db.seedExtensions([markdown, terminal]);
+    assert.equal(db.installedExtensions().find((row) => row.id === 'terminal').enabled, false);
+  } finally {
+    db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the shipped Terminal manifest asks to be installed on upgrade', () => {
+  const found = discover(path.join(__dirname, '..', 'extensions'), { builtIn: true });
+  assert.equal(found.find((one) => one.id === 'terminal').installOnUpgrade, true);
+  assert.equal(found.find((one) => one.id === 'markdown').installOnUpgrade, false);
+});

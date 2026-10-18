@@ -3,6 +3,7 @@
   "name": "Terminal",
   "version": "1.0.0",
   "author": "Smart Terminal",
+  "installOnUpgrade": true,
   "summary": "A terminal that keeps up, copies what you select and remembers what it showed.",
   "description": "Pauses a program that writes faster than the screen can draw instead of freezing behind it. Selecting copies; file paths with a line number open the file there; a paste of several lines into a shell asks first. Scrolled up while output arrives, it says so and takes you back down. Find can match case, whole words and regular expressions, and what was on screen comes back after a restart. Brings Tokyo Night, One Dark and Kanagawa. Each part can be turned off in Appearance.",
   "contributes": {

@@ -71,6 +71,8 @@ function readManifest(dir) {
     summary: manifest.summary ?? '',
     description: manifest.description ?? '',
     contributes: manifest.contributes ?? {},
+    /** Built-ins only: installed on the first run that sees it, not just offered. See `seedExtensions`. */
+    installOnUpgrade: manifest.installOnUpgrade === true,
     /*
      * What it looks like. Only the names travel with the listing — the images
      * themselves are asked for when somebody opens the extension, because a
