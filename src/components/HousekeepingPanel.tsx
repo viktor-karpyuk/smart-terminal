@@ -738,11 +738,32 @@ function Sessions({
   const [profile, setProfile] = useState('');
   const [sessionKind, setSessionKind] = useState('');
   const [withConversation, setWithConversation] = useState(false);
+  const [status, setStatus] = useState<'any' | 'running' | 'ended'>('ended');
+  const [activeSince, setActiveSince] = useState('');
+  const [inactiveSince, setInactiveSince] = useState('');
   const facets = sessionFacets(items);
   const all = items.filter((one) => one.kind === 'session');
-  const rows = filterSessions(items, { olderThanDays: olderThan, minBytes: minMb * 1024 * 1024, includeOpen, query, profile, sessionKind, withConversation });
+  const dayMs = (text: string, endOfDay = false) => {
+    if (!text) return null;
+    const d = new Date(text + 'T00:00:00');
+    if (Number.isNaN(d.getTime())) return null;
+    return endOfDay ? d.getTime() + 86_400_000 - 1 : d.getTime();
+  };
+  const rows = filterSessions(items, {
+    olderThanDays: olderThan,
+    minBytes: minMb * 1024 * 1024,
+    includeOpen,
+    query,
+    profile,
+    sessionKind,
+    withConversation,
+    status,
+    activeSince: dayMs(activeSince),
+    inactiveSince: dayMs(inactiveSince, true),
+  });
   const picked = chosen(rows);
-  const active = [query && 'search', profile && 'account', sessionKind && 'kind', olderThan > 0 && 'idle', minMb > 0 && 'size', withConversation && 'conversation', includeOpen && 'running'].filter(Boolean).length;
+  const running = all.filter((one) => one.state === 'open').length;
+  const active = [query && 'search', profile && 'account', sessionKind && 'kind', olderThan > 0 && 'idle', minMb > 0 && 'size', withConversation && 'conversation', status !== 'ended' && 'status', activeSince && 'active since', inactiveSince && 'inactive since'].filter(Boolean).length;
   const reset = () => {
     setQuery('');
     setProfile('');
@@ -750,6 +771,9 @@ function Sessions({
     setOlderThan(0);
     setMinMb(0);
     setWithConversation(false);
+    setStatus('ended');
+    setActiveSince('');
+    setInactiveSince('');
     setIncludeOpen(false);
   };
   const chip = (on: boolean, label: string, onClick: () => void, title?: string) => (
@@ -791,6 +815,22 @@ function Sessions({
           </label>
         )}
         <div className="housekeeping-filter">
+          <span>Status</span>
+          <div className="housekeeping-chips">
+            {chip(status === 'ended', `ended (${all.length - running})`, () => setStatus('ended'), 'Sessions that ended: the ones that can be removed')}
+            {chip(status === 'running', `running (${running})`, () => setStatus('running'), 'Sessions open right now: shown, never removable')}
+            {chip(status === 'any', 'all', () => setStatus('any'))}
+          </div>
+        </div>
+        <label className="housekeeping-filter">
+          <span>Active since</span>
+          <input type="date" value={activeSince} onChange={(e) => setActiveSince(e.target.value)} title="Only sessions active on or after this day" />
+        </label>
+        <label className="housekeeping-filter">
+          <span>Inactive since</span>
+          <input type="date" value={inactiveSince} onChange={(e) => setInactiveSince(e.target.value)} title="Only sessions with no activity after this day" />
+        </label>
+        <div className="housekeeping-filter">
           <span>Idle</span>
           <div className="housekeeping-chips">
             {chip(olderThan === 0, 'any', () => setOlderThan(0))}
@@ -814,7 +854,6 @@ function Sessions({
           <span>Show</span>
           <div className="housekeeping-chips">
             {chip(withConversation, 'with conversation', () => setWithConversation((v) => !v), 'Only sessions that kept a conversation or a copy')}
-            {chip(includeOpen, 'running too', () => setIncludeOpen((v) => !v), 'Running sessions are shown, never removable')}
           </div>
         </div>
         <span className="housekeeping-filter-sum">

@@ -57,6 +57,13 @@ test('session filters: search words, account, kind and with-conversation narrow 
   assert.deepEqual(ids({ sessionKind: 'claude' }), ['a', 'c']);
   assert.deepEqual(ids({ withConversation: true }), ['a', 'c']);
   assert.deepEqual(lib.sessionFacets(items), { profiles: ['kubrik', 'personal'], kinds: ['claude', 'shell'] });
+  const withOpen = [...items, one({ id: 'live', state: 'open', bytes: 1, lastActivityAt: NOW, meta: {} })];
+  const ids2 = (f) => lib.filterSessions(withOpen, { ...base, ...f }, NOW).map((i) => i.id);
+  assert.deepEqual(ids2({ status: 'running' }), ['live']);
+  assert.deepEqual(ids2({ status: 'ended' }), ['a', 'b', 'c']);
+  assert.deepEqual(ids2({ status: 'any' }), ['a', 'b', 'c', 'live']);
+  assert.deepEqual(ids2({ status: 'any', activeSince: NOW - 2 * DAY }), ['a', 'b', 'live']);
+  assert.deepEqual(ids2({ status: 'any', inactiveSince: NOW - 2 * DAY }), ['c']);
 });
 
 test('the worktree filter keeps by idle days and finished state', () => {

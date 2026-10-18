@@ -66,6 +66,12 @@ export interface SessionFilter {
   sessionKind?: string;
   /** Only sessions that kept a conversation or a copy (bytes > 0). */
   withConversation?: boolean;
+  /** 'running' | 'ended' | 'any'; when set it overrides includeOpen. */
+  status?: 'any' | 'running' | 'ended';
+  /** Keep sessions active on or after this time (ms). */
+  activeSince?: number | null;
+  /** Keep sessions whose last activity is on or before this time (ms): inactive since then. */
+  inactiveSince?: number | null;
 }
 
 /** The sessions a filter keeps, the order unchanged. An unknown age never passes an age filter. */
@@ -73,7 +79,11 @@ export function filterSessions(items: HousekeepingItem[], filter: SessionFilter,
   const words = (filter.query ?? '').toLowerCase().split(/\s+/).filter(Boolean);
   return items.filter((one) => {
     if (one.kind !== 'session') return false;
-    if (!filter.includeOpen && one.state === 'open') return false;
+    if (filter.status === 'running' && one.state !== 'open') return false;
+    if (filter.status === 'ended' && one.state === 'open') return false;
+    if (!filter.status && !filter.includeOpen && one.state === 'open') return false;
+    if (filter.activeSince && (one.lastActivityAt === null || one.lastActivityAt < filter.activeSince)) return false;
+    if (filter.inactiveSince && one.lastActivityAt !== null && one.lastActivityAt > filter.inactiveSince) return false;
     if (filter.minBytes > 0 && one.bytes < filter.minBytes) return false;
     if (filter.withConversation && one.bytes <= 0) return false;
     if (filter.profile && String(one.meta?.profile ?? '') !== filter.profile) return false;
