@@ -1084,11 +1084,11 @@ function Health({
                     </td>
                     <td className="is-num">
                       {formatBytes(b.freed)}
-                      <div className="housekeeping-bar is-freed" style={{ width: `${Math.round((b.freed / max) * 100)}%` }} />
+                      <div className="housekeeping-meter is-freed" style={{ width: `${Math.round((b.freed / max) * 100)}%` }} />
                     </td>
                     <td className="is-num">
                       {b.consumed === null ? '—' : formatBytes(b.consumed)}
-                      <div className="housekeeping-bar is-consumed" style={{ width: `${Math.round(((b.consumed ?? 0) / max) * 100)}%` }} />
+                      <div className="housekeeping-meter is-consumed" style={{ width: `${Math.round(((b.consumed ?? 0) / max) * 100)}%` }} />
                     </td>
                     <td className={`is-num${b.usedDelta !== null && b.usedDelta < 0 ? ' is-good' : b.usedDelta !== null && b.usedDelta > 0 ? ' is-bad' : ''}`}>
                       {b.usedDelta === null ? '—' : `${b.usedDelta > 0 ? '+' : b.usedDelta < 0 ? '−' : ''}${formatBytes(Math.abs(b.usedDelta))}`}

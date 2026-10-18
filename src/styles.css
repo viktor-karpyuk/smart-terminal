@@ -4193,9 +4193,9 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-switch { align-items: center; max-width: 80ch; }
 .housekeeping-switch input { flex: 0 0 auto; }
 .housekeeping-balance td.is-num { position: relative; min-width: 110px; }
-.housekeeping-bar { height: 3px; margin-top: 3px; margin-left: auto; border-radius: 2px; max-width: 100%; }
-.housekeeping-bar.is-freed { background: #3a9d5d; }
-.housekeeping-bar.is-consumed { background: #c9a227; }
+.housekeeping-meter { height: 3px; margin-top: 3px; margin-left: auto; border-radius: 2px; max-width: 100%; }
+.housekeeping-meter.is-freed { background: #3a9d5d; }
+.housekeeping-meter.is-consumed { background: #c9a227; }
 .housekeeping-balance td.is-good { color: #3a9d5d; }
 .housekeeping-balance td.is-bad { color: #c9a227; }
 .titlebar-today { padding-left: 10px; border-left: 1px solid var(--border); }
