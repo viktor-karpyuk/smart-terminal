@@ -393,8 +393,23 @@ export const OVERRIDABLE = [
 
 export type OverridableKey = (typeof OVERRIDABLE)[number]['key'];
 
+/**
+ * Palettes an installed extension brings. Data only — colours, checked in the
+ * main process — and gone again when the extension is switched off.
+ */
+let fromExtensions: TerminalPalette[] = [];
+
+export function setExtensionPalettes(list: TerminalPalette[]) {
+  fromExtensions = list;
+}
+
+/** The app's palettes, then the ones extensions brought. */
+export function allPalettes(): TerminalPalette[] {
+  return fromExtensions.length ? [...PALETTES, ...fromExtensions] : PALETTES;
+}
+
 export function paletteById(id: string): TerminalPalette | undefined {
-  return PALETTES.find((palette) => palette.id === id);
+  return PALETTES.find((palette) => palette.id === id) ?? fromExtensions.find((palette) => palette.id === id);
 }
 
 /**

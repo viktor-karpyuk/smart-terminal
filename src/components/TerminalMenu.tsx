@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Popover } from './Popover';
-import { clearTerminal, copySelection, pasteInto, selectAllIn } from '../terminals/registry';
+import { clearTerminal, copySelection, focusTerminal, getTerminal, guardedPaste, pasteInto, selectAllIn } from '../terminals/registry';
 
 /**
  * The right-click menu on a terminal.
@@ -67,7 +67,7 @@ export function TerminalMenu() {
       )}
 
       {clipboard && (
-        <button className="menu-item" onClick={run(() => pasteInto(menu.id, clipboard))}>
+        <button className="menu-item" onClick={run(() => guardedPaste(menu.id, clipboard))}>
           <span>Paste</span>
           <kbd>{lines(clipboard)}</kbd>
         </button>
@@ -117,6 +117,78 @@ export function TerminalNotice() {
   return (
     <div className="terminal-notice" onClick={() => setNotice(null)} role="status">
       {notice}
+    </div>
+  );
+}
+
+/**
+ * Asked before a paste that would run as it lands.
+ *
+ * A program that did not ask for bracketed paste reads every newline in a
+ * paste as Return, so twelve copied lines are twelve commands run one after
+ * another before anybody can look at them. Claude and zsh ask for bracketed
+ * paste, so this is rare by design: it shows up over the plain shells, the
+ * ssh session and the REPL — exactly where a stray line does damage.
+ */
+type Guarded = { id: string; text: string };
+
+export function TerminalPasteGuard() {
+  const [held, setHeld] = useState<Guarded | null>(null);
+  const first = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const heard = (event: Event) => {
+      const detail = (event as CustomEvent<Guarded>).detail;
+      if (detail?.id && detail.text) setHeld(detail);
+    };
+    window.addEventListener('terminal-paste-guard', heard);
+    return () => window.removeEventListener('terminal-paste-guard', heard);
+  }, []);
+
+  useEffect(() => {
+    if (held) first.current?.focus();
+  }, [held]);
+
+  if (!held) return null;
+  const box = getTerminal(held.id)?.host.getBoundingClientRect();
+  const count = held.text.replace(/\r\n?/g, '\n').replace(/\n+$/, '').split('\n').length;
+  const done = (text: string | null) => {
+    const { id } = held;
+    setHeld(null);
+    if (text) pasteInto(id, text);
+    focusTerminal(id);
+  };
+
+  return (
+    <div
+      className="terminal-paste-guard"
+      role="alertdialog"
+      aria-label="Paste several lines"
+      style={box ? { top: box.top + 12, left: box.left + box.width / 2 } : undefined}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') done(null);
+      }}
+    >
+      <p>
+        <strong>{count === 1 ? 'This paste ends in a newline.' : `Paste ${count} lines?`}</strong>{' '}
+        The program here runs each line the moment it arrives.
+      </p>
+      <pre>{held.text.length > 400 ? `${held.text.slice(0, 400)}…` : held.text}</pre>
+      <div className="terminal-paste-guard-actions">
+        <button ref={first} className="ghost-btn tiny is-primary" onClick={() => done(held.text)}>
+          {count === 1 ? 'Paste and run it' : `Paste and run ${count}`}
+        </button>
+        <button
+          className="ghost-btn tiny"
+          title="Joined with spaces, and nothing runs until you press Return"
+          onClick={() => done(held.text.replace(/\s*[\r\n]+\s*/g, ' ').trim())}
+        >
+          Paste as one line
+        </button>
+        <button className="ghost-btn tiny" onClick={() => done(null)}>
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }

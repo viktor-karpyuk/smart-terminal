@@ -755,6 +755,10 @@ input:focus, textarea:focus { border-color: var(--accent); }
 
 .findbar { max-width: calc(100% - 16px); }
 .findbar input { width: auto; flex: 1 1 180px; min-width: 80px; }
+.findbar input.is-broken { border-color: var(--danger); }
+.findbar-count { font-size: var(--fs-sm); color: var(--text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; padding: 0 2px; }
+.findbar-toggle { min-width: 26px; font-family: var(--font-mono); }
+.findbar-toggle.is-on { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
 
 /* ---------- popovers & modals ---------- */
 
@@ -3753,6 +3757,33 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
   background: var(--bg-elevated); border: 1px solid var(--danger); border-radius: var(--radius);
   box-shadow: var(--shadow-sm); cursor: pointer;
 }
+
+/* Asked before a paste that would run line by line. Pinned to the top of the
+   terminal it is about, so it is plain which one would receive it. */
+.terminal-paste-guard {
+  position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 70;
+  width: min(480px, calc(100vw - 32px)); padding: 12px 14px; display: grid; gap: 8px;
+  background: var(--bg-elevated); border: 1px solid var(--warn); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm); font-size: var(--fs-sm); color: var(--text);
+}
+.terminal-paste-guard p { margin: 0; line-height: 1.45; color: var(--text-dim); }
+.terminal-paste-guard p strong { color: var(--text); font-weight: 600; }
+.terminal-paste-guard pre {
+  margin: 0; max-height: 140px; overflow: auto; padding: 6px 8px; border-radius: var(--r-md);
+  background: var(--bg-input); font-family: var(--font-mono, monospace); font-size: var(--fs-xs, 11px); white-space: pre-wrap;
+}
+.terminal-paste-guard-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* Output arriving below where somebody is reading. */
+.terminal-host { position: relative; }
+.terminal-jump {
+  position: absolute; right: 18px; bottom: 10px; z-index: 5;
+  padding: 4px 10px; border-radius: 999px; font: inherit; font-size: var(--fs-sm); cursor: pointer;
+  color: var(--text); background: var(--bg-elevated); border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+.terminal-jump:hover { border-color: var(--accent); color: var(--accent); }
+.terminal-jump[hidden] { display: none; }
 
 /* ---------- extensions from other people ---------- */
 

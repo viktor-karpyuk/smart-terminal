@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { markLineShown, wantedLine } from '../lib/editorReveal';
 import { Annotation, EditorState, Transaction, type Extension } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
@@ -259,6 +260,18 @@ interface Props {
   onSelection(from: number, to: number, text: string): void;
 }
 
+function takeWantedLine(view: EditorView, path: string, mounting = false) {
+  const wanted = wantedLine(path, mounting);
+  // Nothing read yet: the line waits for the text to arrive.
+  if (!wanted || !view.state.doc.length) return;
+  markLineShown(path);
+  const doc = view.state.doc;
+  const line = doc.line(Math.min(Math.max(1, wanted.line), doc.lines));
+  const at = Math.min(line.to, line.from + Math.max(0, (wanted.column ?? 1) - 1));
+  view.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: 'center' }) });
+  view.focus();
+}
+
 /** Marks a change this component made to match the store, rather than a keystroke. */
 const fromStore = Annotation.define<boolean>();
 
@@ -333,7 +346,13 @@ export function Editor({ path, onSave, onSelection }: Props) {
     });
     viewRef.current = view;
     view.focus();
+    takeWantedLine(view, path, true);
+    const onReveal = (event: Event) => {
+      if ((event as CustomEvent<{ path: string }>).detail?.path === path) takeWantedLine(view, path);
+    };
+    window.addEventListener('editor-reveal', onReveal);
     return () => {
+      window.removeEventListener('editor-reveal', onReveal);
       view.destroy();
       viewRef.current = null;
     };
@@ -364,6 +383,7 @@ export function Editor({ path, onSave, onSelection }: Props) {
        */
       annotations: [fromStore.of(true), Transaction.addToHistory.of(false)],
     });
+    takeWantedLine(view, path);
   }, [text]);
 
   void editBuffer;

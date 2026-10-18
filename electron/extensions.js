@@ -321,6 +321,95 @@ function panelViews(rows) {
 }
 
 /**
+ * What an extension may switch on in the terminal itself.
+ *
+ * A fixed vocabulary, the way `PANEL_NEEDS` is: the terminal runs in the app's
+ * own renderer, where no extension code ever runs, so each of these is
+ * something the app already knows how to do and the extension decides whether
+ * it is done. A name the app does not know is reported rather than dropped.
+ */
+const TERMINAL_FEATURES = [
+  /** Pause a program that writes faster than the screen can draw, instead of freezing behind it. */
+  'flow-control',
+  /** Selecting text copies it. */
+  'copy-on-select',
+  /** `src/app.ts:12:4` in the output opens the file, at the line. */
+  'path-links',
+  /** A paste of several lines into a plain shell asks first: each line would run. */
+  'paste-guard',
+  /** Scrolled up while output arrives: say so, and offer the way back down. */
+  'jump-to-bottom',
+  /** What was on screen comes back after the app restarts. */
+  'keep-scrollback',
+  /** Find with case, whole word and regular expressions. */
+  'find-options',
+];
+
+/** A colour a palette may use: hex, nothing that could be read as anything else. */
+const HEX = /^#[0-9a-f]{6}([0-9a-f]{2})?$/i;
+
+/** The colours a palette is made of. Anything else in its `theme` is ignored. */
+const PALETTE_KEYS = [
+  'background', 'foreground', 'cursor', 'cursorAccent', 'selectionBackground',
+  'black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
+  'brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite',
+];
+
+/** One palette from a manifest, or the reason it is not one. */
+function readPalette(raw, from) {
+  if (!raw || typeof raw !== 'object') return { error: 'a palette must be an object' };
+  const id = String(raw.id ?? '');
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) return { error: `palette "${id}" needs a lowercase id` };
+  const theme = {};
+  for (const key of PALETTE_KEYS) {
+    const value = raw.theme?.[key];
+    if (value === undefined) continue;
+    if (typeof value !== 'string' || !HEX.test(value)) return { error: `palette "${id}": ${key} is not a hex colour` };
+    theme[key] = value;
+  }
+  if (!theme.background || !theme.foreground) return { error: `palette "${id}" needs a background and a foreground` };
+  return {
+    palette: {
+      // Prefixed, so an extension cannot quietly replace one of the app's own.
+      id: `${from}:${id}`,
+      name: String(raw.name ?? id).slice(0, 40),
+      mode: raw.mode === 'light' ? 'light' : 'dark',
+      theme,
+      from,
+    },
+  };
+}
+
+/**
+ * Everything the installed, switched-on extensions add to the terminal.
+ *
+ * Palettes are data and come from anywhere; features are the app's own code,
+ * named by the extension. Both are off the moment the extension is.
+ */
+function terminalContributions(rows) {
+  const features = new Set();
+  const palettes = [];
+  const problems = [];
+  const from = [];
+  for (const row of rows) {
+    if (row.status === 'available' || row.status === 'gone' || !row.enabled) continue;
+    const terminal = row.contributes?.terminal;
+    if (!terminal || typeof terminal !== 'object') continue;
+    from.push(row.id);
+    for (const name of Array.isArray(terminal.features) ? terminal.features : []) {
+      if (TERMINAL_FEATURES.includes(String(name))) features.add(String(name));
+      else problems.push({ from: row.id, error: `it asks the terminal for "${name}", which this app does not know` });
+    }
+    for (const raw of Array.isArray(terminal.palettes) ? terminal.palettes : []) {
+      const { palette, error } = readPalette(raw, row.id);
+      if (palette) palettes.push(palette);
+      else problems.push({ from: row.id, error });
+    }
+  }
+  return { features: TERMINAL_FEATURES.filter((name) => features.has(name)), palettes, problems, from };
+}
+
+/**
  * Read a file an extension brought, refusing anything outside its own folder.
  *
  * Shared by previews and panels because it is the same question both times, and
@@ -497,6 +586,8 @@ module.exports = {
   panelViews,
   withPanelSources,
   PANEL_NEEDS,
+  TERMINAL_FEATURES,
+  terminalContributions,
   validate,
   readPicture,
   pictures,

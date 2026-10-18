@@ -13,6 +13,23 @@ page that works in its own panel). `example/` is a complete one.
   It talks to the app only through `host.call(name, args)`, and every call is
   checked against the permissions in its `extension.json`.
 
+## The terminal
+
+`contributes.terminal` changes the terminal itself. No extension code runs
+there — the terminal lives in the app's own renderer — so it is declarative:
+
+- `features`: names from a fixed list the app implements — `flow-control`,
+  `copy-on-select`, `path-links`, `paste-guard`, `jump-to-bottom`,
+  `keep-scrollback`, `find-options`. A name the app does not know is reported in
+  the gallery, not ignored. People can turn each one off in Settings › Terminal.
+- `palettes`: `{ id, name, mode: "dark" | "light", theme }`, where `theme` holds
+  hex colours for `background`, `foreground`, `cursor`, `cursorAccent`,
+  `selectionBackground` and the sixteen ANSI colours. Anything else is dropped.
+  The id is shown to the app as `<extension>:<id>`, so a palette can never
+  replace one of the app's own.
+
+`extensions/terminal/` is the one that ships with the app.
+
 ## Permissions
 
 An extension from outside the app may only make calls it declared. The person

@@ -52,7 +52,10 @@ test('the real manifests in the repository are all valid', () => {
     assert.equal(manifest.broken, undefined, `${manifest.id ?? manifest.dir} is broken`);
     assert.ok(manifest.summary, `${manifest.id} has no summary`);
     const contributes =
-      (manifest.contributes.previews?.length ?? 0) + (manifest.contributes.panels?.length ?? 0);
+      (manifest.contributes.previews?.length ?? 0) +
+      (manifest.contributes.panels?.length ?? 0) +
+      (manifest.contributes.terminal?.features?.length ?? 0) +
+      (manifest.contributes.terminal?.palettes?.length ?? 0);
     assert.ok(contributes > 0, `${manifest.id} contributes nothing`);
   }
 });

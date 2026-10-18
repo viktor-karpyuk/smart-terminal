@@ -8,6 +8,8 @@ const DEFAULT_SHELL = process.env.SHELL || (process.platform === 'win32' ? 'powe
 
 /** One screen refresh. Output is batched into frames; see `#queue`. */
 const FRAME_MS = 16;
+/** The longest a program's output stays paused without the terminal asking again. */
+const PAUSE_LAPSE_MS = 3000;
 
 /** Interactive login shell so the user's PATH, nvm, aliases and prompt all load normally. */
 function shellArgs(shell) {
@@ -215,6 +217,32 @@ class PtyManager {
 
   write(id, data) {
     this.sessions.get(id)?.proc.write(data);
+  }
+
+  /**
+   * Stop reading a program's output for a while, or start again.
+   *
+   * Asked for by the terminal when it is further behind than it can draw: a
+   * program that writes faster than the screen can paint otherwise piles
+   * megabytes into the renderer and the whole window stops answering. Paused,
+   * the program blocks on its next write — which is what a real terminal does to
+   * it — and nothing is lost.
+   */
+  flow(id, paused) {
+    const session = this.sessions.get(id);
+    if (!session || Boolean(session.paused) === Boolean(paused)) return;
+    session.paused = Boolean(paused);
+    // A pause is never left to whoever asked for it to undo: a window that
+    // reloads or closes mid-pause would leave the program blocked for good. So
+    // it lapses on its own, and a terminal still behind simply asks again.
+    clearTimeout(session.pauseLapse);
+    session.pauseLapse = paused ? setTimeout(() => this.flow(id, false), PAUSE_LAPSE_MS) : null;
+    try {
+      if (paused) session.proc.pause();
+      else session.proc.resume();
+    } catch {
+      /* the process may have exited in between */
+    }
   }
 
   resize(id, cols, rows) {
