@@ -80,6 +80,17 @@ class DiskUsage {
     }
   }
 
+  /** Drop remembered sizes of paths that no longer exist, so the table does not keep every folder ever measured. Returns how many. */
+  pruneMissing() {
+    let gone = 0;
+    for (const target of [...this.cache.keys()]) {
+      if (fs.existsSync(target)) continue;
+      this.forget(target);
+      gone += 1;
+    }
+    return gone;
+  }
+
   /**
    * Sizes for many paths. Fresh answers come straight back; the rest are
    * walked by the worker, and `onEach` hears every one as it lands so a

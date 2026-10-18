@@ -440,9 +440,16 @@ class Housekeeping {
     }
   }
 
-  /** Delete ended sessions and their saved copies, in one transaction for the database and one pass for the files. */
+  /**
+   * Delete ended sessions and their saved copies, in one transaction for the
+   * database and one pass for the files. A session still being recorded is an
+   * ended tab whose copy is still being written; it is skipped like a running
+   * one, because deleting under a writer leaves a copy with no session.
+   */
   deleteSessions(sessionIds = []) {
-    const gone = this.db.deleteSessions(sessionIds);
+    const recording = new Set(this.context?.trackedIds?.() ?? []);
+    const wanted = [...new Set(sessionIds)].filter((id) => !recording.has(id));
+    const gone = this.db.deleteSessions(wanted);
     let bytes = 0;
     for (const id of gone) {
       const dir = path.join(this.userData, 'context-snapshots', id);
@@ -503,9 +510,16 @@ class Housekeeping {
     return { results };
   }
 
-  /** Finish removals a previous run left half done. Called once at start. */
+  /**
+   * The tidying of the tidier, once at start: removals a previous run left half
+   * done are finished, sizes of folders that no longer exist are forgotten, and
+   * the log is cut to a year. Nothing that was not already going is removed.
+   */
   async sweep() {
-    return caches.sweep(this.checkouts());
+    const swept = await caches.sweep(this.checkouts());
+    const forgotten = this.sizes.pruneMissing?.() ?? 0;
+    const trimmed = this.store.trimLog();
+    return { swept, forgotten, trimmed };
   }
 
   log(limit = 50) {

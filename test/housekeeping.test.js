@@ -171,11 +171,32 @@ test('deleting sessions takes rows and saved copies together and skips the one s
     assert.ok(fs.existsSync(path.join(userData, 'context-snapshots', 'live')));
     assert.deepEqual(forgotten, ['old']);
 
+    assert.deepEqual(hk.deleteSessions(['live']).deleted, [], 'a session still being recorded is skipped');
+
     const kept = hk.forgetTranscripts(['recent']);
     assert.equal(kept.count, 1);
     assert.equal(kept.bytes, 250);
     assert.ok(db.getSession('recent'), 'the record of what ran stays');
     assert.equal(db.sessionSizes(['recent']).recent ?? 0, 0);
+  } finally {
+    sizes.stop();
+  }
+});
+
+test('sweep finishes old removals, forgets sizes of folders that are gone, and trims the log', { skip }, async () => {
+  const { hk, sizes, checkout } = world();
+  try {
+    fs.mkdirSync(path.join(checkout, 'target.trash-1'));
+    sizes.cache.set(path.join(checkout, 'vanished'), { bytes: 1, files: 1, mtime: 0, measuredAt: NOW });
+    hk.store.log({ action: 'free', kind: 'build-cache', label: 'ancient', bytes: 1, at: NOW - 400 * DAY });
+    hk.store.log({ action: 'free', kind: 'build-cache', label: 'recent', bytes: 1, at: NOW - DAY });
+    const out = await hk.sweep();
+    assert.equal(out.swept.length, 1);
+    assert.equal(out.forgotten, 1);
+    assert.ok(out.trimmed >= 1);
+    assert.ok(!fs.existsSync(path.join(checkout, 'target.trash-1')));
+    assert.equal(sizes.known(path.join(checkout, 'vanished')), null);
+    assert.ok(hk.log().every((row) => row.label !== 'ancient'));
   } finally {
     sizes.stop();
   }
