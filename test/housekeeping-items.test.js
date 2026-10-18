@@ -25,6 +25,13 @@ test('an unknown kind is refused, and every known one lands in a bucket', () => 
   for (const one of sample()) assert.ok(BUCKETS.includes(one.bucket), `${one.kind} has a bucket`);
 });
 
+test('only what comes back by itself is reversible', () => {
+  const { KINDS } = require('../electron/housekeeping-items');
+  const reversible = Object.entries(KINDS).filter(([, k]) => k.reversible).map(([name]) => name).sort();
+  assert.deepEqual(reversible, ['browser-cache', 'build-cache', 'db-backup', 'install-backup', 'installer', 'pasted', 'trash']);
+  for (const name of ['session', 'worktree', 'workshop']) assert.equal(KINDS[name].reversible, false, `${name} is the only copy of something`);
+});
+
 test('negative or missing sizes become zero, and empty blockers are dropped', () => {
   const one = item({ id: 'x', kind: 'session', label: 'x', bytes: -5, blockers: ['', null, 'busy'] });
   assert.equal(one.bytes, 0);

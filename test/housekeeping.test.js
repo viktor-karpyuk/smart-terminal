@@ -55,6 +55,10 @@ function world() {
   fs.writeFileSync(path.join(userData, 'smart-terminal.db.backup-1'), Buffer.alloc(2048));
   fs.mkdirSync(path.join(home, 'Smart Terminal.backup-20260901-000000'));
   fs.writeFileSync(path.join(home, 'Smart Terminal.backup-20260901-000000', 'big'), Buffer.alloc(4096));
+  // Neighbours that are not backups: the development copy's data folder, and an unrelated folder sharing the prefix.
+  fs.mkdirSync(path.join(home, 'Smart Terminal Dev'));
+  fs.writeFileSync(path.join(home, 'Smart Terminal Dev', 'smart-terminal.db'), Buffer.alloc(64));
+  fs.mkdirSync(path.join(home, 'Smart Terminal Notes'));
   fs.writeFileSync(path.join(userData, 'updates', 'old.dmg'), Buffer.alloc(100));
   fs.utimesSync(path.join(userData, 'updates', 'old.dmg'), new Date(NOW - 10 * DAY), new Date(NOW - 10 * DAY));
   fs.writeFileSync(path.join(userData, 'updates', 'new.dmg'), Buffer.alloc(200));
@@ -107,6 +111,9 @@ test('the inventory lists sessions, caches and the folders beside the database, 
     assert.equal(second.items.find((one) => one.kind === 'install-backup').bytes, 4096);
     assert.equal(second.totals.all.reversibleBytes, 700 + 4096 + 2048 + 100 + 200 + 10 + 777);
 
+    const backups = second.items.filter((one) => one.kind === 'install-backup').map((one) => one.label);
+    assert.deepEqual(backups, ['Smart Terminal.backup-20260901-000000'], 'the live folder, the Dev copy and look-alikes are not backups');
+    assert.ok(!second.items.some((one) => one.path === hk.userData), 'the data folder is never an item');
     const installers = second.items.filter((one) => one.kind === 'installer');
     assert.equal(installers.find((one) => one.label === 'new.dmg').state, 'latest');
     assert.equal(installers.find((one) => one.label === 'old.dmg').state, 'superseded');
@@ -123,6 +130,8 @@ test('free removes only the reversible, renames a cache aside, and writes the lo
     await hk.measure(before.unsized);
     const ids = (await hk.inventory()).items.filter((one) => ['build-cache', 'db-backup', 'install-backup', 'installer'].includes(one.kind) && one.state !== 'latest').map((one) => one.id);
     const { results, freed } = await hk.free([...ids, 'session:old']);
+    const gone = (await hk.free(['cache:/nowhere/at/all'])).results[0];
+    assert.deepEqual([gone.ok, gone.note], [true, 'already gone'], 'an id for something that is not there is done, not failed');
     const refused = results.find((one) => one.id === 'session:old');
     assert.equal(refused.ok, false);
     assert.match(refused.error, /not something this button removes/);
@@ -133,6 +142,9 @@ test('free removes only the reversible, renames a cache aside, and writes the lo
     assert.ok(fs.existsSync(path.join(userData, 'updates', 'new.dmg')), 'the newest installer stays');
     const log = hk.log();
     assert.equal(log.filter((row) => row.action === 'free' && row.ok).length, 4);
+    const after = await hk.inventory();
+    assert.equal(after.log.length, log.length, 'the inventory carries the recent log');
+    assert.ok(after.log[0].at >= after.log[after.log.length - 1].at, 'newest first');
   } finally {
     sizes.stop();
   }
