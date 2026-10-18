@@ -220,6 +220,12 @@ Settings › Memory:
   sessions, so crossing it is said. What the cap or the policy paused, the
   policy resumes on restore; what you paused waits for you.
 
+**Pausing several at once.** The pause button in the sidebar's Sessions
+header turns the list into a picker: rows take a checkbox, a bar offers *all
+running* or *all paused*, then *Pause n* or *Resume n*, and *Done*. A paused
+session wears a small tag in the list. Each pause keeps the conversation and
+gives the process back; each resume picks the conversation up.
+
 The title bar shows **SESSIONS n (k active) · memory**: how many Claude
 sessions are running, how many of those are on screen, and the resident memory
 of every process under the terminals, read every minute.
