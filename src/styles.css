@@ -4302,3 +4302,10 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-rowactions > * + * { margin-left: 2px; }
 /* In a table row the right edge is the pane's, so the tip goes above the icon. */
 .housekeeping-rowactions [data-tip]::after { left: auto; right: 0; top: auto; bottom: calc(100% + 6px); transform: none; }
+.sidebar-pick { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 2px 6px 6px; padding: 6px 8px; border: 1px solid var(--accent); border-radius: var(--r-md); background: var(--bg-elevated); font-size: var(--fs-xs); }
+.sidebar-pick-count { color: var(--text-faint); margin-right: 2px; }
+.sidebar-pick-box { margin: 0 1px; flex: 0 0 auto; accent-color: var(--accent); }
+.sidebar-item.is-picked { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.sidebar-item.is-paused .sidebar-item-title { opacity: 0.75; }
+.sidebar-item-paused { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); border: 1px solid var(--border); border-radius: 999px; padding: 0 5px; }
+.section-open.is-on { color: var(--accent); }

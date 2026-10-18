@@ -416,6 +416,51 @@ export function Sidebar() {
   const runningCount = useStore(
     (s) => allTabs(s.layout).filter((id) => s.sessions[id]?.status === 'running').length,
   );
+  /*
+   * Picking sessions to pause or resume in one go. A mode rather than a
+   * checkbox on every row: the rows are clicked to focus all day, and a
+   * checkbox always showing would be a second thing to miss on every one.
+   */
+  const [picking, setPicking] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const pickedState = useStore(
+    useShallow((s) => {
+      let running = 0;
+      let paused = 0;
+      for (const id of picked) {
+        const one = s.sessions[id];
+        if (!one) continue;
+        if (one.status === 'paused') paused += 1;
+        else if (one.kind === 'claude' && (one.status === 'running' || one.status === 'starting')) running += 1;
+      }
+      return { running, paused };
+    }),
+  );
+  const togglePicked = (id: string) =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const pickAll = (status: 'running' | 'paused') => {
+    const s = useStore.getState();
+    const ids = allTabs(s.layout).filter((id) => {
+      const one = s.sessions[id];
+      return one && (status === 'paused' ? one.status === 'paused' : one.kind === 'claude' && one.status === 'running');
+    });
+    setPicked(new Set(ids));
+  };
+  const pausePicked = () => {
+    const s = useStore.getState();
+    for (const id of picked) if (s.sessions[id]?.status === 'running' && s.sessions[id]?.kind === 'claude') void s.pauseSession(id, 'user');
+    setPicked(new Set());
+  };
+  const resumePicked = () => {
+    const s = useStore.getState();
+    for (const id of picked) if (s.sessions[id]?.status === 'paused') void s.resumeSession(id);
+    setPicked(new Set());
+  };
 
   // With both switched off there is no panel at all — just the rail, which is
   // the whole point of the rail.
@@ -497,9 +542,62 @@ export function Sidebar() {
                       updateSettings({ sidebarSessionsCollapsed: !settings.sidebarSessionsCollapsed })
                     }
                     onClose={() => updateSettings({ sidebarShowSessions: false })}
+                    extra={
+                      <button
+                        className={`section-open${picking ? ' is-on' : ''}`}
+                        title={picking ? 'Done picking' : 'Pick sessions to pause or resume'}
+                        aria-label="Pick sessions to pause or resume"
+                        aria-pressed={picking}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setPicking((v) => !v);
+                          setPicked(new Set());
+                        }}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden>
+                          <path d="M4.5 3v8M9.5 3v8" />
+                        </svg>
+                      </button>
+                    }
                   />
                 }
               >
+                {picking && (
+                  <div className="sidebar-pick" role="toolbar" aria-label="Pause or resume the picked sessions">
+                    <span className="sidebar-pick-count">
+                      {picked.size ? `${picked.size} picked` : 'Pick sessions, or'}
+                    </span>
+                    {!picked.size && (
+                      <>
+                        <button className="link-btn" onClick={() => pickAll('running')}>
+                          all running
+                        </button>
+                        <button className="link-btn" onClick={() => pickAll('paused')}>
+                          all paused
+                        </button>
+                      </>
+                    )}
+                    {pickedState.running > 0 && (
+                      <button className="ghost-btn tiny" onClick={pausePicked} title="Each keeps its conversation and gives its process back">
+                        Pause {pickedState.running}
+                      </button>
+                    )}
+                    {pickedState.paused > 0 && (
+                      <button className="ghost-btn tiny" onClick={resumePicked} title="Each comes back on its conversation">
+                        Resume {pickedState.paused}
+                      </button>
+                    )}
+                    <button
+                      className="ghost-btn tiny"
+                      onClick={() => {
+                        setPicking(false);
+                        setPicked(new Set());
+                      }}
+                    >
+                      Done
+                    </button>
+                  </div>
+                )}
                 {grouped.length === 0 && <p className="sidebar-empty">No sessions yet.</p>}
                 {grouped.map(({ profile, ids }) => {
                   const auth = authByProfile[profile.id];
@@ -515,7 +613,7 @@ export function Sidebar() {
                         <span className="sidebar-group-count">{ids.length}</span>
                       </div>
                       {ids.map((id) => (
-                        <SidebarItem key={id} sessionId={id} />
+                        <SidebarItem key={id} sessionId={id} picking={picking} picked={picked.has(id)} onPick={togglePicked} />
                       ))}
                     </div>
                   );
@@ -2126,7 +2224,7 @@ function BuildLine() {
   );
 }
 
-function SidebarItem({ sessionId }: { sessionId: string }) {
+function SidebarItem({ sessionId, picking = false, picked = false, onPick }: { sessionId: string; picking?: boolean; picked?: boolean; onPick?: (id: string) => void }) {
   const nameMax = useNameMax();
   const session = useStore((s) => s.sessions[sessionId]);
   const homedir = useStore((s) => s.homedir);
@@ -2144,16 +2242,17 @@ function SidebarItem({ sessionId }: { sessionId: string }) {
 
   return (
     <div
-      className={`sidebar-item${session.status === 'exited' ? ' is-exited' : ''}${current ? ' is-current' : ''}`}
-      draggable
+      className={`sidebar-item${session.status === 'exited' ? ' is-exited' : ''}${session.status === 'paused' ? ' is-paused' : ''}${current ? ' is-current' : ''}${picked ? ' is-picked' : ''}`}
+      draggable={!picking}
       onDragStart={(event) => {
         setDraggingId(sessionId);
         event.dataTransfer.setData(SESSION_MIME, sessionId);
         event.dataTransfer.effectAllowed = 'move';
       }}
       onDragEnd={() => setDraggingId(null)}
-      onClick={() => focusSession(sessionId, { startClaude: true })}
+      onClick={() => (picking ? onPick?.(sessionId) : focusSession(sessionId, { startClaude: true }))}
       onDoubleClick={() => {
+        if (picking) return;
         focusSession(sessionId);
         setRenamingId(sessionId);
       }}
@@ -2164,13 +2263,18 @@ function SidebarItem({ sessionId }: { sessionId: string }) {
       }}
       title={nameTip(label, session.cwd, session.title)}
     >
-      <span className={`state-dot state-${session.status}${session.busy ? ' is-busy' : ''}`} />
+      {picking ? (
+        <input type="checkbox" className="sidebar-pick-box" checked={picked} onChange={() => onPick?.(sessionId)} onClick={(event) => event.stopPropagation()} aria-label={`pick ${label}`} />
+      ) : (
+        <span className={`state-dot state-${session.status}${session.busy ? ' is-busy' : ''}`} />
+      )}
       <span className="sidebar-item-text">
         <span className="sidebar-item-title">{cutName(label, nameMax)}</span>
         {/* The folder line is only worth a row of its own when it says something
             the title does not already say. */}
         {where !== label && <PathLabel path={session.cwd} home={homedir} className="sidebar-item-cwd" />}
       </span>
+      {session.status === 'paused' && <span className="sidebar-item-paused" title="Paused: no process; picks up its conversation when resumed">paused</span>}
       {session.unread && <span className="tab-unread" />}
       <button
         className="tab-close"
