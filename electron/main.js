@@ -2938,7 +2938,15 @@ if (isPrimaryInstance) app.whenReady().then(() => {
     emit: (name, payload) => send(`housekeeping:${name}`, payload),
   });
   housekeepingMonitor.start();
-  housekeepingJobs = new JobRunner({ store: housekeeping.store, housekeeping, emit: (name, payload) => send(`housekeeping:${name}`, payload) });
+  housekeepingJobs = new JobRunner({
+    store: housekeeping.store,
+    housekeeping,
+    emit: (name, payload) => {
+      send(`housekeeping:${name}`, payload);
+      // A job that ended moved the disk: the title bar's figures are read again now, not at the next minute.
+      if (name === 'job' && ['done', 'cancelled', 'failed'].includes(payload?.status)) housekeepingMonitor?.tickSystem().catch(() => {});
+    },
+  });
   // Watching how sessions behave is a separate job from keeping copies of them,
   // but it needs the same two things — where a transcript is, and which sessions
   // have one — so it is handed the store rather than working them out again.

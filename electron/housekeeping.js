@@ -760,6 +760,7 @@ class Housekeeping {
     const trimmed = this.store.trimLog();
     const readings = this.store.trimReadings?.() ?? 0;
     const jobs = this.store.trimJobs?.() ?? 0;
+    this.store.trimDaily?.();
     return { swept, forgotten, trimmed, readings, jobs };
   }
 

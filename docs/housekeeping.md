@@ -157,6 +157,15 @@ by the health job's verdict; clicking opens Health.
 how many of how many, how much given back so far, how many refused. The panel
 opens on the last inventory kept and says so while a fresh one is read.
 
+**Freed against consumed** — by day, week, month and year: what housekeeping
+gave back (the log), how the disk's used space moved in the same time, and
+what was *consumed* — the movement plus what was freed, which is what the
+disk would have grown by had nothing been removed. A daily roll-up
+(`hk_daily`, first and last value per day, kept two years) is what the month
+and year stand on; minute readings are kept a month. The title bar shows
+today's figures beside the vitals — freed, consumed and the day's change in
+used space as a share of its start — refreshed the moment a job ends.
+
 **The last 30 days** — what housekeeping gave back (by week), and how the disk,
 the worktrees and the database moved, from the kept log and readings.
 

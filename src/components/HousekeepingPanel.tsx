@@ -1057,6 +1057,51 @@ function Health({
 
       {stats && (
         <>
+          <h3 className="monitor-heading">Freed against consumed</h3>
+          <p className="usage-note">
+            Freed is what housekeeping gave back. Consumed is how much the disk's used space would have grown had nothing been removed: its movement plus what was freed. Net is the movement itself; a negative net means the disk ended with more room than it started.
+          </p>
+          <table className="housekeeping-table housekeeping-balance">
+            <thead>
+              <tr>
+                <th>Period</th>
+                <th className="is-num">Freed</th>
+                <th className="is-num">Consumed</th>
+                <th className="is-num">Net</th>
+                <th>Readings</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(['day', 'week', 'month', 'year'] as const).map((period) => {
+                const b = stats.balance[period];
+                const label = { day: 'Today', week: 'Last 7 days', month: 'Last 30 days', year: 'Last year' }[period];
+                const max = Math.max(1, ...(['day', 'week', 'month', 'year'] as const).map((p) => Math.max(stats.balance[p].freed, stats.balance[p].consumed ?? 0)));
+                return (
+                  <tr key={period}>
+                    <td>
+                      <span className="housekeeping-label">{label}</span>
+                      <small>{b.removals} removal{b.removals === 1 ? '' : 's'}</small>
+                    </td>
+                    <td className="is-num">
+                      {formatBytes(b.freed)}
+                      <div className="housekeeping-bar is-freed" style={{ width: `${Math.round((b.freed / max) * 100)}%` }} />
+                    </td>
+                    <td className="is-num">
+                      {b.consumed === null ? '—' : formatBytes(b.consumed)}
+                      <div className="housekeeping-bar is-consumed" style={{ width: `${Math.round(((b.consumed ?? 0) / max) * 100)}%` }} />
+                    </td>
+                    <td className={`is-num${b.usedDelta !== null && b.usedDelta < 0 ? ' is-good' : b.usedDelta !== null && b.usedDelta > 0 ? ' is-bad' : ''}`}>
+                      {b.usedDelta === null ? '—' : `${b.usedDelta > 0 ? '+' : b.usedDelta < 0 ? '−' : ''}${formatBytes(Math.abs(b.usedDelta))}`}
+                    </td>
+                    <td>
+                      <small>{b.covered ? `${b.covered} of ${b.days} day${b.days === 1 ? '' : 's'} measured` : 'no readings yet'}</small>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+
           <h3 className="monitor-heading">The last {stats.days} days</h3>
           <div className="monitor-stats">
             <div className="monitor-stat">

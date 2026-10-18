@@ -53,6 +53,9 @@ const THRESHOLDS = Object.freeze({
 });
 
 const LEVELS = ['fine', 'attention', 'limit'];
+/** The metrics whose daily first and last are kept for years. */
+const ROLLED_UP = new Set(['disk.used.bytes', 'disk.free.bytes', 'bucket.worktrees.bytes', 'bucket.sessions.bytes', 'bucket.app.bytes', 'db.bytes', 'worktrees.count']);
+const PERIODS = { day: 1, week: 7, month: 30, year: 365 };
 const NOTIFY_COOLDOWN = DAY;
 
 class HousekeepingMonitor {
@@ -179,9 +182,36 @@ class HousekeepingMonitor {
     }
     try {
       this.store.recordReadings(kept, at);
+      for (const [metric, value] of kept) if (ROLLED_UP.has(metric)) this.store.rollup?.(metric, value, at);
     } catch {
       /* a reading not kept is still a reading shown */
     }
+  }
+
+  /**
+   * Freed against consumed, by period. Freed is what housekeeping gave back
+   * (the log). The disk's used bytes moved by some amount in the same time;
+   * what was consumed is that movement plus what was freed — the disk would
+   * have grown by both had nothing been removed. Net is the movement itself.
+   */
+  balance() {
+    const today = Math.floor(this.now() / DAY);
+    const out = {};
+    for (const [name, days] of Object.entries(PERIODS)) {
+      const since = this.now() - days * DAY;
+      const freed = this.store.logTotals(since);
+      const range = this.store.dailyRange?.('disk.used.bytes', today - days) ?? null;
+      const used = range ? range.to - range.from : null;
+      out[name] = {
+        days,
+        freed: freed.bytes,
+        removals: freed.n,
+        usedDelta: used,
+        consumed: used === null ? null : Math.max(0, used + freed.bytes),
+        covered: range ? Math.max(1, range.toDay - range.fromDay + 1) : 0,
+      };
+    }
+    return out;
   }
 
   // --- thresholds ---------------------------------------------------------------
@@ -310,12 +340,16 @@ class HousekeepingMonitor {
       const after = this.store.logTotals(end);
       weeks.unshift({ start, end, bytes: Math.max(0, row.bytes - after.bytes), n: Math.max(0, row.n - after.n) });
     }
-    return { days, freed, moved, weeks };
+    return { days, freed, moved, weeks, balance: this.balance() };
   }
 
   /** The few numbers a title bar can carry: memory, swap, disk, load, sessions. */
   vitals() {
     const v = (metric) => this.latest[metric]?.value ?? null;
+    // Today's balance for the title bar: freed, consumed, and the day's movement as a share of what was used at its start.
+    const today = this.balance().day;
+    const start = this.store.dailyRange?.('disk.used.bytes', Math.floor(this.now() / DAY)) ?? null;
+    const usedPct = start && start.from > 0 && today.usedDelta !== null ? Math.round((today.usedDelta / start.from) * 1000) / 10 : null;
     const memTotal = v('mem.total.bytes');
     const memFree = v('mem.free.bytes');
     const diskTotal = this.latest['disk.free.bytes'] && this.latest['disk.used.bytes'] ? v('disk.free.bytes') + v('disk.used.bytes') : null;
@@ -329,6 +363,10 @@ class HousekeepingMonitor {
       diskFreePct: diskTotal ? Math.round((v('disk.free.bytes') / diskTotal) * 100) : v('disk.free.pct'),
       load: v('load.per.core'),
       sessions: v('sessions.open'),
+      todayFreed: today.freed,
+      todayConsumed: today.consumed,
+      todayUsedDelta: today.usedDelta,
+      todayUsedPct: usedPct,
       at: this.now(),
     };
   }

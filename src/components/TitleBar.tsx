@@ -277,6 +277,15 @@ function SystemVitals() {
       <span className={`titlebar-vital${level(vitals.load, 1, 2)}`}>
         <small>LOAD</small> {vitals.load ?? '—'}
       </span>
+      {(vitals.todayFreed > 0 || (vitals.todayConsumed ?? 0) > 0) && (
+        <span
+          className={`titlebar-vital titlebar-today${vitals.todayUsedDelta !== null && vitals.todayUsedDelta < 0 ? ' is-good' : vitals.todayUsedDelta !== null && vitals.todayUsedDelta > 0 ? ' is-warm' : ''}`}
+          title={`Today: ${gb(vitals.todayFreed)} freed by housekeeping, ${vitals.todayConsumed === null ? '—' : gb(vitals.todayConsumed)} consumed; used space ${vitals.todayUsedDelta === null ? 'not measured yet' : `${vitals.todayUsedDelta >= 0 ? 'up' : 'down'} ${gb(Math.abs(vitals.todayUsedDelta))}`}${vitals.todayUsedPct !== null ? ` (${vitals.todayUsedPct > 0 ? '+' : ''}${vitals.todayUsedPct}%)` : ''}`}
+        >
+          <small>TODAY</small> −{gb(vitals.todayFreed)} / +{vitals.todayConsumed === null ? '—' : gb(vitals.todayConsumed)}
+          {vitals.todayUsedPct !== null ? ` · ${vitals.todayUsedPct > 0 ? '+' : ''}${vitals.todayUsedPct}%` : ''}
+        </span>
+      )}
     </button>
   );
 }

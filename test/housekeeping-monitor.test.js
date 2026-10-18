@@ -195,6 +195,36 @@ test('a pageouts counter becomes a rate per minute between two readings', { skip
   assert.ok(out.conditions.some((c) => c.metric === 'swap.pageouts.perMin' && c.level === 'limit'));
 });
 
+test('the balance: freed from the log, consumed from how the disk moved, by period, from a daily roll-up that outlives the readings', { skip }, async () => {
+  const { monitor, store, sys, tick, clockNow } = world({ free: 500 * GB, total: 1000 * GB });
+  // Twenty days ago the disk had 400 GB used; housekeeping freed 50 GB ten days ago; today it is at 500 GB used.
+  store.rollup('disk.used.bytes', 400 * GB, clockNow() - 20 * DAY);
+  store.rollup('disk.used.bytes', 430 * GB, clockNow() - 10 * DAY);
+  store.log({ action: 'free', kind: 'build-cache', label: 'a', bytes: 50 * GB, at: clockNow() - 10 * DAY });
+  store.log({ action: 'free', kind: 'build-cache', label: 'b', bytes: 5 * GB, at: clockNow() - 2 * 3600_000 });
+  await monitor.tickSystem();
+  const b = monitor.balance();
+  assert.equal(b.month.freed, 55 * GB);
+  assert.equal(b.month.usedDelta, 100 * GB);
+  assert.equal(b.month.consumed, 155 * GB, 'the disk grew 100 despite 55 freed: 155 consumed');
+  assert.equal(b.week.freed, 5 * GB);
+  assert.equal(b.year.freed, 55 * GB);
+  assert.equal(b.day.freed, 5 * GB);
+  assert.equal(b.day.usedDelta, 0, 'one reading today: no movement yet');
+  assert.ok(b.month.covered >= 2);
+  // Readings are trimmed after a month; the roll-up is what a year's balance stands on.
+  store.recordReading('disk.used.bytes', 1, clockNow() - 40 * DAY);
+  store.rollup('disk.used.bytes', 1, clockNow() - 40 * DAY);
+  assert.equal(store.trimReadings(), 1);
+  assert.equal(store.trimDaily(), 0);
+  assert.ok(store.dailyRange('disk.used.bytes', Math.floor(clockNow() / DAY) - 365));
+  tick(DAY);
+  sys.statfs = () => ({ free: 490 * GB, total: 1000 * GB });
+  await monitor.tickSystem();
+  assert.equal(monitor.balance().day.usedDelta, 10 * GB, 'the day the disk grew ten');
+  assert.ok(monitor.stats().balance.week);
+});
+
 test('readings older than a month are trimmed, settings round-trip through JSON', { skip }, () => {
   const { store, clockNow } = world();
   store.recordReading('x', 1, clockNow() - 40 * DAY);
