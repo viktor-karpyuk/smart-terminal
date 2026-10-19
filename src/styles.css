@@ -4309,3 +4309,59 @@ button.ci-toast-main { cursor: pointer; }
 .sidebar-item.is-paused .sidebar-item-title { opacity: 0.75; }
 .sidebar-item-paused { font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); border: 1px solid var(--border); border-radius: 999px; padding: 0 5px; }
 .section-open.is-on { color: var(--accent); }
+.housekeeping-pager { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 8px; }
+.housekeeping-pager .usage-note { margin: 0 6px 0 0; }
+.housekeeping-pager-page { font-variant-numeric: tabular-nums; color: var(--text-faint); padding: 0 4px; }
+.housekeeping-pager-size { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; color: var(--text-faint); font-size: var(--fs-xs); }
+.housekeeping-pager-size select { padding: 2px 6px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); font: inherit; }
+
+/* Housekeeping, in tones: each card, chip and row state carries its own colour, so nothing reads as one dark block. */
+.monitor-stat.is-tone-disk { border-top: 3px solid #4f8ef7; background: color-mix(in srgb, #4f8ef7 7%, var(--bg-input)); }
+.monitor-stat.is-tone-sessions { border-top: 3px solid #9b6df2; background: color-mix(in srgb, #9b6df2 7%, var(--bg-input)); }
+.monitor-stat.is-tone-worktrees { border-top: 3px solid #e0a21f; background: color-mix(in srgb, #e0a21f 7%, var(--bg-input)); }
+.monitor-stat.is-tone-app { border-top: 3px solid #27b3a8; background: color-mix(in srgb, #27b3a8 7%, var(--bg-input)); }
+.monitor-stat.is-free { border-top: 3px solid #3dbd6a; background: color-mix(in srgb, #3dbd6a 8%, var(--bg-input)); }
+.monitor-stat.is-tone-disk .monitor-stat-label { color: #4f8ef7; }
+.monitor-stat.is-tone-sessions .monitor-stat-label { color: #9b6df2; }
+.monitor-stat.is-tone-worktrees .monitor-stat-label { color: #e0a21f; }
+.monitor-stat.is-tone-app .monitor-stat-label { color: #27b3a8; }
+.monitor-stat.is-free .monitor-stat-label { color: #3dbd6a; }
+
+/* Rows are never dimmed: a blocked one is as readable as a free one and says why in colour instead. */
+.housekeeping-table tr.is-blocked { opacity: 1; }
+.housekeeping-table tr.is-blocked .housekeeping-label { color: var(--text); }
+.housekeeping-table td small.housekeeping-blocker { color: #d98a3a; font-style: normal; }
+.housekeeping-table tr.is-work-done td:first-child { box-shadow: inset 3px 0 0 #3dbd6a; }
+.housekeeping-table tr.is-work-unmerged td:first-child { box-shadow: inset 3px 0 0 #e0a21f; }
+.housekeeping-table tr.is-work-empty td:first-child { box-shadow: inset 3px 0 0 #6b7280; }
+.housekeeping-table tr.is-work-done td { background: color-mix(in srgb, #3dbd6a 4%, transparent); }
+.housekeeping-table tr.is-work-unmerged td { background: color-mix(in srgb, #e0a21f 3%, transparent); }
+.housekeeping-table tr:hover td { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.housekeeping-work { background: color-mix(in srgb, currentColor 10%, transparent); }
+.housekeeping-work.is-done { border-color: #3dbd6a; color: #3dbd6a; }
+.housekeeping-work.is-unmerged { border-color: #e0a21f; color: #e0a21f; }
+.housekeeping-work.is-empty, .housekeeping-work.is-unknown { border-color: #6b7280; color: #9ca3af; }
+
+/* The branch's pull requests, as chips: merged purple, open green, draft grey, closed red. */
+.housekeeping-prs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 3px; white-space: normal !important; max-width: none !important; }
+.housekeeping-prs.is-unknown, .housekeeping-prs.is-none { color: var(--text-faint); font-style: italic; }
+.housekeeping-pr { font: inherit; font-size: var(--fs-xs); line-height: 1.5; padding: 0 7px; border-radius: 999px; border: 1px solid currentColor; background: color-mix(in srgb, currentColor 12%, transparent); cursor: pointer; color: var(--text-faint); font-style: normal; }
+.housekeeping-pr:hover { background: color-mix(in srgb, currentColor 24%, transparent); }
+.housekeeping-pr.is-merged { color: #a78bfa; }
+.housekeeping-pr.is-open { color: #3dbd6a; }
+.housekeeping-pr.is-open.is-draft { color: #9ca3af; }
+.housekeeping-pr.is-closed { color: #e5635b; }
+.housekeeping-pr.is-more { cursor: default; }
+.housekeeping-pr-verdict { font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em; font-style: normal; margin-left: 2px; }
+.housekeeping-pr-verdict.is-done { color: #a78bfa; }
+.housekeeping-pr-verdict.is-open { color: #3dbd6a; }
+.housekeeping-pr-verdict.is-closed { color: #e5635b; }
+.housekeeping-close { white-space: nowrap; background: #3dbd6a; border-color: #3dbd6a; color: #06240f; }
+.housekeeping-close:hover { background: #4ccf79; }
+.housekeeping-icon.is-here { color: #3dbd6a; }
+.housekeeping-pr-btn { white-space: nowrap; border-color: #a78bfa; color: #a78bfa; }
+.housekeeping-pr-btn:hover { background: color-mix(in srgb, #a78bfa 16%, transparent); }
+.housekeeping-pr-form { width: min(560px, 92vw); }
+.housekeeping-field { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; font-size: var(--fs-sm); color: var(--text-faint); }
+.housekeeping-field input, .housekeeping-field select, .housekeeping-field textarea { font: inherit; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--r-md, 6px); padding: 6px 8px; }
+.housekeeping-field textarea { resize: vertical; font-family: var(--mono, ui-monospace, monospace); font-size: var(--fs-xs); }

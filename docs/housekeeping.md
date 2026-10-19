@@ -87,6 +87,39 @@ are a few seconds the first time and nothing the second.
 A build cache inside a listed worktree is still shown under **Build caches**
 but counted once, inside the worktree's size.
 
+### Pull requests, and closing a worktree
+
+Each worktree row also shows the pull requests its branch opened, one chip per
+PR (`#95 open → develop`, `#7 merged → develop`) with a verdict: **all
+merged**, **waiting on n**, or **n closed unmerged**. Answers come from `gh`
+for GitHub repositories, and from the Code Reviewer's repository (with its
+token) for Bitbucket — a Bitbucket repository that is not added there shows
+`not on GitHub · add the repository in Code Reviewer to ask Bitbucket`. They
+are remembered for ten minutes and refreshed in the background; **Check PRs**
+asks again now.
+
+A worktree whose PRs were all merged reads as **done** even when `git` still
+counts commits ahead of the base: a squash merge leaves them unrecognisable.
+
+**Close worktree** appears when the work has left: merged into a base, or every
+PR of the branch merged or still open. Closing deletes the folder from the
+disk; the session standing inside it is closed first, and anything not
+committed is thrown away (`--force`), which the confirmation says. Several
+ticked closable rows close together with **Close n**. A worktree with commits
+of its own and no PR for them gets **Create PR**: a small form (title from the
+commits, the nearest base, a description) that pushes the branch if it must and
+opens the request through the Code Reviewer's Bitbucket or GitHub token, or
+`gh`.
+
+The brain icon on a row that already has a live session goes to that session
+instead of opening another; ⇧-click opens a new one on purpose.
+
+Claude sessions get the same reach through the `bitbucket` MCP server (tools
+`repositories`, `repo_for_cwd`, `pull_requests`, `pull_request`,
+`create_pull_request`): the app holds the tokens and asks you in a dialog
+before any pull request is opened. The `bitbucket` skill in the plugin tells
+a session how to use them.
+
 ## Health
 
 The **Health** tab is a small job that measures the machine and says when a

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { useStore } from '../state/store';
-import { describeIdle, diskUsedPercent, filterSessions, filterWorktrees, formatBytes, freeable, idleDays, inBucket, sessionFacets, weigh, withSize, type HousekeepingTab } from '../lib/housekeeping';
+import { describeIdle, diskUsedPercent, filterSessions, filterWorktrees, formatBytes, freeable, idleDays, inBucket, isTab, sessionFacets, weigh, withSize, type HousekeepingTab } from '../lib/housekeeping';
 
 /**
  * What Smart Terminal and the work around it leave on disk, and giving it back.
@@ -45,7 +45,23 @@ const KIND_LABEL: Record<HousekeepingKind, string> = {
 export function HousekeepingPanel() {
   const [inventory, setInventory] = useState<HousekeepingInventory | null>(null);
   const [items, setItems] = useState<HousekeepingItem[]>([]);
-  const [tab, setTab] = useState<Tab>('sessions');
+  // The tab opens where it was left: closing and reopening the panel is not a reason to start over at Sessions.
+  const [tab, setTabRaw] = useState<Tab>(() => {
+    try {
+      const kept = localStorage.getItem('housekeeping:tab');
+      return kept && isTab(kept) ? kept : 'sessions';
+    } catch {
+      return 'sessions';
+    }
+  });
+  const setTab = (next: Tab) => {
+    setTabRaw(next);
+    try {
+      localStorage.setItem('housekeeping:tab', next);
+    } catch {
+      /* a private window: the tab is simply not remembered */
+    }
+  };
   const [busy, setBusy] = useState<string | null>(null);
   const [measuring, setMeasuring] = useState(0);
   const [said, setSaidRaw] = useState<string | null>(null);
@@ -134,6 +150,16 @@ export function HousekeepingPanel() {
       .health(true)
       .then((h) => alive.current && setHealth(h))
       .catch(() => {});
+    // A PR answer lands per worktree: repaint that row, and let a worktree whose PRs all merged read as done.
+    const offPrs = window.api.housekeeping.onPrs((answer) => {
+      setItems((prev) =>
+        prev.map((one) => {
+          if (one.kind !== 'worktree' || one.meta?.root !== answer.root || one.meta?.branch !== answer.branch) return one;
+          const work = answer.allMerged && one.meta?.work === 'unmerged' && !one.meta?.dirty ? 'done' : one.meta?.work;
+          return { ...one, meta: { ...one.meta, prs: answer, work } };
+        }),
+      );
+    });
     const offHealth = window.api.housekeeping.onHealth(({ status, conditions }) => setHealth((prev) => (prev ? { ...prev, status, conditions } : prev)));
     window.api.housekeeping
       .jobs()
@@ -162,6 +188,7 @@ export function HousekeepingPanel() {
       alive.current = false;
       off();
       offHealth();
+      offPrs();
       offProgress();
       offJob();
       if (clear) clearTimeout(clear);
@@ -293,6 +320,7 @@ export function HousekeepingPanel() {
 
   /** The row's own button: the same modal, for this one item. */
   const quickRow = (one: HousekeepingItem) => {
+    if (one.kind === 'worktree' && isClosable(one)) return closeWorktree(one);
     const forced = one.kind === 'worktree' && one.blockers.length > 0 && one.meta?.forceable === true;
     const kind: HousekeepingJobKind | null =
       one.kind === 'session' ? 'forget-transcripts' : one.kind === 'worktree' ? (one.meta?.broken ? 'repair-worktrees' : forced ? 'remove-worktrees-forced' : 'remove-worktrees') : one.kind === 'workshop' ? 'discard-workshops' : one.reversible ? 'free' : null;
@@ -320,6 +348,77 @@ export function HousekeepingPanel() {
     });
   };
 
+  /**
+   * The door out of a worktree whose PRs all left: end the session standing in it,
+   * then remove it. Forced only when something uncommitted is left, which the
+   * modal names — the commits are on GitHub either way.
+   */
+  const closeWorktree = (one: HousekeepingItem) => {
+    const prs = one.meta?.prs as HousekeepingPulls | undefined;
+    const session = (one.meta?.session ?? null) as { id: string; live: boolean; title: string | null } | null;
+    const inside = session?.live && useStore.getState().sessions[session.id] ? session : null;
+    const forced = Boolean(one.meta?.dirty) || (Array.isArray(one.meta?.loses) && (one.meta?.loses as string[]).length > 0);
+    const kind: HousekeepingJobKind = forced ? 'remove-worktrees-forced' : 'remove-worktrees';
+    const landed = prs && prs.prs.length ? `${prs.merged} of ${prs.prs.length} PR${prs.prs.length === 1 ? '' : 's'} merged${prs.open ? `, ${prs.open} still open` : ''}` : one.state ? one.state[0].toUpperCase() + one.state.slice(1) : 'Merged';
+    setPending({
+      key: `close:${one.id}`,
+      verb: 'Yes, close',
+      title: `Close ${one.label}`,
+      detail: [
+        'Closing a worktree deletes its folder from the disk.',
+        `${landed}: the work is already where it belongs.`,
+        inside ? `The session "${inside.title ?? inside.id.slice(0, 8)}" inside it is closed first.` : null,
+        forced ? 'What is not committed is thrown away (git worktree remove --force); the branch and its commits are kept.' : 'git worktree remove; the branch keeps its commits.',
+      ]
+        .filter(Boolean)
+        .join(' '),
+      danger: true,
+      items: [one],
+      work: async () => {
+        if (inside) {
+          if (one.path) await window.api.housekeeping.closing(one.path).catch(() => {});
+          useStore.getState().closeSession(inside.id);
+          await new Promise((r) => setTimeout(r, 1200));
+        }
+        return startJob(kind, [one], `Close ${one.label}`);
+      },
+    });
+  };
+
+  /** Several closable worktrees at once: the sessions inside end first, then two jobs — plain removals and forced ones. */
+  const closeWorktrees = (list: HousekeepingItem[]) => {
+    const dirty = list.filter((one) => Boolean(one.meta?.dirty) || (Array.isArray(one.meta?.loses) && (one.meta?.loses as string[]).length > 0));
+    const clean = list.filter((one) => !dirty.includes(one));
+    const sessions = list
+      .map((one) => ({ one, session: (one.meta?.session ?? null) as { id: string; live: boolean } | null }))
+      .filter(({ session }) => session?.live && useStore.getState().sessions[session.id]);
+    setPending({
+      key: 'close-many',
+      verb: 'Yes, close',
+      title: `Close ${list.length} worktree${list.length === 1 ? '' : 's'} (${formatBytes(weigh(list))})`,
+      detail: [
+        'Closing a worktree deletes its folder from the disk. Each is merged, or every PR its branch opened was merged or is open: the work is already where it belongs.',
+        sessions.length ? `${sessions.length} session${sessions.length === 1 ? '' : 's'} inside ${sessions.length === 1 ? 'is' : 'are'} closed first.` : null,
+        dirty.length ? `${dirty.length} ${dirty.length === 1 ? 'has' : 'have'} uncommitted leftovers, thrown away (--force); branches and commits are kept.` : 'Branches keep their commits.',
+      ]
+        .filter(Boolean)
+        .join(' '),
+      danger: true,
+      items: list,
+      work: async () => {
+        for (const { one, session } of sessions) {
+          if (one.path) await window.api.housekeeping.closing(one.path).catch(() => {});
+          if (session) useStore.getState().closeSession(session.id);
+        }
+        if (sessions.length) await new Promise((r) => setTimeout(r, 1200));
+        const notes: string[] = [];
+        if (clean.length) notes.push(await startJob('remove-worktrees', clean, `Close ${clean.length} worktree${clean.length === 1 ? '' : 's'}`));
+        if (dirty.length) notes.push(await startJob('remove-worktrees-forced', dirty, `Close ${dirty.length} worktree${dirty.length === 1 ? '' : 's'}, discarding leftovers`));
+        return notes.join(' ');
+      },
+    });
+  };
+
   const toggle = (id: string) =>
     setSelected((prev) => {
       const next = new Set(prev);
@@ -332,7 +431,7 @@ export function HousekeepingPanel() {
     setSelected((prev) => {
       const next = new Set(prev);
       for (const one of list) {
-        if (on && one.blockers.length === 0) next.add(one.id);
+        if (on && (one.blockers.length === 0 || isClosable(one))) next.add(one.id);
         else next.delete(one.id);
       }
       return next;
@@ -375,17 +474,17 @@ export function HousekeepingPanel() {
         />
       )}
       <div className="monitor-stats">
-        <div className="monitor-stat">
+        <div className="monitor-stat is-tone-disk">
           <span className="monitor-stat-label">Disk</span>
           <strong>{inventory.disk.free === null ? '—' : `${formatBytes(inventory.disk.free)} free`}</strong>
           <small>{used === null ? 'the volume did not say' : `${used}% of ${formatBytes(inventory.disk.total)} in use`}</small>
         </div>
-        <div className="monitor-stat">
+        <div className="monitor-stat is-tone-sessions">
           <span className="monitor-stat-label">Sessions</span>
           <strong>{formatBytes(totals.sessions)}</strong>
           <small>{inBucket(items, 'sessions').length} kept, conversations and copies</small>
         </div>
-        <div className="monitor-stat">
+        <div className="monitor-stat is-tone-worktrees">
           <span className="monitor-stat-label">Worktrees</span>
           <strong>{formatBytes(totals.worktrees)}</strong>
           <small>
@@ -393,7 +492,7 @@ export function HousekeepingPanel() {
             {measuring ? ` · measuring ${measuring}…` : ''}
           </small>
         </div>
-        <div className="monitor-stat">
+        <div className="monitor-stat is-tone-app">
           <span className="monitor-stat-label">App</span>
           <strong>{formatBytes(totals.app)}</strong>
           <small>backups, installers, caches</small>
@@ -552,7 +651,7 @@ export function HousekeepingPanel() {
         />
       )}
       {tab === 'worktrees' && (
-        <Worktrees items={items} roots={inventory.roots} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} quickRow={quickRow} startJob={startJob} inFlight={inFlight} reload={() => load()} onError={setError} />
+        <Worktrees closeMany={closeWorktrees} onNote={(message) => void run('note', async () => message)} items={items} roots={inventory.roots} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} quickRow={quickRow} startJob={startJob} inFlight={inFlight} reload={() => load()} onError={setError} />
       )}
       {tab === 'app' && <AppFiles items={items} selected={selected} toggle={toggle} selectAll={selectAll} chosen={chosen} confirm={confirm} quickRow={quickRow} startJob={startJob} inFlight={inFlight} />}
       {tab === 'health' && <Health health={health} setHealth={setHealth} onError={setError} ask={askClaude} asking={busy === 'ask'} plan={plan} stats={stats} askPlan={askPlan} busy={Boolean(busy)} />}
@@ -578,6 +677,8 @@ interface ListProps {
   startJob: (kind: HousekeepingJobKind, list: HousekeepingItem[], title: string) => Promise<string>;
   /** Items a job holds right now. */
   inFlight: Map<string, 'removing' | 'queued' | 'paused'>;
+  /** A row did something on its own (opened a pull request): say so and read again. */
+  onNote?: (message: string) => void;
 }
 
 /** Jobs that ended lately, as one line rather than a stack: how many, what they gave back, and one Dismiss. */
@@ -708,14 +809,189 @@ interface WorktreeSessionRef {
   profile: string | null;
 }
 
+/** The verdict GitHub gave over the branch, if it was asked. */
+function pullsOf(item: HousekeepingItem): HousekeepingPulls | null {
+  const prs = item.meta?.prs as HousekeepingPulls | null | undefined;
+  return prs && Array.isArray(prs.prs) ? prs : null;
+}
+
+/**
+ * A worktree can be closed from its row when every PR its branch opened was
+ * merged or is still open: the work is on GitHub, whatever the commit count says.
+ * Not for a base branch, a broken link, or one that git cannot touch at all.
+ */
+function isClosable(item: HousekeepingItem): boolean {
+  if (item.kind !== 'worktree' || item.meta?.broken || item.meta?.prunable || item.meta?.work === 'base') return false;
+  const prs = pullsOf(item);
+  /** Merged into a base branch (or the branch is gone on origin): git itself says the work left. */
+  const finished = item.meta?.finished === true || item.meta?.work === 'done';
+  if (!finished && !prs?.closable) return false;
+  // By PRs alone, a commit not pushed since is not on GitHub; by git's own word, the merge already covers it.
+  if (!finished && item.blockers.some((b) => /not pushed|never pushed/.test(b))) return false;
+  const hard = item.blockers.filter((b) => !/a session is inside it/.test(b) && /main working tree|base branch|^locked$|repair it first/.test(b));
+  return hard.length === 0;
+}
+
+/** Commits of its own that no base has, and no PR merged or waiting for them: the row offers to open one. */
+function wantsPr(item: HousekeepingItem): boolean {
+  if (item.kind !== 'worktree' || !item.meta?.branch || item.meta?.broken || item.meta?.prunable || item.meta?.work === 'base') return false;
+  if ((Number(item.meta?.aheadOfBase) || 0) <= 0 || item.meta?.finished) return false;
+  const prs = pullsOf(item);
+  return !(prs && (prs.open > 0 || prs.merged > 0));
+}
+
+function closeTitle(item: HousekeepingItem): string {
+  const prs = pullsOf(item);
+  if (!prs || !prs.prs.length) return `${item.state ?? 'merged'}: delete the folder from the disk${item.meta?.dirty ? ', discarding what is not committed' : ''}${item.blockers.some((b) => /session is inside/.test(b)) ? ', closing the session inside first' : ''}`;
+  const open = prs.open ? `, ${prs.open} open` : '';
+  return `${prs.merged} merged${open}: delete the folder from the disk${item.meta?.dirty ? ', discarding what is not committed' : ''}`;
+}
+
+/** The PRs of the branch, one chip each, coloured by where they stand; a click opens it on GitHub. */
+function PullChips({ item }: { item: HousekeepingItem }) {
+  const prs = pullsOf(item);
+  if (!prs) {
+    if (item.meta?.work === 'base' || !item.meta?.branch) return null;
+    return <small className="housekeeping-prs is-unknown">PRs: not asked yet</small>;
+  }
+  if (!prs.prs.length) {
+    const why = prs.error ? (/known GitHub host/.test(prs.error) ? 'not on GitHub · add the repository in Code Reviewer to ask Bitbucket' : /no git remotes/.test(prs.error) ? 'no remote' : prs.error) : null;
+    return <small className="housekeeping-prs is-none">no PR{why ? ` · ${why}` : ''}</small>;
+  }
+  const shown = prs.prs.slice(0, 4);
+  return (
+    <small className="housekeeping-prs">
+      {shown.map((pr) => (
+        <button
+          key={pr.number}
+          className={`housekeeping-pr is-${pr.state.toLowerCase()}${pr.draft ? ' is-draft' : ''}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            window.api.system.openExternal(pr.url);
+          }}
+          title={`#${pr.number} ${pr.title} → ${pr.base}${pr.review ? ` · ${pr.review.toLowerCase().replace('_', ' ')}` : ''}${pr.mergedAt ? ` · merged ${new Date(pr.mergedAt).toLocaleDateString()}` : ''}`}
+        >
+          #{pr.number} {pr.state === 'MERGED' ? 'merged' : pr.state === 'OPEN' ? (pr.draft ? 'draft' : 'open') : 'closed'} → {pr.base}
+        </button>
+      ))}
+      {prs.prs.length > shown.length ? <span className="housekeeping-pr is-more">+{prs.prs.length - shown.length}</span> : null}
+      {prs.allMerged ? <span className="housekeeping-pr-verdict is-done">all merged</span> : prs.closable ? <span className="housekeeping-pr-verdict is-open">waiting on {prs.open}</span> : <span className="housekeeping-pr-verdict is-closed">{prs.closed} closed unmerged</span>}
+    </small>
+  );
+}
+
+/**
+ * The pull request, asked for in place: the title the commits suggest, the base
+ * nearest to the branch, a description, and the push the branch needs first.
+ * One request, through the reviewer's Bitbucket or GitHub token, or gh.
+ */
+function PrModal({ item, onClose, onDone }: { item: HousekeepingItem; onClose: () => void; onDone: (message: string) => void }) {
+  const [draft, setDraft] = useState<HousekeepingPrDraft | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [title, setTitle] = useState('');
+  const [base, setBase] = useState('');
+  const [body, setBody] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    if (!item.path) return;
+    window.api.housekeeping
+      .prDraft(item.path)
+      .then((d) => {
+        if (!alive) return;
+        setDraft(d);
+        setTitle(d.title);
+        setBase(d.base ?? '');
+        setBody(d.body);
+      })
+      .catch((e: unknown) => alive && setError(String((e as Error)?.message ?? e)));
+    return () => {
+      alive = false;
+    };
+  }, [item.path]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !busy) onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, busy]);
+  const submit = async () => {
+    if (!item.path || !draft) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const out = await window.api.housekeeping.createPr({ path: item.path, title, body, base, push: true });
+      onDone(`Pull request ${out.id ? `#${out.id} ` : ''}opened from ${out.branch} against ${out.base}.`);
+      onClose();
+    } catch (e) {
+      setError(String((e as Error)?.message ?? e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const chosen = draft?.bases.find((b) => b.remoteless === base) ?? null;
+  return (
+    <div className="modal-backdrop" onMouseDown={() => !busy && onClose()}>
+      <div className="confirm housekeeping-confirm housekeeping-pr-form" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+        <h3>Pull request from {item.label}</h3>
+        {!draft && !error && <p className="usage-note">Reading the branch…</p>}
+        {draft && (
+          <>
+            <p className="usage-note">
+              <code>{draft.branch}</code>
+              {draft.upstream ? ` tracks ${draft.upstream}` : ' has never been pushed'}
+              {draft.mustPush ? ` · pushed to ${draft.remote ?? 'the remote'} first` : ''}
+              {draft.dirtyCount ? ` · ${draft.dirtyCount} uncommitted file${draft.dirtyCount === 1 ? '' : 's'} stay behind` : ''}
+              {draft.via ? ` · opened through ${draft.via === 'gh' ? 'GitHub (gh)' : draft.via}` : ''}
+            </p>
+            {!draft.via && <p className="confirm-warn">{draft.reason}</p>}
+            <label className="housekeeping-field">
+              Title
+              <input value={title} onChange={(e) => setTitle(e.target.value)} disabled={busy} autoFocus />
+            </label>
+            <label className="housekeeping-field">
+              Against
+              <select value={base} onChange={(e) => setBase(e.target.value)} disabled={busy}>
+                {draft.bases.map((b) => (
+                  <option key={b.name} value={b.remoteless}>
+                    {b.remoteless}
+                    {b.ahead !== null ? ` · ${b.ahead} commit${b.ahead === 1 ? '' : 's'} ahead` : ''}
+                  </option>
+                ))}
+                {!draft.bases.length && <option value="">no base branch found</option>}
+              </select>
+            </label>
+            <label className="housekeeping-field">
+              Description
+              <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={5} disabled={busy} />
+            </label>
+            {chosen && chosen.ahead === 0 && <p className="confirm-warn">Nothing is ahead of {chosen.remoteless}; the request would be empty.</p>}
+          </>
+        )}
+        {error && <p className="confirm-warn">{error}</p>}
+        <div className="confirm-actions">
+          <button className="ghost-btn" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button className="primary-btn" disabled={busy || !draft?.via || !title.trim() || !base} onClick={() => void submit()}>
+            {busy ? (draft?.mustPush ? 'Pushing and opening…' : 'Opening…') : draft?.mustPush ? 'Push and create PR' : 'Create PR'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /**
  * The ways into a worktree from its row: the session that worked in it —
  * brought forward if it is open, picked up from history if it ended with a
  * conversation — or a fresh terminal standing in it. For the one with
  * unmerged work, this is how it gets finished rather than removed.
  */
-function WorktreeDoors({ item }: { item: HousekeepingItem }) {
+function WorktreeDoors({ item, onNote }: { item: HousekeepingItem; onNote?: (message: string) => void }) {
   const session = (item.meta?.session ?? null) as WorktreeSessionRef | null;
+  const [pr, setPr] = useState(false);
   const openSession = () => {
     if (!session) return;
     const store = useStore.getState();
@@ -731,8 +1007,13 @@ function WorktreeDoors({ item }: { item: HousekeepingItem }) {
   };
   const [asking, setAsking] = useState(false);
   /** A Claude session in the worktree, in a new tab, handed what is unmerged and asked to finish it. */
-  const askHere = async () => {
+  const askHere = async (event?: { shiftKey?: boolean }) => {
     if (!item.path) return;
+    // One is already working here: go to it. Shift-click still opens another on purpose.
+    if (session?.live && !event?.shiftKey && useStore.getState().sessions[session.id]) {
+      openSession();
+      return;
+    }
     setAsking(true);
     try {
       const store = useStore.getState();
@@ -751,13 +1032,19 @@ function WorktreeDoors({ item }: { item: HousekeepingItem }) {
   const unfinished = item.meta?.work === 'unmerged' || item.meta?.dirty === true;
   return (
     <>
+      {pr && <PrModal item={item} onClose={() => setPr(false)} onDone={(message) => onNote?.(message)} />}
+      {wantsPr(item) && (
+        <button className="ghost-btn tiny housekeeping-pr-btn" onClick={() => setPr(true)} title={`${item.meta?.aheadOfBase} commit${Number(item.meta?.aheadOfBase) === 1 ? '' : 's'} on no base branch and no pull request for them: open one`}>
+          Create PR
+        </button>
+      )}
       {!item.meta?.prunable && !item.meta?.broken && (
         <button
-          className={`housekeeping-icon${unfinished ? ' is-accent' : ''}${asking ? ' is-busy' : ''}`}
+          className={`housekeeping-icon${session?.live ? ' is-here' : unfinished ? ' is-accent' : ''}${asking ? ' is-busy' : ''}`}
           disabled={asking}
-          onClick={() => void askHere()}
+          onClick={(event) => void askHere(event)}
           aria-label="Ask Claude"
-          data-tip={unfinished ? 'Ask Claude to finish this' : 'Ask Claude here'}
+          data-tip={session?.live ? `A session is already here · go to it (⇧ click opens another)` : unfinished ? 'Ask Claude to finish this' : 'Ask Claude here'}
         >
           <BrainIcon />
         </button>
@@ -969,6 +1256,7 @@ function Sessions({
         empty="No session matches. Lower the days or the size."
         quick={{ label: 'Forget', run: quickRow }}
         inFlight={inFlight}
+        pageSize={50}
         onClear={() => selectAll(rows, false)}
         actions={() => (
           <>
@@ -1017,7 +1305,7 @@ function Sessions({
   );
 }
 
-function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm, quickRow, startJob, inFlight, reload, onError }: ListProps & { roots: HousekeepingRoot[]; reload: () => void; onError: (message: string) => void }) {
+function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm, quickRow, startJob, inFlight, reload, onError, closeMany, onNote }: ListProps & { roots: HousekeepingRoot[]; reload: () => void; onError: (message: string) => void; closeMany: (list: HousekeepingItem[]) => void }) {
   const caches = items.filter((one) => one.kind === 'build-cache');
   const shops = items.filter((one) => one.kind === 'workshop');
   const pickedCaches = chosen(caches);
@@ -1030,8 +1318,13 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
   const allTrees = items.filter((one) => one.kind === 'worktree');
   const pickedTrees = chosen(trees);
   /** The blocked ones the person ticked on purpose: old worktrees whose work no longer matters. */
-  const pickedForced = trees.filter((one) => selected.has(one.id) && one.blockers.length > 0 && one.meta?.forceable === true && !inFlight.has(one.id));
+  const pickedForced = trees.filter((one) => selected.has(one.id) && one.blockers.length > 0 && one.meta?.forceable === true && !isClosable(one) && !inFlight.has(one.id));
+  /** Ticked rows whose work already left: merged, or every PR merged or open. Closed as one, sessions inside ended first. */
+  const pickedClosable = trees.filter((one) => selected.has(one.id) && one.blockers.length > 0 && isClosable(one) && !inFlight.has(one.id));
   const finished = allTrees.filter((one) => one.meta?.finished && one.blockers.length === 0);
+  /** Every PR of the branch merged or open, nothing unpushed: the folder can go, whatever the commit count says. */
+  const closable = allTrees.filter((one) => isClosable(one) && !inFlight.has(one.id));
+  const [checkingPrs, setCheckingPrs] = useState(false);
 
   const addRoot = async () => {
     setAdding(true);
@@ -1109,8 +1402,22 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
           <input type="checkbox" checked={finishedOnly} onChange={(e) => setFinishedOnly(e.target.checked)} /> finished only (merged, or branch gone on origin)
         </label>
         <span className="usage-note">
-          {trees.length} of {allTrees.length} worktree{allTrees.length === 1 ? '' : 's'}, {formatBytes(weigh(trees))} · {finished.length} finished and clear
+          {trees.length} of {allTrees.length} worktree{allTrees.length === 1 ? '' : 's'}, {formatBytes(weigh(trees))} · {finished.length} finished and clear · {closable.length} closable by their PRs
         </span>
+        <button
+          className="ghost-btn tiny"
+          disabled={checkingPrs}
+          title="Ask GitHub (gh) again about the pull requests of every worktree's branch"
+          onClick={() => {
+            setCheckingPrs(true);
+            window.api.housekeeping
+              .refreshPrs(null)
+              .catch((e: unknown) => onError(String((e as Error)?.message ?? e)))
+              .finally(() => setCheckingPrs(false));
+          }}
+        >
+          {checkingPrs ? 'Checking PRs…' : 'Check PRs'}
+        </button>
       </div>
       <Table
         rows={trees}
@@ -1120,10 +1427,17 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
         empty={allTrees.length ? 'No worktree matches. Lower the days or untick finished only.' : 'No worktrees found. Add the folder they live in above.'}
         quick={{ label: 'Remove', run: quickRow }}
         inFlight={inFlight}
+        pageSize={50}
+        onNote={onNote}
         allowForce
         onClear={() => selectAll(trees, false)}
         actions={() => (
           <>
+            {pickedClosable.length > 0 && (
+              <button className="primary-btn tiny housekeeping-close" disabled={false} onClick={() => closeMany(pickedClosable)} title="Deletes their folders from the disk. Their work is merged or in a PR; sessions inside are closed first, uncommitted leftovers discarded">
+                Close {pickedClosable.length} ({formatBytes(weigh(pickedClosable))})
+              </button>
+            )}
             {pickedTrees.length > 0 &&
               confirm(
                 'trees',
@@ -1445,7 +1759,7 @@ function Health({
           <strong>{growth('disk.used.bytes')}</strong>
           <small>over the last two weeks</small>
         </div>
-        <div className="monitor-stat">
+        <div className="monitor-stat is-tone-worktrees">
           <span className="monitor-stat-label">Worktrees</span>
           <strong>{growth('bucket.worktrees.bytes')}</strong>
           <small>{health.lastInventoryAt ? `weighed ${describeIdle(health.lastInventoryAt) === 'today' ? 'today' : describeIdle(health.lastInventoryAt) + ' ago'}` : 'not weighed yet'}</small>
@@ -1632,6 +1946,8 @@ interface PendingAction {
   danger: boolean;
   items: HousekeepingItem[];
   work: () => Promise<string>;
+  /** The confirm button's words, when "remove" is not the deed: "Yes, close", "Create". */
+  verb?: string;
 }
 
 /**
@@ -1642,7 +1958,12 @@ interface PendingAction {
 function ConfirmModal({ pending, busy, onCancel, onConfirm }: { pending: PendingAction; busy: boolean; onCancel: () => void; onConfirm: () => void }) {
   const bytes = weigh(pending.items);
   const forcedKind = pending.key.includes('forced') || /anyway/i.test(pending.title);
-  const blocked = forcedKind ? pending.items.filter((one) => one.blockers.length && one.meta?.forceable !== true) : pending.items.filter((one) => one.blockers.length);
+  const closing = pending.key.startsWith('close');
+  const blocked = closing
+    ? pending.items.filter((one) => !isClosable(one))
+    : forcedKind
+      ? pending.items.filter((one) => one.blockers.length && one.meta?.forceable !== true)
+      : pending.items.filter((one) => one.blockers.length);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onCancel();
@@ -1678,6 +1999,8 @@ function ConfirmModal({ pending, busy, onCancel, onConfirm }: { pending: Pending
                       {one.state ?? KIND_LABEL[one.kind]}
                       {Array.isArray(one.meta?.loses) && (one.meta.loses as string[]).length ? (
                         <small className="is-lost"> · loses {(one.meta.loses as string[]).join(', ')}</small>
+                      ) : closing && isClosable(one) ? (
+                        <small> · {one.blockers.some((b) => /session is inside/.test(b)) ? 'session inside closed first' : 'nothing lost'}</small>
                       ) : one.blockers.length ? (
                         <small> · {one.blockers.join(', ')}</small>
                       ) : null}
@@ -1693,7 +2016,7 @@ function ConfirmModal({ pending, busy, onCancel, onConfirm }: { pending: Pending
             Cancel
           </button>
           <button className={pending.danger ? 'danger-btn' : 'primary-btn'} disabled={busy} onClick={onConfirm}>
-            {pending.danger ? 'Yes, remove' : 'Yes, do it'}
+            {pending.verb ?? (pending.danger ? 'Yes, remove' : 'Yes, do it')}
           </button>
         </div>
       </div>
@@ -1886,7 +2209,11 @@ function Table({
   allowForce = false,
   actions,
   onClear,
+  pageSize: pageSizeDefault = 0,
+  onNote,
 }: {
+  /** Something a row did on its own says so here: a pull request opened. */
+  onNote?: (message: string) => void;
   rows: HousekeepingItem[];
   selected: Set<string>;
   toggle: (id: string) => void;
@@ -1900,15 +2227,68 @@ function Table({
   /** What can be done with the selection: shown in a bar above the list that stays while scrolling. */
   actions?: (picked: HousekeepingItem[]) => ReactElement | null;
   onClear?: () => void;
+  /** Rows per page; 0 shows them all. A list of four hundred sessions is read a page at a time. */
+  pageSize?: number;
 }) {
   const [sort, setSort] = useState<'size' | 'idle' | 'name'>('size');
+  const [pageSize, setPageSize] = useState(pageSizeDefault);
+  const [page, setPage] = useState(0);
+  // A filter that shrinks the list below the page you were on puts you on the last page, not on an empty one.
+  const pages = pageSize > 0 ? Math.max(1, Math.ceil(rows.length / pageSize)) : 1;
+  useEffect(() => {
+    if (page > pages - 1) setPage(pages - 1);
+  }, [page, pages]);
   if (!rows.length) return <p className="empty-state">{empty}</p>;
-  const free = rows.filter((one) => one.blockers.length === 0 && !inFlight?.has(one.id));
+  const free = rows.filter((one) => (one.blockers.length === 0 || isClosable(one)) && !inFlight?.has(one.id));
   const allOn = free.length > 0 && free.every((one) => selected.has(one.id));
   const picked = rows.filter((one) => selected.has(one.id));
-  const ordered = [...rows].sort((a, b) =>
+  const sorted = [...rows].sort((a, b) =>
     sort === 'size' ? b.bytes - a.bytes : sort === 'idle' ? (idleDays(b.lastActivityAt) ?? -1) - (idleDays(a.lastActivityAt) ?? -1) : a.label.localeCompare(b.label),
   );
+  const current = Math.min(page, pages - 1);
+  const from = pageSize > 0 ? current * pageSize : 0;
+  const to = pageSize > 0 ? Math.min(rows.length, from + pageSize) : rows.length;
+  const ordered = sorted.slice(from, to);
+  const pager =
+    pageSize > 0 && (rows.length > pageSize || pageSizeDefault > 0) ? (
+      <div className="housekeeping-pager" role="navigation" aria-label="Pages">
+        <span className="usage-note">
+          {from + 1}–{to} of {rows.length}
+        </span>
+        <button className="ghost-btn tiny" disabled={current === 0} onClick={() => setPage(0)} aria-label="First page">
+          «
+        </button>
+        <button className="ghost-btn tiny" disabled={current === 0} onClick={() => setPage(current - 1)} aria-label="Previous page">
+          ‹
+        </button>
+        <span className="housekeeping-pager-page">
+          {current + 1} / {pages}
+        </span>
+        <button className="ghost-btn tiny" disabled={current >= pages - 1} onClick={() => setPage(current + 1)} aria-label="Next page">
+          ›
+        </button>
+        <button className="ghost-btn tiny" disabled={current >= pages - 1} onClick={() => setPage(pages - 1)} aria-label="Last page">
+          »
+        </button>
+        <label className="housekeeping-pager-size">
+          per page
+          <select
+            value={pageSize}
+            onChange={(e) => {
+              setPageSize(Number(e.target.value));
+              setPage(0);
+            }}
+          >
+            {[25, 50, 100, 200].map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+            <option value={0}>all</option>
+          </select>
+        </label>
+      </div>
+    ) : null;
   const head = (key: 'size' | 'idle' | 'name', label: string, className = '') => (
     <th className={className}>
       <button className={`housekeeping-sort${sort === key ? ' is-on' : ''}`} onClick={() => setSort(key)} title={`Sort by ${label.toLowerCase()}`}>
@@ -1930,11 +2310,12 @@ function Table({
           </button>
         </div>
       )}
+    {pager}
     <table className="housekeeping-table">
       <thead>
         <tr>
           <th>
-            <input type="checkbox" checked={allOn} disabled={!free.length} onChange={(e) => selectAll(rows, e.target.checked)} aria-label="select all" />
+            <input type="checkbox" checked={allOn} disabled={!free.length} onChange={(e) => selectAll(rows, e.target.checked)} aria-label="select all" title={pageSize > 0 && rows.length > pageSize ? `Select all ${free.length} that can be, on every page` : undefined} />
           </th>
           {head('name', 'What')}
           {head('idle', 'Idle')}
@@ -1949,7 +2330,7 @@ function Table({
           const unsized = one.meta?.sized === false;
           const working = inFlight?.get(one.id) ?? null;
           return (
-            <tr key={one.id} className={`${blocked ? 'is-blocked' : ''}${working ? ` is-working is-${working}` : ''}`} title={one.path ?? undefined}>
+            <tr key={one.id} className={`${blocked ? 'is-blocked' : ''}${one.kind === 'worktree' ? ` is-work-${one.meta?.hardBlocked ? 'held' : String(one.meta?.work ?? 'unknown')}` : ''}${working ? ` is-working is-${working}` : ''}`} title={one.path ?? undefined}>
               <td>
                 {working ? (
                   <span className={`housekeeping-spinner${working === 'removing' ? ' is-live' : ''}`} aria-label={working} />
@@ -1958,9 +2339,8 @@ function Table({
                     type="checkbox"
                     className={blocked && allowForce && one.meta?.forceable === true ? 'is-force' : undefined}
                     checked={selected.has(one.id)}
-                    disabled={blocked && !(allowForce && one.meta?.forceable === true)}
                     onChange={() => toggle(one.id)}
-                    title={blocked && allowForce && one.meta?.forceable === true ? 'Blocked by the work inside; tick to remove it anyway, discarding that work' : undefined}
+                    title={blocked && allowForce && one.meta?.forceable === true ? 'Blocked by the work inside; tick to remove it anyway, discarding that work' : blocked ? `Blocked: ${one.blockers.join(', ')}. It can be ticked; the confirmation says what will be refused.` : undefined}
                     aria-label={`select ${one.label}`}
                   />
                 )}
@@ -2001,10 +2381,16 @@ function Table({
                   </span>
                 )}
                 {one.state ?? ''}
+                {one.kind === 'worktree' && <PullChips item={one} />}
                 {blocked && <small className="housekeeping-blocker">{one.blockers.join(', ')}</small>}
               </td>
               <td className="is-num housekeeping-rowactions">
-                {quick && !working && (!blocked || Boolean(one.meta?.broken) || (allowForce && one.meta?.forceable === true)) && (
+                {quick && !working && one.kind === 'worktree' && isClosable(one) && (
+                  <button className="primary-btn tiny housekeeping-close" onClick={() => quick.run(one)} title={closeTitle(one)}>
+                    Close worktree
+                  </button>
+                )}
+                {quick && !working && !(one.kind === 'worktree' && isClosable(one)) && (!blocked || Boolean(one.meta?.broken) || (allowForce && one.meta?.forceable === true)) && (
                   <button
                     className={`${blocked && !one.meta?.broken ? 'danger-btn' : 'ghost-btn'} tiny`}
                     onClick={() => quick.run(one)}
@@ -2013,7 +2399,7 @@ function Table({
                     {one.meta?.broken ? 'Repair' : blocked ? 'Remove anyway' : quick.label}
                   </button>
                 )}
-                {one.kind === 'worktree' && one.path && <WorktreeDoors item={one} />}
+                {one.kind === 'worktree' && one.path && <WorktreeDoors item={one} onNote={onNote} />}
                 {one.path && one.kind !== 'browser-cache' && (
                   <button className="housekeeping-icon" aria-label="Show in Finder" data-tip="Show in Finder" onClick={() => window.api.files.reveal(one.path as string)}>
                     <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" aria-hidden>
@@ -2027,6 +2413,7 @@ function Table({
         })}
       </tbody>
     </table>
+    {rows.length > 12 && pager}
     </>
   );
 }

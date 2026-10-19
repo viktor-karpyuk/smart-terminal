@@ -30,6 +30,8 @@ const os = require('node:os');
 const { item, totals, byWeight, formatBytes, KINDS } = require('./housekeeping-items');
 const caches = require('./build-caches');
 const { WorktreeInventory } = require('./worktree-inventory');
+const { WorktreePulls } = require('./worktree-prs');
+const { execFile } = require('node:child_process');
 const { fileSize } = require('./disk-usage');
 
 const DAY = 86_400_000;
@@ -74,6 +76,31 @@ class Housekeeping {
       now,
       regenerable: () => this.regenerable(),
     });
+    /** The pull requests of each worktree's branch, remembered in the store and refreshed in the background. */
+    this.pulls = new WorktreePulls({
+      get: (key) => this.store.setting?.(key),
+      set: (key, value) => this.store.setSetting(key, value),
+      now,
+      emit: (event, payload) => this.emit(event, payload),
+      forgeFor: (root) => this.#forgeFor(root),
+    });
+  }
+
+  /**
+   * The Code Reviewer's adapter for the repository at a root, matched by its remote:
+   * the way to ask Bitbucket, with the token the person gave that repository there.
+   */
+  async #forgeFor(root) {
+    if (!this.review?.forgeByRemote) return null;
+    const remotes = await new Promise((resolve) => {
+      execFile('git', ['remote', '-v'], { cwd: root, timeout: 10_000 }, (error, stdout) => resolve(error ? '' : String(stdout)));
+    });
+    const urls = [...new Set(remotes.split('\n').map((line) => line.split(/\s+/)[1]).filter(Boolean))];
+    for (const url of urls) {
+      const found = this.review.forgeByRemote(url);
+      if (found) return found;
+    }
+    return null;
   }
 
   #activity = [];
@@ -298,10 +325,13 @@ class Housekeeping {
     } catch {
       return [];
     }
+    // PRs refresh after the rows are out: every answer is emitted and the panel repaints that row.
+    void this.pulls.refresh(rows).catch(() => {});
     return rows
       .filter((row) => !row.main)
       .map((row) => {
         const known = this.sizes.known(row.path);
+        const prs = this.pulls.known(row.root, row.branch);
         return item({
           id: `worktree:${row.path}`,
           kind: 'worktree',
@@ -312,7 +342,7 @@ class Housekeeping {
           state: row.state,
           blockers: row.blockers,
           detail: [row.branch ? `branch ${row.branch}` : null, row.upstream ? `tracks ${row.upstream}` : row.ownWork ? 'no upstream' : null].filter(Boolean).join(' · ') || null,
-          meta: { root: row.root, branch: row.branch, finished: row.finished, prunable: row.prunable, broken: row.broken, work: row.work, aheadOfBase: row.aheadOfBase, dirtyCount: row.dirtyCount, dirty: row.dirty, forceable: row.forceable, loses: row.loses, session: this.#sessionUnder(row.path), sized: Boolean(known) || row.prunable },
+          meta: { root: row.root, branch: row.branch, finished: row.finished, prunable: row.prunable, broken: row.broken, work: prs?.allMerged && row.work === 'unmerged' && !row.dirty ? 'done' : row.work, prs, aheadOfBase: row.aheadOfBase, dirtyCount: row.dirtyCount, dirty: row.dirty, forceable: row.forceable, loses: row.loses, session: this.#sessionUnder(row.path), sized: Boolean(known) || row.prunable },
         });
       });
   }
@@ -731,6 +761,31 @@ class Housekeeping {
     return { results: results.map((one) => ({ id: `worktree:${one.path}`, ok: one.ok, bytes: bytesOf.get(one.path) ?? 0, error: one.error, note: one.branchKept ? 'branch kept' : undefined })), freed };
   }
 
+  #closing = new Map();
+
+  /** The panel is about to close a worktree and end the session inside: remember it, so the session's end offers nothing. */
+  markClosing(target) {
+    this.#closing.set(target, this.now() + 60_000);
+    return true;
+  }
+
+  /** Is a folder under a worktree the panel is closing right now? */
+  closing(dir) {
+    const now = this.now();
+    for (const [target, until] of this.#closing) {
+      if (until < now) this.#closing.delete(target);
+      else if (dir === target || dir.startsWith(target + path.sep)) return true;
+    }
+    return false;
+  }
+
+  /** Ask GitHub again about the PRs of these worktrees (or all of them), now. */
+  async refreshPulls(ids = null) {
+    const rows = await this.worktrees.list();
+    const wanted = ids ? new Set(ids.map((id) => String(id).replace(/^worktree:/, ''))) : null;
+    return this.pulls.refresh(wanted ? rows.filter((row) => wanted.has(row.path)) : rows, { force: true });
+  }
+
   /** Point broken worktrees back at their repository. Nothing is removed. */
   async repairWorktrees(ids = []) {
     const paths = ids.map((id) => String(id)).filter((id) => id.startsWith('worktree:')).map((id) => id.slice('worktree:'.length));
@@ -746,6 +801,123 @@ class Housekeeping {
     });
     this.emit('progress', { op: 'delete', label, itemBytes: out.bytes, itemExpected: expected, files: out.files, failed: out.failed, done: true });
     return out;
+  }
+
+  /** git in a folder, resolving to trimmed stdout or '' — and the error text on `.error` when asked. */
+  #git(cwd, args, { timeout = 60_000 } = {}) {
+    return new Promise((resolve) => {
+      execFile('git', args, { cwd, timeout, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => resolve({ ok: !error, out: String(stdout ?? '').trim(), err: String(stderr ?? '').trim() }));
+    });
+  }
+
+  /** The bases of a root, remote first; a repository with no origin still has its local trunk. */
+  async #basesOf(root) {
+    const bases = await this.worktrees.helper.basesOf(root);
+    if (bases.length) return bases;
+    const local = [];
+    for (const name of ['develop', 'main', 'master', 'trunk']) {
+      if ((await this.#git(root, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])).ok) local.push(name);
+    }
+    return local;
+  }
+
+  /**
+   * What a pull request from this worktree would be, before anyone writes it:
+   * the bases it could go against with how far ahead of each it is, a title
+   * from the commits, whether the branch must be pushed first, and who would
+   * take the request (the reviewer's forge for the repository, or gh).
+   */
+  /**
+   * One worktree, read directly with five git calls instead of the whole inventory:
+   * a form that opens on a click cannot wait for sixty worktrees to be looked at.
+   */
+  async #quickRow(target) {
+    const where = fs.existsSync(target) ? target : realOf(target);
+    if (!fs.existsSync(path.join(where, '.git'))) throw new Error('That is not a worktree the app knows; look again.');
+    const [common, branch, head] = await Promise.all([
+      this.#git(where, ['rev-parse', '--path-format=absolute', '--git-common-dir']),
+      this.#git(where, ['symbolic-ref', '--short', '-q', 'HEAD']),
+      this.#git(where, ['rev-parse', 'HEAD']),
+    ]);
+    if (!common.ok) throw new Error('git cannot read this worktree; repair it first.');
+    const root = path.dirname(common.out.replace(/[\\/]\.git$/, '/.git'));
+    const row = { path: where, root, label: path.basename(where), branch: branch.out || null, head: head.out, upstream: null, ahead: 0, dirtyCount: 0 };
+    if (row.branch) {
+      const [track, status] = await Promise.all([this.#git(root, ['for-each-ref', '--format=%(upstream:short) %(upstream:track)', `refs/heads/${row.branch}`]), this.#git(where, ['status', '--porcelain'])]);
+      const [upstream, ...rest] = track.out.split(' ');
+      row.upstream = upstream || null;
+      row.ahead = Number((rest.join(' ').match(/ahead (\d+)/) ?? [])[1]) || 0;
+      row.dirtyCount = status.out ? status.out.split('\n').filter(Boolean).length : 0;
+    }
+    return row;
+  }
+
+  async prDraft(target) {
+    const row = await this.#quickRow(target);
+    if (!row.branch) throw new Error('A detached worktree has no branch to open a pull request from.');
+    const bases = [];
+    for (const name of await this.#basesOf(row.root)) {
+      const count = Number((await this.#git(row.root, ['rev-list', '--count', `${name}..${row.head}`])).out);
+      bases.push({ name, remoteless: name.replace(/^origin\//, ''), ahead: Number.isFinite(count) ? count : null });
+    }
+    bases.sort((a, b) => (a.ahead ?? Infinity) - (b.ahead ?? Infinity));
+    const base = bases[0] ?? null;
+    const log = base ? (await this.#git(row.path, ['log', '--format=%s', '-30', `${base.name}..HEAD`])).out.split('\n').filter(Boolean) : [];
+    const subject = log.length === 1 ? log[0] : row.branch.split('/').pop().replace(/[-_]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+    const remote = row.upstream ? row.upstream.split('/')[0] : (await this.#git(row.root, ['remote'])).out.split('\n').filter(Boolean)[0] ?? null;
+    const forge = await this.#forgeFor(row.root);
+    const url = remote ? (await this.#git(row.root, ['remote', 'get-url', remote])).out : '';
+    const via = forge ? (/bitbucket/.test(url) ? 'Bitbucket' : 'GitHub') : /github\.com/.test(url) ? 'gh' : null;
+    return {
+      path: row.path,
+      branch: row.branch,
+      upstream: row.upstream,
+      ahead: row.ahead,
+      mustPush: !row.upstream || row.ahead > 0,
+      remote,
+      dirtyCount: row.dirtyCount,
+      bases,
+      base: base?.remoteless ?? null,
+      title: subject.slice(0, 120),
+      body: log.length > 1 ? log.map((line) => `- ${line}`).join('\n') : '',
+      via,
+      reason: via ? null : remote ? `The remote ${url || remote} is not on GitHub, and the Code Reviewer does not have this repository. Add it there (Review › Repositories) with its token.` : 'The repository has no remote to push to.',
+    };
+  }
+
+  /** Push if it must, open the pull request, remember it, and say where it is. One POST: never retried. */
+  async createPr(target, { title, body = '', base, push = true } = {}) {
+    const draft = await this.prDraft(target);
+    if (!draft.via) throw new Error(draft.reason);
+    if (!title?.trim()) throw new Error('The pull request needs a title.');
+    const destination = String(base || draft.base || '').replace(/^origin\//, '');
+    if (!destination) throw new Error('Choose the branch the pull request goes against.');
+    if (draft.mustPush) {
+      if (!push) throw new Error(`${draft.branch} is not on ${draft.remote ?? 'the remote'} yet; it has to be pushed first.`);
+      this.emit('progress', { op: 'create-pr', label: `pushing ${draft.branch}`, done: false });
+      const pushed = await this.#git(draft.path, ['push', '-u', draft.remote, `${draft.branch}:${draft.branch}`], { timeout: 5 * 60_000 });
+      if (!pushed.ok) throw new Error(`git push failed: ${pushed.err.split('\n').pop() || 'unknown'}`);
+      this.worktrees.memo.delete(draft.path);
+    }
+    this.emit('progress', { op: 'create-pr', label: `opening the pull request against ${destination}`, done: false });
+    let created;
+    const row = await this.#quickRow(draft.path);
+    if (draft.via === 'gh') {
+      const done = await new Promise((resolve) => {
+        execFile('gh', ['pr', 'create', '--head', draft.branch, '--base', destination, '--title', title.trim(), '--body', body ?? ''], { cwd: draft.path, timeout: 60_000, env: { ...process.env, GH_PROMPT_DISABLED: '1' } }, (error, stdout, stderr) => resolve({ ok: !error, out: String(stdout ?? '').trim(), err: String(stderr ?? '').trim() }));
+      });
+      if (!done.ok) throw new Error(`gh pr create failed: ${done.err.split('\n').pop() || 'unknown'}`);
+      const url = done.out.split('\n').pop();
+      created = { id: Number(url.split('/').pop()) || null, url };
+    } else {
+      const forge = await this.#forgeFor(row.root);
+      created = await forge.createPr({ title: title.trim(), description: body ?? '', source: draft.branch, destination });
+    }
+    this.store.log({ action: 'create-pr', kind: 'worktree', label: path.basename(draft.path), bytes: 0, ok: true, detail: `#${created.id} → ${destination}` });
+    this.worktrees.memo.delete(draft.path);
+    await this.pulls.refresh([row], { force: true }).catch(() => {});
+    this.emit('progress', { op: 'create-pr', label: null, done: true });
+    return { ...created, base: destination, branch: draft.branch };
   }
 
   /**
@@ -803,7 +975,7 @@ class Housekeeping {
     lines.push(
       row.finished
         ? 'This worktree\'s work is already merged. Check nothing uncommitted here still matters; if it does not, say so plainly and I will remove the worktree from Housekeeping. Do not remove it yourself.'
-        : 'Finish this worktree\'s work. Read the commits and the uncommitted changes, run the tests if they are cheap, then either: commit what is worth committing, push the branch (set its upstream if it has none) and open a pull request against the nearest base with a clear description; or, if this work should be dropped, say so and why. Do not remove or force-reset the worktree; Housekeeping does that once you report.',
+        : 'Finish this worktree\'s work. Read the commits and the uncommitted changes, run the tests if they are cheap, then either: commit what is worth committing, push the branch (set its upstream if it has none) and open a pull request against the nearest base with a clear description — through the `bitbucket` tools (pull_requests to see whether one exists, create_pull_request to open it; the user confirms in a dialog) when they are listed, with `gh` otherwise; or, if this work should be dropped, say so and why. Do not remove or force-reset the worktree; Housekeeping does that once you report.',
     );
     return lines.join('\n');
   }

@@ -1159,7 +1159,15 @@ declare global {
         discardWorkshops(ids: string[]): Promise<{ results: HousekeepingResult[] }>;
         removeWorktrees(ids: string[]): Promise<{ results: HousekeepingResult[]; freed: number }>;
         repairWorktrees(ids: string[]): Promise<{ results: HousekeepingResult[] }>;
+        /** Ask GitHub again about the pull requests of these worktrees, or of all of them. */
+        /** Tell main a worktree is being closed from the panel, so ending its session offers nothing. */
+        closing(path: string): Promise<boolean>;
+        refreshPrs(ids?: string[] | null): Promise<HousekeepingPulls[]>;
+        onPrs(handler: (answer: HousekeepingPulls) => void): () => void;
         worktreeBrief(path: string): Promise<string>;
+        /** What a pull request from the worktree would be: bases, title, whether it must be pushed, who takes it. */
+        prDraft(path: string): Promise<HousekeepingPrDraft>;
+        createPr(input: { path: string; title: string; body?: string; base: string; push?: boolean }): Promise<{ id: number | null; url: string; base: string; branch: string }>;
         roots(): Promise<HousekeepingRoot[]>;
         addRoot(folder: string): Promise<HousekeepingRoot[]>;
         removeRoot(folder: string): Promise<HousekeepingRoot[]>;
@@ -1205,6 +1213,52 @@ declare global {
   type HousekeepingBucket = 'sessions' | 'worktrees' | 'app';
 
   /** One removable thing on disk, whatever it is. */
+  interface HousekeepingPrDraft {
+    path: string;
+    branch: string;
+    upstream: string | null;
+    ahead: number;
+    mustPush: boolean;
+    remote: string | null;
+    dirtyCount: number;
+    bases: { name: string; remoteless: string; ahead: number | null }[];
+    base: string | null;
+    title: string;
+    body: string;
+    /** Who takes the request: the reviewer's forge (Bitbucket or GitHub), gh, or nobody. */
+    via: 'Bitbucket' | 'GitHub' | 'gh' | null;
+    reason: string | null;
+  }
+
+  /** One pull request a worktree's branch opened. */
+  interface HousekeepingPull {
+    number: number;
+    title: string;
+    state: 'OPEN' | 'MERGED' | 'CLOSED';
+    base: string;
+    url: string;
+    mergedAt: string | null;
+    draft: boolean;
+    updatedAt: string | null;
+    review: string | null;
+  }
+
+  /** What GitHub says about a worktree's branch: its PRs and the verdict over them. */
+  interface HousekeepingPulls {
+    root?: string;
+    branch?: string;
+    prs: HousekeepingPull[];
+    checkedAt: number;
+    error: string | null;
+    merged: number;
+    open: number;
+    closed: number;
+    allMerged: boolean;
+    /** Every PR landed or is waiting: the work has left the worktree. */
+    closable: boolean;
+    stale?: boolean;
+  }
+
   interface HousekeepingItem {
     id: string;
     kind: HousekeepingKind;
