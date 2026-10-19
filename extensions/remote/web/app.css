@@ -85,6 +85,8 @@ button { font: inherit; }
 .tab .tab-close { padding: 6px 10px; margin-right: 4px; border-radius: 6px; font-size: 17px; line-height: 1; color: var(--ink-3); }
 .tab .tab-close:hover { background: var(--raised); color: #e7eaf3; }
 .tab button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.text-size { display: flex; flex: none; align-self: center; }
+.text-size .icon-btn { width: 40px; font: 600 14px/1 var(--font); color: var(--ink-2); }
 .stage { position: relative; min-height: 0; min-width: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; padding: 8px; }
 .pane { display: flex; align-items: center; justify-content: center; flex: 1 1 0; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
 .pane[hidden] { display: none !important; }
@@ -111,6 +113,7 @@ button { font: inherit; }
   .shell { grid-template-columns: 280px 1fr; }
   .rail { border-right: 1px solid var(--line); }
   .back { display: none; }
+  .text-size { display: none; }
   .keys { display: none; }
 }
 @media (pointer: coarse) and (min-width: 760px) {

@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="/icon.png">
 <title>Smart Terminal</title>
 <link rel="stylesheet" href="/assets/xterm.css">
-<link rel="stylesheet" href="/app.css?v=3">
+<link rel="stylesheet" href="/app.css?v=4">
 </head>
 <body data-view="loading">
 <main class="pair" id="pair" hidden>
@@ -46,6 +46,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
       </button>
       <div class="tabs" id="tabs" role="tablist" aria-label="Open on this phone"></div>
+      <div class="text-size" aria-label="Text size">
+        <button class="icon-btn" id="smaller" type="button" title="Smaller text" aria-label="Smaller text">A−</button>
+        <button class="icon-btn" id="bigger" type="button" title="Bigger text" aria-label="Bigger text">A+</button>
+      </div>
     </header>
     <div class="stage" id="stage"></div>
     <div class="keys" id="keys" aria-label="Keys a phone keyboard does not have"></div>
@@ -55,6 +59,6 @@
 
 <script src="/assets/xterm.js"></script>
 <script src="/assets/addon-fit.js"></script>
-<script src="/app.js?v=3"></script>
+<script src="/app.js?v=4"></script>
 </body>
 </html>

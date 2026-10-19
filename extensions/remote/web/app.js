@@ -30,7 +30,11 @@ const THEME = {
 };
 const FONT = 'ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, monospace';
 const NARROW = matchMedia('(max-width: 759px)');
-const PHONE_FONT = 12;
+/** The text size on a phone, remembered on this phone. */
+const FONT_MIN = 8;
+const FONT_MAX = 22;
+let phoneFont = 12;
+try { phoneFont = Math.min(FONT_MAX, Math.max(FONT_MIN, Number(localStorage.getItem('fontSize')) || 12)); } catch { /* no storage: the default */ }
 
 let computer = '';
 let sessions = [];
@@ -325,7 +329,7 @@ function fit(e) {
     }
     e.drives = true;
     e.pane.classList.add('is-follows');
-    e.term.options.fontSize = PHONE_FONT;
+    e.term.options.fontSize = phoneFont;
     // Claude draws its whole screen again at the new size; what it drew at the old one would only wrap into a mess.
     if (e.kind === 'claude') e.term.reset();
     requestAnimationFrame(() => {
@@ -379,3 +383,21 @@ $('keys').replaceChildren(...KEYS.map(([label, data]) => el('button', {
   if (me) enter(me);
   else showPair();
 })();
+
+// ---------- the text size on a phone ----------
+/** Bigger or smaller text: the session is then asked for the columns and rows that fit. */
+function setFont(size) {
+  phoneFont = Math.min(FONT_MAX, Math.max(FONT_MIN, size));
+  try { localStorage.setItem('fontSize', String(phoneFont)); } catch { /* not remembered, still applied */ }
+  for (const e of open.values()) {
+    if (!e.drives) continue;
+    e.term.options.fontSize = phoneFont;
+    if (!e.pane.hidden) {
+      requestAnimationFrame(() => {
+        try { e.fitter.fit(); } catch { /* not laid out yet */ }
+      });
+    }
+  }
+}
+$('smaller').addEventListener('click', () => setFont(phoneFont - 1));
+$('bigger').addEventListener('click', () => setFont(phoneFont + 1));
