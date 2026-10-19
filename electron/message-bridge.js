@@ -59,7 +59,7 @@ class MessageBridge {
    * @param {(id: string) => boolean} deps.isFree   idle at a Claude prompt, no dialog up
    * @param {object} deps.store               the queue: queue/pending/markDelivered/markRead
    */
-  constructor({ socketPath, reach, roster, write, isFree, store, health = null, lookup = null, onHook = null, onBus = null, onJenkins = null, verifySession = null }) {
+  constructor({ socketPath, reach, roster, write, isFree, store, health = null, lookup = null, onHook = null, onBus = null, onJenkins = null, onForge = null, verifySession = null }) {
     this.socketPath = socketPath;
     this.reach = reach;
     this.roster = roster;
@@ -79,6 +79,7 @@ class MessageBridge {
     this.onBus = onBus;
     /** Jenkins, read-only, for any session. Optional: without it the tools are simply not offered. */
     this.onJenkins = onJenkins;
+    this.onForge = onForge;
     /**
      * Whether a session can prove it is the session it says it is: `(id, secret) => boolean`. Optional, and asked only
      * for what must not be done in another session's name; without it the id alone is believed, as it always was.
@@ -300,6 +301,17 @@ class MessageBridge {
       void secret;
       return this.onJenkins({ ...rest, session: { id: me.id, name: me.name } });
     }
+    // Pull requests, like Jenkins: a window onto the forges, answered for a session that proved who it is.
+    if (op === 'forge') {
+      if (!this.onForge) return { ok: false, error: 'Bitbucket is not available.' };
+      if (this.verifySession && !this.verifySession(me.id, request.secret)) {
+        return { ok: false, error: 'This session could not prove who it is, so Smart Terminal will not act on its behalf.' };
+      }
+      const { secret, ...rest } = request;
+      void secret;
+      return this.onForge({ ...rest, session: { id: me.id, name: me.name }, cwd: me.cwd ?? null });
+    }
+
     const audience = audienceFor(from, roster, reach);
 
     if (op === 'roster') {
