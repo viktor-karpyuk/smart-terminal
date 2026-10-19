@@ -294,8 +294,8 @@ const JENKINS_APP = ['ask'] as const;
  * turning it on opens a port — so no permission grants these to an extension from
  * outside; `permissionFor` says so.
  */
-const REMOTE_READ = ['overview'] as const;
-const REMOTE_WRITE = ['setEnabled', 'setPort', 'pair', 'cancelPairing', 'revoke', 'disconnect', 'open'] as const;
+const REMOTE_READ = ['overview', 'status'] as const;
+const REMOTE_WRITE = ['setEnabled', 'setPort', 'setBind', 'pair', 'cancelPairing', 'revoke', 'disconnect', 'release', 'open'] as const;
 const REMOTE_VERBS = new Map<string, Channel>(
   [...REMOTE_READ, ...REMOTE_WRITE].map((name) => [name, 'remote'] as [string, Channel]),
 );

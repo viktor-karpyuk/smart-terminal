@@ -21,11 +21,14 @@ const CANDIDATES = [
 /** A reading is good for this long; the panel asks often and the command is not free. */
 const TTL_MS = 10_000;
 
+/** The known places first; the PATH after, and only its absolute entries: a `tailscale` planted in `.` or `./node_modules/.bin` is not Tailscale. */
 function findCli({ exists = fs.existsSync, env = process.env } = {}) {
+  const known = CANDIDATES.find((one) => exists(one));
+  if (known) return known;
   for (const dir of String(env.PATH ?? '').split(':')) {
-    if (dir && exists(`${dir}/tailscale`)) return `${dir}/tailscale`;
+    if (dir.startsWith('/') && !/^\/(tmp|var\/tmp|private\/tmp)\b/.test(dir) && exists(`${dir}/tailscale`)) return `${dir}/tailscale`;
   }
-  return CANDIDATES.find((one) => exists(one)) ?? null;
+  return null;
 }
 
 /** What `tailscale status --json` says, kept to the fields the phone cares about. */

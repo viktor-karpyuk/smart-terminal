@@ -12,10 +12,12 @@ const STATUS = JSON.stringify({
   Self: { DNSName: 'viktors-macbook-pro.tail1234.ts.net.', TailscaleIPs: ['100.101.102.103', 'fd7a:115c:a1e0::1'] },
 });
 
-test('the command is looked for on the PATH first, then where the Mac app keeps it', () => {
+test('the command is looked for where the Mac app keeps it, then on the PATH', () => {
   assert.equal(findCli({ exists: () => false, env: { PATH: '/usr/bin:/bin' } }), null);
   assert.equal(findCli({ exists: (p) => p === '/opt/homebrew/bin/tailscale', env: { PATH: '/opt/homebrew/bin:/usr/bin' } }), '/opt/homebrew/bin/tailscale');
   assert.equal(findCli({ exists: (p) => p === '/Applications/Tailscale.app/Contents/MacOS/Tailscale', env: { PATH: '/usr/bin' } }), '/Applications/Tailscale.app/Contents/MacOS/Tailscale');
+  assert.equal(findCli({ exists: (p) => p === '/Applications/Tailscale.app/Contents/MacOS/Tailscale' || p === '/x/tailscale', env: { PATH: '/x' } }), '/Applications/Tailscale.app/Contents/MacOS/Tailscale', 'the known place wins over the PATH');
+  assert.equal(findCli({ exists: (p) => p === './tailscale' || p === 'node_modules/.bin/tailscale', env: { PATH: '.:node_modules/.bin' } }), null, 'a relative PATH entry is not trusted');
 });
 
 test('the status is read down to the name and the IPv4 address', () => {

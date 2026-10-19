@@ -392,14 +392,19 @@ function createRemoteServer() {
         const size = ptys.size(ptyId);
         if (!size || size.rows < 3) return;
         ptys.resize(ptyId, size.cols, size.rows - 1);
-        // Read again, not remembered: a phone may have sized it in the meantime.
-        setTimeout(() => { const now = ptys.size(ptyId); if (now) ptys.resize(ptyId, now.cols, now.rows === size.rows - 1 ? size.rows : now.rows); }, 80);
+        // Back to the size it had, unless a phone sized it in the meantime: then that size stands.
+        setTimeout(() => {
+          const now = ptys.size(ptyId);
+          if (now && now.cols === size.cols && now.rows === size.rows - 1) ptys.resize(ptyId, size.cols, size.rows);
+        }, 80);
       },
       describe: (sessionId) => describeSession(sessionId),
       notify: (title, body) => {
         if (Notification.isSupported()) new Notification({ title, body }).show();
       },
       changed: () => send('remote:event', { type: 'changed' }),
+      // A phone took a session's size or gave it back: the pane says so, with a way to take it back.
+      driven: (ptyId, from) => send('remote:event', { type: 'driven', sessionId: sessionByPty.get(ptyId) ?? null, from }),
       log: (line) => console.log(`[remote] ${line}`),
       // Away from home the phone comes in through Tailscale; this reads what it says, and configures nothing.
       tailscale: new Tailscale(),
@@ -413,7 +418,16 @@ function createRemoteServer() {
 /** What the Remote panel may ask for. */
 const REMOTE_VERBS = {
   overview: async (s) => ({ ok: true, ...(await s.overviewFresh()) }),
-  setEnabled: (s, args) => s.setEnabled(args.enabled === true),
+  status: (s) => ({ ok: true, ...s.status() }),
+  setEnabled: (s, args) => (typeof args.enabled === 'boolean' ? s.setEnabled(args.enabled) : { ok: false, error: 'On or off, nothing else.' }),
+  setBind: (s, args) => s.setBind(args.bind),
+  release: (s, args) => s.release(String(args.ch ?? '')),
+  /** A session's size back from the phone that has it, by session: the pane's own button. */
+  releaseSession: (s, args) => {
+    const ptyId = ptyOfSession(String(args.sessionId ?? ''));
+    const viewer = ptyId ? s.status().viewers.find((v) => v.driven && v.sessionId === String(args.sessionId)) : null;
+    return viewer ? s.release(viewer.ch) : { ok: false, error: 'No phone has that session\'s size.' };
+  },
   setPort: (s, args) => s.setPort(args.port),
   pair: (s) => s.newPairingCode(),
   cancelPairing: (s) => s.cancelPairing(),
@@ -2542,7 +2556,7 @@ function registerIpc() {
    */
   /** Remote: the phone's server, one door for its panel. */
   ipcMain.handle('remote:call', async (_e, { name, args } = {}) => {
-    if (!remoteServer) return { ok: false, error: 'Remote is not running.' };
+    if (!remoteServer) return { ok: false, error: 'Remote could not start in this app; restart Smart Terminal and look at the log.' };
     try {
       const handler = REMOTE_VERBS[String(name ?? '')];
       if (!handler) return { ok: false, error: `No such Remote action: ${name}` };
