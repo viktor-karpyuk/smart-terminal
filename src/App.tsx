@@ -47,6 +47,11 @@ export function App() {
       }),
     [],
   );
+  // Remote: the dot on its launcher, and the bar on a session a phone has sized.
+  useEffect(() => {
+    void useStore.getState().refreshRemoteStatus();
+    return window.api.remote.onEvent(() => void useStore.getState().refreshRemoteStatus());
+  }, []);
   useEffect(() => window.api.housekeeping.onOpen(({ metric, tab }) => useStore.getState().openHousekeeping(isTab(tab) ? tab : tabFor(metric))), []);
   useEffect(() => {
     window.api.housekeeping

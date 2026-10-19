@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0b0d13">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -11,22 +11,22 @@
 <meta name="apple-mobile-web-app-title" content="Smart Terminal">
 <meta name="format-detection" content="telephone=no">
 <link rel="manifest" href="/manifest.webmanifest">
-<link rel="apple-touch-icon" href="/icon.png">
+<link rel="apple-touch-icon" href="/icon-180.png">
 <link rel="icon" href="/icon.png">
 <title>Smart Terminal</title>
 <link rel="stylesheet" href="/assets/xterm.css">
-<link rel="stylesheet" href="/app.css?v=5">
+<link rel="stylesheet" href="/app.css?v=6">
 </head>
 <body data-view="loading">
 <main class="pair" id="pair" hidden>
   <form class="pair-card" id="pair-form" novalidate>
     <h1>Smart Terminal</h1>
+    <p class="hint" id="home-hint" hidden>On an iPhone, first Share → <strong>Add to Home Screen</strong>, and open it from there: it opens like an app, full screen. Then pair.</p>
     <p class="note" id="pair-note">In Smart Terminal on your computer, open <strong>Remote</strong> and press <strong>Pair a phone</strong>. Type the code it shows.</p>
     <label>Code<input id="code" name="code" inputmode="text" autocapitalize="characters" autocomplete="one-time-code" autocorrect="off" spellcheck="false" maxlength="7" size="7" placeholder="ABC123" enterkeyhint="next" required aria-describedby="pair-note"></label>
     <label>This phone's name<input id="name" name="name" autocomplete="off" maxlength="60" placeholder="iPhone" enterkeyhint="go"></label>
     <button class="primary" id="pair-button" type="submit">Pair</button>
     <p class="error" id="pair-error" role="alert"></p>
-    <p class="hint" id="home-hint" hidden>Once paired: Share → <strong>Add to Home Screen</strong>, and this opens like an app, full screen.</p>
   </form>
 </main>
 
@@ -61,10 +61,6 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
       </button>
       <div class="tabs" id="tabs" role="tablist" aria-label="Open on this phone"></div>
-      <div class="text-size" role="group" aria-label="Text size">
-        <button class="icon-btn" id="smaller" type="button" title="Smaller text" aria-label="Smaller text">A−</button>
-        <button class="icon-btn" id="bigger" type="button" title="Bigger text" aria-label="Bigger text">A+</button>
-      </div>
     </header>
     <div class="stage" id="stage"></div>
     <form class="compose" id="compose" hidden autocomplete="off">
@@ -81,6 +77,6 @@
 
 <script src="/assets/xterm.js"></script>
 <script src="/assets/addon-fit.js"></script>
-<script src="/app.js?v=5"></script>
+<script src="/app.js?v=6"></script>
 </body>
 </html>

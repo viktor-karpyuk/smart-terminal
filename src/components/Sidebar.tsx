@@ -1911,6 +1911,10 @@ function MonitorRow({ sessionId }: { sessionId: string }) {
  * front — the same question the other buttons answer about their sections.
  */
 function LauncherButton({ viewId, title, icon }: { viewId: string; title: string; icon: string | null }) {
+  // Remote's button says what the panel would: on, failed, or how many sessions phones have open.
+  const remote = useStore((s) => (icon === 'remote' ? s.remote : null));
+  const remoteClass = remote ? ` remote-dot${remote.error ? ' is-bad' : remote.running ? ' is-on' : ''}` : '';
+  const remoteTip = remote ? (remote.error ? `${title} — could not start` : remote.viewers.length ? `${title} — ${remote.viewers.length} open on phones` : remote.running ? `${title} — on` : `${title} — off`) : null;
   const showing = useStore((s) => {
     const leaf = s.activeLeafId ? allLeaves(s.layout).find((candidate) => candidate.id === s.activeLeafId) : null;
     const panel = leaf?.active ? s.panels[leaf.active] : null;
@@ -1918,13 +1922,14 @@ function LauncherButton({ viewId, title, icon }: { viewId: string; title: string
   });
   return (
     <button
-      className={`activity${showing ? ' is-on' : ''}`}
-      data-tip={`${title} — opens in the section in front`}
+      className={`activity${showing ? ' is-on' : ''}${remoteClass}`}
+      data-tip={remoteTip ?? `${title} — opens in the section in front`}
       aria-label={title}
       aria-pressed={showing}
       onClick={() => useStore.getState().launchExtensionView(viewId)}
     >
       {icon === 'review' ? <ReviewIcon /> : icon === 'teams' ? <TeamsIcon /> : icon === 'send' ? <SendIcon /> : icon === 'jenkins' ? <JenkinsIcon /> : icon === 'remote' ? <RemoteIcon /> : <ExtensionsIcon />}
+      {remote && remote.viewers.length > 0 && !remote.error ? <span className="remote-count" aria-hidden="true">{remote.viewers.length}</span> : null}
     </button>
   );
 }

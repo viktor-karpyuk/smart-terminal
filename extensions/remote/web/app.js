@@ -11,7 +11,9 @@
  *
  * Phones lose their connection all the time: the screen locks, Wi-Fi hands
  * over to data, Safari suspends the tab. A session that drops comes back on
- * its own, with the same tab, and the list polls only while the page is shown.
+ * its own, with the same tab and the same size, and the list polls only while
+ * the page is shown. iOS also kills a background tab outright: the sessions
+ * that were open are remembered and opened again when the page is back.
  */
 
 const $ = (id) => document.getElementById(id);
@@ -38,25 +40,38 @@ const NARROW = matchMedia('(max-width: 759px)');
 /** A finger, not a mouse: no focus that would raise the keyboard uninvited, and the extra keys are shown. */
 const COARSE = matchMedia('(pointer: coarse)');
 const STANDALONE = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
-/** The text size on a phone, remembered on this phone. */
+const IOS = /iPhone|iPad/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+/** The text size on a phone, remembered on this phone; the default suits the screen's width. */
 const FONT_MIN = 8;
 const FONT_MAX = 22;
-let phoneFont = 12;
-try { phoneFont = Math.min(FONT_MAX, Math.max(FONT_MIN, Number(localStorage.getItem('fontSize')) || 12)); } catch { /* no storage: the default */ }
+let phoneFont = Math.max(11, Math.min(14, Math.round(window.innerWidth / 30)));
+try { phoneFont = Math.min(FONT_MAX, Math.max(FONT_MIN, Number(localStorage.getItem('fontSize')) || phoneFont)); } catch { /* no storage: the default */ }
+/** How often the list is asked for: often while it is on screen, rarely while a terminal covers it. */
+const POLL_LIST_MS = 4000;
+const POLL_BEHIND_MS = 15000;
+/** A socket that said nothing for this long after a probe is dead, whatever it says. */
+const PROBE_MS = 3000;
 
 let computer = '';
 let sessions = [];
 let sessionsDrawn = '';
-/** session id → { key, title, kind, term, ws, pane, tab, fitter, cols, rows, state, drives, tries, retryTimer, waiting } */
+/** session id → { key, title, kind, term, ws, pane, tab, fitter, cols, rows, state, drives, tries, retryTimer, followed, probeTimer } */
 const open = new Map();
 let current = null;
 let listTimer = null;
 let reachable = true;
 /** The next key goes with Ctrl held, from the keys bar. */
 let ctrlArmed = false;
+let wakeLock = null;
 
 function view(name) {
   document.body.dataset.view = name;
+  if (name !== 'term') {
+    document.body.classList.remove('has-keyboard');
+    document.documentElement.style.setProperty('--keyboard', '0px');
+  }
+  keepAwake();
+  schedulePolling();
 }
 
 /** The line under the terminal: short, because the phone is narrow. */
@@ -79,7 +94,21 @@ function updateTitle() {
   const name = computer || 'Smart Terminal';
   document.title = waiting ? `(${waiting}) ${name}` : name;
   if (navigator.setAppBadge) {
-    try { waiting ? navigator.setAppBadge(waiting) : navigator.clearAppBadge(); } catch { /* badges are a nicety */ }
+    try { (waiting ? navigator.setAppBadge(waiting) : navigator.clearAppBadge()).catch(() => {}); } catch { /* badges are a nicety */ }
+  }
+}
+
+/** The screen stays on while a terminal is watched: a lock would cut the connection and lose the place. */
+async function keepAwake() {
+  const want = document.body.dataset.view === 'term' && !document.hidden && Boolean(navigator.wakeLock);
+  if (want && !wakeLock) {
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } catch { wakeLock = null; }
+  } else if (!want && wakeLock) {
+    try { await wakeLock.release(); } catch { /* gone anyway */ }
+    wakeLock = null;
   }
 }
 
@@ -109,13 +138,12 @@ function showPair() {
   $('shell').hidden = true;
   $('pair').hidden = false;
   view('pair');
-  $('home-hint').hidden = STANDALONE || !/iPhone|iPad/.test(navigator.userAgent);
-  // A link from the computer may carry the code: `?code=ABC123` pairs with one tap.
+  $('home-hint').hidden = STANDALONE || !IOS;
+  // A link from the computer may carry the code: `?code=ABC123` pairs with one tap. The code stays in the field if pairing fails.
   const given = new URLSearchParams(location.search).get('code');
   if (given) {
     $('code').value = given.toUpperCase();
-    history.replaceState(null, '', location.pathname);
-    $('name').focus();
+    if (!COARSE.matches) $('name').focus();
   } else if (!COARSE.matches) $('code').focus();
 }
 
@@ -128,7 +156,14 @@ function pairError(status, message) {
 }
 
 $('code').addEventListener('focus', () => $('code').select());
-$('code').addEventListener('input', () => { $('pair-error').textContent = ''; });
+$('code').addEventListener('input', () => {
+  $('pair-error').textContent = '';
+  // Six characters is a whole code: on to the name, as the keyboard's "next" promises.
+  if ($('code').value.replace(/[^A-Za-z0-9]/g, '').length === 6) $('name').focus();
+});
+$('code').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') { event.preventDefault(); $('name').focus(); }
+});
 $('pair-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   const button = $('pair-button');
@@ -149,6 +184,7 @@ $('pair-form').addEventListener('submit', async (event) => {
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) throw new Error(pairError(r.status, data.error));
+    history.replaceState(null, '', location.pathname);
     checkVersion(data);
     enter(data);
   } catch (error) {
@@ -169,9 +205,10 @@ $('confirm-no').addEventListener('click', () => { $('confirm').hidden = true; })
 $('confirm-yes').addEventListener('click', async () => {
   $('confirm').hidden = true;
   for (const key of [...open.keys()]) closeSession(key);
-  try { await fetch('/api/logout', { method: 'POST' }); } catch { /* the cookie is gone either way */ }
+  try { await fetch('/api/logout', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }); } catch { /* the cookie is gone either way */ }
   stopPolling();
-  try { navigator.clearAppBadge?.(); } catch { /* fine */ }
+  try { navigator.clearAppBadge?.()?.catch?.(() => {}); } catch { /* fine */ }
+  remember();
   showPair();
 });
 
@@ -187,25 +224,39 @@ function enter(me) {
 }
 
 // ---------- the list ----------
-/** Asked every few seconds while the page is shown; a hidden tab asks nothing and refreshes the moment it is back. */
+/** Asked every few seconds while the list is on screen, rarely while a terminal covers it, never while the page is hidden. */
 function startPolling() {
   stopPolling();
   refresh();
-  listTimer = setInterval(refresh, 4000);
+  schedulePolling();
+}
+function schedulePolling() {
+  if ($('shell').hidden || document.hidden) return;
+  clearInterval(listTimer);
+  const behind = NARROW.matches && document.body.dataset.view === 'term';
+  listTimer = setInterval(refresh, behind ? POLL_BEHIND_MS : POLL_LIST_MS);
 }
 function stopPolling() {
   clearInterval(listTimer);
   listTimer = null;
 }
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) {
-    stopPolling();
-    return;
+/** Back from the lock screen or another app: ask again, and check every open socket is really alive. */
+function resume() {
+  if (document.hidden) return;
+  if (!$('shell').hidden) { refresh(); schedulePolling(); }
+  for (const e of open.values()) {
+    if (e.state === 'lost') reconnect(e, 0);
+    else if (e.state === 'open') probe(e);
   }
-  if (!$('shell').hidden) startPolling();
-  // Sessions that dropped while the phone was asleep come back now, not on their next timer.
-  for (const e of open.values()) if (e.state === 'lost') reconnect(e, 0);
+  keepAwake();
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { stopPolling(); keepAwake(); return; }
+  resume();
 });
+window.addEventListener('pageshow', resume);
+window.addEventListener('focus', resume);
+window.addEventListener('online', resume);
 $('retry').addEventListener('click', () => refresh());
 
 async function refresh() {
@@ -223,6 +274,7 @@ async function refresh() {
     sessions = data.sessions ?? [];
     reachable = true;
     railNote(`Connected to ${computer}`);
+    reopenRemembered();
   } catch {
     reachable = false;
     railNote(`Cannot reach ${computer}. Is it on, and on the same network?`, true);
@@ -272,6 +324,7 @@ function drawSessions() {
     el('ul', {}, list.map((s) => el('li', { role: 'listitem' }, el('button', {
       class: 'session',
       type: 'button',
+      'data-session': s.id,
       'aria-current': s.id === current ? 'true' : null,
       onclick: () => openSession(s),
     },
@@ -295,8 +348,28 @@ function drawEmpty() {
   $('reconnect').hidden = true;
 }
 
+// ---------- which sessions were open, across a reload ----------
+/** iOS throws a background page away and loads it fresh: what was open here is written down, and opened again. */
+function remember() {
+  try { sessionStorage.setItem('open', JSON.stringify({ keys: [...open.keys()], current })); } catch { /* not remembered */ }
+}
+let reopened = false;
+function reopenRemembered() {
+  if (reopened) return;
+  reopened = true;
+  let saved = null;
+  try { saved = JSON.parse(sessionStorage.getItem('open') ?? 'null'); } catch { saved = null; }
+  if (!saved?.keys?.length) return;
+  for (const key of saved.keys) {
+    const s = sessions.find((x) => x.id === key);
+    if (s && !open.has(key)) openSession(s, { quiet: true });
+  }
+  if (saved.current && open.has(saved.current)) show(saved.current);
+  else if (NARROW.matches) view('list');
+}
+
 // ---------- one session ----------
-function openSession(s) {
+function openSession(s, { quiet = false } = {}) {
   const key = s.id;
   if (open.has(key)) {
     show(key);
@@ -313,12 +386,17 @@ function openSession(s) {
   const fitter = new FitAddon.FitAddon();
   term.loadAddon(fitter);
   term.open(pane);
-  const entry = { key, title: s.title || s.folder || 'Session', kind: s.kind, term, pane, fitter, drives: false, cols: 80, rows: 24, state: 'connecting', tries: 0, retryTimer: null, sizeTimer: null, ws: null };
+  // The hidden textarea the keyboard types into: no autocorrect, no capitals, no suggestions; a shell wants what was typed.
+  if (term.textarea) {
+    for (const [k, v] of Object.entries({ autocomplete: 'off', autocorrect: 'off', autocapitalize: 'off', spellcheck: 'false', inputmode: 'text', 'data-gramm': 'false' })) term.textarea.setAttribute(k, v);
+  }
+  const entry = { key, title: s.title || s.folder || 'Session', kind: s.kind, term, pane, fitter, drives: false, followed: false, cols: 80, rows: 24, state: 'connecting', tries: 0, retryTimer: null, sizeTimer: null, probeTimer: null, ws: null };
   entry.tab = el('div', { class: 'tab', role: 'tab' },
     el('button', { class: 'tab-name', type: 'button', onclick: () => show(key) }, el('span', { class: 'tab-dot', 'aria-hidden': 'true' }), el('span', { class: 'tab-text' }, entry.title)),
     el('button', { class: 'tab-close', type: 'button', 'aria-label': `Close ${entry.title} here`, title: 'Close here. The session keeps running.', onclick: () => closeSession(key) }, '×'));
   $('tabs').append(entry.tab);
   open.set(key, entry);
+  remember();
 
   // On a phone the session takes this screen's size; the computer is told of each change,
   // once it settles, since a size that changes twice in a row makes Claude draw twice.
@@ -332,19 +410,21 @@ function openSession(s) {
     }, 150);
     if (current === key) status(describe(entry));
   });
-  term.onData((data) => send(entry, data));
-  // The keys bar's Ctrl: the next key typed goes with it.
-  term.attachCustomKeyEventHandler((event) => {
-    if (!ctrlArmed || event.type !== 'keydown' || event.key.length !== 1) return true;
-    ctrlArmed = false;
-    $('keys').classList.remove('is-ctrl');
-    const code = event.key.toUpperCase().charCodeAt(0);
-    if (code >= 64 && code <= 95) send(entry, String.fromCharCode(code - 64));
-    return false;
+  // What is typed goes to the session, with the phone's curly quotes made plain and the keys bar's Ctrl applied to the next key.
+  term.onData((data) => {
+    let out = COARSE.matches ? plain(data) : data;
+    if (ctrlArmed && out.length === 1) {
+      disarmCtrl();
+      const code = out.toUpperCase().charCodeAt(0);
+      if (code >= 64 && code <= 95) out = String.fromCharCode(code - 64);
+    }
+    send(entry, out);
   });
+  // Swiping on Claude's screen scrolls it: Claude draws its own transcript, so the swipe becomes arrow keys.
+  swipeToArrows(entry);
 
   connect(entry);
-  show(key);
+  if (!quiet) show(key);
   drawSessions();
 }
 
@@ -364,17 +444,29 @@ function connect(entry) {
     let m;
     try { m = JSON.parse(event.data); } catch { return; }
     if (m.t === 'opened') {
+      const back = entry.tries > 0;
       entry.state = 'open';
       entry.tries = 0;
-      entry.cols = m.cols; entry.rows = m.rows;
       if (m.kind) entry.kind = m.kind;
       if (m.title) setTitle(entry, m.title);
       // Another device has this session at its size: this screen follows it rather than fighting over it.
       entry.followed = Boolean(m.driven);
-      // What was on the screen was drawn for another size, or for the connection before this one.
-      term.reset();
-      term.resize(m.cols, m.rows);
-      if (m.replay) term.write(m.replay);
+      if (m.resumed && entry.drives) {
+        // Back within the grace: the computer kept this phone's size, so nothing moves and nothing redraws.
+        entry.cols = m.cols; entry.rows = m.rows;
+      } else if (back && entry.drives && !m.driven && NARROW.matches) {
+        // Back after the grace: the phone's size goes straight out, before the computer's size is drawn and undone.
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'resize', cols: entry.cols, rows: entry.rows }));
+      } else {
+        entry.cols = m.cols; entry.rows = m.rows;
+        // A full-screen program draws itself again; a shell's scrollback is worth keeping across a blip.
+        if (entry.kind === 'claude' || !back) term.reset();
+        else term.write('\r\n\x1b[38;5;245m— reconnected\x1b[0m\r\n');
+        term.resize(m.cols, m.rows);
+        if (m.replay && !back) term.write(m.replay);
+        entry.drives = false;
+        entry.pane.classList.remove('is-follows');
+      }
       fit(entry);
       if (current === key) {
         status(describe(entry));
@@ -383,6 +475,9 @@ function connect(entry) {
       }
     } else if (m.t === 'out') {
       term.write(m.data);
+    } else if (m.t === 'pong') {
+      clearTimeout(entry.probeTimer);
+      entry.probeTimer = null;
     } else if (m.t === 'size') {
       // Sized by another device, or back to the computer's size: this screen follows.
       entry.followed = Boolean(m.driven);
@@ -399,6 +494,8 @@ function connect(entry) {
   };
   ws.onclose = () => {
     if (!open.has(key) || entry.ws !== ws) return;
+    clearTimeout(entry.probeTimer);
+    entry.probeTimer = null;
     if (entry.state === 'ended') {
       // Over for good: the computer said so.
       term.write(`\r\n\x1b[38;5;245m— ${entry.ended}\x1b[0m\r\n`);
@@ -412,9 +509,22 @@ function connect(entry) {
     entry.tab.classList.add('is-lost');
     const wait = Math.min(30_000, 1000 * 2 ** Math.min(entry.tries, 5));
     entry.tries += 1;
-    if (current === key) { status(entry.tries > 1 ? `Connection lost. Reconnecting in ${Math.round(wait / 1000)} s…` : 'Connection lost. Reconnecting…', true); $('reconnect').hidden = false; }
+    if (current === key) {
+      status(document.hidden ? 'Connection lost. Back when you return.' : entry.tries > 1 ? `Connection lost. Reconnecting in ${Math.round(wait / 1000)} s…` : 'Connection lost. Reconnecting…', true);
+      $('reconnect').hidden = false;
+    }
     reconnect(entry, document.hidden ? Infinity : wait);
   };
+}
+
+/** A socket that looks open after the phone slept may be dead: ask, and if nothing comes back, drop it so it reconnects. */
+function probe(e) {
+  if (e.probeTimer || e.ws?.readyState !== WebSocket.OPEN) return;
+  e.ws.send(JSON.stringify({ t: 'ping' }));
+  e.probeTimer = setTimeout(() => {
+    e.probeTimer = null;
+    if (e.state === 'open') { try { e.ws.close(); } catch { /* already gone */ } }
+  }, PROBE_MS);
 }
 
 function reconnect(entry, wait) {
@@ -441,9 +551,12 @@ function describe(e) {
   return `${e.cols}×${e.rows} · the computer's size`;
 }
 
-function show(key) {
+function show(key, { fromHistory = false } = {}) {
+  const wasList = document.body.dataset.view !== 'term';
   current = key;
   view('term');
+  // In a Safari tab the left-edge swipe goes back: with the list in the history, it goes back to the list, not out of the page.
+  if (wasList && NARROW.matches && !fromHistory) history.pushState({ view: 'term', key }, '');
   for (const e of open.values()) {
     const on = e.key === key;
     e.pane.hidden = !on;
@@ -455,10 +568,12 @@ function show(key) {
   requestAnimationFrame(() => fit(e));
   $('compose').hidden = !COARSE.matches;
   if (!COARSE.matches) e.term.focus();
+  else if (wasList) $('back').focus({ preventScroll: true });
   if (e.state === 'open') { status(describe(e)); $('reconnect').hidden = true; }
   else if (e.state === 'ended') { status(e.ended, true); $('reconnect').hidden = true; }
   else if (e.state === 'lost') { status('Connection lost.', true); $('reconnect').hidden = false; }
   else { status('Opening…'); $('reconnect').hidden = true; }
+  remember();
   drawSessions();
 }
 
@@ -468,27 +583,39 @@ function closeSession(key) {
   open.delete(key);
   clearTimeout(e.sizeTimer);
   clearTimeout(e.retryTimer);
+  clearTimeout(e.probeTimer);
   try { e.ws?.close(); } catch { /* already closed */ }
   e.term.dispose();
   e.pane.remove();
   e.tab.remove();
+  remember();
   if (current === key) {
     current = null;
     const next = [...open.keys()].at(-1);
-    if (next) show(next);
+    if (next) show(next, { fromHistory: true });
     else {
       drawEmpty();
       drawSessions();
-      view('list');
+      backToList();
     }
   } else drawSessions();
 }
 
-$('back').addEventListener('click', () => {
+function backToList() {
   // The keyboard goes down with the terminal, or it would cover the list.
   document.activeElement?.blur?.();
   view('list');
   drawSessions();
+  const row = current ? $('sessions').querySelector(`[data-session="${CSS.escape(current)}"]`) : null;
+  if (row && COARSE.matches) row.focus({ preventScroll: true });
+}
+$('back').addEventListener('click', () => {
+  if (history.state?.view === 'term') history.back();
+  else backToList();
+});
+window.addEventListener('popstate', () => {
+  if (document.body.dataset.view === 'term' && !history.state?.view) backToList();
+  else if (history.state?.view === 'term' && open.has(history.state.key)) show(history.state.key, { fromHistory: true });
 });
 
 /**
@@ -518,18 +645,14 @@ function fit(e) {
     });
     return;
   }
-  if (e.drives) {
-    // Wide again: the session goes back to the computer's size, which arrives as a size message.
-    e.drives = false;
-    e.pane.classList.remove('is-follows');
-    if (e.ws?.readyState === WebSocket.OPEN) e.ws.send(JSON.stringify({ t: 'resize', release: true }));
-  }
+  if (e.drives) release(e);
   const box = $('stage').getBoundingClientRect();
   const width = box.width - 16;
   const height = box.height - 16;
   if (width <= 0 || height <= 0) return;
   let size = Math.min(width / (e.cols * 0.602), height / (e.rows * 1.18));
-  size = Math.max(6, Math.min(16, Math.floor(size * 2) / 2));
+  // Following another phone on a wide screen, the text may be as big as a phone's; the app's 160 columns may not.
+  size = Math.max(6, Math.min(e.followed && COARSE.matches ? FONT_MAX : 16, Math.floor(size * 2) / 2));
   e.term.options.fontSize = size;
   requestAnimationFrame(() => {
     const screen = e.pane.querySelector('.xterm-screen');
@@ -540,23 +663,67 @@ function fit(e) {
   });
 }
 
+/** Wide again: the session goes back to the computer's size, which arrives as a size message. */
+function release(e) {
+  e.drives = false;
+  e.pane.classList.remove('is-follows');
+  if (e.ws?.readyState === WebSocket.OPEN) e.ws.send(JSON.stringify({ t: 'resize', release: true }));
+}
+
 let fitTimer = null;
 function refit() {
   clearTimeout(fitTimer);
-  fitTimer = setTimeout(() => { const e = open.get(current); if (e) fit(e); }, 80);
+  fitTimer = setTimeout(() => {
+    // Wide now: every session this screen sized goes back, not only the one in front.
+    if (!NARROW.matches) for (const e of open.values()) if (e.drives) release(e);
+    const e = open.get(current);
+    if (e) fit(e);
+  }, 80);
 }
 window.addEventListener('resize', refit);
 // The on-screen keyboard: the page is kept to what is left of the screen, so the bottom of the terminal is not under it.
 if (window.visualViewport) {
   const vv = window.visualViewport;
   const keyboard = () => {
-    const covered = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+    const covered = Math.max(0, window.innerHeight - vv.height);
     document.documentElement.style.setProperty('--keyboard', `${Math.round(covered)}px`);
     document.body.classList.toggle('has-keyboard', covered > 80);
+    // Safari scrolls the page to show the field; the page has nowhere to scroll to.
+    if (window.scrollY || vv.offsetTop) window.scrollTo(0, 0);
     refit();
   };
   vv.addEventListener('resize', keyboard);
   vv.addEventListener('scroll', keyboard);
+}
+// A pinch on the terminal means bigger or smaller text, not a zoomed page.
+let pinchFrom = null;
+document.addEventListener('gesturestart', (event) => { event.preventDefault(); pinchFrom = phoneFont; }, { passive: false });
+document.addEventListener('gesturechange', (event) => {
+  event.preventDefault();
+  if (pinchFrom == null || document.body.dataset.view !== 'term') return;
+  const next = Math.round(pinchFrom * event.scale);
+  if (next !== phoneFont) setFont(next);
+}, { passive: false });
+document.addEventListener('gestureend', (event) => { event.preventDefault(); pinchFrom = null; }, { passive: false });
+
+/** A swipe on a full-screen program is sent as arrow keys, one per row of movement, since it scrolls its own text. */
+function swipeToArrows(e) {
+  const screen = e.pane.querySelector('.xterm-screen') ?? e.pane;
+  let lastY = null;
+  let moved = 0;
+  screen.addEventListener('touchstart', (event) => { if (e.kind === 'claude' && event.touches.length === 1) { lastY = event.touches[0].clientY; moved = 0; } }, { passive: true });
+  screen.addEventListener('touchmove', (event) => {
+    if (e.kind !== 'claude' || lastY == null || event.touches.length !== 1) return;
+    const y = event.touches[0].clientY;
+    const rowHeight = Math.max(10, (screen.getBoundingClientRect().height || 1) / Math.max(1, e.rows));
+    moved += lastY - y;
+    lastY = y;
+    while (Math.abs(moved) >= rowHeight) {
+      send(e, moved > 0 ? '\x1b[B' : '\x1b[A');
+      moved += moved > 0 ? -rowHeight : rowHeight;
+    }
+  }, { passive: true });
+  screen.addEventListener('touchend', () => { lastY = null; }, { passive: true });
 }
 
 // ---------- a line at a time ----------
@@ -569,7 +736,9 @@ $('compose').addEventListener('submit', (event) => {
   const e = open.get(current);
   const text = $('compose-text').value;
   if (!e || e.state !== 'open') return;
-  send(e, `${plain(text)}\r`);
+  // Several lines for Claude are one message with soft breaks (Option+Enter); for a shell, one command per line.
+  const lines = plain(text).replace(/\r\n?/g, '\n').split('\n');
+  send(e, e.kind === 'claude' ? `${lines.join('\x1b\r')}\r` : `${lines.join('\r')}\r`);
   $('compose-text').value = '';
   $('compose-text').style.height = '';
   $('compose-text').focus();
@@ -587,48 +756,75 @@ $('compose-text').addEventListener('input', () => {
 });
 
 // ---------- keys a phone keyboard does not have ----------
+function disarmCtrl() {
+  ctrlArmed = false;
+  $('keys').classList.remove('is-ctrl');
+  $('keys').querySelector('.ctrl')?.setAttribute('aria-pressed', 'false');
+}
 const KEYS = [
   ['Esc', '\x1b'], ['Tab', '\t'], ['⇧Tab', '\x1b[Z'], ['Ctrl', null], ['^C', '\x03'],
-  ['↑', '\x1b[A'], ['↓', '\x1b[B'], ['←', '\x1b[D'], ['→', '\x1b[C'],
-  ['Enter', '\r'], ['⌥Enter', '\x1b\r'], ['1', '1'], ['2', '2'], ['3', '3'], ['^D', '\x04'],
+  ['↑', '\x1b[A', true], ['↓', '\x1b[B', true], ['←', '\x1b[D', true], ['→', '\x1b[C', true],
+  ['Enter', '\r'], ['⌥Enter', '\x1b\r'], ['1', '1'], ['2', '2'], ['3', '3'],
+  ['|', '|'], ['~', '~'], ['/', '/'], ['-', '-'], ['Paste', 'paste'], ['^D', '\x04'],
+  ['A−', 'smaller'], ['A+', 'bigger'],
 ];
-$('keys').replaceChildren(...KEYS.map(([label, data]) => el('button', {
-  type: 'button',
-  class: data === null ? 'ctrl' : null,
-  'aria-label': label === '^C' ? 'Control C' : label === '^D' ? 'Control D' : label === '⇧Tab' ? 'Shift Tab' : label === '⌥Enter' ? 'Option Enter' : label === 'Ctrl' ? 'Control, held for the next key' : label,
-  'aria-pressed': data === null ? 'false' : null,
-  onclick: (event) => {
-    const e = open.get(current);
-    if (data === null) {
-      ctrlArmed = !ctrlArmed;
-      $('keys').classList.toggle('is-ctrl', ctrlArmed);
-      event.currentTarget.setAttribute('aria-pressed', String(ctrlArmed));
-      if (ctrlArmed && e) e.term.focus();
-      return;
-    }
-    if (e?.state === 'open') {
-      let out = data;
-      if (ctrlArmed && data.length === 1) {
-        const code = data.toUpperCase().charCodeAt(0);
-        out = code >= 64 && code <= 95 ? String.fromCharCode(code - 64) : data;
-        ctrlArmed = false;
-        $('keys').classList.remove('is-ctrl');
-        $('keys').querySelector('.ctrl')?.setAttribute('aria-pressed', 'false');
+const KEY_LABELS = { '^C': 'Control C', '^D': 'Control D', '⇧Tab': 'Shift Tab', '⌥Enter': 'Option Enter', Ctrl: 'Control, held for the next key', 'A−': 'Smaller text', 'A+': 'Bigger text', Paste: 'Paste from the clipboard' };
+function pressKey(e, data) {
+  if (data === 'smaller') return setFont(phoneFont - 1);
+  if (data === 'bigger') return setFont(phoneFont + 1);
+  if (!e || e.state !== 'open') return;
+  if (data === 'paste') {
+    navigator.clipboard?.readText?.().then((text) => { if (text) send(e, plain(text)); }).catch(() => status('Paste was not allowed. Hold the terminal and choose Paste instead.', true));
+    return;
+  }
+  let out = data;
+  if (ctrlArmed && data.length === 1) {
+    const code = data.toUpperCase().charCodeAt(0);
+    out = code >= 64 && code <= 95 ? String.fromCharCode(code - 64) : data;
+    disarmCtrl();
+  }
+  send(e, out);
+}
+$('keys').replaceChildren(...KEYS.map(([label, data, repeats]) => {
+  let holdTimer = null;
+  let repeatTimer = null;
+  const stopRepeat = () => { clearTimeout(holdTimer); clearInterval(repeatTimer); holdTimer = null; repeatTimer = null; };
+  return el('button', {
+    type: 'button',
+    class: data === null ? 'ctrl' : data === 'smaller' || data === 'bigger' ? 'size' : null,
+    'aria-label': KEY_LABELS[label] ?? label,
+    'aria-pressed': data === null ? 'false' : null,
+    // A finger on the keys bar must not take the focus: the keyboard would go down and come back up.
+    onpointerdown: (event) => {
+      event.preventDefault();
+      if (!repeats) return;
+      // Held: the arrow repeats, as a key does.
+      holdTimer = setTimeout(() => { repeatTimer = setInterval(() => pressKey(open.get(current), data), 60); }, 400);
+    },
+    onpointerup: stopRepeat,
+    onpointercancel: stopRepeat,
+    onpointerleave: stopRepeat,
+    onclick: (event) => {
+      const e = open.get(current);
+      if (data === null) {
+        ctrlArmed = !ctrlArmed;
+        $('keys').classList.toggle('is-ctrl', ctrlArmed);
+        event.currentTarget.setAttribute('aria-pressed', String(ctrlArmed));
+        if (ctrlArmed && e && !COARSE.matches) e.term.focus();
+        return;
       }
-      send(e, out);
-      // A finger on the keys bar should not raise the keyboard; a mouse may keep the cursor.
-      if (!COARSE.matches) e.term.focus();
-    }
-  },
-}, label)));
+      pressKey(e, data);
+      if (e && !COARSE.matches) e.term.focus();
+    },
+  }, label);
+}));
 
 // ---------- the text size on a phone ----------
 /** Bigger or smaller text: the session is then asked for the columns and rows that fit. */
 function setFont(size) {
   phoneFont = Math.min(FONT_MAX, Math.max(FONT_MIN, size));
   try { localStorage.setItem('fontSize', String(phoneFont)); } catch { /* not remembered, still applied */ }
-  $('smaller').disabled = phoneFont <= FONT_MIN;
-  $('bigger').disabled = phoneFont >= FONT_MAX;
+  for (const b of $('keys').querySelectorAll('.size')) b.disabled = b.textContent === 'A−' ? phoneFont <= FONT_MIN : phoneFont >= FONT_MAX;
   for (const e of open.values()) {
     if (!e.drives) continue;
     e.term.options.fontSize = phoneFont;
@@ -639,8 +835,6 @@ function setFont(size) {
     }
   }
 }
-$('smaller').addEventListener('click', () => setFont(phoneFont - 1));
-$('bigger').addEventListener('click', () => setFont(phoneFont + 1));
 setFont(phoneFont);
 
 // A tablet turned, or a window dragged across the line: the open session changes mode.

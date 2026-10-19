@@ -1079,7 +1079,7 @@ declare global {
       /** Remote: the phone's server. Every verb through one call; one event for "read it again". */
       remote: {
         call(name: string, args?: unknown): Promise<{ ok?: boolean; error?: string; [key: string]: unknown }>;
-        onEvent(handler: (event: { type: string }) => void): () => void;
+        onEvent(handler: (event: { type: string; sessionId?: string | null; from?: string | null }) => void): () => void;
       };
       /** Jenkins: every verb through one call, and one event for "something changed, read it again". */
       jenkins: {

@@ -2,8 +2,13 @@
   "name": "Smart Terminal",
   "short_name": "Smart Terminal",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "any",
   "background_color": "#0b0d13",
   "theme_color": "#0b0d13",
-  "icons": [{ "src": "/icon.png", "sizes": "512x512", "type": "image/png" }]
+  "icons": [
+    { "src": "/icon-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/icon.png", "sizes": "512x512", "type": "image/png" }
+  ]
 }
