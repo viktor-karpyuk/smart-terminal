@@ -339,7 +339,12 @@ contextBridge.exposeInMainWorld('api', {
     discardWorkshops: (ids) => ipcRenderer.invoke('housekeeping:discard-workshops', ids),
     removeWorktrees: (ids) => ipcRenderer.invoke('housekeeping:remove-worktrees', ids),
     repairWorktrees: (ids) => ipcRenderer.invoke('housekeeping:repair-worktrees', ids),
+    closing: (path) => ipcRenderer.invoke('housekeeping:closing', path),
+    refreshPrs: (ids) => ipcRenderer.invoke('housekeeping:refresh-prs', ids ?? null),
+    onPrs: (handler) => on('housekeeping:prs', handler),
     /** The briefing a Claude session opened in a worktree is handed: branch, unmerged commits, uncommitted files, the ask. */
+    prDraft: (path) => ipcRenderer.invoke('housekeeping:pr-draft', path),
+    createPr: (input) => ipcRenderer.invoke('housekeeping:create-pr', input),
     worktreeBrief: (path) => ipcRenderer.invoke('housekeeping:worktree-brief', path),
     roots: () => ipcRenderer.invoke('housekeeping:roots'),
     addRoot: (folder) => ipcRenderer.invoke('housekeeping:add-root', folder),

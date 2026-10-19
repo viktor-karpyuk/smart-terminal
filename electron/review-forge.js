@@ -262,6 +262,13 @@ class Bitbucket {
     return (await this.paged(`${this.base}/pullrequests?${filter}&pagelen=50`, maxPages)).map((pr) => this.toPr(pr)).filter(Boolean);
   }
 
+  /** Every PR a branch opened, in any state: Bitbucket filters by source branch server-side. */
+  async forBranch(branch) {
+    const q = encodeURIComponent(`source.branch.name="${String(branch).replace(/"/g, '\\"')}"`);
+    const url = `${this.base}/pullrequests?q=${q}&state=OPEN&state=MERGED&state=DECLINED&state=SUPERSEDED&pagelen=50`;
+    return (await this.paged(url, 2)).map((pr) => this.toPr(pr)).filter(Boolean);
+  }
+
   /** Only this call returns `participants[].state` — approvals live here. */
   async get(prId) {
     return this.toPr(await this.json(`${this.base}/pullrequests/${prId}`));
@@ -428,6 +435,12 @@ class GitHub {
     const api = states.length === 1 && states[0] === 'OPEN' ? 'open' : states.includes('OPEN') ? 'all' : 'closed';
     const found = (await this.paged(`${this.base}/pulls?state=${api}&per_page=50&sort=updated&direction=desc`, maxPages)).map((pr) => this.toPr(pr)).filter(Boolean);
     return found.filter((pr) => states.includes(pr.state));
+  }
+
+  /** Every PR a branch opened, in any state. GitHub wants the head as owner:branch. */
+  async forBranch(branch) {
+    const head = encodeURIComponent(`${this.repo.owner}:${branch}`);
+    return (await this.paged(`${this.base}/pulls?state=all&head=${head}&per_page=50`, 2)).map((pr) => this.toPr(pr)).filter(Boolean);
   }
 
   /**

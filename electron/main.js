@@ -19,6 +19,7 @@ const { createOffer } = require('./worktree-offer');
 const { CwdWatcher, worthRemembering } = require('./cwd-watcher');
 const { ContextStore, transcriptPath, locateTranscript, readTurnState } = require('./context-store');
 const { Housekeeping } = require('./housekeeping');
+const { parseRemote } = require('./review-forge');
 const { HousekeepingStore } = require('./housekeeping-store');
 const { DiskUsage } = require('./disk-usage');
 const { HousekeepingMonitor, topProcesses } = require('./housekeeping-monitor');
@@ -77,6 +78,7 @@ const { ReviewService } = require('./review-service');
 const { TeamsService } = require('./teams-service');
 const { JenkinsService } = require('./jenkins-service');
 const { JenkinsMcp } = require('./jenkins-mcp');
+const { ForgeMcp } = require('./forge-mcp');
 const { SessionSecrets } = require('./session-secrets');
 const { ensurePrivateDir } = require('./socket-guard');
 const { serveMedia } = require('./media');
@@ -246,6 +248,7 @@ let teamsService = null;
 let jenkinsService = null;
 /** What Claude sessions may ask of it: read-only, and a dialog for anything that starts a build. */
 let jenkinsMcp = null;
+let forgeMcp = null;
 /**
  * What each session was told at its start that no other session knows. The roster gives every session every other's id, so
  * an id proves nothing; the bridge asks for this where it matters (see session-secrets.js).
@@ -939,6 +942,17 @@ function createWindow(windowId = randomUUID(), bounds = null) {
  * adapters rather than the services, so what it may do to each is written here
  * and nowhere else.
  */
+/**
+ * A remote whose host is an SSH alias (`git@bitbucket-work:owner/repo.git`) names
+ * no known host for the strict parser; the word in the alias still says where it goes.
+ */
+function parseRemoteLoosely(url) {
+  const text = String(url ?? '').trim();
+  const match = /(github|bitbucket)[^:/\s]*[:/]+(?:[^/\s]+\/)*?([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec(text);
+  if (!match) return null;
+  return { provider: match[1].toLowerCase() === 'github' ? 'GITHUB' : 'BITBUCKET', owner: match[2], slug: match[3] };
+}
+
 function createHousekeeping() {
   const userData = app.getPath('userData');
   const store = new HousekeepingStore(db.db);
@@ -987,6 +1001,13 @@ function createHousekeeping() {
           return repo && reviewService.fixer?.root ? path.join(reviewService.fixer.root, `${rules.slug(repo.name)}-pr${prId}`) : null;
         },
         discard: (repoId, prId) => reviewService.fixer.discard(repoId, prId),
+        /** The forge adapter of the reviewer's repository whose owner/slug a git remote URL names, or null. */
+        forgeByRemote: (url) => {
+          const parsed = parseRemote(url) ?? parseRemoteLoosely(url);
+          if (!parsed) return null;
+          const repo = reviewService.store.repos().find((one) => one.provider === parsed.provider && one.owner.toLowerCase() === parsed.owner.toLowerCase() && one.slug.toLowerCase() === parsed.slug.toLowerCase());
+          return repo ? reviewService.forge.of(repo) : null;
+        },
       }
     : null;
   const browser = {
@@ -1225,7 +1246,8 @@ function registerIpc() {
     const cwd = cwdWatcher?.known?.get(id)?.cwd ?? null;
     cwdWatcher.forget(id);
     ptys.kill(id);
-    if (cwd && housekeeping?.pref?.('offer-on-close', true)) {
+    // Housekeeping closing the worktree itself ended this session: it already asked, so no second offer.
+    if (cwd && housekeeping?.pref?.('offer-on-close', true) && !housekeeping.closing?.(cwd)) {
       const timer = setTimeout(() => offerWorktreeFor(cwd, { quiet: true }).catch(() => {}), 1500);
       timer.unref?.();
     }
@@ -1440,7 +1462,11 @@ function registerIpc() {
   ipcMain.handle('housekeeping:discard-workshops', (_e, ids = []) => housekeeping.discardWorkshops(Array.isArray(ids) ? ids : []));
   ipcMain.handle('housekeeping:remove-worktrees', (_e, ids = []) => housekeeping.removeWorktrees(Array.isArray(ids) ? ids : []));
   ipcMain.handle('housekeeping:repair-worktrees', (_e, ids = []) => housekeeping.repairWorktrees(Array.isArray(ids) ? ids : []));
+  ipcMain.handle('housekeeping:closing', (_e, target) => housekeeping.markClosing(String(target ?? '')));
+  ipcMain.handle('housekeeping:refresh-prs', (_e, ids = null) => housekeeping.refreshPulls(Array.isArray(ids) ? ids : null));
   /** What a Claude session opened in a worktree is told. Text; nothing runs. */
+  ipcMain.handle('housekeeping:pr-draft', (_e, target) => housekeeping.prDraft(String(target ?? '')));
+  ipcMain.handle('housekeeping:create-pr', (_e, { path: target, title, body, base, push } = {}) => housekeeping.createPr(String(target ?? ''), { title, body, base, push }));
   ipcMain.handle('housekeeping:worktree-brief', (_e, target) => housekeeping.worktreeBrief(String(target ?? '')));
   ipcMain.handle('housekeeping:roots', () => housekeeping.roots());
   ipcMain.handle('housekeeping:add-root', (_e, folder) => housekeeping.addRoot(String(folder ?? '')));
@@ -3122,6 +3148,8 @@ function startMessaging() {
   reviewBusServer = { command: process.execPath, script: busScript, socketPath };
   // Jenkins, read-only, for every session: a relay like the others, answered by `jenkinsMcp` below.
   const jenkinsScript = path.join(__dirname, 'jenkins-mcp-stdio.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+  // Pull requests on Bitbucket and GitHub, through the reviewer's repositories: a relay answered by `forgeMcp` below.
+  const forgeScript = path.join(__dirname, 'forge-mcp-stdio.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
 
   try {
     fs.writeFileSync(
@@ -3147,6 +3175,12 @@ function startMessaging() {
               args: [jenkinsScript],
               env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
             },
+            // Offers no tools until the Code Reviewer knows a repository; a PR is only opened after a dialog.
+            bitbucket: {
+              command: process.execPath,
+              args: [forgeScript],
+              env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
+            },
           },
         },
         null,
@@ -3163,6 +3197,44 @@ function startMessaging() {
    * dialog — not something a terminal or a model can answer — is where a
    * person says yes or no, and nothing starts unless they do.
    */
+  /** A yes or no from a person, in a native dialog nothing else can answer. Shared by every tool that acts outward. */
+  const askInDialog = async ({ title, message, detail, confirmLabel, timeoutMs }) => {
+    const owner = BrowserWindow.getFocusedWindow() ?? [...windows.values()].find((one) => !one.isDestroyed()) ?? undefined;
+    // No window to hang the question on: on macOS an unparented dialog ignores the abort signal and would wait for ever, and a
+    // question nobody can see is not one anybody answered. Say so, and nothing is started.
+    if (!owner) return 'unavailable';
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), timeoutMs);
+    try {
+      const answer = await dialog.showMessageBox(owner, {
+        type: 'question',
+        title,
+        message,
+        detail,
+        // Cancel is first and the default: a stray Enter must not start a build or open a pull request.
+        buttons: ['Cancel', confirmLabel || 'Run'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+        signal: abort.signal,
+      });
+      // Aborting resolves the dialog as if it were cancelled: nobody said no, nobody was there.
+      if (abort.signal.aborted) return 'timeout';
+      return answer.response === 1 ? 'yes' : 'no';
+    } catch (error) {
+      // The signal aborted the dialog, or it could not be shown: either way nobody said yes.
+      return abort.signal.aborted ? 'timeout' : 'no';
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  forgeMcp = new ForgeMcp({
+    review: () => reviewService,
+    confirm: askInDialog,
+    log: (line) => console.log(line),
+  });
+
   jenkinsMcp = new JenkinsMcp({
     service: () => jenkinsService,
     log: (line) => console.log(line),
@@ -3170,36 +3242,7 @@ function startMessaging() {
     limits: process.env.SMART_TERMINAL_JENKINS_ASK_TIMEOUT_MS
       ? { runTimeout: Math.min(300_000, Math.max(3000, Number(process.env.SMART_TERMINAL_JENKINS_ASK_TIMEOUT_MS) || 120_000)) }
       : {},
-    confirm: async ({ title, message, detail, confirmLabel, timeoutMs }) => {
-      const owner = BrowserWindow.getFocusedWindow() ?? [...windows.values()].find((one) => !one.isDestroyed()) ?? undefined;
-      // No window to hang the question on: on macOS an unparented dialog ignores the abort signal and would wait for ever, and a
-      // question nobody can see is not one anybody answered. Say so, and nothing is started.
-      if (!owner) return 'unavailable';
-      const abort = new AbortController();
-      const timer = setTimeout(() => abort.abort(), timeoutMs);
-      try {
-        const answer = await dialog.showMessageBox(owner, {
-          type: 'question',
-          title,
-          message,
-          detail,
-          // Cancel is first and the default: a stray Enter must not start a build.
-          buttons: ['Cancel', confirmLabel || 'Run'],
-          defaultId: 0,
-          cancelId: 0,
-          noLink: true,
-          signal: abort.signal,
-        });
-        // Aborting resolves the dialog as if it were cancelled: nobody said no, nobody was there.
-        if (abort.signal.aborted) return 'timeout';
-        return answer.response === 1 ? 'yes' : 'no';
-      } catch (error) {
-        // The signal aborted the dialog, or it could not be shown: either way nobody said yes.
-        return abort.signal.aborted ? 'timeout' : 'no';
-      } finally {
-        clearTimeout(timer);
-      }
-    },
+    confirm: askInDialog,
   });
 
   messages = new MessageBridge({
@@ -3218,6 +3261,7 @@ function startMessaging() {
     onHook: (request) => handleHook(request),
     onBus: (request) => (reviewService ? reviewService.bus.handle(request, liveRoster()) : { ok: false, error: 'The Code Reviewer is not running.' }),
     onJenkins: (request) => jenkinsMcp.handle(request),
+    onForge: (request) => forgeMcp.handle(request),
     verifySession: (id, secret) => sessionSecrets.verify(id, secret),
     // Sessions the app knows but is not running. Without this, a message to a
     // session that has ended comes back as "no such session", which is false and
