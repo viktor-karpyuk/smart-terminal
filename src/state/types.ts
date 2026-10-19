@@ -329,7 +329,7 @@ export interface RemoteStatus {
   enabled: boolean;
   running: boolean;
   error: string | null;
-  viewers: Array<{ ch: string; title: string; from: string; sessionId: string; deviceId: string; at: number; driven: boolean }>;
+  viewers: Array<{ ch: string; title: string; from: string; sessionId: string; deviceId: string; at: number; driven: boolean; resuming?: boolean }>;
 }
 
 export const GIT_TAB = '::git';

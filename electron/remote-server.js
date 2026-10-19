@@ -365,9 +365,15 @@ class RemoteServer {
   }
 
   #viewers() {
-    return [...this.channels.values()].map(({ ch, title, from, at, sessionId, ptyId, deviceId }) => ({
-      ch, title, from, at, sessionId, deviceId, driven: this.driven.get(ptyId)?.ch === ch,
+    const rows = [...this.channels.values()].map(({ ch, title, from, at, sessionId, ptyId, deviceId }) => ({
+      ch, title, from, at, sessionId, deviceId, driven: this.driven.get(ptyId)?.ch === ch, resuming: false,
     }));
+    // A phone that dropped a moment ago still holds its size for a while: the app shows that, so it can be taken back.
+    for (const [ptyId, d] of this.driven) {
+      if (!d.timer || this.channels.has(d.ch)) continue;
+      rows.push({ ch: d.ch, title: d.title, from: d.from, at: this.now(), sessionId: d.sessionId, deviceId: d.deviceId, driven: true, resuming: true });
+    }
+    return rows;
   }
 
   overview() {
@@ -449,7 +455,10 @@ class RemoteServer {
   }
 
   #expirePairing() {
-    if (this.pairing && this.pairing.expiresAt <= this.now()) {
+    if (!this.pairing) return;
+    // Used in its last minutes: the home-screen copy still gets its chance to use it again.
+    if (this.pairing.spentAt && this.now() - this.pairing.spentAt < CODE_REUSE_MS) return;
+    if (this.pairing.expiresAt <= this.now() || this.pairing.spentAt) {
       this.pairing = null;
       this.changed();
     }
@@ -461,6 +470,8 @@ class RemoteServer {
     const gone = this.state.devices.find((d) => d.id === id);
     if (!gone) return { ok: false, error: 'That phone is not paired any more.', ...this.overview() };
     this.save({ devices: this.state.devices.filter((d) => d.id !== id) });
+    // The code it typed must not let it straight back in.
+    if (this.pairing?.spentBy === id) { clearTimeout(this.pairingTimer); this.pairing = null; }
     for (const c of [...this.channels.values()]) if (c.deviceId === id) this.#end(c, 'This phone was forgotten in Smart Terminal.');
     this.changed();
     return { ok: true, forgotten: gone.name, ...this.overview() };
@@ -468,7 +479,7 @@ class RemoteServer {
 
   /** Close one session on the phone, or all of them; the sessions keep running here. */
   disconnect(ch = null) {
-    if (ch && !this.channels.has(ch)) return { ok: false, error: 'That session is not open on the phone any more.', ...this.overview() };
+    if (ch && !this.channels.has(ch)) return this.release(ch);
     let closed = 0;
     for (const c of [...this.channels.values()]) {
       if (ch && c.ch !== ch) continue;
@@ -482,7 +493,21 @@ class RemoteServer {
   /** Give a session its own size back without closing it on the phone; the phone's text then follows the app's width. */
   release(ch) {
     const c = this.channels.get(String(ch ?? ''));
-    if (!c) return { ok: false, error: 'That session is not open on the phone any more.', ...this.overview() };
+    if (!c) {
+      // Dropped and within its grace: the size goes back to the app now, and the phone will not resume into it.
+      for (const [ptyId, d] of this.driven) {
+        if (d.ch !== String(ch ?? '') || !d.timer) continue;
+        clearTimeout(d.timer);
+        this.driven.delete(ptyId);
+        this.phoneSizes.delete(ptyId);
+        const back = this.appSizes.get(ptyId);
+        if (back) this.resize(ptyId, back.cols, back.rows);
+        this.drivenChanged(ptyId, null);
+        this.changed();
+        return { ok: true, ...this.overview() };
+      }
+      return { ok: false, error: 'That session is not open on the phone any more.', ...this.overview() };
+    }
     if (this.driven.get(c.ptyId)?.ch !== c.ch) return { ok: true, ...this.overview() };
     this.#giveBack(c, true);
     this.changed();
@@ -511,12 +536,12 @@ class RemoteServer {
       this.changed();
       return Promise.resolve(false);
     }
-    this.starting = new Promise((resolve) => {
-      let settled = false;
+    let settled = false;
+    const starting = new Promise((resolve) => {
       const settle = (value) => {
         if (settled) return;
         settled = true;
-        this.starting = null;
+        if (this.starting === starting) this.starting = null;
         resolve(value);
       };
       const server = http.createServer((req, res) => this.#request(req, res));
@@ -566,7 +591,9 @@ class RemoteServer {
         settle(false);
       }
     });
-    return this.starting;
+    // Failed before this line ran: nothing to wait for later.
+    if (!settled) this.starting = starting;
+    return starting;
   }
 
   /** The address to bind: everything, or Tailscale's address of this computer alone; null when that is not there. */
@@ -741,10 +768,12 @@ class RemoteServer {
   }
 
   async #pair(req, res) {
+    // The home-screen copy of the page is the same browser without the "Version/… Safari/…" tokens in its name.
+    const browserOf = (s) => String(s ?? '').replace(/\s(Version|Safari|Mobile|CriOS|FxiOS)\/\S+/g, '').trim();
     const body = await this.#body(req);
     if (body === TOO_BIG) {
+      res.once('finish', () => req.destroy());
       this.#json(res, 413, { ok: false, error: 'That is too much to be a code.' });
-      req.destroy();
       return;
     }
     if (!body) return this.#json(res, 400, { ok: false, error: 'Could not read that.' });
@@ -756,7 +785,7 @@ class RemoteServer {
     const given = String(body.code ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     // Used once already: the same phone may use it again from its home-screen copy, which has a cookie jar of its own.
     if (pairing.spentAt) {
-      const again = same(given, pairing.code) && this.now() - pairing.spentAt < CODE_REUSE_MS && ua === pairing.spentUa;
+      const again = same(given, pairing.code) && this.now() - pairing.spentAt < CODE_REUSE_MS && browserOf(ua) === browserOf(pairing.spentUa);
       if (!again) return this.#json(res, 403, { ok: false, error: 'No code is waiting. In Smart Terminal, open Remote and press "Pair a phone".' });
       return this.#admit(req, res, body, pairing.spentBy);
     }
@@ -842,10 +871,6 @@ class RemoteServer {
     if (!fromOurPage(req)) return refuse(socket, 403, 'That page is not this computer\'s.');
     const device = this.#device(req);
     if (!device) return refuse(socket, 401, 'Not paired.');
-    if (this.channels.size >= MAX_VIEWERS) return refuse(socket, 403, 'Too many sessions open on phones already.');
-    // One phone with too many open: its oldest makes room, rather than the other phone being locked out.
-    const mine = [...this.channels.values()].filter((c) => c.deviceId === device.id).sort((a, b) => a.at - b.at);
-    while (mine.length >= MAX_VIEWERS_PER_DEVICE) this.#end(mine.shift(), 'Closed to make room: this phone had too many open.');
     const conn = accept(req, socket, head);
     if (!conn) return;
     const sessionId = String(url.searchParams.get('session') ?? '');
@@ -853,6 +878,14 @@ class RemoteServer {
     const found = offered ? this.attach(sessionId) : null;
     if (!found) {
       conn.send(JSON.stringify({ t: 'ended', reason: 'That session is not open any more.' }));
+      conn.close(1000);
+      return;
+    }
+    // One phone with too many open: its oldest makes room, rather than the other phone being locked out.
+    const mine = [...this.channels.values()].filter((c) => c.deviceId === device.id).sort((a, b) => a.at - b.at);
+    while (mine.length >= MAX_VIEWERS_PER_DEVICE) this.#end(mine.shift(), 'Closed to make room: this phone had too many open.');
+    if (this.channels.size >= MAX_VIEWERS) {
+      conn.send(JSON.stringify({ t: 'ended', reason: 'Too many sessions open on phones already.' }));
       conn.close(1000);
       return;
     }
@@ -946,15 +979,18 @@ class RemoteServer {
       if (current) this.#send(c, { t: 'size', ...current, driven: true });
       return;
     }
-    // Sized by the phone now: the redraw that was coming is not needed, the new size brings one.
-    clearTimeout(c.redrawTimer);
-    c.redrawTimer = null;
     if (d?.timer) clearTimeout(d.timer);
     const first = !d || d.ch !== c.ch;
-    this.driven.set(c.ptyId, { ch: c.ch, deviceId: c.deviceId, from: c.from, timer: null });
+    this.driven.set(c.ptyId, { ch: c.ch, deviceId: c.deviceId, from: c.from, sessionId: c.sessionId, title: c.title, timer: null });
     const before = this.phoneSizes.get(c.ptyId);
     this.phoneSizes.set(c.ptyId, size);
-    if (!before || before.cols !== size.cols || before.rows !== size.rows) this.resize(c.ptyId, size.cols, size.rows);
+    const changed = !before || before.cols !== size.cols || before.rows !== size.rows;
+    if (changed) {
+      // The new size brings a redraw of its own; the one that was coming is not needed.
+      clearTimeout(c.redrawTimer);
+      c.redrawTimer = null;
+      this.resize(c.ptyId, size.cols, size.rows);
+    }
     for (const o of this.channels.values()) if (o.ptyId === c.ptyId && o.ch !== c.ch) this.#send(o, { t: 'size', ...size, driven: true });
     if (first) this.drivenChanged(c.ptyId, c.from);
   }

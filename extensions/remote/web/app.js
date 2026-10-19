@@ -99,16 +99,22 @@ function updateTitle() {
 }
 
 /** The screen stays on while a terminal is watched: a lock would cut the connection and lose the place. */
+let wakeLockPending = null;
 async function keepAwake() {
   const want = document.body.dataset.view === 'term' && !document.hidden && Boolean(navigator.wakeLock);
-  if (want && !wakeLock) {
-    try {
-      wakeLock = await navigator.wakeLock.request('screen');
-      wakeLock.addEventListener('release', () => { wakeLock = null; });
-    } catch { wakeLock = null; }
+  if (want && !wakeLock && !wakeLockPending) {
+    // Several events fire together on return; one request serves them all.
+    wakeLockPending = navigator.wakeLock.request('screen').then((lock) => {
+      wakeLock = lock;
+      lock.addEventListener('release', () => { if (wakeLock === lock) wakeLock = null; });
+      // Asked for, then no longer wanted while it was coming: let it go.
+      if (document.body.dataset.view !== 'term' || document.hidden) keepAwake();
+    }, () => {}).finally(() => { wakeLockPending = null; });
+    await wakeLockPending;
   } else if (!want && wakeLock) {
-    try { await wakeLock.release(); } catch { /* gone anyway */ }
+    const lock = wakeLock;
     wakeLock = null;
+    try { await lock.release(); } catch { /* gone anyway */ }
   }
 }
 
@@ -351,20 +357,23 @@ function drawEmpty() {
 // ---------- which sessions were open, across a reload ----------
 /** iOS throws a background page away and loads it fresh: what was open here is written down, and opened again. */
 function remember() {
-  try { sessionStorage.setItem('open', JSON.stringify({ keys: [...open.keys()], current })); } catch { /* not remembered */ }
+  try { sessionStorage.setItem('open', JSON.stringify({ keys: [...open.keys()], current, view: document.body.dataset.view })); } catch { /* not remembered */ }
 }
 let reopened = false;
+let reopenPolls = 0;
 function reopenRemembered() {
   if (reopened) return;
-  reopened = true;
   let saved = null;
   try { saved = JSON.parse(sessionStorage.getItem('open') ?? 'null'); } catch { saved = null; }
-  if (!saved?.keys?.length) return;
+  if (!saved?.keys?.length) { reopened = true; return; }
+  // The list can be empty for a moment right after the computer's app starts: a few more looks before giving up.
+  if (!sessions.length && reopenPolls++ < 5) return;
+  reopened = true;
   for (const key of saved.keys) {
     const s = sessions.find((x) => x.id === key);
     if (s && !open.has(key)) openSession(s, { quiet: true });
   }
-  if (saved.current && open.has(saved.current)) show(saved.current);
+  if (saved.view === 'term' && saved.current && open.has(saved.current)) show(saved.current);
   else if (NARROW.matches) view('list');
 }
 
@@ -372,8 +381,12 @@ function reopenRemembered() {
 function openSession(s, { quiet = false } = {}) {
   const key = s.id;
   if (open.has(key)) {
-    show(key);
-    return;
+    if (open.get(key).state !== 'ended') {
+      show(key);
+      return;
+    }
+    // Over here, but back in the list: it opens again from scratch.
+    closeSession(key, { keepPlace: true });
   }
   if ($('stage').querySelector('.stage-empty')) $('stage').replaceChildren();
 
@@ -444,7 +457,8 @@ function connect(entry) {
     let m;
     try { m = JSON.parse(event.data); } catch { return; }
     if (m.t === 'opened') {
-      const back = entry.tries > 0;
+      const back = entry.everOpened === true;
+      entry.everOpened = true;
       entry.state = 'open';
       entry.tries = 0;
       if (m.kind) entry.kind = m.kind;
@@ -457,15 +471,26 @@ function connect(entry) {
       } else if (back && entry.drives && !m.driven && NARROW.matches) {
         // Back after the grace: the phone's size goes straight out, before the computer's size is drawn and undone.
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'resize', cols: entry.cols, rows: entry.rows }));
+      } else if (m.resumed && !m.driven && NARROW.matches) {
+        // The page was reloaded within the grace: the computer still holds this phone's size, so this phone drives on
+        // from where it was, and the computer's redraw fills the screen.
+        entry.cols = m.cols; entry.rows = m.rows;
+        entry.drives = true;
+        entry.pane.classList.add('is-follows');
+        term.resize(m.cols, m.rows);
+        if (m.replay && !back) term.write(m.replay);
       } else {
         entry.cols = m.cols; entry.rows = m.rows;
+        // Not driving any more, said before the resize so its handler does not send this size back as the phone's.
+        entry.drives = false;
+        entry.pane.classList.remove('is-follows');
         // A full-screen program draws itself again; a shell's scrollback is worth keeping across a blip.
         if (entry.kind === 'claude' || !back) term.reset();
         else term.write('\r\n\x1b[38;5;245m— reconnected\x1b[0m\r\n');
         term.resize(m.cols, m.rows);
         if (m.replay && !back) term.write(m.replay);
-        entry.drives = false;
-        entry.pane.classList.remove('is-follows');
+        // Turned to the wide side while dropped: the computer kept the phone's size, which nobody wants now.
+        if (m.resumed && !m.driven && !NARROW.matches) release(entry);
       }
       fit(entry);
       if (current === key) {
@@ -494,6 +519,14 @@ function connect(entry) {
   };
   ws.onclose = () => {
     if (!open.has(key) || entry.ws !== ws) return;
+    dropped(entry);
+  };
+}
+
+/** The socket is gone: over for good if the computer said so, otherwise back on its own, more slowly each time. */
+function dropped(entry) {
+  const { term, key } = entry;
+  {
     clearTimeout(entry.probeTimer);
     entry.probeTimer = null;
     if (entry.state === 'ended') {
@@ -514,7 +547,7 @@ function connect(entry) {
       $('reconnect').hidden = false;
     }
     reconnect(entry, document.hidden ? Infinity : wait);
-  };
+  }
 }
 
 /** A socket that looks open after the phone slept may be dead: ask, and if nothing comes back, drop it so it reconnects. */
@@ -523,7 +556,14 @@ function probe(e) {
   e.ws.send(JSON.stringify({ t: 'ping' }));
   e.probeTimer = setTimeout(() => {
     e.probeTimer = null;
-    if (e.state === 'open') { try { e.ws.close(); } catch { /* already gone */ } }
+    if (e.state !== 'open' || !e.ws) return;
+    // A close handshake on a dead socket can take the browser a long while to give up on: it is let go of here and now.
+    const dead = e.ws;
+    e.ws = null;
+    dead.onmessage = null;
+    dead.onclose = null;
+    try { dead.close(); } catch { /* already gone */ }
+    dropped(e);
   }, PROBE_MS);
 }
 
@@ -556,7 +596,10 @@ function show(key, { fromHistory = false } = {}) {
   current = key;
   view('term');
   // In a Safari tab the left-edge swipe goes back: with the list in the history, it goes back to the list, not out of the page.
-  if (wasList && NARROW.matches && !fromHistory) history.pushState({ view: 'term', key }, '');
+  if (wasList && NARROW.matches && !fromHistory) {
+    if (history.state?.view === 'term') history.replaceState({ view: 'term', key }, '');
+    else history.pushState({ view: 'term', key }, '');
+  }
   for (const e of open.values()) {
     const on = e.key === key;
     e.pane.hidden = !on;
@@ -577,7 +620,7 @@ function show(key, { fromHistory = false } = {}) {
   drawSessions();
 }
 
-function closeSession(key) {
+function closeSession(key, { keepPlace = false } = {}) {
   const e = open.get(key);
   if (!e) return;
   open.delete(key);
@@ -589,6 +632,7 @@ function closeSession(key) {
   e.pane.remove();
   e.tab.remove();
   remember();
+  if (keepPlace) { drawSessions(); return; }
   if (current === key) {
     current = null;
     const next = [...open.keys()].at(-1);
@@ -596,7 +640,8 @@ function closeSession(key) {
     else {
       drawEmpty();
       drawSessions();
-      backToList();
+      if (history.state?.view === 'term') history.back();
+      else backToList();
     }
   } else drawSessions();
 }
@@ -608,6 +653,7 @@ function backToList() {
   drawSessions();
   const row = current ? $('sessions').querySelector(`[data-session="${CSS.escape(current)}"]`) : null;
   if (row && COARSE.matches) row.focus({ preventScroll: true });
+  remember();
 }
 $('back').addEventListener('click', () => {
   if (history.state?.view === 'term') history.back();
@@ -685,8 +731,10 @@ window.addEventListener('resize', refit);
 if (window.visualViewport) {
   const vv = window.visualViewport;
   const keyboard = () => {
-    const covered = Math.max(0, window.innerHeight - vv.height);
+    const covered = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
     document.documentElement.style.setProperty('--keyboard', `${Math.round(covered)}px`);
+    // What Safari scrolled out of view at the top, when the page itself cannot scroll back.
+    document.documentElement.style.setProperty('--viewport-top', `${Math.round(vv.offsetTop)}px`);
     document.body.classList.toggle('has-keyboard', covered > 80);
     // Safari scrolls the page to show the field; the page has nowhere to scroll to.
     if (window.scrollY || vv.offsetTop) window.scrollTo(0, 0);
@@ -788,6 +836,7 @@ function pressKey(e, data) {
 $('keys').replaceChildren(...KEYS.map(([label, data, repeats]) => {
   let holdTimer = null;
   let repeatTimer = null;
+  let repeated = false;
   const stopRepeat = () => { clearTimeout(holdTimer); clearInterval(repeatTimer); holdTimer = null; repeatTimer = null; };
   return el('button', {
     type: 'button',
@@ -799,7 +848,8 @@ $('keys').replaceChildren(...KEYS.map(([label, data, repeats]) => {
       event.preventDefault();
       if (!repeats) return;
       // Held: the arrow repeats, as a key does.
-      holdTimer = setTimeout(() => { repeatTimer = setInterval(() => pressKey(open.get(current), data), 60); }, 400);
+      repeated = false;
+      holdTimer = setTimeout(() => { repeatTimer = setInterval(() => { repeated = true; pressKey(open.get(current), data); }, 60); }, 400);
     },
     onpointerup: stopRepeat,
     onpointercancel: stopRepeat,
@@ -813,6 +863,8 @@ $('keys').replaceChildren(...KEYS.map(([label, data, repeats]) => {
         if (ctrlArmed && e && !COARSE.matches) e.term.focus();
         return;
       }
+      // Held and repeated: the release is not one more press.
+      if (repeated) { repeated = false; return; }
       pressKey(e, data);
       if (e && !COARSE.matches) e.term.focus();
     },

@@ -51,7 +51,7 @@
    * lists who has what open. Everything it knows comes from one call,
    * `overview`; the app says `remote` when any of it changes.
    */
-  var state = { o: null, error: '', busy: {}, tick: null, showing: true, flash: null, flashTimer: null, confirm: null, portDraft: null, portBad: false, qrAt: 0, stale: false, minute: 0 };
+  var state = { o: null, error: '', busy: {}, tick: null, showing: true, confirm: null, portDraft: null, portBad: false, qrAt: 0, stale: false, minute: 0 };
   var $ = function (id) { return document.getElementById(id); };
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
   function call(name, args) {
@@ -158,7 +158,6 @@
     h += '</div>';
     h += '<p class="dim">Your sessions on your phone, served by this computer while it is on. Nothing goes through anybody else\'s server: at home the phone reaches this computer directly over Wi-Fi; away from home it comes in through Tailscale, encrypted.</p>';
     if (state.error) h += '<p class="flash bad">' + esc(state.error) + '</p>';
-    if (state.flash) h += '<p class="flash' + (state.flash.bad ? ' bad' : '') + '">' + esc(state.flash.text) + '</p>';
     var code = o.pairing ? o.pairing.code : null;
     var ts = o.tailscale;
     var tsOnly = o.bind === 'tailscale';
@@ -244,9 +243,9 @@
     else {
       h += '<table><tr><th>Session</th><th>Phone</th><th>Since</th><th class="act"></th></tr>';
       o.viewers.forEach(function (v) {
-        h += '<tr><td>' + esc(v.title) + (v.driven ? '<span class="tag" title="The session took the phone\'s width; the app\'s own resizes wait until it lets go.">sized for the phone</span>' : '') + '</td><td>' + esc(v.from) + '</td><td title="' + esc(when(v.at)) + '">' + esc(ago(v.at)) + '</td>'
+        h += '<tr><td>' + esc(v.title) + (v.resuming ? '<span class="tag" title="The phone dropped a moment ago; its size is kept for ten seconds in case it comes straight back.">reconnecting</span>' : v.driven ? '<span class="tag" title="The session took the phone\'s width; the app\'s own resizes wait until it lets go.">sized for the phone</span>' : '') + '</td><td>' + esc(v.from) + '</td><td title="' + esc(when(v.at)) + '">' + esc(ago(v.at)) + '</td>'
           + '<td class="act">' + (v.driven ? '<button class="btn quiet" data-release="' + esc(v.ch) + '" title="Back to the app\'s size; the phone follows it."' + (state.busy.release ? ' disabled' : '') + '>Give size back</button> ' : '')
-          + '<button class="btn quiet" data-close="' + esc(v.ch) + '" title="The session keeps running here."' + (state.busy.disconnect ? ' disabled' : '') + '>Close there</button></td></tr>';
+          + (v.resuming ? '' : '<button class="btn quiet" data-close="' + esc(v.ch) + '" title="The session keeps running here."' + (state.busy.disconnect ? ' disabled' : '') + '>Close there</button>') + '</td></tr>';
       });
       h += '</table>';
       if (o.viewers.length > 1) {

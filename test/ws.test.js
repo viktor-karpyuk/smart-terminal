@@ -27,7 +27,11 @@ function frame(opcode, payload, { fin = true, mask = true, rsv = 0 } = {}) {
   const head = [(fin ? 0x80 : 0) | (rsv << 4) | opcode];
   const len = body.length;
   if (len < 126) head.push((mask ? 0x80 : 0) | len);
-  else { head.push((mask ? 0x80 : 0) | 126, len >> 8, len & 0xff); }
+  else if (len < 65536) head.push((mask ? 0x80 : 0) | 126, len >> 8, len & 0xff);
+  else {
+    const big = Buffer.alloc(8); big.writeBigUInt64BE(BigInt(len));
+    head.push((mask ? 0x80 : 0) | 127, ...big);
+  }
   if (!mask) return Buffer.concat([Buffer.from(head), body]);
   const key = crypto.randomBytes(4);
   const masked = Buffer.from(body.map((b, i) => b ^ key[i & 3]));
@@ -138,6 +142,20 @@ test('the peer\'s close code is echoed, and a huge frame is 1009', async () => {
   const body = Buffer.alloc(2); body.writeUInt16BE(1001, 0);
   c.write(frame(0x8, body));
   assert.equal(closeCode(await c.next()), 1001);
+  await c.closed;
+  // A code a peer may not send comes back as 1002, not echoed.
+  c = await client(port);
+  body.writeUInt16BE(1005, 0);
+  c.write(frame(0x8, body));
+  assert.equal(closeCode(await c.next()), 1002);
+  await c.closed;
+  // A big frame followed by a ping in the same write is fine: two legal frames.
+  c = await client(port);
+  const big = Buffer.alloc(900 * 1024, 0x61);
+  c.write(Buffer.concat([frame(0x1, big), frame(0x9, Buffer.from('hi'))]));
+  const pong = await c.next();
+  assert.equal(pong.opcode, 0xa, 'the ping is answered');
+  c.write(frame(0x8, Buffer.alloc(0)));
   await c.closed;
   c = await client(port);
   const head = Buffer.from([0x81, 0x80 | 127]);

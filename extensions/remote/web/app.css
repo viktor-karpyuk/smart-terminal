@@ -49,7 +49,7 @@ button { font: inherit; }
 
 /* ---- the shell: a list and a terminal ---- */
 /* The keyboard takes its part of the screen off the page, so nothing of the terminal is under it. */
-.shell { height: 100%; height: calc(100dvh - var(--keyboard)); display: grid; grid-template-columns: 1fr; grid-template-rows: 1fr; padding-left: var(--safe-left); padding-right: var(--safe-right); }
+.shell { height: 100%; height: calc(100dvh - var(--keyboard) - var(--viewport-top, 0px)); margin-top: var(--viewport-top, 0px); display: grid; grid-template-columns: 1fr; grid-template-rows: 1fr; padding-left: var(--safe-left); padding-right: var(--safe-right); }
 .rail { background: var(--panel); display: flex; flex-direction: column; min-height: 0; padding-top: var(--safe-top); }
 .rail-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 10px 8px 16px; border-bottom: 1px solid var(--line); }
 .rail-title { display: flex; align-items: center; gap: 9px; min-width: 0; }
@@ -148,7 +148,8 @@ body.has-keyboard .status-row, body.has-keyboard .rail-foot { padding-bottom: 4p
 }
 /* A phone on its side: little height, so the rows that are not the terminal make way. */
 @media (max-height: 450px) and (pointer: coarse) {
-  .status-row { display: none; }
+  .status-row { min-height: 0; padding: 0 8px 2px; font-size: 11px; }
+  .status-row .small { min-height: 22px; padding: 0 8px; }
   .keys { padding: 3px 8px; }
   .keys button { min-height: 34px; }
   .compose { padding-top: 3px; }

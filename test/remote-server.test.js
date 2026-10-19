@@ -276,7 +276,7 @@ test('a session that is not there, a page from elsewhere, and closing from the a
 
   const again = await wsClient(server, '/api/terminal?session=s1', cookie);
   await again.next();
-  server.revoke(server.overview().devices[0].id);
+  server.revoke(server.overview().devices.at(-1).id);
   assert.deepEqual(await again.next(), { t: 'ended', reason: 'This phone was forgotten in Smart Terminal.' });
   assert.equal((await call(server, 'GET', '/api/sessions', { cookie })).status, 401, 'the cookie opens nothing now');
   await server.stop();
@@ -483,13 +483,25 @@ test('the same phone may use the code again from its home-screen copy; another p
   const code = server.pairing.code;
   const base = `http://127.0.0.1:${server.port}`;
   const post = (body, ua) => fetch(`${base}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json', 'user-agent': ua }, body: JSON.stringify(body) });
-  assert.equal((await post({ code, name: 'Mine' }, 'iPhone-A')).status, 200);
-  assert.equal((await post({ code, standalone: true }, 'iPhone-B')).status, 403, 'a different phone');
-  const again = await post({ code, standalone: true }, 'iPhone-A');
-  assert.equal(again.status, 200);
+  const safari = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1';
+  const standalone = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148';
+  const other = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1';
+  // Used in the code's last minute: the home-screen copy still gets to use it.
+  tick(9.5 * 60 * 1000);
+  assert.equal((await post({ code, name: 'Mine' }, safari)).status, 200);
+  assert.equal((await post({ code, standalone: true }, other)).status, 403, 'a different phone');
+  tick(60 * 1000);
+  const again = await post({ code, standalone: true }, standalone);
+  assert.equal(again.status, 200, 'the home-screen copy names the browser without the Safari tokens');
   assert.equal(server.overview().devices.length, 1, 'the same phone, not a second row');
   tick(4 * 60 * 1000);
-  assert.equal((await post({ code, standalone: true }, 'iPhone-A')).status, 403, 'and not for ever');
+  assert.equal((await post({ code, standalone: true }, standalone)).status, 403, 'and not for ever');
+  // Forgotten right after pairing: the code it typed does not let it back in.
+  server.newPairingCode();
+  const code2 = server.pairing.code;
+  assert.equal((await post({ code: code2, name: 'Mine' }, safari)).status, 200);
+  server.revoke(server.overview().devices.at(-1).id);
+  assert.equal((await post({ code: code2, standalone: true }, standalone)).status, 403);
   await server.stop();
 });
 
@@ -516,6 +528,9 @@ test('a driving phone that drops keeps the size a moment, and the panel can give
   await ws.closed;
   await new Promise((r) => setTimeout(r, 30));
   assert.equal(server.drives('p1'), true, 'still the phone\'s size, in case it is back');
+  const held = server.overview().viewers;
+  assert.equal(held.length, 1, 'the app still sees who holds the size');
+  assert.deepEqual([held[0].driven, held[0].resuming, held[0].sessionId, held[0].title, held[0].from], [true, true, 's1', 'sh', 'iPhone']);
   ws = await wsClient(server, '/api/terminal?session=s1', cookie);
   assert.deepEqual(await ws.next(), { t: 'opened', cols: 48, rows: 30, title: 'sh', kind: 'shell', replay: '', driven: false, resumed: true });
   assert.deepEqual(calls.resized, [['p1', 48, 30]], 'no resize happened in between');
@@ -524,7 +539,19 @@ test('a driving phone that drops keeps the size a moment, and the panel can give
   assert.equal(server.release(ch).ok, true);
   assert.deepEqual(await ws.next(), { t: 'size', cols: 120, rows: 40, driven: false });
   assert.equal(server.drives('p1'), false);
+  // Dropped, and the app takes the size back before the grace is over.
+  ws.send({ t: 'resize', cols: 48, rows: 30 });
+  await new Promise((r) => setTimeout(r, 30));
+  ws.close();
+  await ws.closed;
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(server.release(server.overview().viewers[0].ch).ok, true);
+  assert.equal(server.drives('p1'), false);
+  assert.deepEqual(calls.resized.at(-1), ['p1', 120, 40]);
+  assert.equal(server.overview().viewers.length, 0);
   // Dropped and not back: given back after the grace.
+  ws = await wsClient(server, '/api/terminal?session=s1', cookie);
+  await ws.next();
   ws.send({ t: 'resize', cols: 48, rows: 30 });
   await new Promise((r) => setTimeout(r, 30));
   ws.close();

@@ -121,13 +121,14 @@ class Conn extends EventEmitter {
     this.alive = true;
     this.chunks.push(chunk);
     this.pending += chunk.length;
-    // More than a frame can ever be, still not a frame: not a client worth reading.
-    if (this.pending > MAX_MESSAGE + 14) return this.close(1009, 'Too large.');
+    // Two frames' worth and still not a frame: not a client worth reading.
+    if (this.pending > 2 * (MAX_MESSAGE + 14)) return this.close(1009, 'Too large.');
     for (;;) {
       if (!this.open) return;
       if (this.pending < 2) return;
-      const b = this.chunks.length === 1 ? this.chunks[0] : Buffer.concat(this.chunks);
-      this.chunks = [b];
+      // The header fits in 14 bytes: it is read from the front without joining a big frame's pieces each time.
+      if (this.chunks[0].length < Math.min(14, this.pending)) this.chunks = [Buffer.concat(this.chunks)];
+      let b = this.chunks[0];
       const fin = (b[0] & 0x80) !== 0;
       if (b[0] & 0x70) return this.close(1002, 'Reserved bits set.');
       const opcode = b[0] & 0x0f;
@@ -149,7 +150,8 @@ class Conn extends EventEmitter {
       if (length > MAX_MESSAGE) return this.close(1009, 'Too large.');
       const control = opcode >= 0x8;
       if (control && (!fin || length > 125)) return this.close(1002, 'A control frame has to be short and whole.');
-      if (b.length < at + 4 + length) return;
+      if (this.pending < at + 4 + length) return;
+      if (this.chunks.length > 1) { b = Buffer.concat(this.chunks); this.chunks = [b]; }
       const mask = b.subarray(at, at + 4);
       const payload = Buffer.from(b.subarray(at + 4, at + 4 + length));
       for (let i = 0; i < payload.length; i += 1) payload[i] ^= mask[i & 3];
@@ -161,7 +163,8 @@ class Conn extends EventEmitter {
         // Answered with the code the peer gave, as the standard asks; a one-byte body is not a code.
         if (length === 1) return this.close(1002, 'A close frame carries two bytes or none.');
         const code = length >= 2 ? payload.readUInt16BE(0) : 1000;
-        this.close(code >= 1000 && code !== 1005 && code !== 1006 ? code : 1000);
+        const echoable = (code >= 1000 && code <= 1003) || (code >= 1007 && code <= 1011) || (code >= 3000 && code <= 4999);
+        this.close(echoable ? code : 1002);
         return;
       }
       if (opcode === 0x9) { this.#frame(0xa, payload); continue; }
