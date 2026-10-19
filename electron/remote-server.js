@@ -135,9 +135,9 @@ class RemoteServer {
   constructor({
     file, webDir, assets = {}, sessions, attach, write, resize = () => {}, redraw = () => {}, describe = () => '',
     notify = () => {}, changed = () => {}, log = () => {}, now = Date.now, hostname = () => os.hostname(),
-    interfaces = () => os.networkInterfaces(),
+    interfaces = () => os.networkInterfaces(), tailscale = null,
   }) {
-    Object.assign(this, { file, webDir, assets, sessions, attach, write, resize, redraw, describe, notify, changed, log, now, hostname, interfaces });
+    Object.assign(this, { file, webDir, assets, sessions, attach, write, resize, redraw, describe, notify, changed, log, now, hostname, interfaces, tailscale });
     this.server = null;
     this.port = null;
     this.error = null;
@@ -172,6 +172,17 @@ class RemoteServer {
     return Boolean(this.server?.listening);
   }
 
+  /** Where a phone reaches this from anywhere, through Tailscale: the computer's name on the tailnet, then its IP there. */
+  awayAddresses() {
+    if (!this.running || !this.tailscale) return [];
+    return this.tailscale.addresses(this.port);
+  }
+
+  /** Every address a phone may be told to open, at home or away. */
+  allAddresses() {
+    return [...this.addresses(), ...this.awayAddresses()];
+  }
+
   /** Where a phone can reach this: every address of this computer, with the port. */
   addresses() {
     if (!this.running) return [];
@@ -186,6 +197,12 @@ class RemoteServer {
     return out;
   }
 
+  /** The overview with Tailscale asked first, for the panel. */
+  async overviewFresh() {
+    await this.tailscale?.info();
+    return this.overview();
+  }
+
   overview() {
     const now = this.now();
     if (this.pairing && this.pairing.expiresAt <= now) this.pairing = null;
@@ -195,6 +212,8 @@ class RemoteServer {
       port: this.state.port,
       error: this.error,
       addresses: this.addresses(),
+      away: this.awayAddresses(),
+      tailscale: this.tailscale ? { installed: this.tailscale.installed, running: Boolean(this.tailscale.last?.running), name: this.tailscale.last?.name ?? null, error: this.tailscale.last?.error ?? null } : null,
       pairing: this.pairing ? { code: this.pairing.code, expiresAt: this.pairing.expiresAt } : null,
       devices: this.state.devices.map(({ id, name, pairedAt, lastSeenAt }) => ({ id, name, pairedAt, lastSeenAt: lastSeenAt ?? null })),
       viewers: [...this.channels.values()].map(({ ch, title, from, at }) => ({ ch, title, from, at })),

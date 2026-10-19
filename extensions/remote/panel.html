@@ -80,7 +80,7 @@
     if (state.error) h += '<p class="bad">' + esc(state.error) + '</p>';
     if (o.error) h += '<p class="bad">' + esc(o.error) + '</p>';
 
-    h += '<div class="card"><h2>Where the phone goes</h2>';
+    h += '<div class="card"><h2>At home, on the same Wi-Fi</h2>';
     if (on) {
       h += '<div>' + o.addresses.map(function (a) {
         return '<div class="addr"><code>' + esc(a) + '</code><button class="btn quiet" data-open="' + esc(a) + '">Open here</button></div>';
@@ -89,6 +89,26 @@
     } else {
       h += '<p class="dim">Turn it on and the addresses appear here.</p>';
     }
+    h += '</div>';
+
+    h += '<div class="card"><h2>Away from home</h2>';
+    var ts = o.tailscale;
+    if (!ts || !ts.installed) {
+      h += '<p class="dim">Install <strong>Tailscale</strong> on this computer and on the phone, sign both in to the same account, and the phone reaches this computer from anywhere, encrypted, with no port opened and no server in between. Only your own devices can see it.</p>'
+        + '<div class="row"><button class="btn" data-open="https://tailscale.com/download">Get Tailscale</button><span class="small faint">Comes back here on its own once it is running.</span></div>';
+    } else if (!ts.running) {
+      h += '<p class="dim">Tailscale is installed but not connected.' + (ts.error ? ' ' + esc(ts.error) : ' Open Tailscale and sign in.') + '</p>';
+    } else if (!on) {
+      h += '<p class="dim">Tailscale is connected as <strong>' + esc(ts.name || 'this computer') + '</strong>. Turn Remote on and the address appears here.</p>';
+    } else {
+      h += '<div>' + o.away.map(function (a) {
+        return '<div class="addr"><code>' + esc(a) + '</code><button class="btn quiet" data-open="' + esc(a) + '">Open here</button></div>';
+      }).join('') + '</div>'
+        + '<p class="small faint">Use this address on the phone when it is on Tailscale too. It works at home as well, so you can pair with it once and never switch. The traffic is encrypted end to end by Tailscale; only devices in your tailnet can reach it.</p>';
+    }
+    h += '</div>';
+
+    h += '<div class="card"><h2>Port</h2>';
     h += '<div class="row"><label class="dim small">Port <input id="port" value="' + esc(o.port) + '" inputmode="numeric"></label><button class="btn" id="save-port"' + (state.busy ? ' disabled' : '') + '>Change</button></div>';
     h += '</div>';
 

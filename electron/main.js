@@ -45,6 +45,7 @@ const {
 const { withCatalog } = require('./extensions');
 const { ScrollbackStore } = require('./scrollback-store');
 const { RemoteServer, RecentOutput } = require('./remote-server');
+const { Tailscale } = require('./tailscale');
 const { registry: makeRegistry } = require('./extension-registry');
 const { installer: makeInstaller } = require('./extension-installer');
 const { parseReport, replyFor, wantsBrief, compactionNote } = require('./hooks');
@@ -398,6 +399,8 @@ function createRemoteServer() {
       },
       changed: () => send('remote:event', { type: 'changed' }),
       log: (line) => console.log(`[remote] ${line}`),
+      // Away from home the phone comes in through Tailscale; this reads what it says, and configures nothing.
+      tailscale: new Tailscale(),
     });
   } catch (error) {
     console.error('[remote] could not start:', error);
@@ -407,17 +410,17 @@ function createRemoteServer() {
 
 /** What the Remote panel may ask for. */
 const REMOTE_VERBS = {
-  overview: (s) => ({ ok: true, ...s.overview() }),
+  overview: async (s) => ({ ok: true, ...(await s.overviewFresh()) }),
   setEnabled: (s, args) => s.setEnabled(args.enabled === true),
   setPort: (s, args) => s.setPort(args.port),
   pair: (s) => s.newPairingCode(),
   cancelPairing: (s) => s.cancelPairing(),
   revoke: (s, args) => s.revoke(String(args.id ?? '')),
   disconnect: (s, args) => s.disconnect(args.ch ? String(args.ch) : null),
-  // The page in this computer's own browser, to try it: only an address the server itself listed.
+  // The page in this computer's own browser, to try it: only an address the server itself listed — or Tailscale's download page.
   open: (s, args) => {
     const url = String(args.url ?? '');
-    if (!s.addresses().includes(url)) return { ok: false, error: 'Not one of this computer\'s addresses.' };
+    if (url !== 'https://tailscale.com/download' && !s.allAddresses().includes(url)) return { ok: false, error: 'Not one of this computer\'s addresses.' };
     shell.openExternal(url);
     return { ok: true };
   },

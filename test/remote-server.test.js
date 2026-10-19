@@ -319,3 +319,16 @@ test('a session whose size is not known opens at 80×24 rather than at nothing',
   assert.deepEqual(await ws.next(), { t: 'opened', cols: 80, rows: 24, title: 'sh', replay: '' });
   server.stop();
 });
+
+test('with Tailscale up, the overview names the away address too, and it may be opened', async () => {
+  const { Tailscale } = require('../electron/tailscale');
+  const status = JSON.stringify({ BackendState: 'Running', Self: { DNSName: 'mac.tail1.ts.net.', TailscaleIPs: ['100.1.2.3'] } });
+  const tailscale = new Tailscale({ cli: '/x/tailscale', exec: (_c, _a, _o, cb) => cb(null, status) });
+  const { server, listen } = make({ tailscale });
+  await listen();
+  const o = await server.overviewFresh();
+  assert.deepEqual(o.away, [`http://mac.tail1.ts.net:${server.port}/`, `http://100.1.2.3:${server.port}/`]);
+  assert.deepEqual(o.tailscale, { installed: true, running: true, name: 'mac.tail1.ts.net', error: null });
+  assert.ok(server.allAddresses().includes(`http://100.1.2.3:${server.port}/`));
+  server.stop();
+});
