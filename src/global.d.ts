@@ -1166,8 +1166,14 @@ declare global {
         onPrs(handler: (answer: HousekeepingPulls) => void): () => void;
         worktreeBrief(path: string): Promise<string>;
         /** What a pull request from the worktree would be: bases, title, whether it must be pushed, who takes it. */
+        /** Compare the worktree's work with its base by content: patches found there, touched files identical. */
+        inBase(path: string): Promise<HousekeepingInBase>;
+        /** Look at one worktree again now (git state, blockers, PRs); the fresh row also arrives through onWorktree. */
+        refreshWorktree(path: string): Promise<HousekeepingItem | null>;
+        onWorktree(handler: (item: HousekeepingItem) => void): () => void;
+        markInBase(input: { path: string; head: string; base: string }): Promise<boolean>;
         prDraft(path: string): Promise<HousekeepingPrDraft>;
-        createPr(input: { path: string; title: string; body?: string; base: string; push?: boolean }): Promise<{ id: number | null; url: string; base: string; branch: string }>;
+        createPr(input: { path: string; title: string; body?: string; base: string; push?: boolean }): Promise<{ id: number | null; url: string; base: string; branch: string; existing?: boolean }>;
         roots(): Promise<HousekeepingRoot[]>;
         addRoot(folder: string): Promise<HousekeepingRoot[]>;
         removeRoot(folder: string): Promise<HousekeepingRoot[]>;
@@ -1213,6 +1219,20 @@ declare global {
   type HousekeepingBucket = 'sessions' | 'worktrees' | 'app';
 
   /** One removable thing on disk, whatever it is. */
+  interface HousekeepingInBase {
+    path: string;
+    branch: string | null;
+    head: string;
+    base: string;
+    ancestor: boolean;
+    commits: { sha: string; subject: string; inBase: boolean }[];
+    patches: number;
+    touched: number;
+    differing: string[];
+    dirtyCount: number;
+    verdict: 'in' | 'partly' | 'not';
+  }
+
   interface HousekeepingPrDraft {
     path: string;
     branch: string;

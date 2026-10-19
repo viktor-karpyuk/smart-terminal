@@ -114,6 +114,19 @@ opens the request through the Code Reviewer's Bitbucket or GitHub token, or
 The brain icon on a row that already has a live session goes to that session
 instead of opening another; ⇧-click opens a new one on purpose.
 
+Two more icons on each row. **Look again** reads that one worktree afresh —
+git state, blockers, pull requests — and replaces the row; the same happens by
+itself when a session standing in the worktree finishes a turn, since it may
+have committed, pushed or opened a pull request. **Already in develop?**
+compares by content: each commit's patch is looked for in the nearest base
+(`git cherry`), and the files the branch touched are compared with the base as
+it stands; the verdict is *in*, *partly* or *not*, with the commits listed. A
+yes can be kept with **Mark as done**, and the row then reads as done and
+offers to close. **Refresh worktrees** above the table does the full read.
+
+A worktree whose only hard blocker is the session inside it offers **Remove
+anyway**: that session is closed first, then the folder goes.
+
 Claude sessions get the same reach through the `bitbucket` MCP server (tools
 `repositories`, `repo_for_cwd`, `pull_requests`, `pull_request`,
 `create_pull_request`): the app holds the tokens and asks you in a dialog
