@@ -244,6 +244,11 @@ class RemoteServer {
     return { ok: true, ...this.overview() };
   }
 
+  /** Whether a phone has this session at its own size; the app's resizes then wait. */
+  drives(ptyId) {
+    return this.driven.has(ptyId);
+  }
+
   /** Close one session on the phone, or all of them; the sessions keep running here. */
   disconnect(ch = null) {
     for (const c of [...this.channels.values()]) {

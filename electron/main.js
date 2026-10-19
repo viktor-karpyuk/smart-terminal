@@ -1305,7 +1305,8 @@ function registerIpc() {
     ptys.write(id, data);
   });
   ipcMain.on('pty:resize', (_e, { id, cols, rows }) => {
-    ptys.resize(id, cols, rows);
+    // While a phone has the session at its own size, the app's size waits for the phone to let go.
+    if (!remoteServer?.drives(id)) ptys.resize(id, cols, rows);
     remoteServer?.resized(id, cols, rows);
   });
   ipcMain.on('pty:flow', (_e, { id, paused }) => ptys.flow(id, paused));
