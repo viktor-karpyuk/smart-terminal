@@ -1,0 +1,158 @@
+<style>
+  body { overflow: auto; }
+  .page { max-width: 640px; margin: 0 auto; padding: 20px 18px 40px; display: grid; gap: 16px; }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  h2 { font-size: 11px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); font-weight: 600; }
+  p { margin: 0; line-height: 1.55; }
+  .dim { color: var(--text-dim); } .faint { color: var(--text-faint); } .small { font-size: 11px; } .bad { color: var(--danger); }
+  .card { border: 1px solid var(--border); border-radius: 8px; padding: 14px; background: var(--bg-panel); display: grid; gap: 10px; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+  .btn { font: inherit; font-size: 12px; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; background: var(--bg-elevated); cursor: pointer; }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+  .btn.quiet { border-color: transparent; color: var(--text-dim); }
+  .btn[disabled] { opacity: .5; cursor: default; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); display: inline-block; }
+  .dot.on { background: var(--ok); } .dot.bad { background: var(--danger); }
+  input { font: inherit; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; width: 90px; }
+  input:focus { outline: none; border-color: var(--accent); }
+  code { font-family: var(--font-mono, ui-monospace, Menlo, monospace); font-size: 12px; }
+  .addr { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); }
+  .addr:last-child { border-bottom: 0; }
+  .addr code { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .code { font-family: var(--font-mono, ui-monospace, Menlo, monospace); font-size: 30px; letter-spacing: .22em; text-align: center; padding: 12px 0 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; color: var(--text-dim); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+  td { padding: 6px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; overflow-wrap: anywhere; }
+  td.act { text-align: right; white-space: nowrap; }
+  ul.steps { margin: 0; padding-left: 18px; line-height: 1.6; }
+</style>
+<div class="page" id="page"><p class="dim">Loading…</p></div>
+<script>
+  var state = { o: null, error: '', busy: false, tick: null };
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
+  function call(name, args) {
+    return host.call('remote.' + name, args || {}).then(function (r) {
+      if (r && r.ok === false) throw new Error(r.error || 'Something went wrong.');
+      return r;
+    });
+  }
+  function say(text, bad) { host.emit('notify', { text: String(text).slice(0, 400), kind: bad ? 'bad' : 'ok' }); }
+  function when(at) {
+    if (!at) return 'never';
+    var d = new Date(at);
+    var today = new Date();
+    return (d.toDateString() === today.toDateString() ? 'today ' : d.toLocaleDateString() + ' ') + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  function left(expiresAt) {
+    var s = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+
+  function load() {
+    return call('overview').then(function (o) { state.o = o; state.error = ''; render(); })
+      .catch(function (e) { state.error = e.message; render(); });
+  }
+  function act(name, args) {
+    if (state.busy) return;
+    state.busy = true;
+    render();
+    return call(name, args).then(function (o) { state.o = o; state.error = ''; })
+      .catch(function (e) { state.error = e.message; })
+      .then(function () { state.busy = false; render(); });
+  }
+
+  function render() {
+    var o = state.o;
+    var h = '';
+    if (!o) {
+      $('page').innerHTML = '<p class="' + (state.error ? 'bad' : 'dim') + '">' + esc(state.error || 'Loading…') + '</p>';
+      return;
+    }
+    var on = o.enabled && o.running;
+    h += '<div class="row"><h1>Remote</h1><span class="spacer"></span>'
+      + '<span class="dot ' + (on ? 'on' : o.enabled ? 'bad' : '') + '"></span>'
+      + '<span class="dim small">' + (on ? 'On' : o.enabled ? 'Could not start' : 'Off') + '</span>'
+      + '<button class="btn ' + (o.enabled ? '' : 'primary') + '" id="toggle"' + (state.busy ? ' disabled' : '') + '>' + (o.enabled ? 'Turn off' : 'Turn on') + '</button></div>';
+    h += '<p class="dim">Your sessions on your phone, served by this computer. Nothing goes through anybody else\'s server: on the same Wi-Fi the phone reaches this computer directly, and away from home through a VPN such as Tailscale, while this computer is on.</p>';
+    if (state.error) h += '<p class="bad">' + esc(state.error) + '</p>';
+    if (o.error) h += '<p class="bad">' + esc(o.error) + '</p>';
+
+    h += '<div class="card"><h2>Where the phone goes</h2>';
+    if (on) {
+      h += '<div>' + o.addresses.map(function (a) {
+        return '<div class="addr"><code>' + esc(a) + '</code><button class="btn quiet" data-open="' + esc(a) + '">Open here</button></div>';
+      }).join('') + '</div>';
+      h += '<p class="small faint">The first one works on most home networks; the others are this computer\'s addresses on each network it is on. Away from home, use the Tailscale address of this computer with the same port.</p>';
+    } else {
+      h += '<p class="dim">Turn it on and the addresses appear here.</p>';
+    }
+    h += '<div class="row"><label class="dim small">Port <input id="port" value="' + esc(o.port) + '" inputmode="numeric"></label><button class="btn" id="save-port"' + (state.busy ? ' disabled' : '') + '>Change</button></div>';
+    h += '</div>';
+
+    h += '<div class="card"><h2>Pair a phone</h2>';
+    if (o.pairing) {
+      h += '<div class="code">' + esc(o.pairing.code) + '</div>'
+        + '<p class="dim" style="text-align:center">Type this on the phone. Good for <span id="left">' + left(o.pairing.expiresAt) + '</span>, once.</p>'
+        + '<div class="row"><span class="spacer"></span><button class="btn quiet" id="cancel-pair">Cancel</button></div>';
+    } else {
+      h += '<ul class="steps dim"><li>On the phone, open one of the addresses above in Safari.</li><li>Press <strong>Pair a phone</strong> here and type the code it shows.</li><li>Share → <strong>Add to Home Screen</strong>, and it opens like an app.</li></ul>'
+        + '<div class="row"><button class="btn primary" id="pair"' + (!on || state.busy ? ' disabled' : '') + '>Pair a phone</button>'
+        + (!on ? '<span class="small faint">Turn it on first.</span>' : '') + '</div>';
+    }
+    h += '</div>';
+
+    h += '<div class="card"><h2>Phones that can open your sessions</h2>';
+    if (!o.devices.length) h += '<p class="dim">None yet.</p>';
+    else {
+      h += '<table><tr><th>Phone</th><th>Paired</th><th>Last seen</th><th></th></tr>';
+      o.devices.forEach(function (d) {
+        h += '<tr><td>' + esc(d.name) + '</td><td>' + esc(when(d.pairedAt)) + '</td><td>' + esc(when(d.lastSeenAt)) + '</td>'
+          + '<td class="act"><button class="btn quiet" data-revoke="' + esc(d.id) + '" title="This phone will need a new code to come back.">Forget</button></td></tr>';
+      });
+      h += '</table>';
+    }
+    h += '</div>';
+
+    h += '<div class="card"><h2>Open on a phone right now</h2>';
+    if (!o.viewers.length) h += '<p class="dim">Nothing. The app says so the moment a phone opens a session.</p>';
+    else {
+      h += '<table><tr><th>Session</th><th>Phone</th><th>Since</th><th></th></tr>';
+      o.viewers.forEach(function (v) {
+        h += '<tr><td>' + esc(v.title) + '</td><td>' + esc(v.from) + '</td><td>' + esc(when(v.at)) + '</td>'
+          + '<td class="act"><button class="btn quiet" data-close="' + esc(v.ch) + '">Close there</button></td></tr>';
+      });
+      h += '</table><div class="row"><span class="spacer"></span><button class="btn" id="close-all">Close all</button></div>';
+    }
+    h += '</div>';
+
+    h += '<div class="card"><h2>What a phone can do</h2><p class="dim">Exactly what you can do in the app: see which sessions are open, read what they print, and type into them. A phone cannot open a session that is not already open here, and the page shows nothing until the phone is paired.</p></div>';
+
+    $('page').innerHTML = h;
+    var t = $('toggle'); if (t) t.onclick = function () { act('setEnabled', { enabled: !o.enabled }); };
+    var p = $('pair'); if (p) p.onclick = function () { act('pair'); };
+    var c = $('cancel-pair'); if (c) c.onclick = function () { act('cancelPairing'); };
+    var sp = $('save-port'); if (sp) sp.onclick = function () { act('setPort', { port: Number($('port').value) }); };
+    var ca = $('close-all'); if (ca) ca.onclick = function () { act('disconnect', {}); };
+    Array.prototype.forEach.call(document.querySelectorAll('[data-revoke]'), function (b) { b.onclick = function () { act('revoke', { id: b.getAttribute('data-revoke') }); }; });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-close]'), function (b) { b.onclick = function () { act('disconnect', { ch: b.getAttribute('data-close') }); }; });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-open]'), function (b) { b.onclick = function () { call('open', { url: b.getAttribute('data-open') }).catch(function (e) { say(e.message, true); }); }; });
+  }
+
+  // The countdown on the code, and the list of who has what open, without being told.
+  state.tick = setInterval(function () {
+    var o = state.o;
+    if (!o || !o.pairing) return;
+    var l = $('left');
+    if (l) l.textContent = left(o.pairing.expiresAt);
+    if (o.pairing.expiresAt <= Date.now()) load();
+  }, 1000);
+
+  host.on('remote', function () { load(); });
+  host.on('showing', function () { load(); });
+  host.on('context', function () { load(); });
+  host.ready();
+  load();
+</script>

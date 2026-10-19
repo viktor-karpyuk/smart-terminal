@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#0b0d13">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Smart Terminal">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon.png">
+<title>Smart Terminal</title>
+<link rel="stylesheet" href="/assets/xterm.css">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body data-view="loading">
+<main class="pair" id="pair" hidden>
+  <form class="pair-card" id="pair-form">
+    <h1>Smart Terminal</h1>
+    <p class="note">In Smart Terminal on your computer, open <strong>Remote</strong> and press <strong>Pair a phone</strong>. Type the code it shows.</p>
+    <label>Code<input id="code" name="code" inputmode="latin" autocapitalize="characters" autocomplete="one-time-code" spellcheck="false" maxlength="7" placeholder="ABC123" required></label>
+    <label>This phone's name<input id="name" name="name" autocomplete="off" maxlength="60" placeholder="iPhone"></label>
+    <button class="primary" type="submit">Pair</button>
+    <p class="error" id="pair-error" role="alert"></p>
+  </form>
+</main>
+
+<div class="shell" id="shell" hidden>
+  <aside class="rail" id="rail" aria-label="Your sessions">
+    <header class="rail-head">
+      <div class="rail-title">
+        <span class="dot" id="dot" aria-hidden="true"></span>
+        <h1 id="computer">Smart Terminal</h1>
+      </div>
+      <button class="icon-btn" id="forget" type="button" title="Unpair this phone" aria-label="Unpair this phone">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/><path d="M21 4v16"/></svg>
+      </button>
+    </header>
+    <div class="sessions" id="sessions"></div>
+    <p class="rail-note" id="rail-note" role="status"></p>
+  </aside>
+
+  <section class="main" id="main">
+    <header class="term-head">
+      <button class="icon-btn back" id="back" type="button" aria-label="Back to the sessions">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
+      <div class="tabs" id="tabs" role="tablist" aria-label="Open on this phone"></div>
+    </header>
+    <div class="stage" id="stage"></div>
+    <div class="keys" id="keys" aria-label="Keys a phone keyboard does not have"></div>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+  </section>
+</div>
+
+<script src="/assets/xterm.js"></script>
+<script src="/assets/addon-fit.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

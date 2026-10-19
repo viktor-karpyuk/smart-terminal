@@ -1,0 +1,9 @@
+{
+  "name": "Smart Terminal",
+  "short_name": "Smart Terminal",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0d13",
+  "theme_color": "#0b0d13",
+  "icons": [{ "src": "/icon.png", "sizes": "512x512", "type": "image/png" }]
+}

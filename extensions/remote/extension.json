@@ -1,0 +1,22 @@
+{
+  "id": "remote",
+  "name": "Remote",
+  "version": "1.0.0",
+  "author": "Smart Terminal",
+  "summary": "Your sessions on your phone, served by this computer — at home on the same Wi-Fi, and away through your VPN.",
+  "description": "Turn it on and this computer serves a small page on your network: the sessions open here, and a terminal for the one you tap, sized to the phone. Nothing goes through anybody else's server. A phone is let in once: the panel shows a six-letter code, the phone types it, and from then on it is recognised until you forget it here. Every session a phone has open is listed in this panel, the app says so the moment one is opened, and you can close it from here. Away from home, the same address works through a VPN such as Tailscale, as long as the computer is on. On the phone, add the page to the home screen and it opens like an app.",
+  "contributes": {
+    "panels": [
+      {
+        "id": "remote",
+        "title": "Remote",
+        "summary": "Your sessions on your phone: turn it on, pair a phone, see who has what open.",
+        "needs": null,
+        "launcher": true,
+        "icon": "remote",
+        "listens": ["remote"],
+        "render": "panel.html"
+      }
+    ]
+  }
+}
