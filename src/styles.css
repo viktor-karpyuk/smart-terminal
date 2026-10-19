@@ -4378,3 +4378,5 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-inbase .housekeeping-confirm-name code { font-size: var(--fs-xs); color: var(--text-faint); margin-right: 4px; }
 .housekeeping-icon.is-spinning svg { animation: housekeeping-spin 0.9s linear infinite; }
 @keyframes housekeeping-spin { to { transform: rotate(360deg); } }
+.housekeeping-ask-together { display: inline-flex; align-items: center; gap: 6px; border-color: var(--accent); color: var(--accent); }
+.housekeeping-ask-together:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }

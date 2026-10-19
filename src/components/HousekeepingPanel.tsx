@@ -394,20 +394,24 @@ export function HousekeepingPanel() {
   };
 
   /** Several closable worktrees at once: the sessions inside end first, then two jobs — plain removals and forced ones. */
-  const closeWorktrees = (list: HousekeepingItem[]) => {
-    const dirty = list.filter((one) => Boolean(one.meta?.dirty) || (Array.isArray(one.meta?.loses) && (one.meta?.loses as string[]).length > 0));
+  const closeWorktrees = (list: HousekeepingItem[], mode: 'close' | 'force' = 'close') => {
+    /** Anything in the way besides the session inside needs --force; a clean worktree held by its session alone does not. */
+    const dirty = list.filter((one) => one.blockers.some((b) => !/a session is inside it/.test(b)));
     const clean = list.filter((one) => !dirty.includes(one));
+    const uncommitted = dirty.filter((one) => Boolean(one.meta?.dirty)).length;
     const sessions = list
       .map((one) => ({ one, session: (one.meta?.session ?? null) as { id: string; live: boolean } | null }))
       .filter(({ session }) => session?.live && useStore.getState().sessions[session.id]);
     setPending({
-      key: 'close-many',
-      verb: 'Yes, close',
-      title: `Close ${list.length} worktree${list.length === 1 ? '' : 's'} (${formatBytes(weigh(list))})`,
+      key: mode === 'close' ? 'close-many' : 'close-held-many',
+      verb: mode === 'close' ? 'Yes, close' : 'Yes, remove',
+      title: `${mode === 'close' ? 'Close' : 'Remove'} ${list.length} worktree${list.length === 1 ? '' : 's'}${mode === 'force' ? ' anyway' : ''} (${formatBytes(weigh(list))})`,
       detail: [
-        'Closing a worktree deletes its folder from the disk. Each is merged, or every PR its branch opened was merged or is open: the work is already where it belongs.',
+        mode === 'close'
+          ? 'Closing a worktree deletes its folder from the disk. Each is merged, or every PR its branch opened was merged or is open: the work is already where it belongs.'
+          : 'Removing a worktree deletes its folder from the disk. These are not merged and have no pull request found; commits stay on their branches, which are kept. There is no undo for what is not committed.',
         sessions.length ? `${sessions.length} session${sessions.length === 1 ? '' : 's'} inside ${sessions.length === 1 ? 'is' : 'are'} closed first.` : null,
-        dirty.length ? `${dirty.length} ${dirty.length === 1 ? 'has' : 'have'} uncommitted leftovers, thrown away (--force); branches and commits are kept.` : 'Branches keep their commits.',
+        uncommitted ? `${uncommitted} ${uncommitted === 1 ? 'has' : 'have'} uncommitted changes, thrown away (--force).` : dirty.length ? `${dirty.length} removed with --force past git's checks; nothing uncommitted is lost.` : 'Branches keep their commits.',
       ]
         .filter(Boolean)
         .join(' '),
@@ -420,8 +424,9 @@ export function HousekeepingPanel() {
         }
         if (sessions.length) await new Promise((r) => setTimeout(r, 1200));
         const notes: string[] = [];
-        if (clean.length) notes.push(await startJob('remove-worktrees', clean, `Close ${clean.length} worktree${clean.length === 1 ? '' : 's'}`));
-        if (dirty.length) notes.push(await startJob('remove-worktrees-forced', dirty, `Close ${dirty.length} worktree${dirty.length === 1 ? '' : 's'}, discarding leftovers`));
+        const verb = mode === 'close' ? 'Close' : 'Remove';
+        if (clean.length) notes.push(await startJob('remove-worktrees', clean, `${verb} ${clean.length} worktree${clean.length === 1 ? '' : 's'}`));
+        if (dirty.length) notes.push(await startJob('remove-worktrees-forced', dirty, `${verb} ${dirty.length} worktree${dirty.length === 1 ? '' : 's'} anyway`));
         return notes.join(' ');
       },
     });
@@ -1443,7 +1448,7 @@ function Sessions({
   );
 }
 
-function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm, quickRow, startJob, inFlight, reload, onError, closeMany, onNote }: ListProps & { roots: HousekeepingRoot[]; reload: () => void; onError: (message: string) => void; closeMany: (list: HousekeepingItem[]) => void }) {
+function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm, quickRow, startJob, inFlight, reload, onError, closeMany, onNote }: ListProps & { roots: HousekeepingRoot[]; reload: () => void; onError: (message: string) => void; closeMany: (list: HousekeepingItem[], mode?: 'close' | 'force') => void }) {
   const caches = items.filter((one) => one.kind === 'build-cache');
   const shops = items.filter((one) => one.kind === 'workshop');
   const pickedCaches = chosen(caches);
@@ -1459,6 +1464,34 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
   const pickedForced = trees.filter((one) => selected.has(one.id) && one.blockers.length > 0 && one.meta?.forceable === true && !isClosable(one) && !inFlight.has(one.id));
   /** Ticked rows whose work already left: merged, or every PR merged or open. Closed as one, sessions inside ended first. */
   const pickedClosable = trees.filter((one) => selected.has(one.id) && one.blockers.length > 0 && isClosable(one) && !inFlight.has(one.id));
+  /** Ticked rows held by the session inside them alone: removed through the closing flow, which ends that session first. */
+  const pickedHeld = trees.filter((one) => selected.has(one.id) && !isClosable(one) && heldBySessionOnly(one) && !inFlight.has(one.id));
+  /** Everything ticked, whatever its state: what one Claude session is handed to resolve as a set. */
+  const pickedAny = trees.filter((one) => selected.has(one.id) && !inFlight.has(one.id) && one.path && !one.meta?.broken && !one.meta?.prunable);
+  const [askingTogether, setAskingTogether] = useState(false);
+  /** One session for several worktrees: the briefs side by side, what they share, and the ask to consolidate. */
+  const askTogether = async () => {
+    if (pickedAny.length < 2) return;
+    setAskingTogether(true);
+    try {
+      const store = useStore.getState();
+      const brief = await window.api.housekeeping.worktreesBrief(pickedAny.map((one) => one.path as string));
+      const roots = [...new Set(pickedAny.map((one) => String(one.meta?.root ?? '')))].filter(Boolean);
+      const cwd = roots.length === 1 ? roots[0] : (pickedAny[0].path as string);
+      const { profiles, settings, authByProfile } = store;
+      const usual = profiles.find((p) => p.id === settings.defaultProfileId) ?? profiles[0];
+      const profileId = usual && authByProfile[usual.id]?.loggedIn !== false ? usual.id : (profiles.find((p) => authByProfile[p.id]?.loggedIn)?.id ?? usual?.id);
+      const sessionId = await store.newSession({ kind: 'claude', cwd, profileId, title: `resolve ${pickedAny.length} worktrees`.slice(0, 28) });
+      if (!sessionId) return;
+      store.focusSession(sessionId);
+      await window.api.analysis.handOver(sessionId, brief);
+      onNote?.(`Claude has the ${pickedAny.length} worktrees side by side, standing in ${cwd.split('/').pop()}.`);
+    } catch (e) {
+      onError(String((e as Error)?.message ?? e));
+    } finally {
+      setAskingTogether(false);
+    }
+  };
   const finished = allTrees.filter((one) => one.meta?.finished && one.blockers.length === 0);
   /** Every PR of the branch merged or open, nothing unpushed: the folder can go, whatever the commit count says. */
   const closable = allTrees.filter((one) => isClosable(one) && !inFlight.has(one.id));
@@ -1574,6 +1607,11 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
         onClear={() => selectAll(trees, false)}
         actions={() => (
           <>
+            {pickedAny.length >= 2 && (
+              <button className="ghost-btn tiny housekeeping-ask-together" disabled={askingTogether} onClick={() => void askTogether()} title="One Claude session, standing in their repository, handed all of them: how they relate, what to keep, one pull request per piece of work">
+                <BrainIcon /> {askingTogether ? 'Briefing…' : `Resolve ${pickedAny.length} together`}
+              </button>
+            )}
             {pickedClosable.length > 0 && (
               <button className="primary-btn tiny housekeeping-close" disabled={false} onClick={() => closeMany(pickedClosable)} title="Deletes their folders from the disk. Their work is merged or in a PR; sessions inside are closed first, uncommitted leftovers discarded">
                 Close {pickedClosable.length} ({formatBytes(weigh(pickedClosable))})
@@ -1589,16 +1627,11 @@ function Worktrees({ items, roots, selected, toggle, selectAll, chosen, confirm,
                 false,
                 pickedTrees,
               )}
-            {pickedForced.length > 0 &&
-              confirm(
-                'trees-forced',
-                `Remove ${pickedForced.length} anyway, discarding work (${formatBytes(weigh(pickedForced))})`,
-                'These have changes not committed, commits on no base branch, or ignored files. git worktree remove --force throws the uncommitted work away; commits stay on their branch, which is kept. There is no undo.',
-                () => startJob('remove-worktrees-forced', pickedForced, `Remove ${pickedForced.length} worktree${pickedForced.length === 1 ? '' : 's'} anyway, discarding work`),
-                true,
-                false,
-                pickedForced,
-              )}
+            {pickedForced.length + pickedHeld.length > 0 && (
+              <button className="danger-btn tiny" onClick={() => closeMany([...pickedForced, ...pickedHeld], 'force')} title="Deletes their folders. Sessions inside are closed first; uncommitted work is thrown away; commits stay on their branches">
+                Remove {pickedForced.length + pickedHeld.length} anyway{[...pickedForced, ...pickedHeld].some((one) => one.meta?.dirty) ? ', discarding work' : ''} ({formatBytes(weigh([...pickedForced, ...pickedHeld]))})
+              </button>
+            )}
           </>
         )}
       />

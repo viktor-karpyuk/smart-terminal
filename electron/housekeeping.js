@@ -1026,6 +1026,50 @@ class Housekeeping {
   }
 
   /**
+   * Several worktrees handed to one session: each one's facts, what they share
+   * (repository, files touched by more than one, ticket keys in branch names), and
+   * one ask — work out how they relate, consolidate, open one pull request per
+   * distinct piece of work, and say per worktree what became of it.
+   */
+  async worktreesBrief(targets) {
+    const paths = [...new Set(targets.map((one) => String(one)).filter(Boolean))];
+    if (paths.length < 2) throw new Error('Pick at least two worktrees to resolve together.');
+    const parts = [];
+    const touched = new Map();
+    const repos = new Set();
+    const keys = new Set();
+    for (const target of paths) {
+      const brief = await this.worktreeBrief(target);
+      const facts = brief.split('\n## Ask')[0].replace(/^## /gm, '### ').replace(/^# /, '## ');
+      parts.push(facts);
+      const row = await this.#quickRow(target);
+      repos.add(path.basename(row.root));
+      for (const key of String(row.branch ?? '').match(/[A-Z][A-Z0-9]+-\d+/g) ?? []) keys.add(key);
+      const bases = await this.#basesOf(row.root);
+      const names = new Set((await this.#git(row.path, ['status', '--porcelain'])).out.split('\n').filter(Boolean).map((line) => line.slice(3).trim()));
+      if (bases[0]) for (const name of (await this.#git(row.path, ['diff', '--name-only', `${bases[0]}...HEAD`])).out.split('\n').filter(Boolean)) names.add(name);
+      for (const name of names) touched.set(name, [...(touched.get(name) ?? []), path.basename(row.path)]);
+    }
+    const shared = [...touched].filter(([, who]) => who.length > 1).slice(0, 40);
+    const lines = [`# ${paths.length} worktrees to resolve together`, ''];
+    lines.push(`- Repositories: ${[...repos].join(', ')}`);
+    if (keys.size) lines.push(`- Ticket keys in the branch names: ${[...keys].join(', ')}`);
+    if (shared.length) {
+      lines.push(`- Files touched by more than one worktree (${shared.length}):`);
+      for (const [name, who] of shared) lines.push(`  - ${name} — ${who.join(', ')}`);
+    } else lines.push('- No file is touched by more than one of them (against their base and uncommitted).');
+    lines.push('', ...parts.flatMap((one) => [one, '']));
+    lines.push('## Ask');
+    lines.push(
+      'These worktrees were picked together because they may be the same work, or parts of one. First work out how they relate: the same files, the same ticket, one continuing another, or nothing in common. ' +
+        'Then resolve them as a set: keep the worktree that holds the most complete version of each piece of work, bring over what matters from the others (cherry-pick, or apply their diffs), and drop what is duplicated or superseded. ' +
+        'Commit what is worth keeping, push, and open one pull request per distinct piece of work against the nearest base — through the `bitbucket` tools (pull_requests first, create_pull_request after; the user confirms in a dialog) when they are listed, with `gh` otherwise. ' +
+        'Finish with a short table, one line per worktree: kept (and its PR), folded into which other one, or dropped and why — Housekeeping closes the ones that are done from that. Do not remove, reset or force-push any worktree yourself.',
+    );
+    return lines.join('\n');
+  }
+
+  /**
    * What a Claude session opened in a worktree is told: where it stands, what
    * is unmerged or uncommitted, and the ask — finish it or say why not. Facts
    * from git and the inventory, then the question; nothing runs.

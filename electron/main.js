@@ -1470,6 +1470,7 @@ function registerIpc() {
   ipcMain.handle('housekeeping:mark-in-base', (_e, { path: target, head, base } = {}) => housekeeping.markInBase(String(target ?? ''), String(head ?? ''), String(base ?? '')));
   ipcMain.handle('housekeeping:pr-draft', (_e, target) => housekeeping.prDraft(String(target ?? '')));
   ipcMain.handle('housekeeping:create-pr', (_e, { path: target, title, body, base, push } = {}) => housekeeping.createPr(String(target ?? ''), { title, body, base, push }));
+  ipcMain.handle('housekeeping:worktrees-brief', (_e, targets) => housekeeping.worktreesBrief(Array.isArray(targets) ? targets : []));
   ipcMain.handle('housekeeping:worktree-brief', (_e, target) => housekeeping.worktreeBrief(String(target ?? '')));
   ipcMain.handle('housekeeping:roots', () => housekeeping.roots());
   ipcMain.handle('housekeeping:add-root', (_e, folder) => housekeeping.addRoot(String(folder ?? '')));
