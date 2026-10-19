@@ -191,6 +191,8 @@ class RemoteServer {
     for (const list of Object.values(this.interfaces() ?? {})) {
       for (const one of list ?? []) {
         if (one.internal || one.family !== 'IPv4') continue;
+        // Tailscale's own range: that address is the away one, listed under Tailscale.
+        if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(one.address)) continue;
         out.push(`http://${one.address}:${port}/`);
       }
     }

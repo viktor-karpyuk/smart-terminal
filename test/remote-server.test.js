@@ -42,7 +42,7 @@ function make(overrides = {}) {
     describe: () => 'stopped, waiting on the user',
     notify: (title, body) => calls.notified.push([title, body]),
     hostname: () => 'viktors-mac.local',
-    interfaces: () => ({ en0: [{ family: 'IPv4', internal: false, address: '192.168.1.75' }, { family: 'IPv6', internal: false, address: '::1' }] }),
+    interfaces: () => ({ en0: [{ family: 'IPv4', internal: false, address: '192.168.1.75' }, { family: 'IPv6', internal: false, address: '::1' }], utun3: [{ family: 'IPv4', internal: false, address: '100.104.183.104' }] }),
     now: () => now,
     ...overrides,
   });
