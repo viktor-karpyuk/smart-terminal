@@ -29,11 +29,12 @@ button { font: inherit; }
 /* ---- pairing ---- */
 .pair { min-height: 100%; display: grid; place-items: center; padding: calc(24px + var(--safe-top)) 20px calc(24px + var(--safe-bottom)); overflow: auto; }
 .pair-card { width: 100%; max-width: 380px; display: grid; gap: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px 20px; }
-.pair-card label { display: grid; gap: 6px; font-size: 13px; color: var(--ink-2); }
-.pair-card input { font: 16px var(--font); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; min-height: 44px; }
+.pair-card > * { min-width: 0; }
+.pair-card label { display: grid; gap: 6px; font-size: 13px; color: var(--ink-2); min-width: 0; }
+.pair-card input { width: 100%; min-width: 0; font: 16px var(--font); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; min-height: 44px; }
 #code { font-family: var(--mono); font-size: 22px; letter-spacing: .18em; text-transform: uppercase; text-align: center; }
 .pair-card input:focus { outline: none; border-color: var(--accent); }
-.primary { min-height: 46px; border: 0; border-radius: 10px; background: var(--accent); color: #0b0d13; font-weight: 600; cursor: pointer; }
+.primary { width: 100%; min-height: 46px; border: 0; border-radius: 10px; background: var(--accent); color: #0b0d13; font-weight: 600; cursor: pointer; }
 .primary[disabled] { opacity: .6; }
 
 /* ---- the shell: a list and a terminal ---- */
