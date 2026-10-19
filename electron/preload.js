@@ -349,6 +349,7 @@ contextBridge.exposeInMainWorld('api', {
     markInBase: (input) => ipcRenderer.invoke('housekeeping:mark-in-base', input),
     prDraft: (path) => ipcRenderer.invoke('housekeeping:pr-draft', path),
     createPr: (input) => ipcRenderer.invoke('housekeeping:create-pr', input),
+    worktreesBrief: (paths) => ipcRenderer.invoke('housekeeping:worktrees-brief', paths),
     worktreeBrief: (path) => ipcRenderer.invoke('housekeeping:worktree-brief', path),
     roots: () => ipcRenderer.invoke('housekeeping:roots'),
     addRoot: (folder) => ipcRenderer.invoke('housekeeping:add-root', folder),

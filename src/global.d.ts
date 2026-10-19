@@ -1165,6 +1165,8 @@ declare global {
         refreshPrs(ids?: string[] | null): Promise<HousekeepingPulls[]>;
         onPrs(handler: (answer: HousekeepingPulls) => void): () => void;
         worktreeBrief(path: string): Promise<string>;
+        /** Several worktrees for one session: their facts, what they share, and the ask to resolve them as a set. */
+        worktreesBrief(paths: string[]): Promise<string>;
         /** What a pull request from the worktree would be: bases, title, whether it must be pushed, who takes it. */
         /** Compare the worktree's work with its base by content: patches found there, touched files identical. */
         inBase(path: string): Promise<HousekeepingInBase>;

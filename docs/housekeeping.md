@@ -127,6 +127,14 @@ offers to close. **Refresh worktrees** above the table does the full read.
 A worktree whose only hard blocker is the session inside it offers **Remove
 anyway**: that session is closed first, then the folder goes.
 
+With two or more rows ticked, the selection bar offers **Resolve n together**:
+one Claude session, standing in their repository, is handed every worktree's
+facts side by side, what they share (repository, ticket keys, files touched by
+more than one) and the ask to work out how they relate, keep the most complete
+version of each piece of work, fold the rest in, open one pull request per
+distinct piece, and report per worktree what became of it. **Remove n anyway**
+in the same bar takes the blocked rows together, session-held ones included.
+
 Claude sessions get the same reach through the `bitbucket` MCP server (tools
 `repositories`, `repo_for_cwd`, `pull_requests`, `pull_request`,
 `create_pull_request`): the app holds the tokens and asks you in a dialog
