@@ -4,33 +4,46 @@
   h1 { font-size: 16px; margin: 0; font-weight: 600; }
   h2 { font-size: 11px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); font-weight: 600; }
   p { margin: 0; line-height: 1.55; }
-  .dim { color: var(--text-dim); } .faint { color: var(--text-faint); } .small { font-size: 11px; } .bad { color: var(--danger); }
+  .dim { color: var(--text-dim); } .faint { color: var(--text-faint); } .small { font-size: 11px; } .bad { color: var(--danger); } .ok { color: var(--ok); }
   .card { border: 1px solid var(--border); border-radius: 8px; padding: 14px; background: var(--bg-panel); display: grid; gap: 10px; }
   .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .spacer { flex: 1; }
-  .btn { font: inherit; font-size: 12px; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; background: var(--bg-elevated); cursor: pointer; }
-  .btn:hover { border-color: var(--accent); }
+  .btn { font: inherit; font-size: 12px; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; background: var(--bg-elevated); cursor: pointer; white-space: nowrap; }
+  .btn:hover:not([disabled]) { border-color: var(--accent); }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
   .btn.quiet { border-color: transparent; color: var(--text-dim); }
+  .btn.danger { color: var(--danger); }
   .btn[disabled] { opacity: .5; cursor: default; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); display: inline-block; }
-  .dot.on { background: var(--ok); } .dot.bad { background: var(--danger); }
+  .dot.on { background: var(--ok); } .dot.bad { background: var(--danger); } .dot.wait { background: var(--warn, #e2a84b); }
   input { font: inherit; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; width: 90px; }
   input:focus { outline: none; border-color: var(--accent); }
+  input.bad { border-color: var(--danger); }
   code { font-family: var(--font-mono, ui-monospace, Menlo, monospace); font-size: 12px; }
-  .addr { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); }
+  .addr { display: flex; align-items: center; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--border); }
   .addr:last-child { border-bottom: 0; }
-  .addr code { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .code { font-family: var(--font-mono, ui-monospace, Menlo, monospace); font-size: 30px; letter-spacing: .22em; text-align: center; padding: 12px 0 6px; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .addr code { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .code { font-family: var(--font-mono, ui-monospace, Menlo, monospace); font-size: 34px; letter-spacing: .22em; text-align: center; padding: 12px 0 4px; user-select: all; }
+  .code.late { color: var(--danger); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
   th { text-align: left; color: var(--text-dim); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--border); }
   td { padding: 6px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; overflow-wrap: anywhere; }
-  td.act { text-align: right; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  td.act, th.act { text-align: right; white-space: nowrap; width: 110px; }
   ul.steps { margin: 0; padding-left: 18px; line-height: 1.6; }
+  .flash { padding: 8px 12px; border-radius: 6px; font-size: 12px; background: var(--bg-elevated); border: 1px solid var(--border); }
+  .flash.bad { border-color: var(--danger); color: var(--danger); }
+  .confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elevated); font-size: 12px; }
 </style>
 <div class="page" id="page"><p class="dim">Loading…</p></div>
 <script>
-  var state = { o: null, error: '', busy: false, tick: null };
+  /*
+   * Remote: your sessions on your phone, served by this computer. This panel
+   * turns it on and off, shows where the phone should go, pairs phones, and
+   * lists who has what open. Everything it knows comes from one call,
+   * `overview`; the app says `remote` when any of it changes.
+   */
+  var state = { o: null, error: '', busy: {}, tick: null, showing: true, flash: null, flashTimer: null, confirm: null, portDraft: null, stale: false };
   var $ = function (id) { return document.getElementById(id); };
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
   function call(name, args) {
@@ -39,53 +52,99 @@
       return r;
     });
   }
-  function say(text, bad) { host.emit('notify', { text: String(text).slice(0, 400), kind: bad ? 'bad' : 'ok' }); }
+  /** A short word in the panel, gone on its own; errors stay until the next action. */
+  function flash(text, bad) {
+    state.flash = { text: String(text).slice(0, 300), bad: Boolean(bad) };
+    clearTimeout(state.flashTimer);
+    if (!bad) state.flashTimer = setTimeout(function () { state.flash = null; render(); }, 2500);
+    render();
+  }
+  function copy(text, what) {
+    host.emit('copy', { text: text });
+    flash((what || 'Address') + ' copied.');
+  }
   function when(at) {
     if (!at) return 'never';
     var d = new Date(at);
     var today = new Date();
     return (d.toDateString() === today.toDateString() ? 'today ' : d.toLocaleDateString() + ' ') + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
+  function ago(at) {
+    var s = Math.max(0, Math.round((Date.now() - at) / 1000));
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.floor(s / 60) + ' min';
+    if (s < 86400) return Math.floor(s / 3600) + ' h';
+    return when(at);
+  }
   function left(expiresAt) {
     var s = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
     return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
   }
 
+  var loading = null;
+  /** One load at a time; one asked for meanwhile runs after, so the newest state is what shows. */
   function load() {
-    return call('overview').then(function (o) { state.o = o; state.error = ''; render(); })
-      .catch(function (e) { state.error = e.message; render(); });
-  }
-  function act(name, args) {
-    if (state.busy) return;
-    state.busy = true;
-    render();
-    return call(name, args).then(function (o) { state.o = o; state.error = ''; })
+    if (loading) { state.stale = true; return loading; }
+    loading = call('overview').then(function (o) { state.o = o; state.error = ''; })
       .catch(function (e) { state.error = e.message; })
-      .then(function () { state.busy = false; render(); });
+      .then(function () {
+        loading = null;
+        render();
+        if (state.stale) { state.stale = false; return load(); }
+      });
+    return loading;
+  }
+  /** One action at a time of each kind; the button that was pressed says what it is doing. */
+  function act(name, args, label) {
+    if (state.busy[name]) return Promise.resolve();
+    state.busy[name] = label || true;
+    state.flash = state.flash && state.flash.bad ? null : state.flash;
+    state.confirm = null;
+    render();
+    return call(name, args).then(function (o) { state.o = o; state.error = ''; return o; })
+      .catch(function (e) { flash(e.message, true); })
+      .then(function (o) { delete state.busy[name]; render(); return o; });
+  }
+
+  function addrRows(list, code) {
+    return '<div>' + list.map(function (a) {
+      var link = code ? a + '?code=' + code : a;
+      return '<div class="addr"><code title="' + esc(link) + '">' + esc(link) + '</code>'
+        + '<button class="btn quiet" data-copy="' + esc(link) + '" title="Copy the address">Copy</button>'
+        + '<button class="btn quiet" data-open="' + esc(a) + '" title="Open it in this computer\'s browser, to try it">Open</button></div>';
+    }).join('') + '</div>';
   }
 
   function render() {
     var o = state.o;
     var h = '';
+    var focused = document.activeElement && document.activeElement.id;
+    var selection = focused === 'port' ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
     if (!o) {
-      $('page').innerHTML = '<p class="' + (state.error ? 'bad' : 'dim') + '">' + esc(state.error || 'Loading…') + '</p>';
+      $('page').innerHTML = '<p class="' + (state.error ? 'bad' : 'dim') + '">' + esc(state.error || 'Loading…') + '</p>'
+        + (state.error ? '<p><button class="btn" id="retry">Try again</button></p>' : '');
+      var r = $('retry'); if (r) r.onclick = load;
       return;
     }
     var on = o.enabled && o.running;
+    var starting = state.busy.setEnabled;
+    var word = starting ? (o.enabled ? 'Turning off…' : 'Turning on…') : on ? 'On' : o.enabled ? 'Could not start' : 'Off';
     h += '<div class="row"><h1>Remote</h1><span class="spacer"></span>'
-      + '<span class="dot ' + (on ? 'on' : o.enabled ? 'bad' : '') + '"></span>'
-      + '<span class="dim small">' + (on ? 'On' : o.enabled ? 'Could not start' : 'Off') + '</span>'
-      + '<button class="btn ' + (o.enabled ? '' : 'primary') + '" id="toggle"' + (state.busy ? ' disabled' : '') + '>' + (o.enabled ? 'Turn off' : 'Turn on') + '</button></div>';
-    h += '<p class="dim">Your sessions on your phone, served by this computer. Nothing goes through anybody else\'s server: on the same Wi-Fi the phone reaches this computer directly, and away from home through a VPN such as Tailscale, while this computer is on.</p>';
-    if (state.error) h += '<p class="bad">' + esc(state.error) + '</p>';
-    if (o.error) h += '<p class="bad">' + esc(o.error) + '</p>';
+      + '<span class="dot ' + (starting ? 'wait' : on ? 'on' : o.enabled ? 'bad' : '') + '"></span>'
+      + '<span class="dim small">' + esc(word) + '</span>'
+      + '<button class="btn ' + (o.enabled ? '' : 'primary') + '" id="toggle"' + (starting ? ' disabled' : '') + '>' + (o.enabled ? 'Turn off' : 'Turn on') + '</button></div>';
+    h += '<p class="dim">Your sessions on your phone, served by this computer while it is on. Nothing goes through anybody else\'s server: at home the phone reaches this computer directly over Wi-Fi; away from home it comes in through Tailscale, encrypted.</p>';
+    if (state.error) h += '<p class="flash bad">' + esc(state.error) + '</p>';
+    if (o.error) h += '<p class="flash bad">' + esc(o.error) + '</p>';
+    if (state.flash) h += '<p class="flash' + (state.flash.bad ? ' bad' : '') + '">' + esc(state.flash.text) + '</p>';
+    var code = o.pairing ? o.pairing.code : null;
 
     h += '<div class="card"><h2>At home, on the same Wi-Fi</h2>';
     if (on) {
-      h += '<div>' + o.addresses.map(function (a) {
-        return '<div class="addr"><code>' + esc(a) + '</code><button class="btn quiet" data-open="' + esc(a) + '">Open here</button></div>';
-      }).join('') + '</div>';
-      h += '<p class="small faint">The first one works on most home networks; the others are this computer\'s addresses on each network it is on. Away from home, use the Tailscale address of this computer with the same port.</p>';
+      h += addrRows(o.addresses, code);
+      h += '<p class="small faint">' + (code ? 'With the code in the link, the phone pairs with one tap. ' : '') + 'The first address works on most home networks; the others are this computer\'s own on each network it is on. Plain HTTP: fine on your own Wi-Fi, and for anywhere else use Tailscale below.</p>';
+    } else if (starting) {
+      h += '<p class="dim">' + esc(word) + '</p>';
     } else {
       h += '<p class="dim">Turn it on and the addresses appear here.</p>';
     }
@@ -93,85 +152,134 @@
 
     h += '<div class="card"><h2>Away from home</h2>';
     var ts = o.tailscale;
-    if (!ts || !ts.installed) {
+    if (!ts) {
+      h += '<p class="dim">Not available in this build.</p>';
+    } else if (!ts.installed) {
       h += '<p class="dim">Install <strong>Tailscale</strong> on this computer and on the phone, sign both in to the same account, and the phone reaches this computer from anywhere, encrypted, with no port opened and no server in between. Only your own devices can see it.</p>'
-        + '<div class="row"><button class="btn" data-open="https://tailscale.com/download">Get Tailscale</button><span class="small faint">Comes back here on its own once it is running.</span></div>';
+        + '<div class="row"><button class="btn" data-open="https://tailscale.com/download">Get Tailscale</button><span class="small faint">This notices on its own once it is installed and running.</span></div>';
+    } else if (!ts.checked) {
+      h += '<p class="dim">Asking Tailscale…</p>';
     } else if (!ts.running) {
       h += '<p class="dim">Tailscale is installed but not connected.' + (ts.error ? ' ' + esc(ts.error) : ' Open Tailscale and sign in.') + '</p>';
     } else if (!on) {
       h += '<p class="dim">Tailscale is connected as <strong>' + esc(ts.name || 'this computer') + '</strong>. Turn Remote on and the address appears here.</p>';
     } else {
-      h += '<div>' + o.away.map(function (a) {
-        return '<div class="addr"><code>' + esc(a) + '</code><button class="btn quiet" data-open="' + esc(a) + '">Open here</button></div>';
-      }).join('') + '</div>'
-        + '<p class="small faint">Use this address on the phone when it is on Tailscale too. It works at home as well, so you can pair with it once and never switch. The traffic is encrypted end to end by Tailscale; only devices in your tailnet can reach it.</p>';
+      h += addrRows(o.away, code)
+        + '<p class="small faint">Use this address on the phone when it is on Tailscale too. It works at home as well, so you can pair with it once and never switch. Tailscale encrypts the traffic end to end; only devices in your tailnet can reach it.</p>';
     }
-    h += '</div>';
-
-    h += '<div class="card"><h2>Port</h2>';
-    h += '<div class="row"><label class="dim small">Port <input id="port" value="' + esc(o.port) + '" inputmode="numeric"></label><button class="btn" id="save-port"' + (state.busy ? ' disabled' : '') + '>Change</button></div>';
     h += '</div>';
 
     h += '<div class="card"><h2>Pair a phone</h2>';
     if (o.pairing) {
-      h += '<div class="code">' + esc(o.pairing.code) + '</div>'
-        + '<p class="dim" style="text-align:center">Type this on the phone. Good for <span id="left">' + left(o.pairing.expiresAt) + '</span>, once.</p>'
-        + '<div class="row"><span class="spacer"></span><button class="btn quiet" id="cancel-pair">Cancel</button></div>';
+      var late = o.pairing.expiresAt - Date.now() < 60 * 1000;
+      h += '<div class="code' + (late ? ' late' : '') + '" id="code">' + esc(o.pairing.code) + '</div>'
+        + '<p class="dim" style="text-align:center">Type this on the phone, or open a link above on it. Good for <span id="left">' + left(o.pairing.expiresAt) + '</span>, once.</p>'
+        + '<div class="row"><button class="btn quiet" data-copy="' + esc(o.pairing.code) + '" data-what="Code">Copy code</button><span class="spacer"></span>'
+        + '<button class="btn quiet" id="new-code"' + (state.busy.pair ? ' disabled' : '') + '>New code</button>'
+        + '<button class="btn quiet" id="cancel-pair"' + (state.busy.cancelPairing ? ' disabled' : '') + '>Cancel</button></div>';
     } else {
       h += '<ul class="steps dim"><li>On the phone, open one of the addresses above in Safari.</li><li>Press <strong>Pair a phone</strong> here and type the code it shows.</li><li>Share → <strong>Add to Home Screen</strong>, and it opens like an app.</li></ul>'
-        + '<div class="row"><button class="btn primary" id="pair"' + (!on || state.busy ? ' disabled' : '') + '>Pair a phone</button>'
+        + '<div class="row"><button class="btn primary" id="pair"' + (!on || state.busy.pair ? ' disabled' : '') + '>' + (state.busy.pair ? 'Making a code…' : 'Pair a phone') + '</button>'
         + (!on ? '<span class="small faint">Turn it on first.</span>' : '') + '</div>';
     }
     h += '</div>';
 
     h += '<div class="card"><h2>Phones that can open your sessions</h2>';
-    if (!o.devices.length) h += '<p class="dim">None yet.</p>';
+    if (!o.devices.length) h += '<p class="dim">None yet. Pair one above.</p>';
     else {
-      h += '<table><tr><th>Phone</th><th>Paired</th><th>Last seen</th><th></th></tr>';
+      h += '<table><tr><th>Phone</th><th>Paired</th><th>Last seen</th><th class="act"></th></tr>';
       o.devices.forEach(function (d) {
-        h += '<tr><td>' + esc(d.name) + '</td><td>' + esc(when(d.pairedAt)) + '</td><td>' + esc(when(d.lastSeenAt)) + '</td>'
-          + '<td class="act"><button class="btn quiet" data-revoke="' + esc(d.id) + '" title="This phone will need a new code to come back.">Forget</button></td></tr>';
+        var asking = state.confirm && state.confirm.revoke === d.id;
+        h += '<tr><td>' + esc(d.name) + '</td><td>' + esc(when(d.pairedAt)) + '</td><td title="' + esc(when(d.lastSeenAt)) + '">' + esc(d.lastSeenAt ? ago(d.lastSeenAt) : 'never') + '</td>'
+          + '<td class="act">' + (asking
+            ? '<button class="btn danger" data-revoke-yes="' + esc(d.id) + '">Forget</button> <button class="btn quiet" data-confirm-no>Keep</button>'
+            : '<button class="btn quiet" data-revoke="' + esc(d.id) + '" title="This phone will need a new code to come back."' + (state.busy.revoke ? ' disabled' : '') + '>Forget…</button>') + '</td></tr>';
       });
       h += '</table>';
     }
     h += '</div>';
 
     h += '<div class="card"><h2>Open on a phone right now</h2>';
-    if (!o.viewers.length) h += '<p class="dim">Nothing. The app says so the moment a phone opens a session.</p>';
+    if (!o.viewers.length) h += '<p class="dim">Nothing. This updates the moment a phone opens a session, and the app says so too.</p>';
     else {
-      h += '<table><tr><th>Session</th><th>Phone</th><th>Since</th><th></th></tr>';
+      h += '<table><tr><th>Session</th><th>Phone</th><th>Since</th><th class="act"></th></tr>';
       o.viewers.forEach(function (v) {
-        h += '<tr><td>' + esc(v.title) + '</td><td>' + esc(v.from) + '</td><td>' + esc(when(v.at)) + '</td>'
-          + '<td class="act"><button class="btn quiet" data-close="' + esc(v.ch) + '">Close there</button></td></tr>';
+        h += '<tr><td>' + esc(v.title) + '</td><td>' + esc(v.from) + '</td><td title="' + esc(when(v.at)) + '">' + esc(ago(v.at)) + '</td>'
+          + '<td class="act"><button class="btn quiet" data-close="' + esc(v.ch) + '" title="The session keeps running here."' + (state.busy.disconnect ? ' disabled' : '') + '>Close there</button></td></tr>';
       });
-      h += '</table><div class="row"><span class="spacer"></span><button class="btn" id="close-all">Close all</button></div>';
+      h += '</table>';
+      if (o.viewers.length > 1) {
+        h += '<div class="row"><span class="spacer"></span>' + (state.confirm && state.confirm.closeAll
+          ? '<span class="confirm">Close all ' + o.viewers.length + ' on the phones? The sessions keep running here. <button class="btn danger" id="close-all-yes">Close all</button><button class="btn quiet" data-confirm-no>Keep</button></span>'
+          : '<button class="btn" id="close-all"' + (state.busy.disconnect ? ' disabled' : '') + '>Close all…</button>') + '</div>';
+      }
     }
     h += '</div>';
 
-    h += '<div class="card"><h2>What a phone can do</h2><p class="dim">Exactly what you can do in the app: see which sessions are open, read what they print, and type into them. A phone cannot open a session that is not already open here, and the page shows nothing until the phone is paired.</p></div>';
+    h += '<div class="card"><h2>Port</h2>';
+    var draft = state.portDraft != null ? state.portDraft : String(o.port);
+    var changed = draft !== String(o.port);
+    h += '<div class="row"><label class="dim small">Port <input id="port" value="' + esc(draft) + '" inputmode="numeric" maxlength="5"' + (state.busy.setPort ? ' disabled' : '') + '></label>'
+      + '<button class="btn" id="save-port"' + (!changed || state.busy.setPort ? ' disabled' : '') + '>' + (state.busy.setPort ? 'Changing…' : 'Change') + '</button>'
+      + (changed ? '<button class="btn quiet" id="reset-port">Undo</button>' : '')
+      + '<span class="small faint">1024 to 65535. Phones already paired keep working; they just open the new address.</span></div>';
+    h += '</div>';
+
+    h += '<div class="card"><h2>What a phone can do</h2><p class="dim">Exactly what you can do in the app: see which sessions are open, read what they print, and type into them. A phone cannot open a session that is not already open here, and the page shows nothing until the phone is paired. A phone that was lost or sold: press Forget, and its pairing is gone.</p></div>';
 
     $('page').innerHTML = h;
     var t = $('toggle'); if (t) t.onclick = function () { act('setEnabled', { enabled: !o.enabled }); };
     var p = $('pair'); if (p) p.onclick = function () { act('pair'); };
+    var nc = $('new-code'); if (nc) nc.onclick = function () { act('pair'); };
     var c = $('cancel-pair'); if (c) c.onclick = function () { act('cancelPairing'); };
-    var sp = $('save-port'); if (sp) sp.onclick = function () { act('setPort', { port: Number($('port').value) }); };
-    var ca = $('close-all'); if (ca) ca.onclick = function () { act('disconnect', {}); };
-    Array.prototype.forEach.call(document.querySelectorAll('[data-revoke]'), function (b) { b.onclick = function () { act('revoke', { id: b.getAttribute('data-revoke') }); }; });
+    var pi = $('port');
+    if (pi) {
+      pi.oninput = function () { state.portDraft = pi.value; var sp = $('save-port'); if (sp) sp.disabled = pi.value === String(o.port) || Boolean(state.busy.setPort); var rp = $('reset-port'); if (!rp && pi.value !== String(o.port)) render(); };
+      pi.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); savePort(); } if (e.key === 'Escape') { state.portDraft = null; render(); } };
+      if (focused === 'port') { pi.focus(); if (selection) try { pi.setSelectionRange(selection[0], selection[1]); } catch (e) { /* fine */ } }
+    }
+    var sp = $('save-port'); if (sp) sp.onclick = savePort;
+    var rp = $('reset-port'); if (rp) rp.onclick = function () { state.portDraft = null; render(); };
+    var ca = $('close-all'); if (ca) ca.onclick = function () { state.confirm = { closeAll: true }; render(); };
+    var cay = $('close-all-yes'); if (cay) cay.onclick = function () { act('disconnect', {}).then(function (r) { if (r) flash('Closed on ' + r.closed + ' phone' + (r.closed === 1 ? '' : 's') + '.'); }); };
+    Array.prototype.forEach.call(document.querySelectorAll('[data-confirm-no]'), function (b) { b.onclick = function () { state.confirm = null; render(); }; });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-revoke]'), function (b) { b.onclick = function () { state.confirm = { revoke: b.getAttribute('data-revoke') }; render(); }; });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-revoke-yes]'), function (b) { b.onclick = function () { act('revoke', { id: b.getAttribute('data-revoke-yes') }).then(function (r) { if (r) flash((r.forgotten || 'The phone') + ' was forgotten.'); }); }; });
     Array.prototype.forEach.call(document.querySelectorAll('[data-close]'), function (b) { b.onclick = function () { act('disconnect', { ch: b.getAttribute('data-close') }); }; });
-    Array.prototype.forEach.call(document.querySelectorAll('[data-open]'), function (b) { b.onclick = function () { call('open', { url: b.getAttribute('data-open') }).catch(function (e) { say(e.message, true); }); }; });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-open]'), function (b) { b.onclick = function () { call('open', { url: b.getAttribute('data-open') }).catch(function (e) { flash(e.message, true); }); }; });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-copy]'), function (b) { b.onclick = function () { copy(b.getAttribute('data-copy'), b.getAttribute('data-what')); }; });
   }
 
-  // The countdown on the code, and the list of who has what open, without being told.
+  function savePort() {
+    var pi = $('port');
+    var value = pi ? pi.value.trim() : '';
+    var n = Number(value);
+    if (!/^\d+$/.test(value) || n < 1024 || n > 65535) {
+      if (pi) pi.classList.add('bad');
+      flash('The port has to be a number between 1024 and 65535.', true);
+      return;
+    }
+    if (n === state.o.port) { state.portDraft = null; render(); return; }
+    act('setPort', { port: n }).then(function (r) { if (r) { state.portDraft = null; flash(r.running ? 'Now on port ' + r.port + '.' : 'Port set to ' + r.port + '.'); } });
+  }
+
+  // The countdown on the code, and "last seen" ages, only while the panel is shown.
   state.tick = setInterval(function () {
     var o = state.o;
-    if (!o || !o.pairing) return;
+    if (!state.showing || !o || !o.pairing) return;
     var l = $('left');
     if (l) l.textContent = left(o.pairing.expiresAt);
+    var cd = $('code');
+    if (cd) cd.classList.toggle('late', o.pairing.expiresAt - Date.now() < 60 * 1000);
     if (o.pairing.expiresAt <= Date.now()) load();
   }, 1000);
 
-  host.on('remote', function () { load(); });
-  host.on('showing', function () { load(); });
+  host.on('remote', function () { if (state.showing) load(); else state.stale = true; });
+  host.on('showing', function (payload) {
+    var was = state.showing;
+    state.showing = !payload || payload.showing !== false;
+    if (state.showing && (!was || state.stale)) { state.stale = false; load(); }
+  });
   host.on('context', function () { load(); });
   host.ready();
   load();

@@ -3,25 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#0b0d13">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Smart Terminal">
+<meta name="format-detection" content="telephone=no">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icon.png">
+<link rel="icon" href="/icon.png">
 <title>Smart Terminal</title>
 <link rel="stylesheet" href="/assets/xterm.css">
-<link rel="stylesheet" href="/app.css?v=4">
+<link rel="stylesheet" href="/app.css?v=5">
 </head>
 <body data-view="loading">
 <main class="pair" id="pair" hidden>
-  <form class="pair-card" id="pair-form">
+  <form class="pair-card" id="pair-form" novalidate>
     <h1>Smart Terminal</h1>
-    <p class="note">In Smart Terminal on your computer, open <strong>Remote</strong> and press <strong>Pair a phone</strong>. Type the code it shows.</p>
-    <label>Code<input id="code" name="code" inputmode="latin" autocapitalize="characters" autocomplete="one-time-code" spellcheck="false" maxlength="7" size="7" placeholder="ABC123" required></label>
-    <label>This phone's name<input id="name" name="name" autocomplete="off" maxlength="60" placeholder="iPhone"></label>
-    <button class="primary" type="submit">Pair</button>
+    <p class="note" id="pair-note">In Smart Terminal on your computer, open <strong>Remote</strong> and press <strong>Pair a phone</strong>. Type the code it shows.</p>
+    <label>Code<input id="code" name="code" inputmode="text" autocapitalize="characters" autocomplete="one-time-code" autocorrect="off" spellcheck="false" maxlength="7" size="7" placeholder="ABC123" enterkeyhint="next" required aria-describedby="pair-note"></label>
+    <label>This phone's name<input id="name" name="name" autocomplete="off" maxlength="60" placeholder="iPhone" enterkeyhint="go"></label>
+    <button class="primary" id="pair-button" type="submit">Pair</button>
     <p class="error" id="pair-error" role="alert"></p>
+    <p class="hint" id="home-hint" hidden>Once paired: Share → <strong>Add to Home Screen</strong>, and this opens like an app, full screen.</p>
   </form>
 </main>
 
@@ -36,8 +41,18 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 17l5-5-5-5"/><path d="M15 12H3"/><path d="M21 4v16"/></svg>
       </button>
     </header>
-    <div class="sessions" id="sessions"></div>
-    <p class="rail-note" id="rail-note" role="status"></p>
+    <div class="confirm" id="confirm" hidden role="dialog" aria-labelledby="confirm-text">
+      <p id="confirm-text">Unpair this phone? Smart Terminal forgets it, and you will need a new code to come back.</p>
+      <div class="confirm-row">
+        <button class="ghost" id="confirm-no" type="button">Keep</button>
+        <button class="danger" id="confirm-yes" type="button">Unpair</button>
+      </div>
+    </div>
+    <div class="sessions" id="sessions" role="list"></div>
+    <footer class="rail-foot">
+      <p class="rail-note" id="rail-note" role="status"></p>
+      <button class="ghost small" id="retry" type="button" hidden>Try again</button>
+    </footer>
   </aside>
 
   <section class="main" id="main">
@@ -46,19 +61,26 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
       </button>
       <div class="tabs" id="tabs" role="tablist" aria-label="Open on this phone"></div>
-      <div class="text-size" aria-label="Text size">
+      <div class="text-size" role="group" aria-label="Text size">
         <button class="icon-btn" id="smaller" type="button" title="Smaller text" aria-label="Smaller text">A−</button>
         <button class="icon-btn" id="bigger" type="button" title="Bigger text" aria-label="Bigger text">A+</button>
       </div>
     </header>
     <div class="stage" id="stage"></div>
-    <div class="keys" id="keys" aria-label="Keys a phone keyboard does not have"></div>
-    <div class="status" id="status" role="status" aria-live="polite"></div>
+    <form class="compose" id="compose" hidden autocomplete="off">
+      <textarea id="compose-text" rows="1" placeholder="Type a line, then Send" enterkeyhint="send" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="A line to send to the session"></textarea>
+      <button class="send" id="compose-send" type="submit">Send</button>
+    </form>
+    <div class="keys" id="keys" role="toolbar" aria-label="Keys a phone keyboard does not have"></div>
+    <div class="status-row">
+      <div class="status" id="status" role="status" aria-live="polite"></div>
+      <button class="ghost small" id="reconnect" type="button" hidden>Reconnect</button>
+    </div>
   </section>
 </div>
 
 <script src="/assets/xterm.js"></script>
 <script src="/assets/addon-fit.js"></script>
-<script src="/app.js?v=4"></script>
+<script src="/app.js?v=5"></script>
 </body>
 </html>

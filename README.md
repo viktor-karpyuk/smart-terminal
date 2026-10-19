@@ -277,12 +277,14 @@ row by row. See [docs/housekeeping.md](docs/housekeeping.md).
 
 The **Remote** panel (in the launcher) makes this computer the server: turn it on, and
 it serves a small page on your network with the sessions open here and a terminal for
-the one you tap, sized to the phone. Pair a phone once with the six-letter code the panel
-shows; add the page to the home screen and it opens like an app. On the same Wi-Fi the
-phone reaches the computer directly; away from home the same address works through a VPN
-such as Tailscale, as long as the computer is on. Nothing goes through anybody else's
-server. The panel lists every phone that is paired and every session one has open, and
-can forget or close either; the app says so the moment a phone opens a session.
+the one you tap, sized to the phone, with A−/A+ for the text and a bar for the keys a
+phone keyboard lacks. Pair a phone once with the six-letter code the panel shows, or
+open the panel's link with the code in it; add the page to the home screen and it opens
+like an app. On the same Wi-Fi the phone reaches the computer directly; away from home,
+install Tailscale on both and the panel shows the address that works from anywhere,
+encrypted, as long as the computer is on. Nothing goes through anybody else's server.
+A phone that loses its connection comes back on its own; the panel lists every phone
+that is paired and every session one has open, and can forget or close either.
 
 ## Project structure
 
