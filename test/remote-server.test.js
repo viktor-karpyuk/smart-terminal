@@ -234,7 +234,7 @@ test('a terminal: replay, typing, output, the phone taking the size and giving i
   ws.send({ t: 'resize', cols: 48, rows: 30 });
   await new Promise((r) => setTimeout(r, 30));
   assert.deepEqual(calls.resized, [['p1', 48, 30]]);
-  assert.equal(server.drives('p1'), true, 'the app's own resizes wait while the phone has it');
+  assert.equal(server.drives('p1'), true, 'the app resizes wait while the phone has it');
   assert.equal(server.drives('p2'), false);
   server.resized('p1', 130, 42);
   ws.send({ t: 'resize', release: true });
