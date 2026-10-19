@@ -1,9 +1,13 @@
 'use strict';
 
 /**
- * Just enough of WebSocket (RFC 6455) for the terminal relay, with no
+ * Just enough of WebSocket (RFC 6455) for the phone's terminal, with no
  * dependencies: the handshake, text and binary frames, fragments, ping and
  * close. Clients must mask what they send; a message is at most 1 MB.
+ *
+ * A slow reader is cut off rather than buffered without end: a phone on weak
+ * Wi-Fi watching a build log would otherwise make the main process hold the
+ * whole log in the socket's queue.
  */
 
 const crypto = require('node:crypto');
@@ -11,18 +15,27 @@ const { EventEmitter } = require('node:events');
 
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const MAX_MESSAGE = 1024 * 1024;
+/** How much may wait in the socket for a reader that is not keeping up. */
+const MAX_BACKLOG = 4 * 1024 * 1024;
 
 class Conn extends EventEmitter {
-  constructor(socket) {
+  /**
+   * @param socket the TCP socket, after the 101
+   * @param head   bytes that arrived with the handshake, if any
+   */
+  constructor(socket, head = null) {
     super();
     this.socket = socket;
     this.open = true;
+    this.closed = false;
     this.buffer = Buffer.alloc(0);
     this.parts = [];
     this.partsSize = 0;
     socket.setNoDelay(true);
     socket.on('data', (chunk) => this.#read(chunk));
     socket.on('close', () => this.#gone());
+    // An http server's sockets allow half-open: a peer that just went away would otherwise linger until the next ping.
+    socket.on('end', () => this.terminate());
     socket.on('error', () => this.#gone());
     // Proxies drop a connection that says nothing for a minute; this keeps it talking.
     this.alive = true;
@@ -32,10 +45,17 @@ class Conn extends EventEmitter {
       this.#frame(0x9, Buffer.alloc(0));
     }, 25_000);
     this.pinger.unref?.();
+    if (head?.length) this.#read(head);
   }
 
   send(text) {
-    if (this.open) this.#frame(0x1, Buffer.from(String(text), 'utf8'));
+    if (!this.open) return;
+    if (this.socket.writableLength > MAX_BACKLOG) {
+      // Far behind: dropping the connection is kinder than drowning the process. The reader can open it again.
+      this.close(1008, 'Too slow to keep up.');
+      return;
+    }
+    this.#frame(0x1, Buffer.from(String(text), 'utf8'));
   }
 
   close(code = 1000, reason = '') {
@@ -46,6 +66,8 @@ class Conn extends EventEmitter {
     why.copy(body, 2);
     this.#frame(0x8, body);
     this.open = false;
+    clearInterval(this.pinger);
+    this.buffer = Buffer.alloc(0);
     setTimeout(() => this.socket.destroy(), 1000).unref?.();
   }
 
@@ -80,9 +102,12 @@ class Conn extends EventEmitter {
   }
 
   #read(chunk) {
+    // Once a close has been sent, nothing that still arrives is anybody's business.
+    if (!this.open) return;
     this.alive = true;
     this.buffer = Buffer.concat([this.buffer, chunk]);
     for (;;) {
+      if (!this.open) return;
       const b = this.buffer;
       if (b.length < 2) return;
       const fin = (b[0] & 0x80) !== 0;
@@ -103,6 +128,8 @@ class Conn extends EventEmitter {
       }
       if (!masked) return this.close(1002, 'Frames from a client must be masked.');
       if (length > MAX_MESSAGE) return this.close(1009, 'Too large.');
+      const control = opcode >= 0x8;
+      if (control && (!fin || length > 125)) return this.close(1002, 'A control frame has to be short and whole.');
       if (b.length < at + 4 + length) return;
       const mask = b.subarray(at, at + 4);
       const payload = Buffer.from(b.subarray(at + 4, at + 4 + length));
@@ -110,12 +137,14 @@ class Conn extends EventEmitter {
       this.buffer = b.subarray(at + 4 + length);
 
       if (opcode === 0x8) {
-        if (this.open) this.close(1000);
+        this.close(1000);
         return this.socket.end();
       }
       if (opcode === 0x9) { this.#frame(0xa, payload); continue; }
       if (opcode === 0xa) continue;
       if (opcode !== 0x0 && opcode !== 0x1 && opcode !== 0x2) return this.close(1002, 'Unknown frame.');
+      if (opcode === 0x0 && !this.parts.length) return this.close(1002, 'A continuation with nothing to continue.');
+      if (opcode !== 0x0 && this.parts.length) return this.close(1002, 'A new message inside an unfinished one.');
       this.parts.push(payload);
       this.partsSize += payload.length;
       if (this.partsSize > MAX_MESSAGE) return this.close(1009, 'Too large.');
@@ -129,7 +158,7 @@ class Conn extends EventEmitter {
 }
 
 /** Answer an HTTP upgrade, or refuse it with a status. Returns the connection, or null. */
-function accept(req, socket) {
+function accept(req, socket, head = null) {
   const key = req.headers['sec-websocket-key'];
   if (String(req.headers.upgrade ?? '').toLowerCase() !== 'websocket' || !key || req.headers['sec-websocket-version'] !== '13') {
     refuse(socket, 400, 'Expected a WebSocket.');
@@ -137,12 +166,13 @@ function accept(req, socket) {
   }
   const answer = crypto.createHash('sha1').update(key + GUID).digest('base64');
   socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${answer}\r\n\r\n`);
-  return new Conn(socket);
+  return new Conn(socket, head);
 }
 
 function refuse(socket, status, message) {
   const body = JSON.stringify({ ok: false, error: message });
-  socket.end(`HTTP/1.1 ${status} ${status === 401 ? 'Unauthorized' : status === 403 ? 'Forbidden' : status === 404 ? 'Not Found' : 'Bad Request'}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`);
+  const reason = { 400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden', 404: 'Not Found', 421: 'Misdirected Request', 500: 'Internal Server Error' }[status] ?? 'Bad Request';
+  if (!socket.destroyed) socket.end(`HTTP/1.1 ${status} ${reason}\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`);
 }
 
-module.exports = { accept, refuse, Conn };
+module.exports = { accept, refuse, Conn, MAX_BACKLOG };

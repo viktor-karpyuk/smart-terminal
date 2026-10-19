@@ -34,7 +34,7 @@ test('not installed: nothing to say, and no addresses', async () => {
 test('installed and up: the name first, then the IP, with the port; read again only after a while', async () => {
   let calls = 0;
   let now = 1000;
-  const ts = new Tailscale({ cli: '/x/tailscale', now: () => now, exec: (_cli, args, _opts, cb) => { calls += 1; assert.deepEqual(args, ['status', '--json']); cb(null, STATUS); } });
+  const ts = new Tailscale({ cli: '/x/tailscale', now: () => now, exec: (_cli, args, _opts, cb) => { calls += 1; assert.deepEqual(args, ['status', '--json', '--peers=false']); cb(null, STATUS); } });
   const info = await ts.info();
   assert.equal(info.running, true);
   assert.deepEqual(ts.addresses(7373), ['http://viktors-macbook-pro.tail1234.ts.net:7373/', 'http://100.101.102.103:7373/']);
@@ -52,4 +52,11 @@ test('installed but not answering says so, rather than looking like it is off', 
   assert.equal(info.running, false);
   assert.match(info.error, /did not answer/);
   assert.deepEqual(ts.addresses(7373), []);
+});
+
+test('many askers at once spawn one reading', async () => {
+  let calls = 0;
+  const ts = new Tailscale({ cli: '/x/tailscale', exec: (_c, _a, _o, cb) => { calls += 1; setTimeout(() => cb(null, STATUS), 20); } });
+  await Promise.all([ts.info(), ts.info(), ts.info()]);
+  assert.equal(calls, 1);
 });

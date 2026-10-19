@@ -50,6 +50,8 @@ class Tailscale {
     this.now = now;
     this.last = null;
     this.readAt = 0;
+    /** The reading under way, so a burst of askers spawns one process, not one each. */
+    this.pending = null;
   }
 
   get installed() {
@@ -58,10 +60,12 @@ class Tailscale {
 
   /** The current reading, fresh enough; never throws. */
   info() {
-    return new Promise((resolve) => {
-      if (!this.cli) return resolve({ installed: false, running: false, name: null, ips: [], error: null });
-      if (this.last && this.now() - this.readAt < TTL_MS) return resolve(this.last);
-      this.exec(this.cli, ['status', '--json'], { timeout: 3000 }, (error, stdout) => {
+    if (!this.cli) return Promise.resolve({ installed: false, running: false, name: null, ips: [], error: null });
+    if (this.last && this.now() - this.readAt < TTL_MS) return Promise.resolve(this.last);
+    if (this.pending) return this.pending;
+    const reading = new Promise((resolve) => {
+      // Only this computer's own entry: a tailnet of hundreds of peers would not fit a default buffer.
+      this.exec(this.cli, ['status', '--json', '--peers=false'], { timeout: 3000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
         const answer = { installed: true, ...readStatus(String(stdout ?? '')) };
         if (error && !answer.name) answer.error = 'Tailscale is installed but did not answer. Is it running?';
         this.last = answer;
@@ -69,6 +73,10 @@ class Tailscale {
         resolve(answer);
       });
     });
+    // Set after the executor ran: an answer that arrives at once would otherwise clear it before it was set.
+    this.pending = reading;
+    reading.then(() => { if (this.pending === reading) this.pending = null; });
+    return reading;
   }
 
   /** The addresses a phone on the same tailnet reaches this port by: the name first, then the IP. */

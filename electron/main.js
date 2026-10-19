@@ -367,6 +367,7 @@ function createRemoteServer() {
   try {
     return new RemoteServer({
       file: path.join(app.getPath('userData'), 'remote.json'),
+      version: app.getVersion(),
       webDir: path.join(__dirname, '..', 'extensions', 'remote', 'web'),
       assets: {
         'xterm.js': require.resolve('@xterm/xterm/lib/xterm.js'),
@@ -391,7 +392,8 @@ function createRemoteServer() {
         const size = ptys.size(ptyId);
         if (!size || size.rows < 3) return;
         ptys.resize(ptyId, size.cols, size.rows - 1);
-        setTimeout(() => ptys.resize(ptyId, size.cols, size.rows), 80);
+        // Read again, not remembered: a phone may have sized it in the meantime.
+        setTimeout(() => { const now = ptys.size(ptyId); if (now) ptys.resize(ptyId, now.cols, now.rows === size.rows - 1 ? size.rows : now.rows); }, 80);
       },
       describe: (sessionId) => describeSession(sessionId),
       notify: (title, body) => {
@@ -3905,6 +3907,8 @@ function retireLegacyWorkspace() {
  */
 let springStopped = false;
 app.on('will-quit', () => {
+  // The phones are told the computer is going, rather than left to time out.
+  remoteServer?.stop('Smart Terminal quit on the computer.');
   kubeStreams.stopAll();
   kubeForwards.stopAll();
   // A `claude -p` nobody can see would go on spending on the person's account.

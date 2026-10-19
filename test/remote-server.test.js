@@ -13,6 +13,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const net = require('node:net');
+const http = require('node:http');
 
 const { RemoteServer, RecentOutput } = require('../electron/remote-server');
 
@@ -144,7 +145,7 @@ test('turned on: it listens, names its addresses, and the settings survive', asy
   const o = server.overview();
   assert.equal(o.running, true);
   assert.deepEqual(o.devices, []);
-  server.stop();
+  await server.stop();
   assert.equal(server.running, false);
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).enabled, true, 'stopping is not turning off');
 });
@@ -155,7 +156,7 @@ test('without a cookie nothing but the page is served', async () => {
   assert.equal((await call(server, 'GET', '/api/sessions')).status, 401);
   assert.equal((await call(server, 'GET', '/api/me')).status, 401);
   await assert.rejects(wsClient(server, '/api/terminal?session=s1'), /401/);
-  server.stop();
+  await server.stop();
 });
 
 test('pairing: the code once, wrong codes counted, and the cookie it leaves', async () => {
@@ -169,6 +170,8 @@ test('pairing: the code once, wrong codes counted, and the cookie it leaves', as
   const wrong = await call(server, 'POST', '/api/pair', { body: { code: 'ZZZZZZ' } });
   assert.equal(wrong.status, 403);
   assert.ok(server.pairing, 'one wrong try does not spend the code');
+  assert.equal((await call(server, 'POST', '/api/pair', { body: { code } })).status, 429, 'a wrong code makes the next try wait a second');
+  tick(1100);
 
   // Lower case and a dash are forgiven: the person is typing on a phone.
   const right = await call(server, 'POST', '/api/pair', { body: { code: `${code.slice(0, 3).toLowerCase()}-${code.slice(3)}`, name: 'Viktor iPhone' } });
@@ -187,7 +190,7 @@ test('pairing: the code once, wrong codes counted, and the cookie it leaves', as
 
   // Five wrong tries throw the code away.
   server.newPairingCode();
-  for (let i = 0; i < 5; i += 1) await call(server, 'POST', '/api/pair', { body: { code: 'ZZZZZZ' } });
+  for (let i = 0; i < 5; i += 1) { await call(server, 'POST', '/api/pair', { body: { code: 'ZZZZZZ' } }); tick(1100); }
   assert.equal(server.pairing, null);
 
   // And a code expires.
@@ -195,7 +198,7 @@ test('pairing: the code once, wrong codes counted, and the cookie it leaves', as
   tick(11 * 60 * 1000);
   assert.equal(server.overview().pairing, null);
   assert.equal((await call(server, 'POST', '/api/pair', { body: { code: 'ABCDEF' } })).status, 403);
-  server.stop();
+  await server.stop();
 });
 
 test('the list says what each session is doing', async () => {
@@ -205,10 +208,10 @@ test('the list says what each session is doing', async () => {
   const r = await call(server, 'GET', '/api/sessions', { cookie });
   assert.equal(r.status, 200);
   assert.deepEqual(r.body.sessions, [
-    { id: 's1', title: 'jenkins', kind: 'claude', folder: 'app', state: 'stopped, waiting on the user', open: false },
-    { id: 's2', title: 'sh', kind: 'shell', folder: 'tmp', state: 'shell', open: false },
+    { id: 's1', title: 'jenkins', kind: 'claude', folder: 'app', state: 'stopped, waiting on the user', open: false, openOn: [] },
+    { id: 's2', title: 'sh', kind: 'shell', folder: 'tmp', state: 'shell', open: false, openOn: [] },
   ]);
-  server.stop();
+  await server.stop();
 });
 
 test('a terminal: replay, typing, output, the phone taking the size and giving it back', async () => {
@@ -216,8 +219,9 @@ test('a terminal: replay, typing, output, the phone taking the size and giving i
   await listen();
   const cookie = await pair(server, 'iPhone');
   const ws = await wsClient(server, '/api/terminal?session=s1', cookie);
-  assert.deepEqual(await ws.next(), { t: 'opened', cols: 120, rows: 40, title: 'jenkins', replay: 'hello\n' });
-  assert.deepEqual(calls.redrawn, ['p1'], 'Claude is asked to draw itself again');
+  assert.deepEqual(await ws.next(), { t: 'opened', cols: 120, rows: 40, title: 'jenkins', kind: 'claude', replay: '', driven: false });
+  await new Promise((r) => setTimeout(r, 350));
+  assert.deepEqual(calls.redrawn, ['p1'], 'Claude is asked to draw itself again, a moment later');
   assert.deepEqual(calls.notified.at(-1), ['Opened on your phone', 'jenkins, from iPhone. Typing there types here.']);
   assert.equal(server.overview().viewers.length, 1);
   assert.equal((await call(server, 'GET', '/api/sessions', { cookie })).body.sessions[0].open, true);
@@ -240,17 +244,17 @@ test('a terminal: replay, typing, output, the phone taking the size and giving i
   ws.send({ t: 'resize', release: true });
   await new Promise((r) => setTimeout(r, 30));
   assert.deepEqual(calls.resized.at(-1), ['p1', 130, 42], 'back to the size the app gave it meanwhile');
-  assert.deepEqual(await ws.next(), { t: 'size', cols: 130, rows: 42 });
+  assert.deepEqual(await ws.next(), { t: 'size', cols: 130, rows: 42, driven: false });
 
   // Not driving any more: the app's sizes reach the phone.
   server.resized('p1', 100, 30);
-  assert.deepEqual(await ws.next(), { t: 'size', cols: 100, rows: 30 });
+  assert.deepEqual(await ws.next(), { t: 'size', cols: 100, rows: 30, driven: false });
 
   server.exited('p1');
-  assert.deepEqual(await ws.next(), { t: 'ended', reason: 'The session ended.' });
+  assert.deepEqual(await ws.next(), { t: 'ended', reason: 'The session ended or restarted. Open it again from the list.' });
   await ws.closed;
   assert.equal(server.overview().viewers.length, 0);
-  server.stop();
+  await server.stop();
 });
 
 test('a session that is not there, a page from elsewhere, and closing from the app', async () => {
@@ -273,7 +277,7 @@ test('a session that is not there, a page from elsewhere, and closing from the a
   server.revoke(server.overview().devices[0].id);
   assert.deepEqual(await again.next(), { t: 'ended', reason: 'This phone was forgotten in Smart Terminal.' });
   assert.equal((await call(server, 'GET', '/api/sessions', { cookie })).status, 401, 'the cookie opens nothing now');
-  server.stop();
+  await server.stop();
 });
 
 test('logging out forgets the phone', async () => {
@@ -284,18 +288,19 @@ test('logging out forgets the phone', async () => {
   assert.equal(r.status, 200);
   assert.match(r.cookie, /Max-Age=0/);
   assert.deepEqual(server.overview().devices, []);
-  server.stop();
+  await server.stop();
 });
 
 test('setPort refuses nonsense and setEnabled off closes what is open', async () => {
   const { server, listen } = make();
   await listen();
-  assert.equal(server.setPort(80).ok, false);
-  assert.equal(server.setPort(99999).ok, false);
+  assert.equal((await server.setPort(80)).ok, false);
+  assert.equal((await server.setPort(99999)).ok, false);
+  assert.equal((await server.setPort("70a")).ok, false);
   const cookie = await pair(server);
   const ws = await wsClient(server, '/api/terminal?session=s1', cookie);
   await ws.next();
-  server.setEnabled(false);
+  await server.setEnabled(false);
   assert.deepEqual(await ws.next(), { t: 'ended', reason: 'Remote access was turned off.' });
   assert.equal(server.running, false);
   assert.equal(server.state.enabled, false);
@@ -316,8 +321,8 @@ test('a session whose size is not known opens at 80×24 rather than at nothing',
   await listen();
   const cookie = await pair(server);
   const ws = await wsClient(server, '/api/terminal?session=s1', cookie);
-  assert.deepEqual(await ws.next(), { t: 'opened', cols: 80, rows: 24, title: 'sh', replay: '' });
-  server.stop();
+  assert.deepEqual(await ws.next(), { t: 'opened', cols: 80, rows: 24, title: 'sh', kind: 'shell', replay: '', driven: false });
+  await server.stop();
 });
 
 test('with Tailscale up, the overview names the away address too, and it may be opened', async () => {
@@ -328,7 +333,101 @@ test('with Tailscale up, the overview names the away address too, and it may be 
   await listen();
   const o = await server.overviewFresh();
   assert.deepEqual(o.away, [`http://mac.tail1.ts.net:${server.port}/`, `http://100.1.2.3:${server.port}/`]);
-  assert.deepEqual(o.tailscale, { installed: true, running: true, name: 'mac.tail1.ts.net', error: null });
+  assert.deepEqual(o.tailscale, { installed: true, running: true, name: 'mac.tail1.ts.net', error: null, checked: true });
   assert.ok(server.allAddresses().includes(`http://100.1.2.3:${server.port}/`));
-  server.stop();
+  await server.stop();
+});
+
+test('turning on says whether the port was bound, and turning off forgets the failure', async () => {
+  const taken = net.createServer();
+  await new Promise((r) => taken.listen(0, '0.0.0.0', r));
+  const { server } = make();
+  server.state.port = taken.address().port;
+  const r = await server.setEnabled(true);
+  assert.equal(r.running, false);
+  assert.match(r.error, /in use by something else/);
+  const off = await server.setEnabled(false);
+  assert.equal(off.error, null);
+  taken.close();
+});
+
+test('bytes that are not a request: a bad body, a bad cookie, a foreign Host, a reserved asset name', async () => {
+  const { server, listen } = make({ assets: { 'xterm.js': path.join(__dirname, '..', 'electron', 'ws.js') } });
+  await listen();
+  const base = `http://127.0.0.1:${server.port}`;
+  server.newPairingCode();
+  let r = await fetch(`${base}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{not json' });
+  assert.equal(r.status, 400);
+  assert.equal(server.pairing.tries, 0, 'a body that is not JSON spends no try');
+  r = await fetch(`${base}/api/me`, { headers: { cookie: 'st_device=%E0%A4%A' } });
+  assert.equal(r.status, 401, 'a cookie that will not decode is no cookie');
+  // fetch will not send a Host of its own; a raw request does.
+  const raw = (host) => new Promise((resolve) => http.get({ host: '127.0.0.1', port: server.port, path: '/api/sessions', headers: { host }, setHost: false }, (res) => { res.resume(); resolve(res.statusCode); }));
+  assert.equal(await raw('evil.example.com'), 421, 'a name that is not ours is refused before anything else');
+  assert.equal(await raw(`viktors-mac.local:${server.port}`), 401, "the computer's own name is fine");
+  assert.equal(await raw('viktors-mac'), 401);
+  assert.equal(await raw('mac.tail1.ts.net:7373'), 401);
+  assert.equal(await raw('[fe80::1]:7373'), 401);
+  assert.equal((await fetch(`${base}/assets/xterm.js`)).status, 200);
+  assert.equal((await fetch(`${base}/assets/__proto__`)).status, 404);
+  assert.equal((await fetch(`${base}/assets/constructor`)).status, 404);
+  assert.equal((await fetch(`${base}/web/../package.json`)).status, 401, "a path outside the page is just an unknown route");
+  await server.stop();
+});
+
+test('a second phone follows the size the first one set', async () => {
+  const { server, calls, listen } = make({ attach: () => ({ ptyId: 'p1', cols: 120, rows: 40, kind: 'shell', title: 'sh', replay: 'x' }) });
+  await listen();
+  const cookie = await pair(server);
+  const a = await wsClient(server, '/api/terminal?session=s1', cookie);
+  assert.equal((await a.next()).driven, false);
+  a.send({ t: 'resize', cols: 48, rows: 30 });
+  await new Promise((r) => setTimeout(r, 30));
+  const b = await wsClient(server, '/api/terminal?session=s1', cookie);
+  assert.deepEqual(await b.next(), { t: 'opened', cols: 48, rows: 30, title: 'sh', kind: 'shell', replay: 'x', driven: true });
+  b.send({ t: 'resize', cols: 60, rows: 20 });
+  assert.deepEqual(await b.next(), { t: 'size', cols: 48, rows: 30, driven: true }, 'told the size the first phone set');
+  assert.deepEqual(calls.resized, [['p1', 48, 30]], 'the second phone did not resize anything');
+  // The first phone leaves: the app's size comes back, and the second phone may now take it.
+  a.close();
+  assert.deepEqual(await b.next(), { t: 'size', cols: 120, rows: 40, driven: false });
+  b.send({ t: 'resize', cols: 60, rows: 20 });
+  await new Promise((r) => setTimeout(r, 30));
+  assert.deepEqual(calls.resized.at(-1), ['p1', 60, 20]);
+  await server.stop();
+});
+
+test('"opened on your phone" is said once per session per phone for a while', async () => {
+  const { server, calls, listen, tick } = make();
+  await listen();
+  const cookie = await pair(server);
+  for (let i = 0; i < 3; i += 1) {
+    const ws = await wsClient(server, '/api/terminal?session=s1', cookie);
+    await ws.next();
+    ws.close();
+    await ws.closed;
+  }
+  assert.equal(calls.notified.filter(([t]) => t === 'Opened on your phone').length, 1);
+  tick(6 * 60 * 1000);
+  const ws = await wsClient(server, '/api/terminal?session=s1', cookie);
+  await ws.next();
+  assert.equal(calls.notified.filter(([t]) => t === 'Opened on your phone').length, 2);
+  await server.stop();
+});
+
+test('the settings file is written whole, and a broken one is kept aside', () => {
+  const dir = tmp();
+  const file = path.join(dir, 'remote.json');
+  fs.writeFileSync(file, '{broken');
+  const server = new RemoteServer({ file, webDir: dir, sessions: () => [], attach: () => null, write: () => {} });
+  assert.ok(fs.existsSync(`${file}.broken`));
+  server.save({ port: 7474 });
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).port, 7474);
+  assert.ok(!fs.existsSync(`${file}.tmp`));
+});
+
+test('nothing keeps the process alive once every server is stopped', async () => {
+  // Sockets belong to fetch's keep-alive pool and to stdio; a listening server would be ours.
+  const servers = process._getActiveHandles().filter((h) => h.constructor?.name === 'Server' && h.listening);
+  assert.deepEqual(servers.map((h) => h.address()?.port), []);
 });
