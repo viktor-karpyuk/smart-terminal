@@ -41,6 +41,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { accept, refuse } = require('./ws');
+const { QR } = require('./qr');
 
 const DEFAULT_PORT = 7373;
 /** A pairing code is six characters from an alphabet with no look-alikes. */
@@ -381,10 +382,18 @@ class RemoteServer {
       addresses: this.addresses(),
       away: this.awayAddresses(),
       tailscale: this.tailscale ? { installed: this.tailscale.installed, running: Boolean(this.tailscale.last?.running), name: this.tailscale.last?.name ?? null, error: this.tailscale.last?.error ?? null, checked: Boolean(this.tailscale.last) } : null,
-      pairing: this.pairing && !this.pairing.spentAt ? { code: this.pairing.code, expiresAt: this.pairing.expiresAt } : null,
+      pairing: this.pairing && !this.pairing.spentAt ? { code: this.pairing.code, expiresAt: this.pairing.expiresAt, links: this.#pairingLinks(this.pairing.code) } : null,
       devices: this.state.devices.map(({ id, name, pairedAt, lastSeenAt }) => ({ id, name, pairedAt, lastSeenAt: lastSeenAt ?? null, open: viewers.filter((v) => v.deviceId === id).length })),
       viewers,
     };
+  }
+
+  /** Each address with the code in it, and a QR code of it for the phone's camera: one scan, paired. */
+  #pairingLinks(code) {
+    return this.allAddresses().map((address) => {
+      const url = `${address}?code=${code}`;
+      return { address, url, qr: QR.svg(url, `Pairing link for ${address}`) };
+    });
   }
 
   async setEnabled(enabled) {
