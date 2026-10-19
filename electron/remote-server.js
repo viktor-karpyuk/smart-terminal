@@ -448,9 +448,11 @@ class RemoteServer {
     const ch = crypto.randomBytes(8).toString('hex');
     const title = found.title || offered.title || 'A session';
     const c = { ch, conn, sessionId, ptyId: found.ptyId, title, from: device.name, deviceId: device.id, at: this.now() };
-    if (!this.driven.has(found.ptyId)) this.appSizes.set(found.ptyId, { cols: found.cols, rows: found.rows });
+    if (!this.driven.has(found.ptyId)) this.appSizes.set(found.ptyId, { cols: Number(found.cols) || 80, rows: Number(found.rows) || 24 });
     this.channels.set(ch, c);
-    this.#send(c, { t: 'opened', cols: found.cols, rows: found.rows, title, replay: found.replay ?? '' });
+    const cols = Number(found.cols) || 80;
+    const rows = Number(found.rows) || 24;
+    this.#send(c, { t: 'opened', cols, rows, title, replay: found.replay ?? '' });
     // A full-screen program draws itself again when asked; the replay alone can leave it half drawn.
     if (found.kind === 'claude') this.redraw(found.ptyId);
     this.notify('Opened on your phone', `${title}, from ${device.name}. Typing there types here.`);

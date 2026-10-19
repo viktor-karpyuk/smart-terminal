@@ -142,6 +142,9 @@ class PtyManager {
       profileId: profile.id,
       cwd: workdir,
       kind,
+      // The size it was given, kept so a phone showing it later can start at the same one.
+      cols,
+      rows,
       pending: '',
       flushTimer: null,
       bootstrapped: false,

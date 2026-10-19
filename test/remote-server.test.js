@@ -310,3 +310,12 @@ test('recent output keeps the tail, cut at a line', () => {
   recent.forget('p');
   assert.equal(recent.get('p'), '');
 });
+
+test('a session whose size is not known opens at 80×24 rather than at nothing', async () => {
+  const { server, listen } = make({ attach: () => ({ ptyId: 'p1', kind: 'shell', title: 'sh', replay: '' }) });
+  await listen();
+  const cookie = await pair(server);
+  const ws = await wsClient(server, '/api/terminal?session=s1', cookie);
+  assert.deepEqual(await ws.next(), { t: 'opened', cols: 80, rows: 24, title: 'sh', replay: '' });
+  server.stop();
+});
