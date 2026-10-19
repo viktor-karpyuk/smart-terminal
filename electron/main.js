@@ -1465,6 +1465,9 @@ function registerIpc() {
   ipcMain.handle('housekeeping:closing', (_e, target) => housekeeping.markClosing(String(target ?? '')));
   ipcMain.handle('housekeeping:refresh-prs', (_e, ids = null) => housekeeping.refreshPulls(Array.isArray(ids) ? ids : null));
   /** What a Claude session opened in a worktree is told. Text; nothing runs. */
+  ipcMain.handle('housekeeping:refresh-worktree', (_e, target) => housekeeping.refreshWorktree(String(target ?? '')));
+  ipcMain.handle('housekeeping:in-base', (_e, target) => housekeeping.inBase(String(target ?? '')));
+  ipcMain.handle('housekeeping:mark-in-base', (_e, { path: target, head, base } = {}) => housekeeping.markInBase(String(target ?? ''), String(head ?? ''), String(base ?? '')));
   ipcMain.handle('housekeeping:pr-draft', (_e, target) => housekeeping.prDraft(String(target ?? '')));
   ipcMain.handle('housekeeping:create-pr', (_e, { path: target, title, body, base, push } = {}) => housekeeping.createPr(String(target ?? ''), { title, body, base, push }));
   ipcMain.handle('housekeeping:worktree-brief', (_e, target) => housekeeping.worktreeBrief(String(target ?? '')));
@@ -3459,6 +3462,13 @@ function handleHook(request) {
       // within the sweep; being told means the reading is never stale at the
       // one moment somebody is most likely to be looking at it.
       monitor?.read(sessionId, { force: true });
+      // The session may have committed, pushed or opened a pull request in a worktree Housekeeping lists: that row is looked at again.
+      for (const [ptyId, owner] of sessionByPty) {
+        if (owner !== sessionId) continue;
+        const cwd = cwdWatcher?.known?.get(ptyId)?.cwd ?? null;
+        if (cwd && housekeeping?.last) housekeeping.refreshWorktree(cwd).catch(() => {});
+        break;
+      }
     }
 
     if (report.event === 'SessionEnd') {

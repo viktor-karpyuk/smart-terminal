@@ -323,20 +323,24 @@ class Housekeeping {
    * main working tree: that one is never removable and its size is the repository's,
    * not housekeeping's business.
    */
-  async worktreeItems() {
+  async worktreeItems({ only = null, quiet = false } = {}) {
     let rows;
     try {
       rows = await this.worktrees.list();
     } catch {
       return [];
     }
+    if (only) rows = rows.filter((row) => row.path === only);
     // PRs refresh after the rows are out: every answer is emitted and the panel repaints that row.
-    void this.pulls.refresh(rows).catch(() => {});
+    if (!quiet) void this.pulls.refresh(rows).catch(() => {});
     return rows
       .filter((row) => !row.main)
       .map((row) => {
         const known = this.sizes.known(row.path);
         const prs = this.pulls.known(row.root, row.branch);
+        const kept = this.store.setting?.(`inbase:${row.path}`);
+        /** Found in the base by content at this very head: as done as a merge. */
+        const inBase = Boolean(kept && kept.head === row.head);
         return item({
           id: `worktree:${row.path}`,
           kind: 'worktree',
@@ -344,10 +348,10 @@ class Housekeeping {
           path: row.path,
           bytes: known?.bytes ?? 0,
           lastActivityAt: row.lastActivityAt,
-          state: row.state,
+          state: inBase && !row.finished ? `in ${kept.base} by content` : row.state,
           blockers: row.blockers,
           detail: [row.branch ? `branch ${row.branch}` : null, row.upstream ? `tracks ${row.upstream}` : row.ownWork ? 'no upstream' : null].filter(Boolean).join(' · ') || null,
-          meta: { root: row.root, branch: row.branch, hardBlockers: row.hardBlockers, finished: row.finished, prunable: row.prunable, broken: row.broken, work: prs?.allMerged && row.work === 'unmerged' && !row.dirty ? 'done' : row.work, prs, aheadOfBase: row.aheadOfBase, dirtyCount: row.dirtyCount, dirty: row.dirty, forceable: row.forceable, loses: row.loses, session: this.#sessionUnder(row.path), sized: Boolean(known) || row.prunable },
+          meta: { root: row.root, branch: row.branch, hardBlockers: row.hardBlockers, finished: row.finished, prunable: row.prunable, broken: row.broken, work: (prs?.allMerged || inBase) && row.work === 'unmerged' && !row.dirty ? 'done' : row.work, prs, inBase: inBase ? kept.base : null, aheadOfBase: row.aheadOfBase, dirtyCount: row.dirtyCount, dirty: row.dirty, forceable: row.forceable, loses: row.loses, session: this.#sessionUnder(row.path), sized: Boolean(known) || row.prunable },
         });
       });
   }
@@ -784,8 +788,33 @@ class Housekeeping {
     return false;
   }
 
+  /**
+   * One worktree looked at again, now: git state, blockers, pull requests. Called
+   * when a session standing in it finished a turn (it may have committed, pushed or
+   * opened a pull request) and from the row's own refresh. The fresh item is emitted
+   * as `worktree` so an open panel replaces that row without reading the disk again.
+   */
+  async refreshWorktree(target) {
+    const where = fs.existsSync(target) ? target : realOf(target);
+    const known = (this.last?.items ?? []).filter((one) => one.kind === 'worktree' && one.path);
+    const hit = known.find((one) => one.path === where || where.startsWith(one.path + path.sep)) ?? null;
+    const wtPath = hit?.path ?? where;
+    this.worktrees.memo.delete(wtPath);
+    const rows = await this.worktrees.list();
+    const row = rows.find((one) => one.path === wtPath);
+    if (!row) return null;
+    await this.pulls.refresh([row], { force: true }).catch(() => {});
+    const [built] = await this.worktreeItems({ only: wtPath, quiet: true });
+    if (!built) return null;
+    if (this.last) this.last.items = this.last.items.map((one) => (one.id === built.id ? built : one));
+    this.emit('worktree', built);
+    return built;
+  }
+
   /** Ask GitHub again about the PRs of these worktrees (or all of them), now. */
   async refreshPulls(ids = null) {
+    // Asked for all of them: forget what git said too, so a push or a new upstream is seen as well as a new PR.
+    if (!ids) this.worktrees.memo.clear();
     const rows = await this.worktrees.list();
     const wanted = ids ? new Set(ids.map((id) => String(id).replace(/^worktree:/, ''))) : null;
     return this.pulls.refresh(wanted ? rows.filter((row) => wanted.has(row.path)) : rows, { force: true });
@@ -855,6 +884,53 @@ class Housekeeping {
       row.dirtyCount = status.out ? status.out.split('\n').filter(Boolean).length : 0;
     }
     return row;
+  }
+
+  /**
+   * Is this worktree's work already in its base, whatever the ancestry says? Two
+   * readings, both from git: `cherry` finds each commit's patch in the base (what a
+   * squash merge or a cherry-pick leaves behind), and the files the branch touched
+   * are compared against the base as they stand now. "In the base" when every
+   * patch is found or those files are identical; "partly" when some are; "not" when
+   * none. Nothing is changed; the verdict can be kept with `markInBase`.
+   */
+  async inBase(target) {
+    const row = await this.#quickRow(target);
+    const bases = await this.#basesOf(row.root);
+    if (!bases.length) throw new Error('No base branch (origin/develop, origin/main…) to compare against.');
+    this.emit('progress', { op: 'in-base', label: `fetching ${path.basename(row.root)}`, done: false });
+    await this.#git(row.root, ['fetch', '--quiet', '--prune', 'origin'], { timeout: 60_000 });
+    let base = bases[0];
+    let least = Infinity;
+    for (const name of bases) {
+      const count = Number((await this.#git(row.root, ['rev-list', '--count', `${name}..${row.head}`])).out);
+      if (Number.isFinite(count) && count < least) {
+        least = count;
+        base = name;
+      }
+    }
+    this.emit('progress', { op: 'in-base', label: `comparing with ${base}`, done: false });
+    const cherry = (await this.#git(row.path, ['cherry', '-v', base, 'HEAD'])).out.split('\n').filter(Boolean);
+    const commits = cherry.map((line) => {
+      const match = /^([+-])\s+([0-9a-f]+)\s*(.*)$/.exec(line);
+      return match ? { sha: match[2].slice(0, 10), subject: match[3], inBase: match[1] === '-' } : null;
+    }).filter(Boolean);
+    const touched = (await this.#git(row.path, ['diff', '--name-only', `${base}...HEAD`])).out.split('\n').filter(Boolean);
+    const differing = touched.length ? (await this.#git(row.path, ['diff', '--name-only', base, 'HEAD', '--', ...touched])).out.split('\n').filter(Boolean) : [];
+    const ancestor = (await this.#git(row.root, ['merge-base', '--is-ancestor', row.head, base])).ok;
+    const patches = commits.filter((c) => c.inBase).length;
+    const verdict = ancestor || (commits.length > 0 && patches === commits.length) || (touched.length > 0 && differing.length === 0) ? 'in' : patches > 0 || (touched.length > 0 && differing.length < touched.length) ? 'partly' : commits.length === 0 && touched.length === 0 ? 'in' : 'not';
+    this.emit('progress', { op: 'in-base', label: null, done: true });
+    return { path: row.path, branch: row.branch, head: row.head, base, ancestor, commits, patches, touched: touched.length, differing, dirtyCount: row.dirtyCount, verdict };
+  }
+
+  /** Keep the verdict: this head of this worktree is in its base, so the row reads as done and can be closed. */
+  markInBase(target, head, base) {
+    const row = { path: fs.existsSync(target) ? target : realOf(target) };
+    this.store.setSetting(`inbase:${row.path}`, { head, base, at: this.now() });
+    this.worktrees.memo.delete(row.path);
+    this.store.log({ action: 'mark-in-base', kind: 'worktree', label: path.basename(row.path), bytes: 0, ok: true, detail: `${head.slice(0, 10)} is in ${base} by content` });
+    return true;
   }
 
   async prDraft(target) {

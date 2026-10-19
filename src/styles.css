@@ -4370,3 +4370,11 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-field { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; font-size: var(--fs-sm); color: var(--text-faint); }
 .housekeeping-field input, .housekeeping-field select, .housekeeping-field textarea { font: inherit; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--r-md, 6px); padding: 6px 8px; }
 .housekeeping-field textarea { resize: vertical; font-family: var(--mono, ui-monospace, monospace); font-size: var(--fs-xs); }
+
+.housekeeping-inbase-verdict { color: var(--text); }
+.housekeeping-inbase-verdict.is-in { color: #3dbd6a; }
+.housekeeping-inbase-verdict.is-partly { color: #e0a21f; }
+.housekeeping-inbase-verdict.is-not { color: #e5635b; }
+.housekeeping-inbase .housekeeping-confirm-name code { font-size: var(--fs-xs); color: var(--text-faint); margin-right: 4px; }
+.housekeeping-icon.is-spinning svg { animation: housekeeping-spin 0.9s linear infinite; }
+@keyframes housekeeping-spin { to { transform: rotate(360deg); } }
