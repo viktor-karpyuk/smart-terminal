@@ -44,7 +44,7 @@ class WorktreePulls {
    * @param {(event:string, payload:any)=>void} [deps.emit]
    * @param {(root:string)=>Promise<null|{forBranch:(branch:string)=>Promise<any[]>}>} [deps.forgeFor] a forge adapter for a repository that gh cannot read
    */
-  constructor({ get, set, now = () => Date.now(), ttl = 10 * MINUTE, exec = run, emit = () => {}, forgeFor = async () => null }) {
+  constructor({ get, set, now = () => Date.now(), ttl = 3 * MINUTE, exec = run, emit = () => {}, forgeFor = async () => null }) {
     this.forgeFor = forgeFor;
     this.get = get;
     this.set = set;
@@ -81,14 +81,14 @@ class WorktreePulls {
     const worker = async () => {
       while (index < todo.length) {
         const row = todo[index++];
-        out.push(await this.lookup(row.root, row.branch, row.head));
+        out.push(await this.lookup(row.root, row.branch, row.head, row.upstream ? String(row.upstream).split('/')[0] : null));
       }
     };
     await Promise.all(Array.from({ length: Math.min(concurrency, todo.length) }, worker));
     return out;
   }
 
-  async lookup(root, branch, head = null) {
+  async lookup(root, branch, head = null, remote = null) {
     const key = this.key(root, branch);
     if (this.inflight.has(key)) return this.inflight.get(key);
     const job = (async () => {
@@ -98,7 +98,7 @@ class WorktreePulls {
       // Not a GitHub repository, or gh is missing: the Code Reviewer may know this repository and hold its token.
       if (!done.ok) {
         try {
-          const forge = await this.forgeFor(root);
+          const forge = await this.forgeFor(root, remote);
           if (forge) {
             prs = (await forge.forBranch(branch)).map((pr) => ({
               number: pr.id,

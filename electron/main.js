@@ -3232,6 +3232,8 @@ function startMessaging() {
   forgeMcp = new ForgeMcp({
     review: () => reviewService,
     confirm: askInDialog,
+    // A pull request a session opened is a pull request Housekeeping shows a moment later.
+    created: () => housekeeping?.refreshPulls?.().catch(() => {}),
     log: (line) => console.log(line),
   });
 

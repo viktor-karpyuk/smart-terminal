@@ -43,8 +43,10 @@ class ForgeMcp {
    * @param {() => number} [deps.now]
    * @param {(cwd:string)=>Promise<string[]>} [deps.remotes]
    */
-  constructor({ review, confirm, log = () => {}, now = () => Date.now(), remotes = remotesOf }) {
+  constructor({ review, confirm, log = () => {}, now = () => Date.now(), remotes = remotesOf, created = () => {} }) {
     this.review = review;
+    /** Told when a pull request was opened, so whatever shows pull requests looks again. */
+    this.created = created;
     this.confirm = confirm;
     this.log = log;
     this.now = now;
@@ -196,6 +198,11 @@ class ForgeMcp {
     if (answer !== 'yes') return answer === 'timeout' ? 'Nobody answered the dialog in time; nothing was created. Ask the user and try again.' : answer === 'unavailable' ? 'There is no window to ask the user in; nothing was created.' : 'The user declined; nothing was created. Do not try again unless they ask.';
     const created = await forge.createPr({ title, description, source, destination });
     this.log(`[forge-mcp] ${session.name ?? session.id} opened PR #${created.id} in ${target.name}`);
+    try {
+      this.created(target);
+    } catch {
+      /* a listener's problem */
+    }
     return `Pull request #${created.id} opened in ${target.name}: ${source} → ${destination}${created.url ? ` · ${created.url}` : ''}`;
   }
 }

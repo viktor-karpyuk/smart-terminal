@@ -4362,6 +4362,11 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-pr-btn { white-space: nowrap; border-color: #a78bfa; color: #a78bfa; }
 .housekeeping-pr-btn:hover { background: color-mix(in srgb, #a78bfa 16%, transparent); }
 .housekeeping-pr-form { width: min(560px, 92vw); }
+/* A long error or URL must wrap inside the box, never stretch the grid column past it. */
+.housekeeping-confirm { grid-template-columns: minmax(0, 1fr); min-width: 0; }
+.housekeeping-confirm > * { min-width: 0; }
+.housekeeping-confirm p, .housekeeping-confirm code, .housekeeping-prs { overflow-wrap: anywhere; word-break: break-word; }
+.housekeeping-confirm p.confirm-warn { max-height: 9em; overflow: auto; }
 .housekeeping-field { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; font-size: var(--fs-sm); color: var(--text-faint); }
 .housekeeping-field input, .housekeeping-field select, .housekeeping-field textarea { font: inherit; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--r-md, 6px); padding: 6px 8px; }
 .housekeeping-field textarea { resize: vertical; font-family: var(--mono, ui-monospace, monospace); font-size: var(--fs-xs); }

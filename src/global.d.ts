@@ -1167,7 +1167,7 @@ declare global {
         worktreeBrief(path: string): Promise<string>;
         /** What a pull request from the worktree would be: bases, title, whether it must be pushed, who takes it. */
         prDraft(path: string): Promise<HousekeepingPrDraft>;
-        createPr(input: { path: string; title: string; body?: string; base: string; push?: boolean }): Promise<{ id: number | null; url: string; base: string; branch: string }>;
+        createPr(input: { path: string; title: string; body?: string; base: string; push?: boolean }): Promise<{ id: number | null; url: string; base: string; branch: string; existing?: boolean }>;
         roots(): Promise<HousekeepingRoot[]>;
         addRoot(folder: string): Promise<HousekeepingRoot[]>;
         removeRoot(folder: string): Promise<HousekeepingRoot[]>;

@@ -320,7 +320,7 @@ export function HousekeepingPanel() {
 
   /** The row's own button: the same modal, for this one item. */
   const quickRow = (one: HousekeepingItem) => {
-    if (one.kind === 'worktree' && isClosable(one)) return closeWorktree(one);
+    if (one.kind === 'worktree' && (isClosable(one) || heldBySessionOnly(one))) return closeWorktree(one);
     const forced = one.kind === 'worktree' && one.blockers.length > 0 && one.meta?.forceable === true;
     const kind: HousekeepingJobKind | null =
       one.kind === 'session' ? 'forget-transcripts' : one.kind === 'worktree' ? (one.meta?.broken ? 'repair-worktrees' : forced ? 'remove-worktrees-forced' : 'remove-worktrees') : one.kind === 'workshop' ? 'discard-workshops' : one.reversible ? 'free' : null;
@@ -357,18 +357,21 @@ export function HousekeepingPanel() {
     const prs = one.meta?.prs as HousekeepingPulls | undefined;
     const session = (one.meta?.session ?? null) as { id: string; live: boolean; title: string | null } | null;
     const inside = session?.live && useStore.getState().sessions[session.id] ? session : null;
-    const forced = Boolean(one.meta?.dirty) || (Array.isArray(one.meta?.loses) && (one.meta?.loses as string[]).length > 0);
+    const closable = isClosable(one);
+    const soft = one.blockers.filter((b) => !/a session is inside it/.test(b));
+    // Anything git or the inventory would refuse besides the session needs --force; commits of its own alone do not.
+    const forced = soft.length > 0;
     const kind: HousekeepingJobKind = forced ? 'remove-worktrees-forced' : 'remove-worktrees';
     const landed = prs && prs.prs.length ? `${prs.merged} of ${prs.prs.length} PR${prs.prs.length === 1 ? '' : 's'} merged${prs.open ? `, ${prs.open} still open` : ''}` : one.state ? one.state[0].toUpperCase() + one.state.slice(1) : 'Merged';
     setPending({
-      key: `close:${one.id}`,
-      verb: 'Yes, close',
-      title: `Close ${one.label}`,
+      key: closable ? `close:${one.id}` : `close-held:${one.id}`,
+      verb: closable ? 'Yes, close' : 'Yes, remove',
+      title: `${closable ? 'Close' : 'Remove'} ${one.label}`,
       detail: [
-        'Closing a worktree deletes its folder from the disk.',
-        `${landed}: the work is already where it belongs.`,
+        closable ? 'Closing a worktree deletes its folder from the disk.' : 'Removing a worktree deletes its folder from the disk. No pull request was found for its branch: if you opened one, it is still there; commits stay on the branch either way.',
+        closable ? `${landed}: the work is already where it belongs.` : soft.length ? `In the way: ${soft.join(', ')}.` : null,
         inside ? `The session "${inside.title ?? inside.id.slice(0, 8)}" inside it is closed first.` : null,
-        forced ? 'What is not committed is thrown away (git worktree remove --force); the branch and its commits are kept.' : 'git worktree remove; the branch keeps its commits.',
+        forced && one.meta?.dirty ? 'What is not committed is thrown away (git worktree remove --force); the branch and its commits are kept.' : forced ? 'Removed with git worktree remove --force past the checks above; the branch and its commits are kept.' : 'git worktree remove; the branch keeps its commits.',
       ]
         .filter(Boolean)
         .join(' '),
@@ -535,7 +538,7 @@ export function HousekeepingPanel() {
           freeNow.length === 0,
           freeNow,
         )}
-        <button className="ghost-btn tiny" disabled={Boolean(busy)} onClick={() => load()}>
+        <button className="ghost-btn tiny" disabled={Boolean(busy)} onClick={() => { void window.api.housekeeping.refreshPrs(null).catch(() => {}); void load(); }}>
           {busy === 'reading' ? 'Reading…' : 'Refresh'}
         </button>
         <button className="ghost-btn tiny" disabled={Boolean(busy)} onClick={() => askClaude()} title="Open a Claude session with the machine's state and ask how to free memory and disk">
@@ -840,6 +843,13 @@ function wantsPr(item: HousekeepingItem): boolean {
   return !(prs && (prs.open > 0 || prs.merged > 0));
 }
 
+/** The only thing in git's way is the session standing inside: ending that session is enough, forced or not. */
+function heldBySessionOnly(item: HousekeepingItem): boolean {
+  if (item.kind !== 'worktree' || item.meta?.broken || item.meta?.prunable || item.meta?.work === 'base') return false;
+  const hard = (item.meta?.hardBlockers as string[] | undefined) ?? item.blockers.filter((b) => /main working tree|base branch|^locked$|a session is inside it|repair it first/.test(b));
+  return hard.length > 0 && hard.every((b) => /a session is inside it/.test(b));
+}
+
 function closeTitle(item: HousekeepingItem): string {
   const prs = pullsOf(item);
   if (!prs || !prs.prs.length) return `${item.state ?? 'merged'}: delete the folder from the disk${item.meta?.dirty ? ', discarding what is not committed' : ''}${item.blockers.some((b) => /session is inside/.test(b)) ? ', closing the session inside first' : ''}`;
@@ -922,7 +932,9 @@ function PrModal({ item, onClose, onDone }: { item: HousekeepingItem; onClose: (
     setError(null);
     try {
       const out = await window.api.housekeeping.createPr({ path: item.path, title, body, base, push: true });
-      onDone(`Pull request ${out.id ? `#${out.id} ` : ''}opened from ${out.branch} against ${out.base}.`);
+      onDone(out.existing ? `${out.branch} already has pull request #${out.id} open against ${out.base}; that is the one.` : `Pull request ${out.id ? `#${out.id} ` : ''}opened from ${out.branch} against ${out.base}.`);
+      // Shown where it lives: the person wants to see the pull request they just asked for.
+      if (out.url) window.api.system.openExternal(out.url);
       onClose();
     } catch (e) {
       setError(String((e as Error)?.message ?? e));
@@ -1959,7 +1971,11 @@ function ConfirmModal({ pending, busy, onCancel, onConfirm }: { pending: Pending
   const bytes = weigh(pending.items);
   const forcedKind = pending.key.includes('forced') || /anyway/i.test(pending.title);
   const closing = pending.key.startsWith('close');
-  const blocked = closing
+  /** Held by a session alone: nothing is refused once that session is gone. */
+  const held = pending.key.startsWith('close-held');
+  const blocked = held
+    ? []
+    : closing
     ? pending.items.filter((one) => !isClosable(one))
     : forcedKind
       ? pending.items.filter((one) => one.blockers.length && one.meta?.forceable !== true)
@@ -1999,7 +2015,7 @@ function ConfirmModal({ pending, busy, onCancel, onConfirm }: { pending: Pending
                       {one.state ?? KIND_LABEL[one.kind]}
                       {Array.isArray(one.meta?.loses) && (one.meta.loses as string[]).length ? (
                         <small className="is-lost"> · loses {(one.meta.loses as string[]).join(', ')}</small>
-                      ) : closing && isClosable(one) ? (
+                      ) : closing && (held || isClosable(one)) ? (
                         <small> · {one.blockers.some((b) => /session is inside/.test(b)) ? 'session inside closed first' : 'nothing lost'}</small>
                       ) : one.blockers.length ? (
                         <small> · {one.blockers.join(', ')}</small>
@@ -2390,7 +2406,12 @@ function Table({
                     Close worktree
                   </button>
                 )}
-                {quick && !working && !(one.kind === 'worktree' && isClosable(one)) && (!blocked || Boolean(one.meta?.broken) || (allowForce && one.meta?.forceable === true)) && (
+                {quick && !working && one.kind === 'worktree' && !isClosable(one) && heldBySessionOnly(one) && (
+                  <button className="danger-btn tiny" onClick={() => quick.run(one)} title="A session is inside it: that session is closed first, then the worktree is removed. Commits stay on the branch.">
+                    Remove anyway
+                  </button>
+                )}
+                {quick && !working && !(one.kind === 'worktree' && (isClosable(one) || heldBySessionOnly(one))) && (!blocked || Boolean(one.meta?.broken) || (allowForce && one.meta?.forceable === true)) && (
                   <button
                     className={`${blocked && !one.meta?.broken ? 'danger-btn' : 'ghost-btn'} tiny`}
                     onClick={() => quick.run(one)}

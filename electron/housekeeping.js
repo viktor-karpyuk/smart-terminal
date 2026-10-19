@@ -82,7 +82,7 @@ class Housekeeping {
       set: (key, value) => this.store.setSetting(key, value),
       now,
       emit: (event, payload) => this.emit(event, payload),
-      forgeFor: (root) => this.#forgeFor(root),
+      forgeFor: (root, remote) => this.#forgeFor(root, remote),
     });
   }
 
@@ -90,12 +90,17 @@ class Housekeeping {
    * The Code Reviewer's adapter for the repository at a root, matched by its remote:
    * the way to ask Bitbucket, with the token the person gave that repository there.
    */
-  async #forgeFor(root) {
+  async #forgeFor(root, preferRemote = null) {
     if (!this.review?.forgeByRemote) return null;
     const remotes = await new Promise((resolve) => {
       execFile('git', ['remote', '-v'], { cwd: root, timeout: 10_000 }, (error, stdout) => resolve(error ? '' : String(stdout)));
     });
-    const urls = [...new Set(remotes.split('\n').map((line) => line.split(/\s+/)[1]).filter(Boolean))];
+    // The remote the branch was pushed to first, then origin, then the rest: a checkout with two
+    // remotes (a fork and the upstream) has its pull requests where its branch went.
+    const pairs = remotes.split('\n').map((line) => line.split(/\s+/)).filter((parts) => parts[1]);
+    const rank = (name) => (name === preferRemote ? 0 : name === 'origin' ? 1 : 2);
+    pairs.sort((a, b) => rank(a[0]) - rank(b[0]));
+    const urls = [...new Set(pairs.map((parts) => parts[1]))];
     for (const url of urls) {
       const found = this.review.forgeByRemote(url);
       if (found) return found;
@@ -342,7 +347,7 @@ class Housekeeping {
           state: row.state,
           blockers: row.blockers,
           detail: [row.branch ? `branch ${row.branch}` : null, row.upstream ? `tracks ${row.upstream}` : row.ownWork ? 'no upstream' : null].filter(Boolean).join(' · ') || null,
-          meta: { root: row.root, branch: row.branch, finished: row.finished, prunable: row.prunable, broken: row.broken, work: prs?.allMerged && row.work === 'unmerged' && !row.dirty ? 'done' : row.work, prs, aheadOfBase: row.aheadOfBase, dirtyCount: row.dirtyCount, dirty: row.dirty, forceable: row.forceable, loses: row.loses, session: this.#sessionUnder(row.path), sized: Boolean(known) || row.prunable },
+          meta: { root: row.root, branch: row.branch, hardBlockers: row.hardBlockers, finished: row.finished, prunable: row.prunable, broken: row.broken, work: prs?.allMerged && row.work === 'unmerged' && !row.dirty ? 'done' : row.work, prs, aheadOfBase: row.aheadOfBase, dirtyCount: row.dirtyCount, dirty: row.dirty, forceable: row.forceable, loses: row.loses, session: this.#sessionUnder(row.path), sized: Boolean(known) || row.prunable },
         });
       });
   }
@@ -865,7 +870,7 @@ class Housekeeping {
     const log = base ? (await this.#git(row.path, ['log', '--format=%s', '-30', `${base.name}..HEAD`])).out.split('\n').filter(Boolean) : [];
     const subject = log.length === 1 ? log[0] : row.branch.split('/').pop().replace(/[-_]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
     const remote = row.upstream ? row.upstream.split('/')[0] : (await this.#git(row.root, ['remote'])).out.split('\n').filter(Boolean)[0] ?? null;
-    const forge = await this.#forgeFor(row.root);
+    const forge = await this.#forgeFor(row.root, remote);
     const url = remote ? (await this.#git(row.root, ['remote', 'get-url', remote])).out : '';
     const via = forge ? (/bitbucket/.test(url) ? 'Bitbucket' : 'GitHub') : /github\.com/.test(url) ? 'gh' : null;
     return {
@@ -892,16 +897,28 @@ class Housekeeping {
     if (!title?.trim()) throw new Error('The pull request needs a title.');
     const destination = String(base || draft.base || '').replace(/^origin\//, '');
     if (!destination) throw new Error('Choose the branch the pull request goes against.');
-    if (draft.mustPush) {
-      if (!push) throw new Error(`${draft.branch} is not on ${draft.remote ?? 'the remote'} yet; it has to be pushed first.`);
+    const row = await this.#quickRow(draft.path);
+    const forge = draft.via === 'gh' ? null : await this.#forgeFor(row.root, draft.remote);
+    // One already open for the branch: that is the pull request, not a reason for a second.
+    if (forge) {
+      const open = (await forge.forBranch(draft.branch).catch(() => [])).find((pr) => pr.state === 'OPEN');
+      if (open) {
+        await this.pulls.refresh([row], { force: true }).catch(() => {});
+        return { id: open.id, url: open.url, base: open.targetBranch, branch: draft.branch, existing: true };
+      }
+    }
+    const pushBranch = async () => {
       this.emit('progress', { op: 'create-pr', label: `pushing ${draft.branch}`, done: false });
       const pushed = await this.#git(draft.path, ['push', '-u', draft.remote, `${draft.branch}:${draft.branch}`], { timeout: 5 * 60_000 });
       if (!pushed.ok) throw new Error(`git push failed: ${pushed.err.split('\n').pop() || 'unknown'}`);
       this.worktrees.memo.delete(draft.path);
+    };
+    if (draft.mustPush) {
+      if (!push) throw new Error(`${draft.branch} is not on ${draft.remote ?? 'the remote'} yet; it has to be pushed first.`);
+      await pushBranch();
     }
     this.emit('progress', { op: 'create-pr', label: `opening the pull request against ${destination}`, done: false });
     let created;
-    const row = await this.#quickRow(draft.path);
     if (draft.via === 'gh') {
       const done = await new Promise((resolve) => {
         execFile('gh', ['pr', 'create', '--head', draft.branch, '--base', destination, '--title', title.trim(), '--body', body ?? ''], { cwd: draft.path, timeout: 60_000, env: { ...process.env, GH_PROMPT_DISABLED: '1' } }, (error, stdout, stderr) => resolve({ ok: !error, out: String(stdout ?? '').trim(), err: String(stderr ?? '').trim() }));
@@ -910,8 +927,20 @@ class Housekeeping {
       const url = done.out.split('\n').pop();
       created = { id: Number(url.split('/').pop()) || null, url };
     } else {
-      const forge = await this.#forgeFor(row.root);
-      created = await forge.createPr({ title: title.trim(), description: body ?? '', source: draft.branch, destination });
+      const open = () => forge.createPr({ title: title.trim(), description: body ?? '', source: draft.branch, destination });
+      try {
+        created = await open();
+      } catch (error) {
+        const text = String(error?.message ?? error);
+        // The upstream is set but the branch is not there (a push that never landed, a rewritten remote): push now and ask once more.
+        if (/branch not found/i.test(text) && draft.remote) {
+          await pushBranch();
+          created = await open();
+        } else {
+          const said = /"message"\s*:\s*"([^"]+)"/.exec(text);
+          throw new Error(said ? `${draft.via} refused: ${said[1]}` : text);
+        }
+      }
     }
     this.store.log({ action: 'create-pr', kind: 'worktree', label: path.basename(draft.path), bytes: 0, ok: true, detail: `#${created.id} → ${destination}` });
     this.worktrees.memo.delete(draft.path);
