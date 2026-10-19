@@ -11,14 +11,14 @@
 <link rel="apple-touch-icon" href="/icon.png">
 <title>Smart Terminal</title>
 <link rel="stylesheet" href="/assets/xterm.css">
-<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/app.css?v=3">
 </head>
 <body data-view="loading">
 <main class="pair" id="pair" hidden>
   <form class="pair-card" id="pair-form">
     <h1>Smart Terminal</h1>
     <p class="note">In Smart Terminal on your computer, open <strong>Remote</strong> and press <strong>Pair a phone</strong>. Type the code it shows.</p>
-    <label>Code<input id="code" name="code" inputmode="latin" autocapitalize="characters" autocomplete="one-time-code" spellcheck="false" maxlength="7" placeholder="ABC123" required></label>
+    <label>Code<input id="code" name="code" inputmode="latin" autocapitalize="characters" autocomplete="one-time-code" spellcheck="false" maxlength="7" size="7" placeholder="ABC123" required></label>
     <label>This phone's name<input id="name" name="name" autocomplete="off" maxlength="60" placeholder="iPhone"></label>
     <button class="primary" type="submit">Pair</button>
     <p class="error" id="pair-error" role="alert"></p>
@@ -55,6 +55,6 @@
 
 <script src="/assets/xterm.js"></script>
 <script src="/assets/addon-fit.js"></script>
-<script src="/app.js"></script>
+<script src="/app.js?v=3"></script>
 </body>
 </html>
