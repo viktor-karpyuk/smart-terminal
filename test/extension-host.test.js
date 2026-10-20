@@ -679,3 +679,13 @@ test('stopping a build and running a production job ask first, naming the job an
   // Looking at things asks nothing.
   for (const verb of ['jenkins.job', 'jenkins.log', 'jenkins.follow', 'jenkins.favorite', 'jenkins.cancelQueued', 'jenkins.archive', 'jenkins.save', 'jenkins.archiveSettings']) assert.equal(H.needsConsent(verb, { path: 'x' }), null, verb);
 });
+
+// ── Remote: the phone's server is the app's own panel's, and nobody else's ──
+test('Remote verbs route to their door, and no permission can grant them', () => {
+  assert.equal(H.route('remote.overview'), 'remote');
+  assert.equal(H.route('remote.setEnabled'), 'remote');
+  assert.equal(H.route('remote.nonsense'), null);
+  assert.equal(H.permissionFor('remote.setEnabled'), null, 'opening a port is nothing an installed extension can ask for');
+  assert.equal(H.permitted({ trusted: true }, 'remote.pair'), true);
+  assert.equal(H.permitted({ trusted: false, permissions: ['terminal', 'teams', 'jenkins.write'] }, 'remote.pair'), false);
+});

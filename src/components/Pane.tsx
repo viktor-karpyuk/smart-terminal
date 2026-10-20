@@ -7,6 +7,7 @@ import { TerminalSlot } from './TerminalSlot';
 import { NewSessionMenu } from './NewSessionMenu';
 import { FindBar } from './FindBar';
 import { HandoffBanner } from './HandoffBanner';
+import { RemoteBanner } from './RemoteBanner';
 import { GROUP_MIME, PANEL_MIME, PANE_MIME, SESSION_MIME, sideFromPoint, type Side } from '../lib/drag';
 import { PathLabel } from './PathLabel';
 import { SessionTab } from './SessionTab';
@@ -440,6 +441,7 @@ export function Pane({ leaf }: { leaf: LeafNode }) {
             <TerminalSlot key={leaf.active} sessionId={leaf.active} />
             {activeSession.offerCommand && <CommandOffer sessionId={leaf.active} />}
             {activeSession.limitHit && <HandoffBanner sessionId={leaf.active} />}
+            <RemoteBanner sessionId={leaf.active} />
             {findOpenFor === leaf.active && <FindBar sessionId={leaf.active} />}
           </>
         ) : (

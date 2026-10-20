@@ -4198,6 +4198,15 @@ button.ci-toast-main { cursor: pointer; }
 .housekeeping-regenerable { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 12px; }
 .housekeeping-regenerable textarea { width: 320px; max-width: 100%; padding: 4px 8px; background: var(--bg-input); color: var(--text); border: 1px solid var(--border); border-radius: var(--r-sm); font: inherit; font-family: var(--font-mono, monospace); font-size: var(--fs-xs); resize: vertical; }
 .activity.housekeeping-dot.is-attention::after, .activity.housekeeping-dot.is-limit::after { top: 6px; right: 6px; width: 7px; height: 7px; }
+/* Remote's launcher: a dot while the phone's server is on, red when it could not start, and the count of sessions open on phones. */
+.activity.remote-dot { position: relative; }
+.activity.remote-dot.is-on::after, .activity.remote-dot.is-bad::after { content: ''; position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--ok, #3a9d5d); }
+.activity.remote-dot.is-bad::after { background: var(--danger, #d9534f); }
+.activity.remote-dot .remote-count { position: absolute; top: 2px; right: 2px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; background: var(--accent); color: var(--on-accent, #fff); font-size: 10px; line-height: 14px; text-align: center; font-weight: 600; }
+.remote-banner { position: absolute; left: 8px; right: 8px; top: 8px; z-index: 20; display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--bg-elevated); border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent); border-radius: var(--r-lg); box-shadow: var(--shadow-md); }
+.remote-banner-text { display: grid; gap: 1px; flex: 1 1 220px; min-width: 0; }
+.remote-banner-text strong { font-size: var(--fs-sm); font-weight: 600; }
+.remote-banner-text small { font-size: var(--fs-xs); color: var(--text-faint); }
 .titlebar-vitals { -webkit-app-region: no-drag; display: inline-flex; gap: 10px; align-items: center; margin-left: 10px; padding: 2px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-input); color: var(--text-faint); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
 .titlebar-vitals:hover { color: var(--text); background: var(--bg-hover); }
 .titlebar-vitals.is-attention { border-color: #c9a227; }

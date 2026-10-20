@@ -273,6 +273,25 @@ your worktrees, the Code Reviewer's clones, old installers and backups — is li
 space back. Caches and installers go behind one button; sessions and clones are picked
 row by row. See [docs/housekeeping.md](docs/housekeeping.md).
 
+## Your sessions on your phone
+
+The **Remote** panel (in the launcher) makes this computer the server: turn it on, and
+it serves a small page on your network with the sessions open here and a terminal for
+the one you tap, sized to the phone, with A−/A+ for the text and a bar for the keys a
+phone keyboard lacks. Pair a phone once: type the six-character code the panel shows,
+open the panel's link with the code in it, or point the phone's camera at the QR code.
+On an iPhone, add the page to the home screen first and pair from there: it opens like
+an app. On the same Wi-Fi the phone reaches the computer directly, over plain HTTP, so
+only on a Wi-Fi you trust; away from home, install Tailscale on both and the panel shows
+the address that works from anywhere, encrypted, as long as the computer is on — and
+can be told to listen through Tailscale only. Nothing goes through anybody else's server.
+A phone may take a session's width while it has it open; the session here says so, with
+a button to take the size back. A phone that loses its connection comes back on its own
+with the same size; a phone stays paired for a year, or until you forget it in the panel,
+or until a month goes by without it. The panel lists every phone that is paired and every
+session one has open, and can forget or close either; the port must be free, and a page
+on the home screen keeps the old address if the port changes.
+
 ## Project structure
 
 ```

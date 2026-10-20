@@ -472,6 +472,10 @@ function Frame({
           // credentials never leave the main process.
           return reply(true, await window.api.teams.call(name.slice(6), args), undefined);
         }
+        if (channel === 'remote') {
+          // The phone's server: a port, a code and the phones it knows. Nothing of a folder's.
+          return reply(true, await window.api.remote.call(name.slice(7), args), undefined);
+        }
         if (channel === 'jenkins') {
           // Servers and their tokens are the main process's: nothing here names an address or holds a credential.
           return reply(true, await window.api.jenkins.call(name.slice(8), args), undefined);
@@ -899,6 +903,12 @@ function Frame({
   useEffect(() => {
     if (!view.listens?.includes('jenkins')) return;
     return window.api.jenkins.onEvent((payload) => tell('jenkins', payload));
+  }, [view.listens]);
+
+  // Remote: a phone paired, opened or closed something; the panel reads again.
+  useEffect(() => {
+    if (!view.listens?.includes('remote')) return;
+    return window.api.remote.onEvent((payload) => tell('remote', payload));
   }, [view.listens]);
 
   // The working tree moved: the panel is told, and decides for itself what of

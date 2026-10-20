@@ -44,6 +44,8 @@ const {
 } = require('./extensions');
 const { withCatalog } = require('./extensions');
 const { ScrollbackStore } = require('./scrollback-store');
+const { RemoteServer, RecentOutput } = require('./remote-server');
+const { Tailscale } = require('./tailscale');
 const { registry: makeRegistry } = require('./extension-registry');
 const { installer: makeInstaller } = require('./extension-installer');
 const { parseReport, replyFor, wantsBrief, compactionNote } = require('./hooks');
@@ -244,6 +246,10 @@ let housekeepingJobs = null;
 let worktreeCleanup = null;
 let worktreeOffer = null;
 let teamsService = null;
+/** Your sessions on your phone: this computer serving them itself, when the person turns it on. */
+let remoteServer = null;
+/** What each session printed lately, kept only while a phone may open sessions. */
+const recentOutput = new RecentOutput();
 /** Jenkins: the credentials, the poller, and the verbs the panel may call. Its tables live in this app's own database. */
 let jenkinsService = null;
 /** What Claude sessions may ask of it: read-only, and a dialog for anything that starts a build. */
@@ -343,6 +349,96 @@ const TEAMS_VERBS = {
   saveBot: (service, args) => {
     if (!service.bot) throw new Error('The bot needs both Teams and the Code Reviewer running.');
     return { ok: true, bot: service.bot.save(args.bot ?? {}) };
+  },
+};
+
+/** The pty a session runs in now, or null. */
+function ptyOfSession(sessionId) {
+  for (const [ptyId, owner] of sessionByPty) if (owner === sessionId) return ptyId;
+  return null;
+}
+
+/**
+ * Remote: the phone's server, run by this app. Everything it reaches is named
+ * here — a session is a pty, typing is writing to it — and it starts listening
+ * only once the person has turned it on in its panel.
+ */
+function createRemoteServer() {
+  try {
+    return new RemoteServer({
+      file: path.join(app.getPath('userData'), 'remote.json'),
+      version: app.getVersion(),
+      webDir: path.join(__dirname, '..', 'extensions', 'remote', 'web'),
+      assets: {
+        'xterm.js': require.resolve('@xterm/xterm/lib/xterm.js'),
+        'xterm.css': require.resolve('@xterm/xterm/css/xterm.css'),
+        'addon-fit.js': require.resolve('@xterm/addon-fit/lib/addon-fit.js'),
+      },
+      sessions: () => roster().filter((row) => ptyOfSession(row.id)).map((row) => ({ id: row.id, title: row.title, kind: row.kind, cwd: row.cwd })),
+      attach: (sessionId) => {
+        const ptyId = ptyOfSession(sessionId);
+        const size = ptyId ? ptys.size(ptyId) : null;
+        if (!size) return null;
+        return { ptyId, cols: size.cols, rows: size.rows, kind: size.kind, title: db.getSession(sessionId)?.title ?? '', replay: recentOutput.get(ptyId) };
+      },
+      write: (ptyId, data) => {
+        cwdWatcher?.wake();
+        noteTyping(sessionByPty.get(ptyId));
+        ptys.write(ptyId, data);
+      },
+      resize: (ptyId, cols, rows) => ptys.resize(ptyId, cols, rows),
+      // One row shorter and back: the program is told the size changed, and draws everything again.
+      redraw: (ptyId) => {
+        const size = ptys.size(ptyId);
+        if (!size || size.rows < 3) return;
+        ptys.resize(ptyId, size.cols, size.rows - 1);
+        // Back to the size it had, unless a phone sized it in the meantime: then that size stands.
+        setTimeout(() => {
+          const now = ptys.size(ptyId);
+          if (now && now.cols === size.cols && now.rows === size.rows - 1) ptys.resize(ptyId, size.cols, size.rows);
+        }, 80);
+      },
+      describe: (sessionId) => describeSession(sessionId),
+      notify: (title, body) => {
+        if (Notification.isSupported()) new Notification({ title, body }).show();
+      },
+      changed: () => send('remote:event', { type: 'changed' }),
+      // A phone took a session's size or gave it back: the pane says so, with a way to take it back.
+      driven: (ptyId, from) => send('remote:event', { type: 'driven', sessionId: sessionByPty.get(ptyId) ?? null, from }),
+      log: (line) => console.log(`[remote] ${line}`),
+      // Away from home the phone comes in through Tailscale; this reads what it says, and configures nothing.
+      tailscale: new Tailscale(),
+    });
+  } catch (error) {
+    console.error('[remote] could not start:', error);
+    return null;
+  }
+}
+
+/** What the Remote panel may ask for. */
+const REMOTE_VERBS = {
+  overview: async (s) => ({ ok: true, ...(await s.overviewFresh()) }),
+  status: (s) => ({ ok: true, ...s.status() }),
+  setEnabled: (s, args) => (typeof args.enabled === 'boolean' ? s.setEnabled(args.enabled) : { ok: false, error: 'On or off, nothing else.' }),
+  setBind: (s, args) => s.setBind(args.bind),
+  release: (s, args) => s.release(String(args.ch ?? '')),
+  /** A session's size back from the phone that has it, by session: the pane's own button. */
+  releaseSession: (s, args) => {
+    const ptyId = ptyOfSession(String(args.sessionId ?? ''));
+    const viewer = ptyId ? s.status().viewers.find((v) => v.driven && v.sessionId === String(args.sessionId)) : null;
+    return viewer ? s.release(viewer.ch) : { ok: false, error: 'No phone has that session\'s size.' };
+  },
+  setPort: (s, args) => s.setPort(args.port),
+  pair: (s) => s.newPairingCode(),
+  cancelPairing: (s) => s.cancelPairing(),
+  revoke: (s, args) => s.revoke(String(args.id ?? '')),
+  disconnect: (s, args) => s.disconnect(args.ch ? String(args.ch) : null),
+  // The page in this computer's own browser, to try it: only an address the server itself listed — or Tailscale's download page.
+  open: (s, args) => {
+    const url = String(args.url ?? '');
+    if (url !== 'https://tailscale.com/download' && !s.allAddresses().includes(url)) return { ok: false, error: 'Not one of this computer\'s addresses.' };
+    shell.openExternal(url);
+    return { ok: true };
   },
 };
 
@@ -1227,7 +1323,11 @@ function registerIpc() {
     noteTyping(sessionByPty.get(id));
     ptys.write(id, data);
   });
-  ipcMain.on('pty:resize', (_e, { id, cols, rows }) => ptys.resize(id, cols, rows));
+  ipcMain.on('pty:resize', (_e, { id, cols, rows }) => {
+    // While a phone has the session at its own size, the app's size waits for the phone to let go.
+    if (!remoteServer?.drives(id)) ptys.resize(id, cols, rows);
+    remoteServer?.resized(id, cols, rows);
+  });
   ipcMain.on('pty:flow', (_e, { id, paused }) => ptys.flow(id, paused));
 
   /*
@@ -2454,6 +2554,18 @@ function registerIpc() {
    * reach it through the app rather than through this channel — a panel cannot
    * name another extension's service, and should not be able to.
    */
+  /** Remote: the phone's server, one door for its panel. */
+  ipcMain.handle('remote:call', async (_e, { name, args } = {}) => {
+    if (!remoteServer) return { ok: false, error: 'Remote could not start in this app; restart Smart Terminal and look at the log.' };
+    try {
+      const handler = REMOTE_VERBS[String(name ?? '')];
+      if (!handler) return { ok: false, error: `No such Remote action: ${name}` };
+      return (await handler(remoteServer, args ?? {})) ?? { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error?.message ?? error) };
+    }
+  });
+
   ipcMain.handle('teams:call', async (_e, { name, args } = {}) => {
     if (!teamsService) return { ok: false, error: 'Teams is not running.' };
     try {
@@ -2865,6 +2977,9 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   // What the hours held back is looked at again on a clock of its own: the
   // delivery extension promises the morning, and something has to bring it.
   teamsService?.start();
+  // The phone's server: it listens only if the person turned it on last time.
+  remoteServer = createRemoteServer();
+  remoteServer?.start();
   // Builds that finish while no panel is open are noticed here, on a clock of its own.
   jenkinsService = createJenkinsService();
   jenkinsService?.start();
@@ -2895,6 +3010,12 @@ if (isPrimaryInstance) app.whenReady().then(() => {
         autopilot.noteOutput(owner);
         lastOutputBySession.set(owner, Date.now());
       }
+      if (remoteServer?.running) {
+        recentOutput.add(payload.id, payload.data);
+        remoteServer.output(payload.id, payload.data);
+      } else if (recentOutput.byPty.size) {
+        recentOutput.clear();
+      }
     }
     sendToPtyOwner(channel, payload);
     /*
@@ -2911,7 +3032,11 @@ if (isPrimaryInstance) app.whenReady().then(() => {
      * `foregroundByPty` was frozen too, because the watcher only ever polls
      * living ptys — so "is Claude up" answered for a process that had exited.
      */
-    if (channel === 'pty:exit') forgetPty(payload.id);
+    if (channel === 'pty:exit') {
+      forgetPty(payload.id);
+      recentOutput.forget(payload.id);
+      remoteServer?.exited(payload.id);
+    }
   });
 
   autopilot = new Autopilot({
@@ -3796,6 +3921,8 @@ function retireLegacyWorkspace() {
  */
 let springStopped = false;
 app.on('will-quit', () => {
+  // The phones are told the computer is going, rather than left to time out.
+  remoteServer?.stop('Smart Terminal quit on the computer.');
   kubeStreams.stopAll();
   kubeForwards.stopAll();
   // A `claude -p` nobody can see would go on spending on the person's account.

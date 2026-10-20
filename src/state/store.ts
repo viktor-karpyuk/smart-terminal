@@ -12,7 +12,7 @@ import { forgetPanel, whereEachPanelWas } from '../lib/panelHolds';
 import { baseOf, movedPath, moveProblem, nameProblem, parentOf } from '../lib/fileOps';
 import { arrangeGroup, moveGroupTo } from './groups';
 import { closePane, movePane, panePlace, restorePaneAt, splitEmpty, splitOffTabs, swapPanes } from './layout';
-import { GIT_TAB } from './types';
+import { GIT_TAB , RemoteStatus } from './types';
 import type {
   Advice,
   MonitorPanel,
@@ -563,6 +563,8 @@ interface State {
   historyOpen: boolean;
   /** What the health job last said: shown as a dot beside the housekeeping button. */
   housekeepingStatus: 'fine' | 'attention' | 'limit';
+  /** Remote, the phone's server: on or failed, and which sessions a phone has open — and sized. */
+  remote: RemoteStatus;
   appearanceOpen: boolean;
   /**
    * What the app knows about newer versions of itself. Owned by the main
@@ -780,6 +782,9 @@ interface State {
   restoreGroup(groupId: string, arrangement?: GroupArrangement): Promise<number>;
   setHistoryOpen(open: boolean): void;
   setHousekeepingStatus(status: 'fine' | 'attention' | 'limit'): void;
+  setRemoteStatus(status: RemoteStatus): void;
+  /** Ask the phone's server where things stand; cheap, and called whenever it says something changed. */
+  refreshRemoteStatus(): Promise<void>;
   setAppearanceOpen(open: boolean): void;
   setUpdatePanelOpen(open: boolean): void;
   /** Ask now. `force` also ignores a version that was skipped. */
@@ -961,6 +966,7 @@ export const useStore = create<State>((set, get) => ({
   groups: [],
   historyOpen: false,
   housekeepingStatus: 'fine',
+  remote: { enabled: false, running: false, error: null, viewers: [] },
   housekeepingTab: null,
   housekeepingVitals: null,
   appearanceOpen: false,
@@ -3364,6 +3370,21 @@ export const useStore = create<State>((set, get) => ({
 
   setHousekeepingStatus(status) {
     if (get().housekeepingStatus !== status) set({ housekeepingStatus: status });
+  },
+
+  setRemoteStatus(status) {
+    if (JSON.stringify(get().remote) !== JSON.stringify(status)) set({ remote: status });
+  },
+
+  async refreshRemoteStatus() {
+    try {
+      const r = await window.api.remote.call('status');
+      if (!r || r.ok === false) return;
+      const viewers = Array.isArray(r.viewers) ? (r.viewers as RemoteStatus['viewers']) : [];
+      get().setRemoteStatus({ enabled: Boolean(r.enabled), running: Boolean(r.running), error: typeof r.error === 'string' ? r.error : null, viewers });
+    } catch {
+      /* the app without its server: nothing to show */
+    }
   },
 
   /** Open housekeeping, or bring the one that is already open forward. One is enough: it shows the whole disk. */

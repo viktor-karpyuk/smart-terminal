@@ -289,6 +289,17 @@ const JENKINS_WRITE = [
 ] as const;
 /** A Claude session handed what the app gathered about a build. */
 const JENKINS_APP = ['ask'] as const;
+/**
+ * Remote: the phone's server. Its panel is the only thing that should touch it —
+ * turning it on opens a port — so no permission grants these to an extension from
+ * outside; `permissionFor` says so.
+ */
+const REMOTE_READ = ['overview', 'status'] as const;
+const REMOTE_WRITE = ['setEnabled', 'setPort', 'setBind', 'pair', 'cancelPairing', 'revoke', 'disconnect', 'release', 'open'] as const;
+const REMOTE_VERBS = new Map<string, Channel>(
+  [...REMOTE_READ, ...REMOTE_WRITE].map((name) => [name, 'remote'] as [string, Channel]),
+);
+
 const JENKINS_VERBS = new Map<string, Channel>([
   ...JENKINS_READ.map((name) => [name, 'jenkins'] as [string, Channel]),
   ...JENKINS_WRITE.map((name) => [name, 'jenkins'] as [string, Channel]),
@@ -309,7 +320,7 @@ const KUBE_VERBS = new Map<string, Channel>([
   ...KUBE_APP.map((name) => [name, 'app'] as [string, Channel]),
 ]);
 
-export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review' | 'teams' | 'jenkins';
+export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review' | 'teams' | 'jenkins' | 'remote';
 
 /**
  * Which door a call goes through, or none.
@@ -329,6 +340,7 @@ export function route(name: string): Channel | null {
   if (name.startsWith('review.')) return REVIEW_VERBS.get(name.slice(7)) ?? null;
   if (name.startsWith('teams.')) return TEAMS_VERBS.get(name.slice(6)) ?? null;
   if (name.startsWith('jenkins.')) return JENKINS_VERBS.get(name.slice(8)) ?? null;
+  if (name.startsWith('remote.')) return REMOTE_VERBS.get(name.slice(7)) ?? null;
   return null;
 }
 
@@ -372,6 +384,8 @@ export function permissionFor(name: string): string | null {
   if (channel === 'kube-stream') return KUBE_READ_STREAMS.has(name.slice(5)) ? 'kube.read' : 'kube.write';
   if (channel === 'helm') return (HELM_READ as readonly string[]).includes(name.slice(5)) ? 'helm.read' : 'helm.write';
   if (channel === 'jenkins') return (JENKINS_READ as readonly string[]).includes(name.slice(8)) ? 'jenkins.read' : 'jenkins.write';
+  // Opening a port on this computer is nothing an installed extension gets to ask for.
+  if (channel === 'remote') return null;
   return channel;
 }
 

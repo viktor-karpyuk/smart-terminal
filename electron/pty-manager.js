@@ -142,6 +142,9 @@ class PtyManager {
       profileId: profile.id,
       cwd: workdir,
       kind,
+      // The size it was given, kept so a phone showing it later can start at the same one.
+      cols,
+      rows,
       pending: '',
       flushTimer: null,
       bootstrapped: false,
@@ -215,6 +218,12 @@ class PtyManager {
     }));
   }
 
+  /** The size the app last gave it: a phone showing it too has to use the same. */
+  size(id) {
+    const session = this.sessions.get(id);
+    return session ? { cols: session.cols, rows: session.rows, kind: session.kind } : null;
+  }
+
   write(id, data) {
     this.sessions.get(id)?.proc.write(data);
   }
@@ -250,6 +259,8 @@ class PtyManager {
     if (!session) return;
     try {
       session.proc.resize(Math.max(2, cols | 0), Math.max(1, rows | 0));
+      session.cols = Math.max(2, cols | 0);
+      session.rows = Math.max(1, rows | 0);
     } catch {
       /* the process may have exited between the resize and this call */
     }

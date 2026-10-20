@@ -294,6 +294,12 @@ contextBridge.exposeInMainWorld('api', {
     onEvent: (handler) => on('teams:event', handler),
   },
 
+  /** Remote: the phone's server, one door for its panel, and one event for "read it again". */
+  remote: {
+    call: (name, args) => ipcRenderer.invoke('remote:call', { name, args }),
+    onEvent: (handler) => on('remote:event', handler),
+  },
+
   /** Jenkins: one door, and one stream of "something changed, read it again". */
   jenkins: {
     call: (name, args) => ipcRenderer.invoke('jenkins:call', { name, args }),

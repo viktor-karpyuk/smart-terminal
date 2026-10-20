@@ -1,0 +1,338 @@
+<style>
+  body { overflow: auto; }
+  .page { max-width: 640px; margin: 0 auto; padding: 20px 18px 40px; display: grid; gap: 16px; }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  h2 { font-size: 11px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); font-weight: 600; }
+  p { margin: 0; line-height: 1.55; }
+  .dim { color: var(--text-dim); } .faint { color: var(--text-faint); } .small { font-size: 11px; } .bad { color: var(--danger); } .ok { color: var(--ok); }
+  .card { border: 1px solid var(--border); border-radius: 8px; padding: 14px; background: var(--bg-panel); display: grid; gap: 10px; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+  .btn { font: inherit; font-size: 12px; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; background: var(--bg-elevated); cursor: pointer; white-space: nowrap; }
+  .btn:hover:not([disabled]) { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent, var(--bg)); font-weight: 600; }
+  .btn.quiet { border-color: transparent; color: var(--text-dim); }
+  .btn.danger { color: var(--danger); }
+  .btn[disabled] { opacity: .5; cursor: default; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); display: inline-block; }
+  .dot.on { background: var(--ok); } .dot.bad { background: var(--danger); } .dot.wait { background: var(--warn, #e2a84b); }
+  input[type="text"] { font: inherit; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; width: 90px; }
+  input[type="text"]:focus { outline: none; border-color: var(--accent); }
+  input[type="text"].bad { border-color: var(--danger); }
+  label.check { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  code { font-family: var(--font-mono, ui-monospace, Menlo, monospace); font-size: 12px; }
+  .addr { display: flex; align-items: center; gap: 6px; padding: 5px 0; border-bottom: 1px solid var(--border); }
+  .addr:last-child { border-bottom: 0; }
+  .addr code { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .code { font-family: var(--font-mono, ui-monospace, Menlo, monospace); font-size: 34px; letter-spacing: .22em; text-align: center; padding: 12px 0 4px; user-select: all; }
+  .code.late { color: var(--danger); }
+  .qr { display: grid; grid-template-columns: 168px 1fr; gap: 14px; align-items: start; }
+  .qr svg { width: 168px; height: 168px; border-radius: 6px; display: block; }
+  .qr-which { display: flex; flex-wrap: wrap; gap: 4px; }
+  .qr-which .btn { font-size: 11px; padding: 3px 8px; }
+  .qr-which .btn.is-on { border-color: var(--accent); color: var(--text); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+  th { text-align: left; color: var(--text-dim); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+  td { padding: 6px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; overflow-wrap: anywhere; }
+  tr:last-child td { border-bottom: 0; }
+  td.act, th.act { text-align: right; white-space: nowrap; width: 150px; }
+  ul.steps { margin: 0; padding-left: 18px; line-height: 1.6; }
+  .flash { padding: 8px 12px; border-radius: 6px; font-size: 12px; background: var(--bg-elevated); border: 1px solid var(--border); }
+  .flash.bad { border-color: var(--danger); color: var(--danger); }
+  .confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elevated); font-size: 12px; }
+  .tag { font-size: 10.5px; padding: 1px 6px; border-radius: 99px; border: 1px solid var(--border); color: var(--text-dim); margin-left: 6px; white-space: nowrap; }
+  @media (max-width: 460px) { .qr { grid-template-columns: 1fr; } }
+</style>
+<div class="page" id="page"><p class="dim">Loading…</p></div>
+<script>
+  /*
+   * Remote: your sessions on your phone, served by this computer. This panel
+   * turns it on and off, shows where the phone should go, pairs phones, and
+   * lists who has what open. Everything it knows comes from one call,
+   * `overview`; the app says `remote` when any of it changes.
+   */
+  var state = { o: null, error: '', busy: {}, tick: null, showing: true, confirm: null, portDraft: null, portBad: false, qrAt: 0, stale: false, minute: 0 };
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
+  function call(name, args) {
+    return host.call('remote.' + name, args || {}).then(function (r) {
+      if (r && r.ok === false) throw new Error(r.error || 'Something went wrong.');
+      return r;
+    });
+  }
+  /** What an action did, said the way every panel says it: the app's own notice, which floats wherever the page is scrolled. */
+  function say(text, bad) { host.emit('notify', { text: String(text).slice(0, 300), kind: bad ? 'bad' : 'ok' }); }
+  function copy(text, what) {
+    host.emit('copy', { text: text });
+    say((what || 'Address') + ' copied.');
+  }
+  function when(at) {
+    if (!at) return 'never';
+    var d = new Date(at);
+    var today = new Date();
+    return (d.toDateString() === today.toDateString() ? 'today ' : d.toLocaleDateString() + ' ') + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  function ago(at) {
+    var s = Math.max(0, Math.round((Date.now() - at) / 1000));
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.floor(s / 60) + ' min ago';
+    if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+    return when(at);
+  }
+  function left(expiresAt) {
+    var s = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+
+  var loading = null;
+  /** One load at a time; one asked for meanwhile runs after, so the newest state is what shows. */
+  function load() {
+    if (loading) { state.stale = true; return loading; }
+    loading = call('overview').then(function (o) { state.o = o; state.error = ''; })
+      .catch(function (e) { state.error = e.message; })
+      .then(function () {
+        loading = null;
+        render();
+        if (state.stale) { state.stale = false; return load(); }
+      });
+    return loading;
+  }
+  /** One action at a time of each kind; the button that was pressed says what it is doing. An error reloads: what the panel showed was stale. */
+  function act(name, args) {
+    if (state.busy[name]) return Promise.resolve();
+    state.busy[name] = true;
+    state.confirm = null;
+    render();
+    return call(name, args).then(function (o) { state.o = o; state.error = ''; return o; })
+      .catch(function (e) { say(e.message, true); return load().then(function () { return null; }); })
+      .then(function (o) { delete state.busy[name]; render(); return o; });
+  }
+
+  function addrRows(list, code) {
+    return '<div>' + list.map(function (a) {
+      var link = code ? a + '?code=' + code : a;
+      return '<div class="addr"><code title="' + esc(link) + '">' + esc(link) + '</code>'
+        + '<button class="btn quiet" data-copy="' + esc(link) + '" title="Copy the address">Copy</button>'
+        + '<button class="btn quiet" data-open="' + esc(a) + '" title="Open it in this computer\'s browser, to try it">Open</button></div>';
+    }).join('') + '</div>';
+  }
+
+  /** Where the keyboard was, so the rebuilt page puts it back: a phone reconnecting must not steal the focus. */
+  function focusKey() {
+    var a = document.activeElement;
+    if (!a || a === document.body) return null;
+    if (a.id) return { id: a.id, sel: a.id === 'port' ? [a.selectionStart, a.selectionEnd] : null };
+    for (var i = 0; i < a.attributes.length; i += 1) if (a.attributes[i].name.indexOf('data-') === 0) return { attr: a.attributes[i].name, value: a.attributes[i].value };
+    return null;
+  }
+  function refocus(key) {
+    if (!key) return;
+    var el = key.id ? $(key.id) : document.querySelector('[' + key.attr + '="' + key.value.replace(/"/g, '\\"') + '"]');
+    if (!el) return;
+    el.focus();
+    if (key.sel) try { el.setSelectionRange(key.sel[0], key.sel[1]); } catch (e) { /* fine */ }
+  }
+
+  function render() {
+    var o = state.o;
+    var h = '';
+    var focused = focusKey();
+    if (!o) {
+      $('page').innerHTML = '<p class="' + (state.error ? 'bad' : 'dim') + '">' + esc(state.error || 'Loading…') + '</p>'
+        + (state.error && !/restart Smart Terminal/.test(state.error) ? '<p><button class="btn" id="retry">Try again</button></p>' : '');
+      var r = $('retry'); if (r) r.onclick = load;
+      return;
+    }
+    var on = o.enabled && o.running;
+    var failed = o.enabled && !o.running;
+    var starting = state.busy.setEnabled;
+    var word = starting ? (o.enabled ? 'Turning off…' : 'Turning on…') : on ? 'On' : failed ? 'Could not start' : 'Off';
+    h += '<div class="row"><h1>Remote</h1><span class="spacer"></span>'
+      + '<span class="dot ' + (starting ? 'wait' : on ? 'on' : failed ? 'bad' : '') + '"></span>'
+      + '<span class="dim small">' + esc(word) + '</span>';
+    if (state.confirm && state.confirm.off) {
+      h += '<span class="confirm">Turn off? ' + o.viewers.length + ' session' + (o.viewers.length === 1 ? '' : 's') + ' open on phones close there, and keep running here. <button class="btn danger" id="toggle-yes">Turn off</button><button class="btn quiet" data-confirm-no>Keep</button></span>';
+    } else {
+      h += '<button class="btn ' + (o.enabled ? '' : 'primary') + '" id="toggle"' + (starting ? ' disabled' : '') + '>' + (o.enabled ? 'Turn off' : 'Turn on') + '</button>';
+    }
+    h += '</div>';
+    h += '<p class="dim">Your sessions on your phone, served by this computer while it is on. Nothing goes through anybody else\'s server: at home the phone reaches this computer directly over Wi-Fi; away from home it comes in through Tailscale, encrypted.</p>';
+    if (state.error) h += '<p class="flash bad">' + esc(state.error) + '</p>';
+    var code = o.pairing ? o.pairing.code : null;
+    var ts = o.tailscale;
+    var tsOnly = o.bind === 'tailscale';
+
+    h += '<div class="card"><h2>At home, on the same Wi-Fi</h2>';
+    if (failed) {
+      h += '<p class="bad">' + esc(o.error || 'It could not start.') + '</p>'
+        + '<div class="row"><button class="btn" id="retry-start"' + (starting ? ' disabled' : '') + '>Try again</button><span class="small faint">Or pick another port below, or turn it off.</span></div>';
+    } else if (on && tsOnly) {
+      h += '<p class="dim">Listening through Tailscale only: there is no address on the Wi-Fi. The phone uses the Tailscale address below, at home too.</p>';
+    } else if (on) {
+      h += addrRows(o.addresses, code);
+      h += '<p class="small faint">' + (code ? 'With the code in the link, the phone pairs with one tap. ' : '') + 'The first address works on most home networks; the others are this computer\'s own on each network it is on.</p>'
+        + '<p class="small faint">Plain HTTP, so only on a Wi-Fi you trust: anyone on it who can capture traffic could read what you type and take over the pairing. On a network you share with others, use the Tailscale address below (it works at home too), or tick "Through Tailscale only".</p>';
+    } else if (starting) {
+      h += '<p class="dim">' + esc(word) + '</p>';
+    } else {
+      h += '<p class="dim">Turn it on and the addresses appear here.</p>';
+    }
+    h += '</div>';
+
+    h += '<div class="card"><h2>Away from home</h2>';
+    if (!ts) {
+      h += '<p class="dim">Not available in this build.</p>';
+    } else if (!ts.installed) {
+      h += '<p class="dim">Install <strong>Tailscale</strong> on this computer and on the phone, sign both in to the same account, and the phone reaches this computer from anywhere, encrypted, with no port opened and no server in between. Only your own devices can see it.</p>'
+        + '<div class="row"><button class="btn" data-open="https://tailscale.com/download">Get Tailscale</button><span class="small faint">This notices on its own once it is installed and running.</span></div>';
+    } else if (!ts.checked) {
+      h += '<p class="dim">Asking Tailscale…</p>';
+    } else if (!ts.running) {
+      h += '<p class="dim">' + esc(ts.error || 'Tailscale is installed but not connected. Open Tailscale and sign in.') + '</p>';
+    } else if (!on && !failed) {
+      h += '<p class="dim">Tailscale is connected as <strong>' + esc(ts.name || 'this computer') + '</strong>. Turn Remote on and the address appears here.</p>';
+    } else if (on) {
+      h += addrRows(o.away, code)
+        + '<p class="small faint">Use this address on the phone when it is on Tailscale too. It works at home as well, so you can pair with it once and never switch. Tailscale encrypts the traffic end to end; only devices in your tailnet can reach it.</p>';
+    }
+    if (ts && ts.installed) {
+      h += '<label class="check small dim"><input type="checkbox" id="bind"' + (tsOnly ? ' checked' : '') + (state.busy.setBind ? ' disabled' : '') + '> Through Tailscale only — nothing listens on the Wi-Fi, so a shared network cannot see this at all.' + (state.busy.setBind ? ' <span class="faint">Changing…</span>' : '') + '</label>';
+    }
+    h += '</div>';
+
+    h += '<div class="card"><h2>Pair a phone</h2>';
+    if (o.pairing) {
+      var late = o.pairing.expiresAt - Date.now() < 60 * 1000;
+      var links = o.pairing.links || [];
+      var at = Math.min(state.qrAt, Math.max(0, links.length - 1));
+      h += '<div class="code' + (late ? ' late' : '') + '" id="code">' + esc(o.pairing.code) + '</div>'
+        + '<p class="dim" style="text-align:center">Type this on the phone, open a link above on it, or point its camera at the code. Good for <span id="left">' + left(o.pairing.expiresAt) + '</span>, once.</p>';
+      if (links.length) {
+        h += '<div class="qr">' + links[at].qr + '<div>'
+          + '<p class="small dim">The phone\'s camera reads this as the address with the code in it: one tap and it is paired. Pick the address the phone will use:</p>'
+          + '<div class="qr-which" style="margin-top:6px">' + links.map(function (l, i) { return '<button class="btn quiet' + (i === at ? ' is-on' : '') + '" data-qr="' + i + '">' + esc(l.address.replace(/^http:\/\//, '').replace(/\/$/, '')) + '</button>'; }).join('') + '</div>'
+          + '</div></div>';
+      }
+      h += '<div class="row"><button class="btn quiet" data-copy="' + esc(o.pairing.code) + '" data-what="Code">Copy code</button><span class="spacer"></span>'
+        + '<button class="btn quiet" id="new-code"' + (state.busy.pair ? ' disabled' : '') + '>New code</button>'
+        + '<button class="btn quiet" id="cancel-pair"' + (state.busy.cancelPairing ? ' disabled' : '') + '>Cancel</button></div>';
+    } else {
+      h += '<ul class="steps dim"><li>On the phone, open one of the addresses above (or scan the code that appears here).</li><li>Press <strong>Pair a phone</strong> here, and type the code this panel shows into the phone.</li><li>On an iPhone, first Share → <strong>Add to Home Screen</strong>, then pair from there: it opens like an app.</li></ul>'
+        + '<div class="row"><button class="btn primary" id="pair"' + (!on || state.busy.pair ? ' disabled' : '') + '>' + (state.busy.pair ? 'Making a code…' : 'Pair a phone') + '</button>'
+        + (!on ? '<span class="small faint">Turn it on first.</span>' : '') + '</div>';
+    }
+    h += '</div>';
+
+    h += '<div class="card"><h2>Phones that can open your sessions</h2>';
+    if (!o.devices.length) h += '<p class="dim">None yet. Pair one above.</p>';
+    else {
+      h += '<table><tr><th>Phone</th><th>Paired</th><th>Last seen</th><th class="act"></th></tr>';
+      o.devices.forEach(function (d) {
+        var asking = state.confirm && state.confirm.revoke === d.id;
+        h += '<tr><td>' + esc(d.name) + (d.open ? '<span class="tag">' + d.open + ' open</span>' : '') + '</td><td>' + esc(when(d.pairedAt)) + '</td><td title="' + esc(when(d.lastSeenAt)) + '">' + esc(d.lastSeenAt ? ago(d.lastSeenAt) : 'never') + '</td>'
+          + '<td class="act">' + (asking
+            ? '<button class="btn danger" data-revoke-yes="' + esc(d.id) + '">Forget</button> <button class="btn quiet" data-confirm-no>Keep</button>'
+            : '<button class="btn quiet" data-revoke="' + esc(d.id) + '" title="This phone will need a new code to come back."' + (state.busy.revoke ? ' disabled' : '') + '>Forget…</button>') + '</td></tr>';
+      });
+      h += '</table><p class="small faint">A phone stays paired for a year, or until you forget it here, or until a month goes by without it. A phone that was lost or sold: press Forget, and its pairing is gone.</p>';
+    }
+    h += '</div>';
+
+    h += '<div class="card"><h2>Open on a phone right now</h2>';
+    if (!o.viewers.length) h += '<p class="dim">Nothing. This updates the moment a phone opens a session, and the app says so too.</p>';
+    else {
+      h += '<table><tr><th>Session</th><th>Phone</th><th>Since</th><th class="act"></th></tr>';
+      o.viewers.forEach(function (v) {
+        h += '<tr><td>' + esc(v.title) + (v.resuming ? '<span class="tag" title="The phone dropped a moment ago; its size is kept for ten seconds in case it comes straight back.">reconnecting</span>' : v.driven ? '<span class="tag" title="The session took the phone\'s width; the app\'s own resizes wait until it lets go.">sized for the phone</span>' : '') + '</td><td>' + esc(v.from) + '</td><td title="' + esc(when(v.at)) + '">' + esc(ago(v.at)) + '</td>'
+          + '<td class="act">' + (v.driven ? '<button class="btn quiet" data-release="' + esc(v.ch) + '" title="Back to the app\'s size; the phone follows it."' + (state.busy.release ? ' disabled' : '') + '>Give size back</button> ' : '')
+          + (v.resuming ? '' : '<button class="btn quiet" data-close="' + esc(v.ch) + '" title="The session keeps running here."' + (state.busy.disconnect ? ' disabled' : '') + '>Close there</button>') + '</td></tr>';
+      });
+      h += '</table>';
+      if (o.viewers.length > 1) {
+        h += '<div class="row"><span class="spacer"></span>' + (state.confirm && state.confirm.closeAll
+          ? '<span class="confirm">Close all ' + o.viewers.length + ' on the phones? The sessions keep running here. <button class="btn danger" id="close-all-yes">Close all</button><button class="btn quiet" data-confirm-no>Keep</button></span>'
+          : '<button class="btn" id="close-all"' + (state.busy.disconnect ? ' disabled' : '') + '>Close all…</button>') + '</div>';
+      }
+    }
+    h += '</div>';
+
+    h += '<div class="card"><h2>Port</h2>';
+    var draft = state.portDraft != null ? state.portDraft : String(o.port);
+    var changed = draft !== String(o.port);
+    h += '<div class="row"><label class="dim small">Port <input type="text" id="port" class="' + (state.portBad ? 'bad' : '') + '" value="' + esc(draft) + '" inputmode="numeric" maxlength="5"' + (state.busy.setPort ? ' disabled' : '') + '></label>'
+      + '<button class="btn" id="save-port"' + (!changed || state.busy.setPort ? ' disabled' : '') + '>' + (state.busy.setPort ? 'Changing…' : 'Change') + '</button>'
+      + (changed ? '<button class="btn quiet" id="reset-port">Undo</button>' : '')
+      + '<span class="small faint">1024 to 65535, and free. Phones stay paired, but a page added to the home screen keeps the old address: remove it there and add it again from the new one.</span></div>';
+    h += '</div>';
+
+    h += '<div class="card"><h2>What a phone can do</h2><p class="dim">Read what your sessions print and type into them — the same as sitting at this computer, including Claude — and nothing more: it cannot open a session that is not already open here, and it shows nothing until it is paired. A phone may take a session\'s width while it has it open; the session here says so, with a button to take the size back.</p></div>';
+
+    $('page').innerHTML = h;
+    refocus(focused);
+    var t = $('toggle'); if (t) t.onclick = function () { if (o.enabled && o.viewers.length) { state.confirm = { off: true }; render(); } else act('setEnabled', { enabled: !o.enabled }); };
+    var ty = $('toggle-yes'); if (ty) ty.onclick = function () { act('setEnabled', { enabled: false }); };
+    var rs = $('retry-start'); if (rs) rs.onclick = function () { act('setEnabled', { enabled: true }).then(function (r) { if (r && r.running) say('Remote is on.'); }); };
+    var p = $('pair'); if (p) p.onclick = function () { act('pair'); };
+    var nc = $('new-code'); if (nc) nc.onclick = function () { act('pair'); };
+    var c = $('cancel-pair'); if (c) c.onclick = function () { act('cancelPairing'); };
+    var b = $('bind'); if (b) b.onchange = function () { act('setBind', { bind: b.checked ? 'tailscale' : 'all' }).then(function (r) { if (r) say(r.bind === 'tailscale' ? 'Listening through Tailscale only.' : 'Listening on every network.'); }); };
+    var pi = $('port');
+    if (pi) {
+      pi.oninput = function () { state.portDraft = pi.value; state.portBad = false; pi.classList.remove('bad'); var sp = $('save-port'); if (sp) sp.disabled = pi.value === String(o.port) || Boolean(state.busy.setPort); var rp = $('reset-port'); if (!rp && pi.value !== String(o.port)) render(); };
+      pi.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); savePort(); } if (e.key === 'Escape') { state.portDraft = null; state.portBad = false; render(); } };
+    }
+    var sp = $('save-port'); if (sp) sp.onclick = savePort;
+    var rp = $('reset-port'); if (rp) rp.onclick = function () { state.portDraft = null; state.portBad = false; render(); };
+    var ca = $('close-all'); if (ca) ca.onclick = function () { state.confirm = { closeAll: true }; render(); };
+    var cay = $('close-all-yes'); if (cay) cay.onclick = function () { act('disconnect', {}).then(function (r) { if (r) say('Closed on ' + r.closed + ' phone' + (r.closed === 1 ? '' : 's') + '.'); }); };
+    Array.prototype.forEach.call(document.querySelectorAll('[data-confirm-no]'), function (el) { el.onclick = function () { state.confirm = null; render(); }; });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-revoke]'), function (el) { el.onclick = function () { state.confirm = { revoke: el.getAttribute('data-revoke') }; render(); }; });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-revoke-yes]'), function (el) { el.onclick = function () { act('revoke', { id: el.getAttribute('data-revoke-yes') }).then(function (r) { if (r) say(r.forgotten + ' was forgotten.'); }); }; });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-close]'), function (el) { el.onclick = function () { act('disconnect', { ch: el.getAttribute('data-close') }); }; });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-release]'), function (el) { el.onclick = function () { act('release', { ch: el.getAttribute('data-release') }).then(function (r) { if (r) say('The session has its own size again.'); }); }; });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-open]'), function (el) { el.onclick = function () { call('open', { url: el.getAttribute('data-open') }).catch(function (e) { say(e.message, true); }); }; });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-copy]'), function (el) { el.onclick = function () { copy(el.getAttribute('data-copy'), el.getAttribute('data-what')); }; });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-qr]'), function (el) { el.onclick = function () { state.qrAt = Number(el.getAttribute('data-qr')); render(); }; });
+  }
+
+  function savePort() {
+    var pi = $('port');
+    var value = pi ? pi.value.trim() : '';
+    var n = Number(value);
+    if (!/^\d+$/.test(value) || n < 1024 || n > 65535) {
+      state.portBad = true;
+      render();
+      say('The port has to be a number between 1024 and 65535.', true);
+      return;
+    }
+    if (n === state.o.port) { state.portDraft = null; render(); return; }
+    act('setPort', { port: n }).then(function (r) { if (r) { state.portDraft = null; say(r.running ? 'Now on port ' + r.port + '.' : r.error || 'Port set to ' + r.port + '.', Boolean(r.error)); } });
+  }
+
+  // The countdown on the code every second, and the ages in the tables every minute, only while the panel is shown.
+  state.tick = setInterval(function () {
+    var o = state.o;
+    if (!state.showing || !o) return;
+    if (o.pairing) {
+      var l = $('left');
+      if (l) l.textContent = left(o.pairing.expiresAt);
+      var cd = $('code');
+      if (cd) cd.classList.toggle('late', o.pairing.expiresAt - Date.now() < 60 * 1000);
+      if (o.pairing.expiresAt <= Date.now()) load();
+    }
+    var minute = Math.floor(Date.now() / 60000);
+    if (minute !== state.minute && (o.viewers.length || o.devices.length)) { state.minute = minute; render(); }
+  }, 1000);
+
+  host.on('remote', function () { if (state.showing) load(); else state.stale = true; });
+  host.on('showing', function (payload) {
+    var was = state.showing;
+    state.showing = !payload || payload.showing !== false;
+    if (state.showing && (!was || state.stale)) { state.stale = false; load(); }
+  });
+  host.on('context', function (payload) {
+    if (payload && payload.showing === false) state.showing = false;
+    load();
+  });
+  host.ready();
+</script>

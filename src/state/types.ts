@@ -324,6 +324,14 @@ export type Panel = FilePanel | MonitorPanel | ExtensionsPanel | ExtensionViewPa
  * Git's place in the content row. A file path is always absolute, so this can
  * never be mistaken for one.
  */
+/** What the app's own chrome shows of Remote, the phone's server. */
+export interface RemoteStatus {
+  enabled: boolean;
+  running: boolean;
+  error: string | null;
+  viewers: Array<{ ch: string; title: string; from: string; sessionId: string; deviceId: string; at: number; driven: boolean; resuming?: boolean }>;
+}
+
 export const GIT_TAB = '::git';
 
 export type GitView = 'changes' | 'history' | 'branches';
