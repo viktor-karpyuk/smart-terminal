@@ -24,6 +24,7 @@ const { JenkinsError } = require('../electron/jenkins-api');
 const launchModule = require('../electron/jenkins-launch');
 const { Launch, familyOf, paramsIn, splitSecrets } = launchModule;
 const { JenkinsService } = sqlite ? require('../electron/jenkins-service') : {};
+const { fakeActiveChoices } = require('./support/active-choices-jenkins');
 
 const T0 = Date.parse('2026-10-16T12:00:00Z');
 const MASK = '••••••';
@@ -427,6 +428,77 @@ test('"re-run all failed" plans exactly the jobs failing now, with what each fai
   const none = await call('launchPlan', { retryFailed: true, scope: { folder: 'nowhere' } });
   assert.equal(none.items.length, 0);
   assert.equal(none.valid, true);
+});
+
+/** A job like LIB RELEASE: a block and a list that Jenkins works out from the other parameters. */
+function reactiveWorld(fake, builds) {
+  const w = world();
+  w.add('lib', {
+    params: [
+      def('CURRENT_VERSIONS', { type: 'dynamicreferenceparameter', description: 'What releasing would publish.' }),
+      def('LIB', { type: 'choice', choices: ['common', 'mongo-common'] }),
+      def('BUMP', { type: 'cascadechoiceparameter', description: 'What to do with the pom.' }),
+      def('OVERWRITE', { type: 'choice', choices: ['NO', 'YES'], default: 'NO' }),
+    ],
+    builds,
+  });
+  w.api.rawGet = ((plain) => async (url, opts) => (/\/build\?delay=0sec$|\/\$stapler\//.test(url) ? fake.api.rawGet(url, opts) : plain(url, opts)))(w.api.rawGet);
+  w.api.rawPost = fake.api.rawPost;
+  return w;
+}
+
+test('a plan holds what Jenkins works out for its reactive parameters, for the values the form starts from', { skip }, async () => {
+  const fake = fakeActiveChoices();
+  const w = reactiveWorld(fake, [{ number: 5, status: 'success', params: [{ name: 'LIB', value: 'mongo-common' }, { name: 'BUMP', value: 'PATCH' }, { name: 'OVERWRITE', value: 'NO' }] }]);
+  const { call } = setup(w);
+  const plan = await call('paramPlan', { path: 'lib' });
+  const of = (name) => plan.params.find((p) => p.name === name);
+  // The page was built for `common`; the last good run was `mongo-common`, so what it holds is asked for again.
+  assert.deepEqual(of('BUMP').choices, ['POM (2.3.0)', 'MINOR', 'PATCH', 'MAJOR']);
+  assert.deepEqual([of('BUMP').type, of('BUMP').suggested, of('BUMP').source, of('BUMP').reactive, of('BUMP').refs], ['choice', 'PATCH', 'last successful build', true, ['LIB']]);
+  assert.deepEqual([of('CURRENT_VERSIONS').type, of('CURRENT_VERSIONS').required, of('CURRENT_VERSIONS').suggested], ['display', false, null]);
+  assert.equal(of('CURRENT_VERSIONS').view[1].runs[0].t, 'Will release.', 'the sentence about mongo-common, not about common');
+  assert.equal(plan.callPreview.body, 'LIB=mongo-common&BUMP=PATCH&OVERWRITE=NO', 'a block that only shows is not sent');
+  assert.equal(fake.model.pages, 2, 'the form page, then once more inside the question');
+});
+
+test('a plan that starts where the form was built does not ask Jenkins to work anything out again', { skip }, async () => {
+  const fake = fakeActiveChoices();
+  const w = reactiveWorld(fake, []);
+  const { call } = setup(w);
+  const plan = await call('paramPlan', { path: 'lib' });
+  const of = (name) => plan.params.find((p) => p.name === name);
+  assert.deepEqual(of('BUMP').choices, ['POM (2.5.3)', 'MINOR', 'PATCH', 'MAJOR']);
+  assert.equal(of('BUMP').default, 'POM (2.5.3)', 'what Jenkins marks is where it starts, so the form is never one that cannot be run');
+  assert.equal(of('CURRENT_VERSIONS').view[0].type, 'table');
+  assert.equal(fake.model.calls.some((c) => c.method === 'POST'), false, 'nothing was run on Jenkins');
+});
+
+test('a Jenkins that cannot say leaves the reactive parameters the plain fields they were', { skip }, async () => {
+  const w = reactiveWorld(fakeActiveChoices({ down: true }), []);
+  const { call } = setup(w);
+  const plan = await call('paramPlan', { path: 'lib' });
+  const of = (name) => plan.params.find((p) => p.name === name);
+  assert.deepEqual([of('BUMP').type, of('BUMP').choices, of('BUMP').reactive], ['cascadechoiceparameter', null, undefined]);
+  assert.equal(of('LIB').type, 'choice');
+  // Asked again for one value, it is a refusal with words, as for any other verb.
+  await assert.rejects(call('paramRefresh', { path: 'lib', values: { LIB: 'common' } }), /Could not reach Jenkins/);
+});
+
+test('refreshing says, per parameter, what a change of the others does — and takes only what it is given as text', { skip }, async () => {
+  const fake = fakeActiveChoices();
+  const w = reactiveWorld(fake, []);
+  const { call } = setup(w);
+  const reply = await call('paramRefresh', { path: 'lib', values: { LIB: 'mongo-common', BUMP: 'MINOR', OVERWRITE: 'YES', EVIL: { x: 1 }, LIST: [1] } });
+  assert.deepEqual(reply.params.BUMP.choices, ['POM (2.3.0)', 'MINOR', 'PATCH', 'MAJOR']);
+  assert.equal(reply.params.BUMP.selected, 'POM (2.3.0)');
+  assert.equal(reply.params.CURRENT_VERSIONS.view[1].runs[0].t, 'Will release.');
+  assert.equal(JSON.stringify(fake.model.calls).includes('EVIL'), false);
+  assert.deepEqual((await call('paramRefresh', { path: 'plain-job-without-params', values: {} }).catch(() => ({ params: 'refused' }))).params, 'refused', 'a job that does not exist is a refusal');
+  for (const bad of [null, [], 'LIB=common', 5]) {
+    const out = await call('paramRefresh', { path: 'lib', values: bad });
+    assert.ok(out.params, 'a value that is not a set of values is no values');
+  }
 });
 
 test('the parameter plan says where each value came from, never fills a secret, and shows the exact request', { skip }, async () => {

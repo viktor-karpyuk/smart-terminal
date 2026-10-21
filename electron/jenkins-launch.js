@@ -3,6 +3,9 @@
 const crypto = require('node:crypto');
 const { JenkinsError, jobPath, segment } = require('./jenkins-api');
 const { familyOf, vocabulary } = require('./jenkins-board');
+const { ActiveChoices } = require('./jenkins-active-choices');
+
+const REACTIVE = /^(cascadechoice|dynamicreference)parameter$/;
 
 /**
  * Starting builds, and everything a person wants around the click.
@@ -491,6 +494,7 @@ class Launch {
       launchpad: async (args) => this.#launchpad(serverOf(args)),
       launchHistory: async (args) => this.#history({ ...serverOf(args), args }),
       paramPlan: async (args) => this.#paramPlan({ ...serverOf(args), path: needPath(args.path), fromNumber: args.fromNumber === undefined || args.fromNumber === null ? null : needInt(args.fromNumber, 'build number', 1) }),
+      paramRefresh: async (args) => this.#paramRefresh({ ...serverOf(args), path: needPath(args.path), values: args.values }),
       launchPlan: async (args) => this.#launchPlan({ ...serverOf(args), args }),
       promoteCandidates: async (args) => this.#candidates({ ...serverOf(args), path: needPath(args.path), number: args.number === undefined || args.number === null ? null : needInt(args.number, 'build number', 1) }),
       schedules: async (args) => this.#schedules(serverOf(args)),
@@ -805,10 +809,87 @@ class Launch {
     return { build, params: (build.parameters ?? []).map((one) => ({ name: one.name, value: one.value, masked: one.value === MASK || one.value === undefined || isSecretName(one.name) || looksSecretValue(one.value) })) };
   }
 
+  /**
+   * What the reactive parameters of a job (Active Choices) hold, for the values the form starts from. Best effort, and
+   * quiet: a job without the plugin, or a Jenkins that does not answer, leaves its parameters the plain fields they were.
+   * Returns `{ NAME: { choices, selected, labels } | { blocks } | { error } }`.
+   */
+  async #reactive(api, path, defs, valueOf) {
+    const reactive = defs.filter((one) => REACTIVE.test(one.type));
+    if (!reactive.length) return {};
+    const choices = new ActiveChoices(api);
+    let session;
+    try {
+      session = await choices.read(jobPath(path));
+    } catch {
+      return {};
+    }
+    if (!session) return {};
+    const found = {};
+    for (const param of session.params) {
+      if (param.initial) found[param.name] = { refs: param.refs, ...(param.initial.blocks ? { blocks: param.initial.blocks } : { choices: param.initial.choices, selected: param.initial.selected, labels: param.initial.labels }) };
+    }
+    // The page was built with each parameter at its own default. If the form starts anywhere else, what the page holds is for another question.
+    const pageValue = (one) => (one.default !== '' && one.default !== undefined ? asText(one.default) : (one.choices?.[0] ?? ''));
+    const elsewhere = session.params.some((param) => param.refs.some((name) => {
+      const own = defs.find((one) => one.name === name);
+      if (!own || REACTIVE.test(own.type)) return false;
+      const wanted = valueOf(own);
+      return wanted !== null && wanted !== undefined && String(wanted) !== String(pageValue(own));
+    }));
+    if (!elsewhere) return found;
+    const values = {};
+    for (const one of defs) {
+      const wanted = valueOf(one);
+      if (wanted !== null && wanted !== undefined) values[one.name] = String(wanted);
+    }
+    try {
+      const fresh = await choices.refresh(jobPath(path), values);
+      for (const [name, result] of Object.entries(fresh)) found[name] = { refs: found[name]?.refs ?? [], ...result };
+    } catch {
+      // What was read is for the wrong question: said so, rather than shown.
+      for (const param of session.params) found[param.name] = { error: 'Jenkins did not answer for these values' };
+    }
+    return found;
+  }
+
+  /** A reactive parameter's definition, as a row of the form would have it. */
+  #withReactive(definition, got) {
+    if (!got) return definition;
+    if (got.error) return { ...definition, type: 'string', choices: null, reactiveError: got.error };
+    if (got.blocks) return { ...definition, type: 'display', choices: null, default: '', view: got.blocks, reactive: true, refs: got.refs ?? [] };
+    if (got.choices?.length) return { ...definition, type: 'choice', choices: got.choices, choiceLabels: got.labels && Object.keys(got.labels).length ? got.labels : null, default: got.selected ?? got.choices[0], reactive: true, refs: got.refs ?? [] };
+    return definition;
+  }
+
+  /**
+   * The reactive parameters of a form for the values it has now: what a change of `LIB` does to `BUMP`. Asked of the job's
+   * own script on Jenkins, once per change the panel settles on. `values` is the form's, by name; only what a reactive
+   * parameter names is sent on.
+   */
+  async #paramRefresh({ api, path, values }) {
+    const given = values && typeof values === 'object' && !Array.isArray(values) ? values : {};
+    const clean = {};
+    for (const [name, value] of Object.entries(given).slice(0, 200)) {
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') clean[String(name).slice(0, 120)] = String(value).slice(0, 500);
+    }
+    const job = await api.job(path, { builds: 0 });
+    const reactive = (job.parameters ?? []).filter((one) => REACTIVE.test(one.type));
+    if (!reactive.length) return { params: {} };
+    const got = await new ActiveChoices(api).refresh(jobPath(path), clean);
+    const params = {};
+    for (const one of reactive) {
+      const result = got[one.name];
+      if (!result) continue;
+      params[one.name] = result.error ? { error: result.error } : result.blocks ? { view: result.blocks } : { choices: result.choices, selected: result.selected ?? result.choices?.[0] ?? null, ...(result.labels && Object.keys(result.labels).length ? { labels: result.labels } : {}) };
+    }
+    return { params };
+  }
+
   async #paramPlan({ server, api, path, fromNumber }) {
     const settings = this.#settings(server.id);
     const job = await this.#job(server.id, api, path, { builds: 20, fresh: true });
-    const defs = job.parameters ?? [];
+    let defs = job.parameters ?? [];
     const db = this.#need();
     // Where a value can come from, best first: the build asked about, the last one launched from here, the last that passed.
     const sources = [];
@@ -825,11 +906,21 @@ class Launch {
         sources.push({ source: 'last successful build', values: Object.fromEntries(params.filter((one) => !one.masked).map((one) => [one.name, asText(one.value)])), masked: new Set(params.filter((one) => one.masked).map((one) => one.name)) });
       } catch { /* a build Jenkins no longer has: the other sources still stand */ }
     }
+    if (defs.some((one) => REACTIVE.test(one.type))) {
+      // The value each parameter would start from, in the order the form picks them.
+      const startOf = (definition) => {
+        if (isSecretParam(definition)) return null;
+        for (const one of sources) if (Object.prototype.hasOwnProperty.call(one.values, definition.name)) return one.values[definition.name];
+        return definition.default === '' || definition.default === undefined ? null : asText(definition.default);
+      };
+      const got = await this.#reactive(api, path, defs, startOf);
+      defs = defs.map((one) => (REACTIVE.test(one.type) ? this.#withReactive(one, got[one.name]) : one));
+    }
     const rows = defs.map((definition) => {
       const secret = isSecretParam(definition);
       const valueOk = (value) => !definition.choices || definition.choices.map(String).includes(String(value));
       const options = [];
-      if (!secret) {
+      if (!secret && definition.type !== 'display') {
         for (const one of sources) if (Object.prototype.hasOwnProperty.call(one.values, definition.name)) options.push({ source: one.source, value: one.values[definition.name] });
         const own = definition.default === '' || definition.default === undefined ? null : asText(definition.default);
         if (own !== null) options.push({ source: 'default', value: own });
@@ -842,8 +933,12 @@ class Launch {
         description: definition.description ?? '',
         default: secret ? '' : definition.default,
         choices: definition.choices ?? null,
+        ...(definition.choiceLabels ? { choiceLabels: definition.choiceLabels } : {}),
+        ...(definition.type === 'display' ? { view: definition.view } : {}),
+        ...(definition.reactive ? { reactive: true, refs: definition.refs ?? [] } : {}),
+        ...(definition.reactiveError ? { reactiveError: definition.reactiveError } : {}),
         secret,
-        required: isRequired(definition),
+        required: definition.type === 'display' ? false : isRequired(definition),
         suggested: picked ? picked.value : null,
         source: picked ? picked.source : null,
         others: options.filter((one) => one !== picked).slice(0, 3),

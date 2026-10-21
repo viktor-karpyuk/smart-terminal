@@ -737,7 +737,7 @@ class JenkinsApi {
     }
   }
 
-  async #send(path, init = {}, { read = 'bytes', max = MAX_JSON, onChunk = null, timeout = this.timeout } = {}) {
+  async #send(path, init = {}, { read = 'bytes', max = MAX_JSON, onChunk = null, timeout = this.timeout, allow = [] } = {}) {
     const controller = new AbortController();
     // The time allowed is for Jenkins to answer, and then for the next piece of the answer: a console that goes on arriving is
     // not cut off for being long. Nothing goes on for ever: `hard` is the most a whole answer may take.
@@ -785,7 +785,8 @@ class JenkinsApi {
         throw new JenkinsError('Jenkins answered with a redirect. Use the address it redirects to — this app does not follow redirects, so as to never hand your token to another address', 302);
       }
       // An answer that is an error is not read: its connection is given back at once, not when something collects it.
-      if (status >= 400) { try { void response.body?.cancel?.()?.catch?.(() => {}); } catch { /* nothing to give back */ } }
+      // (`allow` names the statuses that are an answer here: Jenkins says 405 to a GET of a build's form, with the form as the body.)
+      if (status >= 400 && !allow.includes(status)) { try { void response.body?.cancel?.()?.catch?.(() => {}); } catch { /* nothing to give back */ } }
       if (status === 401) throw new JenkinsError('Jenkins did not accept that user and token', 401);
       if (status === 403) {
         // Without credentials, a 403 is Jenkins asking who this is, not telling you what you may do.
@@ -800,7 +801,7 @@ class JenkinsApi {
         );
       }
       if (status === 404) throw new JenkinsError('Jenkins has nothing there', 404);
-      if (status >= 400) throw new JenkinsError(`Jenkins answered ${status}`, status);
+      if (status >= 400 && !allow.includes(status)) throw new JenkinsError(`Jenkins answered ${status}`, status);
       if (read === 'none') {
         try { await response.body?.cancel?.(); } catch { /* nothing was wanted from it */ }
         return { status, headers: response.headers, bytes: Buffer.alloc(0), tooBig: false };
@@ -881,20 +882,20 @@ class JenkinsApi {
    * Any page under the server, read to the end and capped: `{ status, headers, bytes, tooBig }`.
    * The path is the caller's, built with `jobPath`/`segment` — never from what a panel typed — and has to be one.
    */
-  async rawGet(path, { max = MAX_JSON, accept = 'application/json' } = {}) {
+  async rawGet(path, { max = MAX_JSON, accept = 'application/json', allow = [], headers = {} } = {}) {
     if (typeof path !== 'string' || !path.startsWith('/') || /[\u0000-\u001f\u007f]/.test(path)) throw new JenkinsError('That is not a page of a Jenkins');
-    return this.#request(path, { headers: { Accept: accept } }, { max });
+    return this.#request(path, { headers: { Accept: accept, ...headers } }, { max, allow });
   }
 
   /**
    * A form posted to any page under the server, with the crumb. By default only its status and headers come back
    * (what a form that redirects says); `read: 'bytes'` keeps the answer, capped at `max`.
    */
-  async rawPost(path, body = '', { read = 'none', max = MAX_JSON } = {}) {
+  async rawPost(path, body = '', { read = 'none', max = MAX_JSON, headers = {}, contentType = 'application/x-www-form-urlencoded', accept = null } = {}) {
     if (typeof path !== 'string' || !path.startsWith('/') || /[\u0000-\u001f\u007f]/.test(path)) throw new JenkinsError('That is not a page of a Jenkins');
     const send = async () => this.#request(path, {
       method: 'POST',
-      headers: { ...(await this.#crumb()), ...(body ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}) },
+      headers: { ...(await this.#crumb()), ...(body ? { 'Content-Type': contentType } : {}), ...(accept ? { Accept: accept } : {}), ...headers },
       body,
     }, { read, max });
     try {
@@ -1024,7 +1025,7 @@ class JenkinsApi {
       parameters: definitions.map((one) => ({
         name: one.name,
         type: String(one.type ?? '').replace(/ParameterDefinition$/, '').toLowerCase() || 'string',
-        description: String(one.description ?? '').slice(0, 500),
+        description: String(one.description ?? '').slice(0, 2000),
         // A password's default is never sent to the panel; Jenkins would not either.
         default: one.type === 'PasswordParameterDefinition' ? '' : (one.defaultParameterValue?.value ?? ''),
         choices: Array.isArray(one.choices) ? one.choices.slice(0, 500) : null,
