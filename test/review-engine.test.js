@@ -327,6 +327,27 @@ test('handing back with push puts the fix on origin in one go, and a refused pus
   assert.equal((await service.call('giveBack', { repoId: repo.id, prId: 7 })).ok, false, 'nothing left to hand back');
 });
 
+test('pushing to the PR with the branch checked out in the clone goes straight from the workshop to origin', { skip }, async () => {
+  const { service, repo, w } = setup([
+    async () => ({ structured: { summary: 's', findings: [finding()] } }),
+    async (options) => { fs.writeFileSync(path.join(options.cwd, 'app.js'), 'x\n'); return { structured: { fixed: true, summary: 'x' } }; },
+  ]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  // Checked out in a worktree of the clone, the way people keep one per branch.
+  const tree = path.join(w.root, 'feature-tree');
+  git(w.clone, 'worktree', 'add', tree, 'feature');
+  const cloneBefore = git(w.clone, 'rev-parse', 'refs/heads/feature');
+  const [f] = service.store.findingsForReview(service.store.latestDone(repo.id, 7).id);
+  const fix = (await service.call('fix', { findingId: f.id })).fix;
+  const given = await service.call('giveBack', { repoId: repo.id, prId: 7, push: true });
+  assert.equal(given.ok, true, given.error);
+  assert.deepEqual(given.pushed, { ok: true, direct: true });
+  assert.equal(git(w.origin, 'rev-parse', 'refs/heads/feature'), fix.sha, 'on the PR');
+  assert.equal(git(w.clone, 'rev-parse', 'refs/heads/feature'), cloneBefore, 'the clone is left as it was');
+  assert.equal(service.store.pendingReturn(repo.id, 7).length, 0);
+});
+
 test('handing back refuses when the clone has the branch checked out, and says so', { skip }, async () => {
   const { service, repo, w } = setup([
     async () => ({ structured: { summary: 's', findings: [finding()] } }),
@@ -339,7 +360,7 @@ test('handing back refuses when the clone has the branch checked out, and says s
   await service.call('fix', { findingId: f.id });
   const given = await service.call('giveBack', { repoId: repo.id, prId: 7 });
   assert.equal(given.ok, false);
-  assert.match(given.error, /The clone is on "feature"/);
+  assert.match(given.error, /Your clone has "feature" checked out[\s\S]*Push to the PR/);
   const discard = await service.call('discardWorkshop', { repoId: repo.id, prId: 7 });
   assert.equal(discard.ok, false);
   assert.match(discard.error, /have not been handed back/);

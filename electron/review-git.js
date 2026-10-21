@@ -353,6 +353,18 @@ class ReviewGit {
     return this.run(workshop, ['push', dest, headRefspec(branch)]);
   }
 
+  /**
+   * The workshop's branch, or one commit of it, straight to the forge — to the
+   * URL the person's clone pushes to, so with the same credentials. Never forced.
+   */
+  pushToRemote(workshop, url, branch, sha = null) {
+    const name = String(branch ?? '');
+    if (!name || name.startsWith('-') || name.includes(':')) throw new Error(`Not a branch that can be pushed: ${name.slice(0, 60)}`);
+    if (sha && !/^[0-9a-f]{7,40}$/.test(String(sha))) throw new Error('Not a commit that can be pushed.');
+    if (!url || String(url).startsWith('-')) throw new Error('The clone has no origin to push to.');
+    return this.run(workshop, ['push', url, sha ? `${sha}:refs/heads/${name}` : headRefspec(name)]);
+  }
+
   /** One commit of the workshop's branch, rather than its tip: what a partial hand-back delivers. */
   pushRefToLocal(workshop, dest, sha, branch) {
     const name = String(branch ?? '');

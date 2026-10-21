@@ -398,19 +398,33 @@ class FixEngine {
       : await this.git.pushToLocal(dir, repo.localPath, branch);
     const want = partial ? pending[cut].sha : await this.git.branchHead(dir, branch);
     const same = want && want === (await this.git.branchHead(repo.localPath, branch));
-    if (!pushed.ok && !same) {
-      const checkedOut = (await this.git.currentBranch(repo.localPath)) === branch;
-      throw new Error(checkedOut ? `The clone is on "${branch}": switch it to another branch and hand back again.` : pushed.output.slice(0, 300));
+    /*
+     * Git will not move a branch that is checked out — in the clone itself or
+     * in any worktree of it — and that is how people work: on the PR's branch.
+     */
+    const inUse = !pushed.ok && !same && /checked out|refusing to update/i.test(pushed.output);
+    if (!pushed.ok && !same && !(inUse && push)) {
+      throw new Error(inUse
+        ? `Your clone has "${branch}" checked out, so git will not update it. "Push to the PR" sends the fixes straight to origin instead; then pull in your clone.`
+        : pushed.output.slice(0, 300));
     }
-    this.store.markReturned(chosen.map((fix) => fix.id));
     /*
      * And on to origin, when asked: what the person wants from the button is the
-     * fix on the PR. The clone's branch goes, never forced. A refused push leaves
-     * the fixes handed back — they are in the clone, which is true — and says why,
-     * so the Commits tab's push can finish the job.
+     * fix on the PR. Normally the clone's branch goes, never forced. When the
+     * clone could not take the fixes, they go from the workshop straight to the
+     * clone's origin URL — the clone is left as it is, and pulling brings them.
+     * A refused push leaves what was handed back handed back, and says why.
      */
     let toOrigin = null;
-    if (push) {
+    if (inUse) {
+      const url = await this.git.remoteUrl(repo.localPath);
+      const res = await this.git.pushToRemote(dir, url, branch, partial ? pending[cut].sha : null);
+      if (!res.ok) throw new Error(`Your clone has "${branch}" checked out, and pushing from the workshop to origin was refused too: ${res.output.slice(-300)}`);
+      toOrigin = { ok: true, direct: true };
+    }
+    // In the clone or on origin, the workshop no longer holds the only copy.
+    this.store.markReturned(chosen.map((fix) => fix.id));
+    if (push && !inUse) {
       const res = await this.git.pushBranch(repo.localPath, branch);
       toOrigin = res.ok ? { ok: true } : { ok: false, output: res.output.slice(-300) };
     }
