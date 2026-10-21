@@ -1185,3 +1185,31 @@ test('a console that keeps arriving is not cut off by the time allowed for it to
     fetch: async () => ({ status: 200, headers: { get: () => null }, body: { getReader: () => ({ read: () => new Promise(() => {}), cancel: async () => {} }) } }) });
   await assert.rejects(stalls.logRead('j', 1, 0), /stopped answering/);
 });
+
+test('a form page Jenkins answers with 405 is readable only when asked for, and a call can carry its own session and crumb', async () => {
+  const { client, calls } = api({
+    'GET /job/lib/build': reply('<html>the form</html>', { status: 405, headers: { 'Set-Cookie': 'JSESSIONID.x=ABC; Path=/' } }),
+    'POST /$stapler/bound/11111111-2222-4333-8444-555555555555/doUpdate': reply('', { status: 204 }),
+    'GET /crumbIssuer/api/json': reply({ crumbRequestField: 'Jenkins-Crumb', crumb: 'ISSUED' }),
+  });
+  // By default a 405 is a refusal, like any 4xx.
+  await assert.rejects(client.rawGet('/job/lib/build'), /405/);
+  const page = await client.rawGet('/job/lib/build', { accept: 'text/html', allow: [405] });
+  assert.equal(page.status, 405);
+  assert.equal(page.bytes.toString(), '<html>the form</html>');
+  assert.equal(page.headers.get('set-cookie'), 'JSESSIONID.x=ABC; Path=/');
+  // No cookie goes along on its own; what a caller names is what is sent, with the credentials the client always sends.
+  const first = calls.find((c) => c.key === 'GET /job/lib/build' && c.headers.Accept === 'text/html');
+  assert.equal('Cookie' in first.headers, false);
+  assert.match(first.headers.Authorization, /^Basic /);
+  const done = await client.rawPost('/$stapler/bound/11111111-2222-4333-8444-555555555555/doUpdate', '["LIB=common"]', {
+    read: 'bytes', contentType: 'application/x-stapler-method-invocation;charset=UTF-8', accept: 'application/json', headers: { Cookie: 'JSESSIONID.x=ABC', 'Jenkins-Crumb': 'FROM-THE-PAGE', Crumb: 'FROM-THE-PAGE' },
+  });
+  assert.equal(done.status, 204);
+  const post = calls.find((c) => c.key.startsWith('POST /$stapler'));
+  assert.equal(post.headers['Content-Type'], 'application/x-stapler-method-invocation;charset=UTF-8');
+  assert.equal(post.headers.Accept, 'application/json');
+  assert.equal(post.headers.Cookie, 'JSESSIONID.x=ABC');
+  assert.equal(post.headers['Jenkins-Crumb'], 'FROM-THE-PAGE', 'the crumb of the page\'s session wins over the one issued without a session');
+  assert.equal(post.body, '["LIB=common"]');
+});

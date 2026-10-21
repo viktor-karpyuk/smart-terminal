@@ -276,6 +276,8 @@ const JENKINS_WRITE = [
   'claudeAccessSave',
   // Starting several builds, promoting one environment's build to the next, and starting one later.
   'runMany', 'promote', 'scheduleRun', 'scheduleCancel', 'boardSettings',
+  // Asking the job's own script on Jenkins what its reactive parameters hold for the values the form has now (it runs that script).
+  'paramRefresh',
   'notifySettingsSave',
   // Answering a pipeline's question, starting a build again, switching a job or an agent on and off.
   'inputSubmit', 'inputAbort', 'rebuild', 'jobEnabled', 'nodeToggle',

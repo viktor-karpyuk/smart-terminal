@@ -291,8 +291,22 @@
   .pfield .plabel { font-weight: 600; } .pfield .req { color: var(--danger); font-weight: 700; }
   .pfield .perr { color: var(--danger); min-height: 0; } .pfield .perr:empty { display: none; }
   .pfield.bad input, .pfield.bad select, .pfield.bad textarea { border-color: var(--danger); }
-  .otherpick { max-width: 80px; font-size: 0.9rem; }
-  .pdesc.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .otherpick { max-width: 90px; font-size: 0.9rem; }
+  .chip[hidden] { display: none; }
+  .avview { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius, 8px); background: var(--bg); }
+  .avview .avtext { margin: 0; line-height: 1.45; } .avview .avtext.dim { color: var(--text-dim); }
+  .avview code { font-family: ui-monospace, Menlo, monospace; }
+  .avview table { border-collapse: collapse; } .avview th { text-align: left; color: var(--text-dim); font-weight: 600; } .avview th, .avview td { padding: 3px 14px 3px 4px; }
+  .avview tbody tr:nth-child(odd) { background: color-mix(in srgb, var(--text) 5%, transparent); }
+  .pfield.updating select, .pfield.updating .avview { opacity: .5; } .pfield .upd { color: var(--text-dim); } .pfield .upd[hidden] { display: none; }
+  /* The run form reads top to bottom, one parameter to a line: a name, what it is for in full, then the control at the width of the form. */
+  .runform { grid-template-columns: 1fr; max-width: 880px; gap: 20px; }
+  .runform .pfield { display: grid; gap: 6px; align-content: start; }
+  .runform .pfield .plabel { font-size: 1.05em; }
+  .runform .pfield > input, .runform .pfield > select, .runform .pfield > textarea { width: 100%; box-sizing: border-box; padding: 7px 10px; }
+  .runform .pfield textarea { min-height: 84px; }
+  .runform .pdesc { white-space: pre-line; line-height: 1.45; }
+  .pdesc.clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
   .linkish { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; }
   .flagbox { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius, 8px); display: grid; gap: 8px; }
   .flagbox.idle .flaggrid { opacity: .55; }
@@ -5454,7 +5468,7 @@
 
   /** The request a form would send, as text — the secrets as dots, the rest as typed. */
   function callPreviewText(plan, params, values) {
-    var pairs = (params || []).map(function (p) {
+    var pairs = (params || []).filter(function (p) { return p.type !== 'display'; }).map(function (p) {
       var v = values[p.name];
       v = v === true ? 'true' : v === false ? 'false' : (v === undefined || v === null ? '' : String(v));
       return encodeURIComponent(p.name) + '=' + (p.secret ? (v ? '••••' : '') : encodeURIComponent(v));
@@ -5613,6 +5627,96 @@
     form.planApplied = true;
   }
 
+  /**
+   * What a job's own script made for a parameter (a table, some sentences), as the app read it into text and tables.
+   * It is drawn with textContent only: nothing in it was ever markup by the time it gets here.
+   */
+  function renderBlocks(blocks) {
+    var runs = function (list) {
+      return (list || []).map(function (run) {
+        var node = document.createElement(run.code ? 'code' : run.b ? 'strong' : 'span');
+        if (run.code && run.b) { var inner = document.createElement('strong'); inner.textContent = String(run.t); node.appendChild(inner); }
+        else node.textContent = String(run.t);
+        return node;
+      });
+    };
+    var box = h('div', { class: 'avview' });
+    (blocks || []).forEach(function (block) {
+      if (block.type === 'table') {
+        var table = document.createElement('table');
+        if (block.head && block.head.length) {
+          var hr = document.createElement('tr');
+          block.head.forEach(function (c) { var th = document.createElement('th'); th.scope = 'col'; runs(c.runs).forEach(function (n) { th.appendChild(n); }); hr.appendChild(th); });
+          var thead = document.createElement('thead'); thead.appendChild(hr); table.appendChild(thead);
+        }
+        var tbody = document.createElement('tbody');
+        (block.rows || []).forEach(function (r) {
+          var tr = document.createElement('tr');
+          r.forEach(function (c) { var td = document.createElement('td'); runs(c.runs).forEach(function (n) { td.appendChild(n); }); tr.appendChild(td); });
+          tbody.appendChild(tr);
+        });
+        table.appendChild(tbody);
+        box.appendChild(table);
+      } else {
+        var p = document.createElement('p');
+        p.className = 'avtext' + (block.dim ? ' dim' : '');
+        runs(block.runs).forEach(function (n) { p.appendChild(n); });
+        box.appendChild(p);
+      }
+    });
+    if (!box.childNodes.length) box.appendChild(h('span', { class: 'help', text: 'Nothing to show for these values.' }));
+    return box;
+  }
+
+  /** The parameters whose value is worked out by Jenkins from others, and which of the others they read. */
+  function reactiveReads(data) {
+    var out = {};
+    ((data && data.params) || []).forEach(function (p) { if (p.reactive) (p.refs || []).forEach(function (name) { out[name] = true; }); });
+    return out;
+  }
+
+  /**
+   * A parameter another one is worked out from changed: ask Jenkins again, once the person has stopped, and put its answer
+   * in. A reply for an older question, or for another form, is dropped. If Jenkins cannot say, the field is a plain one again.
+   */
+  function reactiveChanged(job, name) {
+    var plan = state.plan;
+    if (!plan || !plan.data || plan.path !== job.path || !reactiveReads(plan.data)[name]) return;
+    var data = plan.data;
+    var mine = (plan.reactiveSeq = (plan.reactiveSeq || 0) + 1);
+    clearTimeout(plan.reactiveTimer);
+    data.params.forEach(function (p) { if (p.reactive) p.updating = true; });
+    if (state.formRefresh) state.formRefresh();
+    plan.reactiveTimer = setTimeout(function () {
+      var values = {};
+      data.params.forEach(function (p) {
+        if (p.secret || p.type === 'display') return;
+        var v = state.form.values[p.name];
+        values[p.name] = v === true ? 'true' : v === false ? 'false' : (v === undefined || v === null ? '' : String(v));
+      });
+      var epoch = state.epoch;
+      api('paramRefresh', { path: job.path, values: values }).then(function (reply) { return reply.params || {}; }, function (error) {
+        var failed = {};
+        data.params.forEach(function (p) { if (p.reactive) failed[p.name] = { error: error.message || 'Jenkins did not answer' }; });
+        return failed;
+      }).then(function (answers) {
+        if (epoch !== state.epoch || state.plan !== plan || plan.reactiveSeq !== mine) return;
+        data.params.forEach(function (p) {
+          if (!p.reactive) return;
+          var got = answers[p.name];
+          p.updating = false;
+          if (!got) return;
+          if (got.error) { p.reactive = false; p.type = 'string'; p.choices = null; p.reactiveError = got.error; return; }
+          if (got.view) { p.view = got.view; return; }
+          p.choices = got.choices || [];
+          p.choiceLabels = got.labels || null;
+          if (p.choices.indexOf(String(state.form.values[p.name])) < 0) state.form.values[p.name] = got.selected !== null && got.selected !== undefined ? got.selected : (p.choices[0] || '');
+        });
+        if (state.page.type === 'job' && !typing()) drawMain(); else if (state.formRefresh) state.formRefresh();
+      });
+    }, 350);
+  }
+
   /** A value the form did not start from the default for says where it came from — and only then: on every field it is noise. */
   function sourceChip(p) {
     if (p.secret) return h('span', { class: 'chip warnc', title: 'A secret is never saved and never filled in', text: 'type it — never saved' });
@@ -5628,14 +5732,14 @@
     return p.type === 'boolean' ? (d === true || d === 'true') : String(d);
   }
   function differsFromDefault(p, value) {
-    if (p.secret) return false;
+    if (p.secret || p.type === 'display') return false;
     return p.type === 'boolean' ? (value === true || value === 'true') !== paramDefault(p) : String(value === undefined || value === null ? '' : value) !== paramDefault(p);
   }
 
   /** What a parameter is for: two lines of it, and the rest one tap away. */
   function describe(text) {
     if (!text) return null;
-    var long = String(text).length > 150;
+    var long = String(text).length > 420;
     var el = h('div', { class: 'help pdesc' + (long ? ' clamp' : ''), text: text });
     if (!long) return el;
     var more = h('button', { class: 'linkish', type: 'button', text: 'more', 'aria-expanded': 'false', onclick: function () {
@@ -5688,12 +5792,19 @@
     var values = form.values;
     var current = values[p.name];
     var control;
-    var set = function (value) { values[p.name] = value; form.dirty = true; refresh(); };
+    var set = function (value) { values[p.name] = value; form.dirty = true; refresh(); reactiveChanged(job, p.name); };
     var problem = h('div', { class: 'perr', role: 'alert', id: 'perr-' + p.name });
+    var changedValue = function () { reactiveChanged(job, p.name); };
+    var updating = h('span', { class: 'upd', text: 'Updating from Jenkins…', hidden: !p.updating });
+    if (p.type === 'display') {
+      return h('div', { class: 'field pfield' + (p.updating ? ' updating' : ''), 'data-param': p.name },
+        h('div', { class: 'row', style: 'gap:6px' }, h('span', { class: 'plabel', text: p.name }), updating),
+        describe(p.description), renderBlocks(p.view), problem);
+    }
     if (p.type === 'boolean') {
       control = h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: current === true || current === 'true', onchange: function (event) { set(event.target.checked); } }), h('span', { text: 'true' }));
     } else if (p.type === 'choice' && p.choices) {
-      control = h('select', { 'aria-describedby': 'perr-' + p.name, value: current, onchange: function (event) { set(event.target.value); } }, p.choices.map(function (one) { return h('option', { value: one, text: one }); }));
+      control = h('select', { 'aria-describedby': 'perr-' + p.name, value: current, disabled: p.updating ? true : null, onchange: function (event) { set(event.target.value); } }, p.choices.map(function (one) { return h('option', { value: one, text: (p.choiceLabels && p.choiceLabels[one]) || one }); }));
     } else if (p.type === 'text') {
       control = h('textarea', { 'aria-describedby': 'perr-' + p.name, value: current || '', oninput: function (event) { set(event.target.value); } });
     } else {
@@ -5707,12 +5818,14 @@
       var v = o.value;
       values[p.name] = p.type === 'boolean' ? (v === true || v === 'true') : v;
       form.dirty = true;
+      reactiveChanged(job, p.name);
       drawMain();
     } }, h('option', { value: '', text: 'Use…' }), others.map(function (o, i) { return h('option', { value: String(i), text: String(o.value).slice(0, 40) + '  (' + o.source + ')' }); })) : null;
-    var field = h('div', { class: 'field pfield', 'data-param': p.name },
-      h('div', { class: 'row', style: 'gap:6px' }, h('span', { class: 'plabel', text: p.name }), p.required && p.secret ? h('span', { class: 'req', title: 'Needed', 'aria-label': 'needed', text: '*' }) : null, sourceChip(p), h('span', { class: 'spacer' }), pick),
+    var field = h('div', { class: 'field pfield' + (p.updating ? ' updating' : ''), 'data-param': p.name },
+      h('div', { class: 'row', style: 'gap:6px' }, h('span', { class: 'plabel', text: p.name }), p.required && p.secret ? h('span', { class: 'req', title: 'Needed', 'aria-label': 'needed', text: '*' }) : null, sourceChip(p), updating, h('span', { class: 'spacer' }), pick),
       control,
       describe(p.description),
+      p.reactiveError ? h('div', { class: 'help', text: 'Jenkins works this out from the other values, and did not say now (' + p.reactiveError + '). Type it instead.' }) : null,
       problem);
     return field;
   }
@@ -5749,17 +5862,24 @@
         if (chip && byName[name]) chip.hidden = !differsFromDefault(byName[name], form.values[name]);
       });
       var count = Object.keys(problems).length;
-      run.disabled = count > 0 || isBusy('run:' + job.path);
-      run.title = count ? 'Fix ' + (count === 1 ? 'the parameter marked' : count + ' parameters marked') + ' first' : '';
+      var waiting = params.some(function (p) { return p.updating; });
+      [].forEach.call(wrap.querySelectorAll('.pfield'), function (el) {
+        var one = byName[el.getAttribute('data-param')];
+        el.classList.toggle('updating', Boolean(one && one.updating));
+        var note = el.querySelector('.upd');
+        if (note) note.hidden = !(one && one.updating);
+      });
+      run.disabled = count > 0 || waiting || isBusy('run:' + job.path);
+      run.title = waiting ? 'Jenkins is working out some values for what changed' : count ? 'Fix ' + (count === 1 ? 'the parameter marked' : count + ' parameters marked') + ' first' : '';
       preview.textContent = callPreviewText(data, params, form.values);
       stripe.hidden = !formLooksProd(data, params, form.values);
     };
     wrap = h('div', null,
       stripe,
       presetsRow(job),
-      h('div', { class: 'form' }, groups.fields.map(function (p) { return planField(p, job, refresh); })),
+      h('div', { class: 'form runform' }, groups.fields.map(function (p) { return planField(p, job, refresh); })),
       picker,
-      groups.options.length ? h('div', { class: 'form optform' }, groups.options.map(function (p) { return planField(p, job, refresh); })) : null,
+      groups.options.length ? h('div', { class: 'form runform optform' }, groups.options.map(function (p) { return planField(p, job, refresh); })) : null,
       h('details', { class: 'sendbox' }, h('summary', { text: 'What will be sent' }), preview),
       h('div', { class: 'row actionbar' }, run,
         h('button', { class: 'btn', type: 'button', text: 'Run at…', title: 'Start it later, at a time you choose', onclick: function () { openSchedule(job.path, formValues(job, params)); } }),
@@ -5767,6 +5887,7 @@
         changed,
         h('span', { class: 'spacer' }),
         h('span', { class: 'help', text: form.fromNumber ? 'Started from the parameters of #' + form.fromNumber + '. Secrets are never filled in.' : 'Each value says where it came from. Secrets are never saved.' })));
+    state.formRefresh = refresh;
     refresh();
     return wrap;
   }
@@ -5774,6 +5895,7 @@
   function formValues(job, params) {
     var out = {};
     (params || job.parameters).forEach(function (p) {
+      if (p.type === 'display') return;
       var v = state.form.values[p.name];
       out[p.name] = v === true ? 'true' : v === false ? 'false' : (v === undefined || v === null ? '' : String(v));
     });

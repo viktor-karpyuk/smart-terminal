@@ -48,7 +48,7 @@ const P = fromPanel([
   'PAGE_TYPES', 'SMART_KINDS', 'cleanPage', 'listKey', 'SMART_NOTES', 'STATUS_ORDER', 'sortRows', 'matchRow',
   'ARCHIVE_MODES', 'ARCHIVE_LIMITS', 'formatBytes', 'clampNumber', 'archiveUsage', 'copyNote', 'hasCopy',
   'IMPORT_EXAMPLE', 'describeImport', 'exportWhat', 'describeExport',
-  'groupParams', 'RANGES', 'rangeOf', 'packLanes', 'runsAt', 'niceTicks', 'compact', 'WEEKDAYS', 'MONTHS', 'fmtMoment', 'fmtTick', 'deltaOf', 'ratePct', 'downsample', 'stepCursor', 'heatLevel', 'isStuck', 'fractionOf', 'PALETTE_ACTIONS', 'paletteActions', 'typeAheadFrom', 'MIN_WINDOW_MS', 'fitWindow', 'fitBuckets', 'binFinished', 'binLoad', 'historyCovers', 'assign', 'PATIENT', 'declined', 'promoteItems', 'promoteMissing', 'promoteSend', 'rememberableParams', 'inputDefaults', 'inputAnswers', 'isCertError', 'certDay', 'buildPercent', 'NOTIFY_SWITCHES', 'commitLine', 'BOARD_OLD', 'boardLags', 'boardNeverBuilt', 'boardNoise', 'boardRank', 'boardKind', 'boardPrepare', 'DISGUISES', 'plainShown', 'SCOPE_TRIGGERS', 'SCOPE_RESULTS', 'scopeArgs', 'scopeChips', 'scopeMatchesPath', 'csvCell', 'csvOf', 'heatTone', 'trendWords', 'driftWords', 'LAUNCH_WORDS', 'LAUNCH_GLYPHS', 'launchWord', 'launchGlyph', 'launchOver', 'launchTone', 'quickChoices', 'whenWords', 'parseLocalTime', 'toLocalTime', 'paramProblems', 'callPreviewText', 'formLooksProd', 'batchProgress', 'paramChips', 'promoteWorthAsking', 'packLanesPx', 'densityColumns', 'zoomWindow', 'panWindow', 'jobsByActivity', 'spanWords', 'CLAUDE_DENIED', 'CLAUDE_OUTCOME', 'claudeResult', 'queueJobPath',
+  'groupParams', 'RANGES', 'rangeOf', 'packLanes', 'runsAt', 'niceTicks', 'compact', 'WEEKDAYS', 'MONTHS', 'fmtMoment', 'fmtTick', 'deltaOf', 'ratePct', 'downsample', 'stepCursor', 'heatLevel', 'isStuck', 'fractionOf', 'PALETTE_ACTIONS', 'paletteActions', 'typeAheadFrom', 'MIN_WINDOW_MS', 'fitWindow', 'fitBuckets', 'binFinished', 'binLoad', 'historyCovers', 'assign', 'PATIENT', 'declined', 'promoteItems', 'promoteMissing', 'promoteSend', 'rememberableParams', 'inputDefaults', 'inputAnswers', 'isCertError', 'certDay', 'buildPercent', 'NOTIFY_SWITCHES', 'commitLine', 'BOARD_OLD', 'boardLags', 'boardNeverBuilt', 'boardNoise', 'boardRank', 'boardKind', 'boardPrepare', 'DISGUISES', 'plainShown', 'SCOPE_TRIGGERS', 'SCOPE_RESULTS', 'scopeArgs', 'scopeChips', 'scopeMatchesPath', 'csvCell', 'csvOf', 'heatTone', 'trendWords', 'driftWords', 'LAUNCH_WORDS', 'LAUNCH_GLYPHS', 'launchWord', 'launchGlyph', 'launchOver', 'launchTone', 'quickChoices', 'whenWords', 'parseLocalTime', 'toLocalTime', 'paramProblems', 'callPreviewText', 'reactiveReads', 'paramDefault', 'differsFromDefault', 'formLooksProd', 'batchProgress', 'paramChips', 'promoteWorthAsking', 'packLanesPx', 'densityColumns', 'zoomWindow', 'panWindow', 'jobsByActivity', 'spanWords', 'CLAUDE_DENIED', 'CLAUDE_OUTCOME', 'claudeResult', 'queueJobPath',
 ]);
 
 test('a time is "just now" for under a minute, and then says how long, in the unit that fits', () => {
@@ -1086,4 +1086,23 @@ test('a run form groups what belongs together: the long tail of RUN_* switches b
   const mixed = P.groupParams([flag('RUN_A'), flag('RUN_B', { description: 'Read only when MODE is ALL.' }), flag('RUN_C')]);
   assert.equal(mixed.flags.when, null, 'no single condition, none claimed');
   assert.deepEqual(P.groupParams([]), { fields: [], flags: null, options: [] });
+});
+
+test('a parameter Jenkins works out is shown, not asked for, and never sent; and the ones it reads are known', () => {
+  const params = [
+    { name: 'CURRENT_VERSIONS', type: 'display', required: false, default: '', view: [], reactive: true, refs: ['LIB', 'BUMP'] },
+    { name: 'LIB', type: 'choice', choices: ['common', 'mongo-common'], default: 'common' },
+    { name: 'BUMP', type: 'choice', choices: ['POM (2.5.3)', 'MINOR'], default: 'POM (2.5.3)', reactive: true, refs: ['LIB'] },
+  ];
+  const values = { CURRENT_VERSIONS: '', LIB: 'common', BUMP: 'POM (2.5.3)' };
+  assert.deepEqual({ ...P.paramProblems(params, values) }, {});
+  assert.deepEqual(Object.keys(P.reactiveReads({ params })).sort(), ['BUMP', 'LIB']);
+  assert.deepEqual(Object.keys(P.reactiveReads({ params: [params[1]] })), [], 'nothing reactive, nothing to watch');
+  assert.equal(P.differsFromDefault(params[0], 'anything'), false, 'a display is never "changed"');
+  assert.equal(P.differsFromDefault(params[2], 'MINOR'), true);
+  const text = P.callPreviewText({}, params, values);
+  assert.equal(text.includes('CURRENT_VERSIONS'), false, 'a block that only shows is not part of the request');
+  assert.match(text, /LIB=common&BUMP=POM%20\(2\.5\.3\)/);
+  // A choice that Jenkins's new list no longer has is still caught, so Run waits for the form to be right.
+  assert.deepEqual({ ...P.paramProblems(params, { ...values, BUMP: 'GONE' }) }, { BUMP: 'Not one of the choices Jenkins offers.' });
 });
