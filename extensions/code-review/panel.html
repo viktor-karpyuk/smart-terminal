@@ -2801,7 +2801,7 @@
     if (ws.pendingReturn) {
       html += '<button class="btn small" data-act="workshop-diff" title="Everything the workshop has that your clone does not, as one diff">' +
         (state.wsDiff && state.wsDiff.open ? 'Hide the diff' : 'Review the ' + ws.pendingReturn + ' waiting') + '</button>';
-      html += '<button class="btn small primary" data-act="give-back" data-push="1"' + busyAttr(prKey('give-back')) + ' title="Into your clone and on to origin/' + esc(v.pr.sourceBranch) + ', never forced, so the fix is on the PR. Your clone must not have that branch checked out.">Push ' + ws.pendingReturn + ' to the PR</button>' +
+      html += '<button class="btn small primary" data-act="give-back" data-push="1"' + busyAttr(prKey('give-back')) + ' title="Into your clone and on to origin/' + esc(v.pr.sourceBranch) + ', never forced, so the fix is on the PR. If your clone has that branch checked out, they go straight from the workshop to origin and you pull.">Push ' + ws.pendingReturn + ' to the PR</button>' +
         '<button class="btn small" data-act="give-back"' + busyAttr(prKey('give-back')) + ' title="Into your clone only, on ' + esc(v.pr.sourceBranch) + ': nothing goes to origin until you push it from the Commits tab.">To my clone only</button>';
     } else {
       html += '<span class="faint">Nothing waiting to be handed back.</span>';
@@ -5088,6 +5088,7 @@
         state.wsDiff = null;
         var left = r.left ? ' ' + r.left + ' still in the workshop.' : '';
         if (!r.pushed) say(r.count + ' fix(es) handed back to your clone.' + left);
+        else if (r.pushed.ok && r.pushed.direct) say(r.count + ' fix(es) pushed to origin/' + r.branch + ' straight from the workshop, because your clone has that branch checked out. Pull there to have them.' + left);
         else if (r.pushed.ok) say(r.count + ' fix(es) pushed to origin/' + r.branch + '.' + left);
         else say(r.count + ' fix(es) are in your clone, but the push to origin/' + r.branch + ' was refused: ' + (r.pushed.output || 'git said nothing') + ' Pull, then push from the Commits tab.', true);
         state.commits.data = null;
