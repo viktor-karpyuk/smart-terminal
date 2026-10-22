@@ -480,6 +480,10 @@ function Frame({
           // Servers and their tokens are the main process's: nothing here names an address or holds a credential.
           return reply(true, await window.api.jenkins.call(name.slice(8), args), undefined);
         }
+        if (channel === 'timelogbook') {
+          // The address and the key are the main process's: the panel only names verbs and tools.
+          return reply(true, await window.api.timelogbook.call(name.slice(12), args), undefined);
+        }
         if (channel === 'kube-stream') {
           return reply(true, await stream(name.slice(5), args), undefined);
         }
@@ -710,6 +714,18 @@ function Frame({
         return { ok: true, sessionId, delivered: handed.delivered ?? false };
       }
 
+      // A Timelogbook task: the app reads it from Timelogbook and hands it over.
+      if (name === 'timelogbook.ask') {
+        const found = await window.api.timelogbook.call('brief', { key: args.key, title: args.title });
+        if (found.ok === false) return found;
+        // A session per task: two tasks are two pieces of work, not one conversation.
+        const sessionId = await claudeFor(panelId, { title: String(found.title ?? 'task'), fresh: true });
+        if (!sessionId) return { ok: false, error: 'the app could not open a session' };
+        store.focusSession(sessionId);
+        const handed = await window.api.analysis.handOver(sessionId, String(found.text ?? ''));
+        return { ok: true, sessionId, delivered: handed.delivered ?? false };
+      }
+
       // Ask Claude. The evidence is gathered by the app, in the app's words.
       const brief = await window.api.kube.call('brief', {
         ...where,
@@ -747,10 +763,10 @@ function Frame({
    * close it — and then the next question opens another, which is the right
    * answer to having closed one.
    */
-  async function claudeFor(id: string, options: { cwd?: string; title?: string } = {}): Promise<string | null> {
+  async function claudeFor(id: string, options: { cwd?: string; title?: string; fresh?: boolean } = {}): Promise<string | null> {
     const store = useStore.getState();
     const held = claudeForPanel.get(id);
-    if (held && store.sessions[held]) return held;
+    if (held && store.sessions[held] && !options.fresh) return held;
 
     const sessionId = await store.newSession({
       kind: 'claude',
@@ -906,6 +922,12 @@ function Frame({
   useEffect(() => {
     if (!view.listens?.includes('teams')) return;
     return window.api.teams.onEvent((payload) => tell('teams', payload));
+  }, [view.listens]);
+
+  // Timelogbook: the connection changed (connected, disconnected, Claude let in or out).
+  useEffect(() => {
+    if (!view.listens?.includes('timelogbook')) return;
+    return window.api.timelogbook.onEvent((payload) => tell('timelogbook', payload));
   }, [view.listens]);
 
   // Jenkins has no push channel, so the app makes one: a build began or ended, a

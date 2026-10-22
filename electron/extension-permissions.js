@@ -26,6 +26,8 @@ const PERMISSIONS = {
   deliver: 'Send messages to people in Teams, in its own name',
   'jenkins.read': 'Read your Jenkins servers: jobs, builds, logs, queue and agents',
   'jenkins.write': 'Change what Jenkins does: run and stop builds, and the servers this app knows',
+  'timelogbook.read': 'Read Timelogbook as you: your tasks, hours and projects, through the API key you gave this app',
+  'timelogbook.write': 'Change the Timelogbook connection, and run tools that change things in Timelogbook (each one asks you first)',
   terminal: 'Open terminals and Claude sessions about what it shows',
 };
 
