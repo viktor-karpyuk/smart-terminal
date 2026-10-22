@@ -291,7 +291,7 @@
     var d = state.draft;
     return '<div class="card"><h1>Connect Timelogbook</h1>'
       + '<ol class="steps"><li>In Timelogbook, open your profile → <b>API keys</b> and create one. Pick the apps it may reach — <b>My work</b> and <b>Tasks</b> at least — and whether it may write.</li>'
-      + '<li>Copy the key (it is shown once) and paste it below, with the address of Timelogbook's MCP servers — <code>https://mcp.timelogbook.com</code> unless your company runs its own. Any of the per-app addresses Timelogbook shows beside the key works too.</li></ol>'
+      + '<li>Copy the key (it is shown once) and paste it below, with the address of Timelogbook’s MCP servers — <code>https://mcp.timelogbook.com</code> unless your company runs its own. Any of the per-app addresses Timelogbook shows beside the key works too.</li></ol>'
       + '<label class="field"><span>Address</span><input type="text" id="url" placeholder="https://mcp.timelogbook.com" value="' + esc(d.url) + '" autocomplete="off"></label>'
       + '<label class="field"><span>API key</span><input type="password" id="key" placeholder="tlbk_…" value="' + esc(d.key) + '" autocomplete="off"></label>'
       + '<div class="row"><button class="btn primary" id="connect"' + (state.busy.connect ? ' disabled' : '') + '>' + (state.busy.connect ? 'Checking…' : 'Connect') + '</button>'
