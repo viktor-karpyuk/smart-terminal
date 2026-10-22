@@ -5,16 +5,20 @@ description: Work with Timelogbook v4 from a Smart Terminal session — the user
 
 # Timelogbook from a Smart Terminal session
 
-Smart Terminal is connected to the user's Timelogbook through an API key they
-made there. You reach it with the `timelogbook` MCP tools. You never see the
-key and do not need it: the app holds it, makes each call and hands you the
-answer. Every tool runs **as the user**, with their permissions in Timelogbook
-and only the apps their key was made for.
+The user connects Timelogbook in Smart Terminal's **MCP connections** panel,
+with an API key they made in Timelogbook (Profile → API keys). The connection
+has whatever name they gave it — usually `timelogbook` — and that is the MCP
+server its tools come from. You never see the key and do not need it: the app
+holds it, makes each call and hands you the answer. Every tool runs **as the
+user**, with their permissions in Timelogbook and only the apps their key was
+made for.
 
-If no `timelogbook` tools are listed, either Timelogbook is not connected or
-the user has not let Claude sessions use it. Say so and point at the
-Timelogbook panel (Settings → "Let Claude sessions use Timelogbook"). Do not
-reach for `curl` or guess at addresses.
+If no Timelogbook tools (`me_…`, `tasks_…`) are listed, either it is not
+connected or the user has not let Claude sessions use it, or this session
+started before they did. Say so and point at the MCP connections panel: add a
+connection with the address `https://mcp.timelogbook.com`, the key, and the
+modules `me, tasks, projects`, tick "Let Claude sessions use it", and start a
+new session. Do not reach for `curl` or guess at addresses.
 
 ## The tools
 
@@ -44,8 +48,7 @@ exclusive (`me_search_my_tasks` takes `q` **or** `group`, never both), what
 
 ## Starting work on a task
 
-When the user says they are starting a task, or the session was handed one
-from the Timelogbook panel:
+When the user says they are starting a task:
 
 1. Read the task (`tasks_get_task` / `me_get_task`) and its comments
    (`tasks_list_comments`) — the comments often hold the decision the

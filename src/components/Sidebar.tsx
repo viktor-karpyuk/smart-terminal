@@ -1928,7 +1928,7 @@ function LauncherButton({ viewId, title, icon }: { viewId: string; title: string
       aria-pressed={showing}
       onClick={() => useStore.getState().launchExtensionView(viewId)}
     >
-      {icon === 'review' ? <ReviewIcon /> : icon === 'teams' ? <TeamsIcon /> : icon === 'send' ? <SendIcon /> : icon === 'jenkins' ? <JenkinsIcon /> : icon === 'remote' ? <RemoteIcon /> : icon === 'timelogbook' ? <TimelogbookIcon /> : icon === 'kubrik' ? <KubrikIcon /> : <ExtensionsIcon />}
+      {icon === 'review' ? <ReviewIcon /> : icon === 'teams' ? <TeamsIcon /> : icon === 'send' ? <SendIcon /> : icon === 'jenkins' ? <JenkinsIcon /> : icon === 'remote' ? <RemoteIcon /> : icon === 'mcp' ? <McpIcon /> : <ExtensionsIcon />}
       {remote && remote.viewers.length > 0 && !remote.error ? <span className="remote-count" aria-hidden="true">{remote.viewers.length}</span> : null}
     </button>
   );
@@ -1985,24 +1985,13 @@ function JenkinsIcon() {
   );
 }
 
-/** A clock with a tick: time logged against work, in the stroke the rest use. */
-function TimelogbookIcon() {
+/** A plug: something connected from outside, in the stroke the rest use. */
+function McpIcon() {
   return (
     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.95" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 7v5l3 2" />
-    </svg>
-  );
-}
-
-/** Three stacked blocks: the modules of an ERP, in the stroke the rest use. */
-function KubrikIcon() {
-  return (
-    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.95" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="3" y="3" width="8" height="8" rx="1.5" />
-      <rect x="13" y="3" width="8" height="8" rx="1.5" />
-      <rect x="3" y="13" width="8" height="8" rx="1.5" />
-      <path d="M17 13v8M13 17h8" />
+      <path d="M9 2v5M15 2v5" />
+      <path d="M6 7h12v4a6 6 0 0 1-12 0V7Z" />
+      <path d="M12 17v5" />
     </svg>
   );
 }

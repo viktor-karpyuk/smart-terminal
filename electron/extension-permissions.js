@@ -26,10 +26,8 @@ const PERMISSIONS = {
   deliver: 'Send messages to people in Teams, in its own name',
   'jenkins.read': 'Read your Jenkins servers: jobs, builds, logs, queue and agents',
   'jenkins.write': 'Change what Jenkins does: run and stop builds, and the servers this app knows',
-  'timelogbook.read': 'Read Timelogbook as you: your tasks, hours and projects, through the API key you gave this app',
-  'timelogbook.write': 'Change the Timelogbook connection, and run tools that change things in Timelogbook (each one asks you first)',
-  'kubrik.read': 'Read Kubrik OS as you: the ERP modules your API key reaches',
-  'kubrik.write': 'Change the Kubrik OS connection, and run tools that change things in Kubrik OS (each one asks you first)',
+  'mcp.read': 'See your MCP connections and the tools each one offers',
+  'mcp.write': 'Add, change and remove MCP connections, and run their tools (any that may change something asks you first)',
   terminal: 'Open terminals and Claude sessions about what it shows',
 };
 

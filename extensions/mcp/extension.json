@@ -1,0 +1,22 @@
+{
+  "id": "mcp",
+  "name": "MCP connections",
+  "version": "0.1.0",
+  "author": "Smart Terminal",
+  "summary": "Add any MCP server by hand — a name, an address, a token — run its tools from a panel, and give it to every Claude session.",
+  "description": "Every MCP server you reach over HTTP, in one place. Add one with a name you choose, its address and a token, and the app asks it what tools it has. A product that serves one MCP server per module — Kubrik OS at mcp.kubrik.io, Timelogbook at mcp.timelogbook.com — is one connection too: give its address and the modules you want, and each is address/module. Every tool runs from a form built from its own schema, with the answer shown as a tree; when a server answers that a change is a proposal waiting to be confirmed, the panel says nothing has changed yet and opens its confirmation page. Let Claude use a connection and every Claude session started afterwards gets it as an MCP server under the name you gave it. Tokens are kept by the app, encrypted by your system's keychain: this panel never holds one and none is ever written into a session's config. Any tool a server does not mark as read-only is shown to you in a dialog before it runs, whoever asked.",
+  "contributes": {
+    "panels": [
+      {
+        "id": "mcp",
+        "title": "MCP connections",
+        "summary": "Your MCP servers, for you and for Claude.",
+        "needs": null,
+        "launcher": true,
+        "icon": "mcp",
+        "listens": ["mcp"],
+        "render": "panel.html"
+      }
+    ]
+  }
+}
