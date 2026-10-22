@@ -18,7 +18,7 @@ const assert = require('node:assert');
 let sqlite = null;
 try { sqlite = require('node:sqlite'); } catch { sqlite = null; }
 const skip = sqlite ? false : 'node:sqlite needs Node 22 or newer';
-const { TimelogbookService, apiBase, appOf } = require('../electron/timelogbook-service');
+const { TimelogbookService, apiBase, mcpUrl, siteOf, appOf } = require('../electron/timelogbook-service');
 
 const KEY = j('tl', 'bk_', 'Ab12Cd34', '_', 'x'.repeat(40));
 const OTHER = j('tl', 'bk_', 'Zz99Yy88', '_', 'y'.repeat(40));
@@ -75,6 +75,15 @@ test('the address is the API base whatever was pasted', () => {
   assert.equal(apiBase('http://localhost:8090'), 'http://localhost:8090/api');
   assert.throws(() => apiBase('http://app.timelogbook.com'), /https/);
   assert.throws(() => apiBase('ftp://x'), /https/);
+  // The MCP door's own host: one address per app, `/<app>` and nothing more (k8s/ingress/prod/mcp-ingress.yml).
+  assert.equal(apiBase('mcp.timelogbook.com'), 'https://mcp.timelogbook.com');
+  assert.equal(apiBase('https://mcp.timelogbook.com/tasks'), 'https://mcp.timelogbook.com');
+  assert.equal(apiBase('https://dev-mcp.timelogbook.com/crm/'), 'https://dev-mcp.timelogbook.com');
+  assert.equal(mcpUrl('https://mcp.timelogbook.com', 'tasks'), 'https://mcp.timelogbook.com/tasks');
+  assert.equal(mcpUrl('https://app.timelogbook.com/api', 'tasks'), 'https://app.timelogbook.com/api/agent/mcp/v1/tasks');
+  assert.equal(siteOf('https://mcp.timelogbook.com'), 'https://app.timelogbook.com/');
+  assert.equal(siteOf('https://dev-mcp.timelogbook.com'), 'https://dev.timelogbook.com/');
+  assert.equal(siteOf('https://app.timelogbook.com/api'), 'https://app.timelogbook.com/');
   assert.throws(() => apiBase(''), /address/);
 });
 

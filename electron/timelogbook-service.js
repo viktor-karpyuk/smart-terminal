@@ -4,7 +4,8 @@
  * Timelogbook v4, through the MCP servers its agent door exposes.
  *
  * Timelogbook serves one MCP server per app of the suite at
- * `<api>/agent/mcp/v1/<app>`: stateless JSON-RPC over POST, one JSON answer per
+ * `https://mcp.timelogbook.com/<app>` (an ingress in front of the gateway's
+ * `<api>/agent/mcp/v1/<app>`, which also answers directly): stateless JSON-RPC over POST, one JSON answer per
  * message, no session and no stream. A person makes an API key in Timelogbook
  * (Profile → API keys, `tlbk_<8>_<40>`), choosing which apps it reaches and
  * whether it may write; the key goes as a Bearer and every tool runs with that
@@ -39,10 +40,15 @@ const MIGRATIONS = [
   `CREATE TABLE IF NOT EXISTS tlb_setting (k TEXT PRIMARY KEY, v TEXT NOT NULL);`,
 ];
 
+/** The MCP door's own host (`mcp.timelogbook.com`, `dev-mcp.…`): there an app's server is `/<app>`, nothing more. */
+const MCP_HOST = /^(?:[a-z0-9-]+-)?mcp\./i;
+
 /**
- * The API's base, from whatever the person pasted: the site, the API, or the
- * whole MCP address Timelogbook shows beside a new key. Always ends in `/api`.
- * Plain http only to this computer: the key is a password.
+ * Where the servers are, from whatever the person pasted: the MCP host
+ * (`mcp.timelogbook.com`, or one app's address on it), the site, the API, or
+ * the gateway's MCP address. On the MCP host it is the origin; anywhere else
+ * the API, ending in `/api`. Plain http only to this computer: the key is a
+ * password.
  */
 function apiBase(input) {
   let text = String(input ?? '').trim();
@@ -58,11 +64,25 @@ function apiBase(input) {
   const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   if (url.protocol === 'http:' && !local) throw new Error('Use https:// — the API key would travel in the clear.');
   if (url.username || url.password) throw new Error('Leave the user and password out of the address; the API key is what signs in.');
+  if (MCP_HOST.test(url.hostname)) return url.origin;
   let path = url.pathname.replace(/\/+$/, '');
   const cut = path.indexOf('/agent/');
   if (cut >= 0) path = path.slice(0, cut);
   if (!/\/api$/.test(path)) path += '/api';
   return `${url.origin}${path}`;
+}
+
+/** One app's MCP server under a base `apiBase` made. */
+function mcpUrl(base, app) {
+  return MCP_HOST.test(new URL(base).hostname) ? `${base}/${app}` : `${base}/agent/mcp/v1/${app}`;
+}
+
+/** The site people open, for a base: `mcp.timelogbook.com` → `app.timelogbook.com`, `dev-mcp.` → `dev.`; otherwise the API's own host. */
+function siteOf(base) {
+  const url = new URL(base);
+  const m = /^(?:([a-z0-9-]+)-)?mcp\.(.+)$/i.exec(url.hostname);
+  if (m) return `${url.protocol}//${m[1] ?? 'app'}.${m[2]}/`;
+  return base.replace(/\/api$/, '/');
 }
 
 function keyPrefix(key) {
@@ -176,7 +196,7 @@ class TimelogbookService {
     const timer = setTimeout(() => abort.abort(), TIMEOUT_MS);
     let response;
     try {
-      response = await this.fetch(`${conn.base}/agent/mcp/v1/${app}`, {
+      response = await this.fetch(mcpUrl(conn.base, app), {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${conn.key}`,
@@ -405,7 +425,7 @@ class TimelogbookService {
           const conn = this.connection();
           if (!conn || !this.openExternal) throw new TimelogbookError('Timelogbook is not connected.');
           // The site, not the API: the address is the one saved, never one a panel names.
-          await this.openExternal(conn.base.replace(/\/api$/, '/'));
+          await this.openExternal(siteOf(conn.base));
           return { ok: true };
         }
         default:
@@ -449,4 +469,4 @@ class TimelogbookService {
   }
 }
 
-module.exports = { TimelogbookService, TimelogbookError, apiBase, appOf, keyPrefix, APPS };
+module.exports = { TimelogbookService, TimelogbookError, apiBase, mcpUrl, siteOf, appOf, keyPrefix, APPS };
