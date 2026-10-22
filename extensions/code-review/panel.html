@@ -1579,6 +1579,13 @@
      * sent the file list to the top whenever a file was marked viewed.
      */
     var asideScrolls = Array.prototype.map.call(main.querySelectorAll('aside'), function (el) { return el.scrollTop; });
+    /*
+     * The diff beside the file list scrolls on its own, and every redraw — a
+     * review's progress, a comment arriving, an age ticking — rebuilt it at the
+     * top while the person was reading a long file. Kept by what it shows: the
+     * same file (or commit) comes back where it was, a different one at its top.
+     */
+    var sectionScrolls = keptPlaces(main);
     var html;
     try {
       if (state.view === 'dashboard') html = drawDashboard();
@@ -1606,6 +1613,7 @@
     }
     var asides = main.querySelectorAll('aside');
     for (var a = 0; a < asides.length; a++) if (asideScrolls[a] != null) asides[a].scrollTop = asideScrolls[a];
+    putPlacesBack(main, sectionScrolls);
     var list = main.querySelector('.split > aside');
     if (list) {
       // The file in front stays in sight as Enter walks down the list; nothing moves if it already is.
@@ -1622,6 +1630,20 @@
         again.scrollTop = selection.scroll;
       }
     }
+  }
+
+  /** How far each keyed scroller under `root` is scrolled, by its key. */
+  function keptPlaces(root) {
+    var places = {};
+    Array.prototype.forEach.call(root.querySelectorAll('section[data-scroll-key]'), function (el) { places[el.getAttribute('data-scroll-key')] = el.scrollTop; });
+    return places;
+  }
+  /** Scroll each keyed scroller back to where the same key was; one with a new key stays at its top. */
+  function putPlacesBack(root, places) {
+    Array.prototype.forEach.call(root.querySelectorAll('section[data-scroll-key]'), function (el) {
+      var kept = places[el.getAttribute('data-scroll-key')];
+      if (kept != null) el.scrollTop = kept;
+    });
   }
 
   function cssEscape(value) {
@@ -3291,7 +3313,8 @@
         return '<div class="item" data-act="jump" data-file="' + esc(f.filePath) + '" data-line="' + (f.lineNo || '') + '"><span class="sev ' + esc(f.severity) + '">' + esc(f.severity[0]) + '</span><span class="p" style="direction:ltr" title="' + esc(f.title) + '">' + esc(f.title) + '</span></div>';
       }).join('');
     }
-    html += '</aside>' + gutter() + '<section>';
+    // Keyed by the file, so a redraw keeps the reader's place in it and opening another file starts at its top.
+    html += '</aside>' + gutter() + '<section data-scroll-key="' + esc('code:' + (c.lines ? c.file : '')) + '">';
     if (!c.file) html += '<div class="empty">No file chosen.</div>';
     else if (!c.lines) html += '<div class="loading">Loading ' + esc(c.file) + '…</div>';
     else html += drawDiff(v, c.file, c.lines);
@@ -3924,7 +3947,7 @@
       if (d.sinceReview !== null && index === d.sinceReview && index > 0) html += '<div class="group" style="color:var(--accent)">↑ ' + index + ' since the last review</div>';
       html += commitItem(commit, false, d.fixes);
     });
-    html += '</aside>' + gutter() + '<section>';
+    html += '</aside>' + gutter() + '<section data-scroll-key="' + esc('commit:' + (c.sha || '')) + '">';
     if (!c.sha) html += '<div class="empty">Choose a commit.</div>';
     else {
       var commit = d.local.concat(d.commits).filter(function (x) { return x.sha === c.sha; })[0];

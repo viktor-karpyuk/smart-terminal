@@ -843,3 +843,28 @@ test('a redraw keeps the file list where it was, not only the first column that 
   assert.match(draw, /querySelectorAll\('aside'\)[\s\S]*querySelectorAll\('aside'\)/, 'every aside is saved and restored');
   assert.doesNotMatch(draw, /querySelector\('aside'\)/, 'the side column of a pull request is an aside too, and comes first');
 });
+
+// A fake of the little DOM the scroll keeper touches: sections with a key and a scrollTop.
+function scrollers(entries) {
+  const els = entries.map(([key, top]) => ({ scrollTop: top, getAttribute: (name) => (name === 'data-scroll-key' ? key : null) }));
+  return { els, root: { querySelectorAll: (sel) => (sel === 'section[data-scroll-key]' ? els : []) } };
+}
+
+test('a redraw keeps the place in the file being read, and a new file starts at its top', () => {
+  const S = fromPanel(['keptPlaces', 'putPlacesBack']);
+  const before = scrollers([['code:src/app/shared/topbar.component.ts', 1840], ['commit:abc', 0]]);
+  const places = S.keptPlaces(before.root);
+  // The redraw builds fresh elements, at the top.
+  const same = scrollers([['code:src/app/shared/topbar.component.ts', 0]]);
+  S.putPlacesBack(same.root, places);
+  assert.equal(same.els[0].scrollTop, 1840, 'the same file comes back where it was');
+  const other = scrollers([['code:src/app/app.routes.ts', 0]]);
+  S.putPlacesBack(other.root, places);
+  assert.equal(other.els[0].scrollTop, 0, 'another file starts at its top');
+});
+
+test('the code and commit diffs are keyed by what they show', () => {
+  assert.match(source, /<section data-scroll-key="' \+ esc\('code:' \+ \(c\.lines \? c\.file : ''\)\)/);
+  assert.match(source, /<section data-scroll-key="' \+ esc\('commit:' \+ \(c\.sha \|\| ''\)\)/);
+  assert.match(source, /var sectionScrolls = keptPlaces\(main\);[\s\S]*main\.innerHTML = html;[\s\S]*putPlacesBack\(main, sectionScrolls\);/);
+});
