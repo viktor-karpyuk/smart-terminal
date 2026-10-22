@@ -31,3 +31,25 @@ test('no panel declares the same function twice', () => {
   }
   assert.deepEqual(clashes, []);
 });
+
+/*
+ * A panel whose script does not parse shows its static HTML for ever — the
+ * Timelogbook panel sat on "Loading…" in 0.8.60 because one apostrophe closed a
+ * single-quoted string. Nothing in the app reports it; the frame just never runs.
+ */
+test('every panel script parses', () => {
+  const broken = [];
+  for (const id of fs.readdirSync(root)) {
+    const file = path.join(root, id, 'panel.html');
+    if (!fs.existsSync(file)) continue;
+    const html = fs.readFileSync(file, 'utf8');
+    for (const script of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) {
+      try {
+        new Function(script[1]);
+      } catch (error) {
+        broken.push(`${id}: ${error.message}`);
+      }
+    }
+  }
+  assert.deepEqual(broken, []);
+});
