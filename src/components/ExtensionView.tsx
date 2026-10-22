@@ -480,6 +480,9 @@ function Frame({
           // Servers and their tokens are the main process's: nothing here names an address or holds a credential.
           return reply(true, await window.api.jenkins.call(name.slice(8), args), undefined);
         }
+        if (channel === 'kubrik') {
+          return reply(true, await window.api.kubrik.call(name.slice(7), args), undefined);
+        }
         if (channel === 'timelogbook') {
           // The address and the key are the main process's: the panel only names verbs and tools.
           return reply(true, await window.api.timelogbook.call(name.slice(12), args), undefined);
@@ -928,6 +931,12 @@ function Frame({
   useEffect(() => {
     if (!view.listens?.includes('timelogbook')) return;
     return window.api.timelogbook.onEvent((payload) => tell('timelogbook', payload));
+  }, [view.listens]);
+
+  // Kubrik OS, the same.
+  useEffect(() => {
+    if (!view.listens?.includes('kubrik')) return;
+    return window.api.kubrik.onEvent((payload) => tell('kubrik', payload));
   }, [view.listens]);
 
   // Jenkins has no push channel, so the app makes one: a build began or ended, a

@@ -81,6 +81,7 @@ const { TeamsService } = require('./teams-service');
 const { JenkinsService } = require('./jenkins-service');
 const { JenkinsMcp } = require('./jenkins-mcp');
 const { TimelogbookService } = require('./timelogbook-service');
+const { KubrikService } = require('./kubrik-service');
 const { ForgeMcp } = require('./forge-mcp');
 const { SessionSecrets } = require('./session-secrets');
 const { ensurePrivateDir } = require('./socket-guard');
@@ -258,6 +259,8 @@ let jenkinsMcp = null;
 let forgeMcp = null;
 /** Timelogbook v4: the address and the API key, and the verbs its panel and Claude sessions may call. */
 let timelogbookService = null;
+/** Kubrik OS (kubrik.io): the same kind of door, to the ERP's MCP gateway. */
+let kubrikService = null;
 /** The native yes-or-no every tool that acts outward goes through; set once messaging starts. */
 let askPerson = null;
 /**
@@ -666,28 +669,41 @@ function createJenkinsService() {
   }
 }
 
+/** What both API-key products are handed: the keychain, the network, the person, and a way to say something changed. */
+function keyProductOptions(channel) {
+  return {
+    db: db.db,
+    secrets: {
+      encrypt: (text) => {
+        if (!safeStorage.isEncryptionAvailable()) throw new Error('This system offers no encrypted storage, so the API key cannot be kept safely.');
+        return safeStorage.encryptString(text).toString('base64');
+      },
+      decrypt: (cipher) => safeStorage.decryptString(Buffer.from(cipher, 'base64')),
+    },
+    fetch: (url, init) => net.fetch(url, init),
+    confirm: (question) => (askPerson ? askPerson(question) : Promise.resolve('unavailable')),
+    openExternal: (url) => {
+      if (/^https?:\/\//i.test(String(url))) return shell.openExternal(String(url));
+      throw new Error('Only web addresses can be opened.');
+    },
+    language: () => (String(app.getLocale() || '').toLowerCase().startsWith('es') ? 'es' : 'en'),
+    emit: (event) => send(`${channel}:event`, event),
+    log: (line) => console.log(line),
+  };
+}
+
+function createKubrikService() {
+  try {
+    return new KubrikService(keyProductOptions('kubrik'));
+  } catch (error) {
+    console.error('[kubrik] could not start:', error);
+    return null;
+  }
+}
+
 function createTimelogbookService() {
   try {
-    return new TimelogbookService({
-      db: db.db,
-      secrets: {
-        encrypt: (text) => {
-          if (!safeStorage.isEncryptionAvailable()) throw new Error('This system offers no encrypted storage, so the API key cannot be kept safely.');
-          return safeStorage.encryptString(text).toString('base64');
-        },
-        decrypt: (cipher) => safeStorage.decryptString(Buffer.from(cipher, 'base64')),
-      },
-      fetch: (url, init) => net.fetch(url, init),
-      confirm: (question) => (askPerson ? askPerson(question) : Promise.resolve('unavailable')),
-      openExternal: (url) => {
-        if (/^https?:\/\//i.test(String(url))) return shell.openExternal(String(url));
-        throw new Error('Only web addresses can be opened.');
-      },
-      // Timelogbook answers in Spanish or English; the person's system says which.
-      language: () => (String(app.getLocale() || '').toLowerCase().startsWith('es') ? 'es' : 'en'),
-      emit: (event) => send('timelogbook:event', event),
-      log: (line) => console.log(line),
-    });
+    return new TimelogbookService(keyProductOptions('timelogbook'));
   } catch (error) {
     console.error('[timelogbook] could not start:', error);
     return null;
@@ -2622,6 +2638,12 @@ function registerIpc() {
     return timelogbookService.call(String(name ?? ''), args ?? {});
   });
 
+  /** Kubrik OS: the same single door. The key never crosses it. */
+  ipcMain.handle('kubrik:call', async (_e, { name, args } = {}) => {
+    if (!kubrikService) return { ok: false, error: 'Kubrik OS is not running.' };
+    return kubrikService.call(String(name ?? ''), args ?? {});
+  });
+
   ipcMain.handle('review:call', async (_e, { name, args } = {}) => {
     if (!reviewService) return { ok: false, error: 'The Code Reviewer is not running.' };
     return reviewService.call(String(name ?? ''), args ?? {});
@@ -3023,6 +3045,7 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   jenkinsService = createJenkinsService();
   jenkinsService?.start();
   timelogbookService = createTimelogbookService();
+  kubrikService = createKubrikService();
   reviewService = createReviewService();
   if (teamsService && reviewService) {
     teamsBot = new TeamsBot({
@@ -3319,8 +3342,8 @@ function startMessaging() {
   const jenkinsScript = path.join(__dirname, 'jenkins-mcp-stdio.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
   // Pull requests on Bitbucket and GitHub, through the reviewer's repositories: a relay answered by `forgeMcp` below.
   const forgeScript = path.join(__dirname, 'forge-mcp-stdio.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
-  // Timelogbook, through the key the app holds: a relay answered by `timelogbookService` below.
-  const timelogbookScript = path.join(__dirname, 'timelogbook-mcp-stdio.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+  // Timelogbook and Kubrik OS, through the keys the app holds: one relay, told which by SMART_TERMINAL_RELAY.
+  const keyRelayScript = path.join(__dirname, 'key-mcp-stdio.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
 
   try {
     fs.writeFileSync(
@@ -3355,8 +3378,14 @@ function startMessaging() {
             // Offers no tools until Timelogbook is connected and the person lets sessions use it; the key stays in the app.
             timelogbook: {
               command: process.execPath,
-              args: [timelogbookScript],
-              env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
+              args: [keyRelayScript],
+              env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath, SMART_TERMINAL_RELAY: 'timelogbook' },
+            },
+            // Kubrik OS, the same way: no tools until it is connected and the person lets sessions use it.
+            kubrik: {
+              command: process.execPath,
+              args: [keyRelayScript],
+              env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath, SMART_TERMINAL_RELAY: 'kubrik' },
             },
           },
         },
@@ -3444,6 +3473,7 @@ function startMessaging() {
     onJenkins: (request) => jenkinsMcp.handle(request),
     onForge: (request) => forgeMcp.handle(request),
     onTimelogbook: (request) => (timelogbookService ? timelogbookService.handleSession(request) : { ok: false, error: 'Timelogbook is not running.' }),
+    onKubrik: (request) => (kubrikService ? kubrikService.handleSession(request) : { ok: false, error: 'Kubrik OS is not running.' }),
     verifySession: (id, secret) => sessionSecrets.verify(id, secret),
     // Sessions the app knows but is not running. Without this, a message to a
     // session that has ended comes back as "no such session", which is false and

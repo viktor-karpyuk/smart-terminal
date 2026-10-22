@@ -485,6 +485,16 @@ test('anything may ask the app to deliver, and nothing may send as somebody else
     assert.equal(host.needsConsent('timelogbook.claudeAccessSave', { on: false }), null);
   });
 
+  test('Kubrik OS: reading is its own permission; connecting, running a tool and opening a link are not', () => {
+    assert.equal(host.route('kubrik.overview'), 'kubrik');
+    assert.equal(host.route('kubrik.nonsense'), null);
+    assert.equal(host.permissionFor('kubrik.overview'), 'kubrik.read');
+    for (const verb of ['connect', 'disconnect', 'run', 'claudeAccessSave', 'openInBrowser', 'openLink']) assert.equal(host.permissionFor(`kubrik.${verb}`), 'kubrik.write', verb);
+    assert.equal(host.permitted({ trusted: false, permissions: ['kubrik.read'] }, 'kubrik.run'), false);
+    assert.ok(host.needsConsent('kubrik.disconnect', {}));
+    assert.ok(host.needsConsent('kubrik.claudeAccessSave', { on: true }));
+  });
+
   test('a downloaded panel may do what it asked for and nothing else; a shipped one anything', () => {
     const reader = { trusted: false, permissions: ['git.read'] };
     assert.equal(host.permitted(reader, 'status'), true);

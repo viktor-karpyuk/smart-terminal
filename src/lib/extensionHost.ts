@@ -309,7 +309,7 @@ const REMOTE_VERBS = new Map<string, Channel>(
  * Timelogbook does not mark read-only, whoever asked.
  */
 const TIMELOGBOOK_READ = ['overview', 'brief', 'claudeAccess'] as const;
-const TIMELOGBOOK_WRITE = ['connect', 'disconnect', 'run', 'claudeAccessSave', 'openInBrowser'] as const;
+const TIMELOGBOOK_WRITE = ['connect', 'disconnect', 'run', 'claudeAccessSave', 'openInBrowser', 'openLink'] as const;
 /** A Claude session handed a task. */
 const TIMELOGBOOK_APP = ['ask'] as const;
 const TIMELOGBOOK_VERBS = new Map<string, Channel>([
@@ -317,6 +317,13 @@ const TIMELOGBOOK_VERBS = new Map<string, Channel>([
   ...TIMELOGBOOK_WRITE.map((name) => [name, 'timelogbook'] as [string, Channel]),
   ...TIMELOGBOOK_APP.map((name) => [name, 'app'] as [string, Channel]),
 ]);
+
+/** Kubrik OS: the same door as Timelogbook, to the ERP's MCP gateway. */
+const KUBRIK_READ = ['overview', 'claudeAccess'] as const;
+const KUBRIK_WRITE = ['connect', 'disconnect', 'run', 'claudeAccessSave', 'openInBrowser', 'openLink'] as const;
+const KUBRIK_VERBS = new Map<string, Channel>(
+  [...KUBRIK_READ, ...KUBRIK_WRITE].map((name) => [name, 'kubrik'] as [string, Channel]),
+);
 
 const JENKINS_VERBS = new Map<string, Channel>([
   ...JENKINS_READ.map((name) => [name, 'jenkins'] as [string, Channel]),
@@ -338,7 +345,7 @@ const KUBE_VERBS = new Map<string, Channel>([
   ...KUBE_APP.map((name) => [name, 'app'] as [string, Channel]),
 ]);
 
-export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review' | 'teams' | 'jenkins' | 'remote' | 'timelogbook';
+export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review' | 'teams' | 'jenkins' | 'remote' | 'timelogbook' | 'kubrik';
 
 /**
  * Which door a call goes through, or none.
@@ -360,6 +367,7 @@ export function route(name: string): Channel | null {
   if (name.startsWith('jenkins.')) return JENKINS_VERBS.get(name.slice(8)) ?? null;
   if (name.startsWith('remote.')) return REMOTE_VERBS.get(name.slice(7)) ?? null;
   if (name.startsWith('timelogbook.')) return TIMELOGBOOK_VERBS.get(name.slice(12)) ?? null;
+  if (name.startsWith('kubrik.')) return KUBRIK_VERBS.get(name.slice(7)) ?? null;
   return null;
 }
 
@@ -384,6 +392,8 @@ export const PERMISSIONS: Record<string, string> = {
   'jenkins.write': 'Change what Jenkins does: run and stop builds, and the servers this app knows',
   'timelogbook.read': 'Read Timelogbook as you: your tasks, hours and projects, through the API key you gave this app',
   'timelogbook.write': 'Change the Timelogbook connection, and run tools that change things in Timelogbook (each one asks you first)',
+  'kubrik.read': 'Read Kubrik OS as you: the ERP modules your API key reaches',
+  'kubrik.write': 'Change the Kubrik OS connection, and run tools that change things in Kubrik OS (each one asks you first)',
   terminal: 'Open terminals and Claude sessions about what it shows',
 };
 
@@ -406,6 +416,7 @@ export function permissionFor(name: string): string | null {
   if (channel === 'helm') return (HELM_READ as readonly string[]).includes(name.slice(5)) ? 'helm.read' : 'helm.write';
   if (channel === 'jenkins') return (JENKINS_READ as readonly string[]).includes(name.slice(8)) ? 'jenkins.read' : 'jenkins.write';
   if (channel === 'timelogbook') return (TIMELOGBOOK_READ as readonly string[]).includes(name.slice(12)) ? 'timelogbook.read' : 'timelogbook.write';
+  if (channel === 'kubrik') return (KUBRIK_READ as readonly string[]).includes(name.slice(7)) ? 'kubrik.read' : 'kubrik.write';
   // Opening a port on this computer is nothing an installed extension gets to ask for.
   if (channel === 'remote') return null;
   return channel;
@@ -651,6 +662,12 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
   }
   if (name === 'timelogbook.disconnect') {
     return 'Disconnect Timelogbook?\n\nThe API key is removed from this app. It keeps working in Timelogbook until you revoke it there.';
+  }
+  if (name === 'kubrik.claudeAccessSave' && args.on) {
+    return 'Let Claude sessions use Kubrik OS?\n\nEvery Claude session in this app can then read what your API key reaches, as you. Anything that would change Kubrik OS is shown to you first.';
+  }
+  if (name === 'kubrik.disconnect') {
+    return 'Disconnect Kubrik OS?\n\nThe API key is removed from this app. It keeps working in Kubrik OS until you revoke it there.';
   }
 
   if (name.startsWith('kube.')) {

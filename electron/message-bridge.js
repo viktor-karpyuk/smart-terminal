@@ -59,7 +59,7 @@ class MessageBridge {
    * @param {(id: string) => boolean} deps.isFree   idle at a Claude prompt, no dialog up
    * @param {object} deps.store               the queue: queue/pending/markDelivered/markRead
    */
-  constructor({ socketPath, reach, roster, write, isFree, store, health = null, lookup = null, onHook = null, onBus = null, onJenkins = null, onForge = null, onTimelogbook = null, verifySession = null }) {
+  constructor({ socketPath, reach, roster, write, isFree, store, health = null, lookup = null, onHook = null, onBus = null, onJenkins = null, onForge = null, onTimelogbook = null, onKubrik = null, verifySession = null }) {
     this.socketPath = socketPath;
     this.reach = reach;
     this.roster = roster;
@@ -82,6 +82,8 @@ class MessageBridge {
     this.onForge = onForge;
     /** Timelogbook, through the key the app holds. Optional, like Jenkins. */
     this.onTimelogbook = onTimelogbook;
+    /** Kubrik OS, the same way. */
+    this.onKubrik = onKubrik;
     /**
      * Whether a session can prove it is the session it says it is: `(id, secret) => boolean`. Optional, and asked only
      * for what must not be done in another session's name; without it the id alone is believed, as it always was.
@@ -312,6 +314,16 @@ class MessageBridge {
       const { secret, ...rest } = request;
       void secret;
       return this.onTimelogbook({ ...rest, session: { id: me.id, name: me.name } });
+    }
+    // Kubrik OS, like Timelogbook.
+    if (op === 'kubrik') {
+      if (!this.onKubrik) return { ok: false, error: 'Kubrik OS is not available.' };
+      if (this.verifySession && !this.verifySession(me.id, request.secret)) {
+        return { ok: false, error: 'This session could not prove who it is, so Smart Terminal will not act on its behalf.' };
+      }
+      const { secret, ...rest } = request;
+      void secret;
+      return this.onKubrik({ ...rest, session: { id: me.id, name: me.name } });
     }
     // Pull requests, like Jenkins: a window onto the forges, answered for a session that proved who it is.
     if (op === 'forge') {

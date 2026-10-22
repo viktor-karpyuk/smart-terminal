@@ -318,6 +318,12 @@ contextBridge.exposeInMainWorld('api', {
     onEvent: (handler) => on('timelogbook:event', handler),
   },
 
+  /** Kubrik OS: the same, for the ERP's MCP gateway. */
+  kubrik: {
+    call: (name, args) => ipcRenderer.invoke('kubrik:call', { name, args }),
+    onEvent: (handler) => on('kubrik:event', handler),
+  },
+
   /** Maven and Gradle: read by the main process, run by a terminal. */
   build: {
     call: (name, args) => ipcRenderer.invoke('build:call', { name, args }),
