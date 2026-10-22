@@ -88,6 +88,39 @@ class ReviewGit {
     return this.run(dir, ['fetch', 'origin', ...names]);
   }
 
+  /**
+   * The workshop's own commits replayed on top of the PR's newest tip, when the
+   * branch moved after the fixes were written — what keeps "refused: the tip of
+   * your branch is behind" from being the answer to handing them back.
+   *
+   * One commit at a time, so each old id maps to its new one. A commit that
+   * does not apply cleanly stops everything and puts the branch back exactly
+   * where it was: nothing half-replayed is ever left behind.
+   */
+  async replayOnto(dir, branch, tipRef) {
+    const tip = await this.revParse(dir, tipRef);
+    const head = await this.branchHead(dir, branch);
+    if (!tip || !head || (await this.isAncestor(dir, tip, head))) return { ok: true, moved: new Map() };
+    if (await this.isDirty(dir)) return { ok: false, output: 'The workshop has uncommitted changes; commit or discard them first.' };
+    if ((await this.currentBranch(dir)) !== branch) return { ok: false, output: `The workshop is not on "${branch}".` };
+    const listed = await this.run(dir, ['rev-list', '--reverse', '--no-merges', `${tip}..${head}`]);
+    if (!listed.ok) return { ok: false, output: listed.output };
+    const ours = listed.stdout.split('\n').map((line) => line.trim()).filter(Boolean);
+    const reset = await this.run(dir, ['reset', '--hard', tip]);
+    if (!reset.ok) return { ok: false, output: reset.output };
+    const moved = new Map();
+    for (const sha of ours) {
+      const picked = await this.run(dir, ['cherry-pick', '--allow-empty', '--keep-redundant-commits', sha]);
+      if (!picked.ok) {
+        await this.run(dir, ['cherry-pick', '--abort']);
+        await this.run(dir, ['reset', '--hard', head]);
+        return { ok: false, conflict: sha, output: picked.output };
+      }
+      moved.set(sha, await this.head(dir));
+    }
+    return { ok: true, moved };
+  }
+
   async remoteUrl(dir) {
     const res = await this.run(dir, ['remote', 'get-url', 'origin']);
     return res.ok ? res.stdout.trim() : null;
