@@ -312,6 +312,12 @@ contextBridge.exposeInMainWorld('api', {
     onNoticeBlocked: (handler) => on('jenkins:notice-blocked', handler),
   },
 
+  /** Timelogbook v4: one door, and one event for "the connection changed, read it again". */
+  timelogbook: {
+    call: (name, args) => ipcRenderer.invoke('timelogbook:call', { name, args }),
+    onEvent: (handler) => on('timelogbook:event', handler),
+  },
+
   /** Maven and Gradle: read by the main process, run by a terminal. */
   build: {
     call: (name, args) => ipcRenderer.invoke('build:call', { name, args }),

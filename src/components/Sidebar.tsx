@@ -1928,7 +1928,7 @@ function LauncherButton({ viewId, title, icon }: { viewId: string; title: string
       aria-pressed={showing}
       onClick={() => useStore.getState().launchExtensionView(viewId)}
     >
-      {icon === 'review' ? <ReviewIcon /> : icon === 'teams' ? <TeamsIcon /> : icon === 'send' ? <SendIcon /> : icon === 'jenkins' ? <JenkinsIcon /> : icon === 'remote' ? <RemoteIcon /> : <ExtensionsIcon />}
+      {icon === 'review' ? <ReviewIcon /> : icon === 'teams' ? <TeamsIcon /> : icon === 'send' ? <SendIcon /> : icon === 'jenkins' ? <JenkinsIcon /> : icon === 'remote' ? <RemoteIcon /> : icon === 'timelogbook' ? <TimelogbookIcon /> : <ExtensionsIcon />}
       {remote && remote.viewers.length > 0 && !remote.error ? <span className="remote-count" aria-hidden="true">{remote.viewers.length}</span> : null}
     </button>
   );
@@ -1981,6 +1981,16 @@ function JenkinsIcon() {
   return (
     <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
       <path d={JENKINS_MARK} />
+    </svg>
+  );
+}
+
+/** A clock with a tick: time logged against work, in the stroke the rest use. */
+function TimelogbookIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.95" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
     </svg>
   );
 }

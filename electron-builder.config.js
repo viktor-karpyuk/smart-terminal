@@ -85,7 +85,7 @@ module.exports = {
   // Claude CLI spawns it as a plain-node child, and plain node cannot read an asar.
   // Unpacked because a plain `node` runs it: a hook is a child of Claude, not of
   // Electron, and it cannot read a file inside an asar.
-  asarUnpack: ['**/node_modules/node-pty/**', 'electron/group-mcp.js', 'electron/review-bus-mcp.js', 'electron/jenkins-mcp-stdio.js', 'electron/jenkins-mcp-tools.js', 'electron/forge-mcp-stdio.js', 'electron/forge-mcp-tools.js', 'plugin/**',
+  asarUnpack: ['**/node_modules/node-pty/**', 'electron/group-mcp.js', 'electron/review-bus-mcp.js', 'electron/jenkins-mcp-stdio.js', 'electron/jenkins-mcp-tools.js', 'electron/forge-mcp-stdio.js', 'electron/forge-mcp-tools.js', 'electron/timelogbook-mcp-stdio.js', 'plugin/**',
     // The dashboard's heavy reads run in a worker thread, which Node loads itself and cannot read from inside the archive.
     'electron/jenkins-metrics-worker.js', 'electron/disk-usage-worker.js', 'electron/jenkins-metrics.js', 'electron/jenkins-board.js', 'electron/jenkins-insights.js', 'electron/jenkins-api.js'],
   mac: {

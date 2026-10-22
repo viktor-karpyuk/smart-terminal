@@ -1,0 +1,22 @@
+{
+  "id": "timelogbook",
+  "name": "Timelogbook",
+  "version": "0.1.0",
+  "author": "Smart Terminal",
+  "summary": "Your Timelogbook v4 tasks beside your terminals, and Timelogbook's MCP tools in every Claude session — through one API key.",
+  "description": "Timelogbook v4 serves an MCP server for each app of the suite — My work, Tasks, Projects, CRM and the rest — and an API key you make in Timelogbook (Profile → API keys) decides which of them you reach and whether it may write. Paste the key and your Timelogbook address once: the app asks every server what the key reaches and shows it. My tasks lists what is overdue, due today, upcoming, undated or done, searchable, and Ask Claude opens a session that has already been handed the task as Timelogbook describes it. Tools lets you run any tool the key reaches and read the answer as a tree. Switch on Claude access and every Claude session in this app gets a timelogbook MCP server with those same tools, running as you. The key is kept by the app, encrypted by your system's keychain; this panel never holds it, it is never written into a session's config, and any tool Timelogbook does not mark as read-only is shown to you in a dialog before it runs — whoever asked.",
+  "contributes": {
+    "panels": [
+      {
+        "id": "timelogbook",
+        "title": "Timelogbook",
+        "summary": "Your Timelogbook tasks, and its MCP tools for Claude.",
+        "needs": null,
+        "launcher": true,
+        "icon": "timelogbook",
+        "listens": ["timelogbook"],
+        "render": "panel.html"
+      }
+    ]
+  }
+}

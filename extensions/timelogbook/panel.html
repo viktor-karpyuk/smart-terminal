@@ -1,0 +1,393 @@
+<style>
+  body { overflow: auto; }
+  .page { max-width: 820px; margin: 0 auto; padding: 18px 18px 40px; display: grid; gap: 14px; }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  h2 { font-size: 11px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); font-weight: 600; }
+  p { margin: 0; line-height: 1.55; }
+  .dim { color: var(--text-dim); } .faint { color: var(--text-faint); } .small { font-size: 11px; } .bad { color: var(--danger); } .ok { color: var(--ok); }
+  .card { border: 1px solid var(--border); border-radius: 8px; padding: 14px; background: var(--bg-panel); display: grid; gap: 10px; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+  .btn { font: inherit; font-size: 12px; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 11px; background: var(--bg-elevated); cursor: pointer; white-space: nowrap; }
+  .btn:hover:not([disabled]) { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent, var(--bg)); font-weight: 600; }
+  .btn.quiet { border-color: transparent; color: var(--text-dim); }
+  .btn.danger { color: var(--danger); }
+  .btn.is-on { border-color: var(--accent); color: var(--text); }
+  .btn[disabled] { opacity: .5; cursor: default; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-faint); display: inline-block; flex: none; }
+  .dot.on { background: var(--ok); } .dot.bad { background: var(--danger); }
+  input[type="text"], input[type="password"], input[type="number"], select { font: inherit; font-size: 12px; color: var(--text); background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; min-width: 0; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  label.field { display: grid; gap: 4px; font-size: 12px; }
+  label.field > span { color: var(--text-dim); }
+  label.check { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  code, pre { font-family: var(--font-mono, ui-monospace, Menlo, monospace); font-size: 12px; }
+  pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  ol.steps { margin: 0; padding-left: 18px; line-height: 1.7; }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+  .tab { font: inherit; font-size: 12px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--text-dim); padding: 6px 10px; cursor: pointer; }
+  .tab.is-on { color: var(--text); border-bottom-color: var(--accent); }
+  .tasks { display: grid; }
+  .task { display: grid; grid-template-columns: 92px 1fr auto; gap: 4px 10px; align-items: baseline; padding: 8px 4px; border-bottom: 1px solid var(--border); }
+  .task:last-child { border-bottom: 0; }
+  .task .key { font-family: var(--font-mono, ui-monospace, Menlo, monospace); font-size: 11.5px; color: var(--text-dim); }
+  .task .title { overflow-wrap: anywhere; }
+  .task .title.done { text-decoration: line-through; color: var(--text-dim); }
+  .task .meta { grid-column: 2 / 3; font-size: 11px; color: var(--text-dim); display: flex; gap: 10px; flex-wrap: wrap; }
+  .task .act { grid-row: 1 / 3; grid-column: 3; align-self: center; }
+  .pill { font-size: 10.5px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--border); color: var(--text-dim); white-space: nowrap; }
+  .pill.late { color: var(--danger); border-color: var(--danger); }
+  .pill.warn { color: var(--warn, #e2a84b); border-color: var(--warn, #e2a84b); }
+  .apps { display: grid; gap: 4px; }
+  .app { display: flex; gap: 8px; align-items: center; font-size: 12px; }
+  .toollist { display: grid; grid-template-columns: 220px 1fr; gap: 14px; align-items: start; }
+  .toollist nav { display: grid; gap: 10px; max-height: 70vh; overflow: auto; }
+  .toollist nav .group { display: grid; gap: 1px; }
+  .toollist nav button { text-align: left; font: inherit; font-size: 12px; background: none; border: 0; border-radius: 5px; color: var(--text); padding: 4px 7px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toollist nav button:hover { background: var(--bg-elevated); }
+  .toollist nav button.is-on { background: var(--bg-elevated); color: var(--accent); }
+  .form { display: grid; gap: 8px; }
+  .tree { font-family: var(--font-mono, ui-monospace, Menlo, monospace); font-size: 12px; line-height: 1.55; }
+  .tree details { margin-left: 14px; }
+  .tree summary { cursor: pointer; margin-left: -14px; }
+  .tree .leaf { margin-left: 0; overflow-wrap: anywhere; }
+  .tree .k { color: var(--text-dim); }
+  .tree .s { color: var(--ok); } .tree .n { color: var(--accent); } .tree .z { color: var(--text-faint); }
+  .flash { padding: 8px 12px; border-radius: 6px; font-size: 12px; background: var(--bg-elevated); border: 1px solid var(--border); }
+  .flash.bad { border-color: var(--danger); color: var(--danger); }
+  @media (max-width: 560px) { .toollist { grid-template-columns: 1fr; } .task { grid-template-columns: 1fr auto; } .task .key { grid-column: 1 / 2; } .task .meta { grid-column: 1 / 2; } }
+</style>
+<div class="page" id="page"><p class="dim">Loading…</p></div>
+<script>
+  /*
+   * Timelogbook v4. The app holds the address and the API key; this panel
+   * never sees the key and cannot reach the network. It asks the app for
+   * verbs (`timelogbook.*`) and, through `run`, for any tool the key reaches
+   * on Timelogbook's MCP servers. The app hears `timelogbook` when the
+   * connection changes.
+   */
+  var GROUPS = [['OVERDUE', 'Overdue'], ['TODAY', 'Today'], ['UPCOMING', 'Upcoming'], ['NO_DATE', 'No date'], ['DONE', 'Done']];
+  var state = {
+    o: null, error: '', busy: {}, tab: 'tasks',
+    draft: { url: '', key: '' },
+    tasks: { group: 'TODAY', q: '', kind: 'ALL', items: null, page: null, error: '', loading: false },
+    tool: null, toolArgs: {}, result: null, resultError: '', running: false,
+  };
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }); }
+  function call(name, args) {
+    return host.call('timelogbook.' + name, args || {}).then(function (r) {
+      if (r && r.ok === false) throw new Error(r.error || 'Something went wrong.');
+      return r;
+    });
+  }
+  function say(text, bad) { host.emit('notify', { text: String(text).slice(0, 300), kind: bad ? 'bad' : 'ok' }); }
+  function host_(base) { try { return new URL(base).host; } catch (e) { return base; } }
+  function tools() { return ((state.o && state.o.apps) || []).reduce(function (all, a) { return all.concat(a.tools || []); }, []); }
+  function hasTool(name) { return tools().some(function (t) { return t.name === name; }); }
+
+  function load(fresh) {
+    return call('overview', { fresh: Boolean(fresh) }).then(function (o) {
+      var was = state.o && state.o.connected;
+      state.o = o; state.error = '';
+      if (o.connected && !was && state.tab === 'tasks') loadTasks();
+    }).catch(function (e) { state.error = e.message; }).then(render);
+  }
+
+  function act(name, args, then) {
+    if (state.busy[name]) return;
+    state.busy[name] = true; render();
+    call(name, args).then(function (r) { if (then) then(r); })
+      .catch(function (e) { say(e.message, true); })
+      .then(function () { delete state.busy[name]; return load(); });
+  }
+
+  // --- my tasks -------------------------------------------------------------------
+
+  function loadTasks(more) {
+    var t = state.tasks;
+    if (!hasTool('me_search_my_tasks')) { t.items = null; render(); return; }
+    var args = { kind: t.kind };
+    if (t.q.trim()) args.q = t.q.trim(); else args.group = t.group;
+    if (more && t.page && t.page.nextCursor) args.cursor = t.page.nextCursor;
+    t.loading = true; t.error = ''; render();
+    call('run', { tool: 'me_search_my_tasks', args: args }).then(function (r) {
+      if (r.isError) throw new Error(errorText(r));
+      var d = r.data || {};
+      t.items = more ? (t.items || []).concat(d.items || []) : (d.items || []);
+      t.page = d.page || null;
+    }).catch(function (e) { t.error = e.message; if (!more) t.items = []; })
+      .then(function () { t.loading = false; render(); });
+  }
+
+  function errorText(r) {
+    var d = r.data;
+    if (d && (d.message || d.error)) return String(d.message || d.error);
+    return r.text || 'Timelogbook could not do that.';
+  }
+
+  function dueLabel(task) {
+    if (!task.dueDate) return '';
+    // Today where the person is: a due date is a day on their calendar, not in UTC.
+    var now = new Date();
+    var today = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+    var cls = task.closed ? '' : task.dueDate < today ? ' late' : task.dueDate === today ? ' warn' : '';
+    return '<span class="pill' + cls + '">due ' + esc(task.dueDate) + '</span>';
+  }
+
+  function tasksView() {
+    var t = state.tasks;
+    if (!hasTool('me_search_my_tasks')) {
+      return '<div class="card"><p>This key does not reach <b>My work</b>, so there is no list of your tasks here.</p>'
+        + '<p class="dim">Make a key in Timelogbook that includes My work (read is enough), or use the Tools tab for what this key does reach.</p></div>';
+    }
+    var h = '<div class="row">';
+    GROUPS.forEach(function (g) {
+      h += '<button class="btn' + (!t.q && t.group === g[0] ? ' is-on' : '') + '" data-group="' + g[0] + '">' + g[1] + '</button>';
+    });
+    h += '<span class="spacer"></span><select id="kind" title="Which tasks">'
+      + [['ALL', 'All'], ['PROJECT', 'Project tasks'], ['PERSONAL', 'My to-dos']].map(function (k) {
+        return '<option value="' + k[0] + '"' + (t.kind === k[0] ? ' selected' : '') + '>' + k[1] + '</option>';
+      }).join('') + '</select>'
+      + '<input type="text" id="q" placeholder="Search…" value="' + esc(t.q) + '" style="width:160px"></div>';
+    if (t.error) h += '<div class="flash bad">' + esc(t.error) + '</div>';
+    if (t.items === null || (t.loading && !t.items.length)) return h + '<p class="dim">Loading…</p>';
+    if (!t.items.length) return h + '<p class="dim">Nothing here.</p>';
+    h += '<div class="card tasks">';
+    t.items.forEach(function (task, i) {
+      var status = task.status && (task.status.label || task.status.code);
+      h += '<div class="task"><span class="key">' + esc(task.key) + '</span>'
+        + '<span class="title' + (task.closed ? ' done' : '') + '">' + esc(task.title) + '</span>'
+        + '<span class="act"><button class="btn" data-ask="' + i + '" title="Open a Claude session that has been handed this task">Ask Claude</button></span>'
+        + '<span class="meta">' + (status ? '<span class="pill">' + esc(status) + '</span>' : '') + dueLabel(task)
+        + (task.priority ? '<span>' + esc(String(task.priority).toLowerCase()) + '</span>' : '')
+        + (task.project ? '<span>' + esc(task.project) + '</span>' : '')
+        + (task.subtasks ? '<span>' + esc(task.subtasks.done) + '/' + esc(task.subtasks.total) + ' subtasks</span>' : '')
+        + '</span></div>';
+    });
+    h += '</div>';
+    if (t.page) {
+      h += '<div class="row small dim">' + esc(t.items.length) + ' of ' + esc(t.page.totalElements) + '<span class="spacer"></span>'
+        + (t.page.hasMore ? '<button class="btn" id="more"' + (t.loading ? ' disabled' : '') + '>' + (t.loading ? 'Loading…' : 'More') + '</button>' : '') + '</div>';
+    }
+    return h;
+  }
+
+  // --- tools ---------------------------------------------------------------------
+
+  function fieldsOf(tool) {
+    var schema = tool.inputSchema || {};
+    var props = schema.properties || {};
+    var required = schema.required || [];
+    return Object.keys(props).map(function (name) { return { name: name, spec: props[name] || {}, required: required.indexOf(name) >= 0 }; });
+  }
+
+  function fieldInput(f) {
+    var v = state.toolArgs[f.name];
+    var id = 'arg-' + f.name;
+    var type = Array.isArray(f.spec.type) ? f.spec.type[0] : f.spec.type;
+    if (Array.isArray(f.spec.enum)) {
+      return '<select id="' + id + '" data-arg="' + esc(f.name) + '"><option value="">—</option>' + f.spec.enum.map(function (e) {
+        return '<option' + (String(v) === String(e) ? ' selected' : '') + '>' + esc(e) + '</option>';
+      }).join('') + '</select>';
+    }
+    if (type === 'boolean') {
+      return '<select id="' + id + '" data-arg="' + esc(f.name) + '" data-type="boolean"><option value="">—</option><option' + (v === true ? ' selected' : '') + '>true</option><option' + (v === false ? ' selected' : '') + '>false</option></select>';
+    }
+    if (type === 'integer' || type === 'number') {
+      return '<input type="number" id="' + id + '" data-arg="' + esc(f.name) + '" data-type="number" value="' + esc(v == null ? '' : v) + '">';
+    }
+    if (type === 'array' || type === 'object') {
+      return '<input type="text" id="' + id + '" data-arg="' + esc(f.name) + '" data-type="json" placeholder="JSON" value="' + esc(v == null ? '' : JSON.stringify(v)) + '">';
+    }
+    return '<input type="text" id="' + id + '" data-arg="' + esc(f.name) + '" value="' + esc(v == null ? '' : v) + '">';
+  }
+
+  function tree(value, key, depth) {
+    var label = key == null ? '' : '<span class="k">' + esc(key) + ':</span> ';
+    if (value === null || value === undefined) return '<div class="leaf">' + label + '<span class="z">null</span></div>';
+    if (typeof value === 'string') return '<div class="leaf">' + label + '<span class="s">' + esc(value) + '</span></div>';
+    if (typeof value === 'number' || typeof value === 'boolean') return '<div class="leaf">' + label + '<span class="n">' + esc(value) + '</span></div>';
+    var isArray = Array.isArray(value);
+    var keys = isArray ? value.map(function (_, i) { return i; }) : Object.keys(value);
+    var head = isArray ? '[' + keys.length + ']' : '{' + keys.length + '}';
+    var body = keys.slice(0, 500).map(function (k) { return tree(value[k], k, depth + 1); }).join('')
+      + (keys.length > 500 ? '<div class="leaf z">… ' + (keys.length - 500) + ' more</div>' : '');
+    return '<details' + (depth < 2 ? ' open' : '') + '><summary>' + label + '<span class="z">' + head + '</span></summary>' + body + '</details>';
+  }
+
+  function toolsView() {
+    var apps = ((state.o && state.o.apps) || []).filter(function (a) { return a.reached; });
+    if (!apps.length) return '<p class="dim">This key reaches no tools.</p>';
+    var h = '<div class="toollist"><nav>';
+    apps.forEach(function (a) {
+      h += '<div class="group"><h2>' + esc(a.name) + '</h2>' + a.tools.map(function (t) {
+        return '<button data-tool="' + esc(t.name) + '" class="' + (state.tool === t.name ? 'is-on' : '') + '" title="' + esc(t.name) + '">' + esc(t.title) + '</button>';
+      }).join('') + '</div>';
+    });
+    h += '</nav><div>';
+    var tool = tools().filter(function (t) { return t.name === state.tool; })[0];
+    if (!tool) {
+      h += '<p class="dim">Pick a tool. Each runs as you, with what your key allows — the same tools a Claude session gets.</p>';
+    } else {
+      h += '<div class="card"><div class="row"><b>' + esc(tool.title) + '</b><code class="faint">' + esc(tool.name) + '</code>'
+        + (tool.readOnly ? '' : '<span class="pill warn">changes Timelogbook — asks first</span>') + '</div>'
+        + '<p class="dim small">' + esc(tool.description) + '</p><div class="form">';
+      fieldsOf(tool).forEach(function (f) {
+        h += '<label class="field"><span>' + esc(f.name) + (f.required ? ' *' : '') + (f.spec.description ? ' — ' + esc(f.spec.description) : '') + '</span>' + fieldInput(f) + '</label>';
+      });
+      h += '<div class="row"><button class="btn primary" id="runTool"' + (state.running ? ' disabled' : '') + '>' + (state.running ? 'Running…' : 'Run') + '</button></div></div></div>';
+      if (state.resultError) h += '<div class="flash bad">' + esc(state.resultError) + '</div>';
+      if (state.result) {
+        h += '<div class="card">' + (state.result.isError ? '<p class="bad">Timelogbook said no:</p>' : '')
+          + (state.result.data !== null && state.result.data !== undefined ? '<div class="tree">' + tree(state.result.data, null, 0) + '</div>' : '<pre>' + esc(state.result.text) + '</pre>')
+          + '</div>';
+      }
+    }
+    return h + '</div></div>';
+  }
+
+  function readArgs() {
+    var args = {};
+    var bad = null;
+    document.querySelectorAll('[data-arg]').forEach(function (el) {
+      var raw = el.value;
+      if (raw === '') return;
+      var name = el.getAttribute('data-arg');
+      var type = el.getAttribute('data-type');
+      if (type === 'number') args[name] = Number(raw);
+      else if (type === 'boolean') args[name] = raw === 'true';
+      else if (type === 'json') { try { args[name] = JSON.parse(raw); } catch (e) { bad = name + ' is not valid JSON'; } }
+      else args[name] = raw;
+    });
+    if (bad) throw new Error(bad);
+    return args;
+  }
+
+  // --- settings --------------------------------------------------------------------
+
+  function settingsView() {
+    var o = state.o;
+    var h = '<div class="card"><h2>Claude sessions</h2>'
+      + '<label class="check"><input type="checkbox" id="claude"' + (o.claude ? ' checked' : '') + (state.busy.claudeAccessSave ? ' disabled' : '') + '> Let Claude sessions use Timelogbook</label>'
+      + '<p class="dim small">Every Claude session in this app gets a <code>timelogbook</code> MCP server with the tools below, running as you. The key stays in this app: it is never written into a session or its config. A tool that changes Timelogbook is shown to you in a dialog before it runs. Sessions started before you switch this on see the tools within half a minute.</p></div>';
+    h += '<div class="card"><h2>What this key reaches</h2><div class="apps">';
+    (o.apps || []).forEach(function (a) {
+      h += '<div class="app"><span class="dot' + (a.reached ? ' on' : '') + '"></span><b>' + esc(a.name) + '</b>'
+        + (a.reached ? '<span class="dim">' + a.tools.length + ' tool' + (a.tools.length === 1 ? '' : 's') + '</span>' : '<span class="faint">' + esc(a.why || 'not reached') + '</span>') + '</div>';
+    });
+    h += '</div><p class="dim small">To reach more, make a new key in Timelogbook (Profile → API keys) with more apps, and paste it here.</p></div>';
+    h += '<div class="card"><h2>Connection</h2><p class="small"><code>' + esc(o.base) + '</code></p>'
+      + '<div class="row"><input type="password" id="newKey" placeholder="Paste a new API key" style="flex:1" autocomplete="off">'
+      + '<button class="btn" id="replaceKey"' + (state.busy.connect ? ' disabled' : '') + '>' + (state.busy.connect ? 'Checking…' : 'Replace key') + '</button></div>'
+      + '<div class="row"><span class="spacer"></span><button class="btn danger" id="disconnect">Disconnect</button></div></div>';
+    return h;
+  }
+
+  // --- connect -----------------------------------------------------------------------
+
+  function connectView() {
+    var d = state.draft;
+    return '<div class="card"><h1>Connect Timelogbook</h1>'
+      + '<ol class="steps"><li>In Timelogbook, open your profile → <b>API keys</b> and create one. Pick the apps it may reach — <b>My work</b> and <b>Tasks</b> at least — and whether it may write.</li>'
+      + '<li>Copy the key (it is shown once) and paste it below, with your Timelogbook address. The MCP address Timelogbook shows beside the key works too.</li></ol>'
+      + '<label class="field"><span>Address</span><input type="text" id="url" placeholder="https://app.timelogbook.com" value="' + esc(d.url) + '" autocomplete="off"></label>'
+      + '<label class="field"><span>API key</span><input type="password" id="key" placeholder="tlbk_…" value="' + esc(d.key) + '" autocomplete="off"></label>'
+      + '<div class="row"><button class="btn primary" id="connect"' + (state.busy.connect ? ' disabled' : '') + '>' + (state.busy.connect ? 'Checking…' : 'Connect') + '</button>'
+      + '<span class="dim small">The key is kept by this app, encrypted by your system’s keychain. This panel never sees it again.</span></div></div>';
+  }
+
+  function render() {
+    var o = state.o;
+    var h = '';
+    if (!o) {
+      h = state.error ? '<div class="flash bad">' + esc(state.error) + '</div>' : '<p class="dim">Loading…</p>';
+    } else if (!o.connected) {
+      h = connectView();
+    } else {
+      h += '<div class="row"><span class="dot ' + (o.error ? 'bad' : 'on') + '"></span><h1>Timelogbook</h1><span class="dim">' + esc(host_(o.base)) + '</span>'
+        + (o.keyHint ? '<code class="faint">' + esc(o.keyHint) + '</code>' : '')
+        + '<span class="spacer"></span><button class="btn quiet" id="refresh" title="Ask Timelogbook again what this key reaches">Refresh</button>'
+        + '<button class="btn quiet" id="openSite">Open Timelogbook</button></div>';
+      if (o.error) h += '<div class="flash bad">' + esc(o.error) + '</div>';
+      h += '<div class="tabs">' + [['tasks', 'My tasks'], ['tools', 'Tools'], ['settings', 'Settings']].map(function (t) {
+        return '<button class="tab' + (state.tab === t[0] ? ' is-on' : '') + '" data-tab="' + t[0] + '">' + t[1] + '</button>';
+      }).join('') + '</div>';
+      h += state.tab === 'tasks' ? tasksView() : state.tab === 'tools' ? toolsView() : settingsView();
+    }
+    var focused = document.activeElement && document.activeElement.id;
+    var caret = focused && document.activeElement.selectionStart;
+    $('page').innerHTML = h;
+    if (focused && $(focused)) { $(focused).focus(); try { $(focused).setSelectionRange(caret, caret); } catch (e) { /* not a text box */ } }
+  }
+
+  // --- what the person does ------------------------------------------------------------
+
+  var searchTimer = null;
+  document.addEventListener('input', function (e) {
+    var id = e.target.id;
+    if (id === 'url' || id === 'key') state.draft[id] = e.target.value;
+    if (id === 'q') {
+      state.tasks.q = e.target.value;
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(function () { loadTasks(); }, 350);
+    }
+    var arg = e.target.getAttribute && e.target.getAttribute('data-arg');
+    if (arg) state.toolArgs[arg] = e.target.value;
+  });
+  document.addEventListener('change', function (e) {
+    if (e.target.id === 'kind') { state.tasks.kind = e.target.value; loadTasks(); }
+    if (e.target.id === 'claude') act('claudeAccessSave', { on: e.target.checked });
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter') return;
+    if (e.target.id === 'url' || e.target.id === 'key') $('connect') && $('connect').click();
+    if (e.target.getAttribute && e.target.getAttribute('data-arg')) $('runTool') && $('runTool').click();
+  });
+  document.addEventListener('click', function (e) {
+    var el = e.target.closest('button, [data-tab]');
+    if (!el) return;
+    if (el.id === 'connect') {
+      act('connect', { url: state.draft.url, key: state.draft.key }, function () { state.draft.key = ''; say('Timelogbook connected.'); });
+    } else if (el.id === 'replaceKey') {
+      var key = ($('newKey') && $('newKey').value) || '';
+      act('connect', { url: state.o.base, key: key }, function () { say('Key replaced.'); });
+    } else if (el.id === 'disconnect') {
+      act('disconnect', {}, function () { state.tasks.items = null; state.tool = null; state.result = null; });
+    } else if (el.id === 'refresh') {
+      load(true).then(function () { if (state.tab === 'tasks') loadTasks(); });
+    } else if (el.id === 'openSite') {
+      act('openInBrowser', {});
+    } else if (el.dataset.tab) {
+      state.tab = el.dataset.tab; render();
+      if (state.tab === 'tasks' && state.tasks.items === null) loadTasks();
+    } else if (el.dataset.group) {
+      state.tasks.group = el.dataset.group; state.tasks.q = ''; loadTasks();
+    } else if (el.id === 'more') {
+      loadTasks(true);
+    } else if (el.dataset.ask) {
+      var task = state.tasks.items[Number(el.dataset.ask)];
+      if (!task) return;
+      el.disabled = true;
+      host.call('timelogbook.ask', { key: task.key, title: task.title }).then(function (r) {
+        if (r && r.ok === false) throw new Error(r.error);
+      }).catch(function (err) { say(err.message, true); }).then(function () { el.disabled = false; });
+    } else if (el.dataset.tool) {
+      if (state.tool !== el.dataset.tool) { state.tool = el.dataset.tool; state.toolArgs = {}; state.result = null; state.resultError = ''; }
+      render();
+    } else if (el.id === 'runTool') {
+      var args;
+      try { args = readArgs(); } catch (err) { state.resultError = err.message; render(); return; }
+      state.running = true; state.resultError = ''; render();
+      call('run', { tool: state.tool, args: args }).then(function (r) { state.result = r; })
+        .catch(function (err) { state.result = null; state.resultError = err.message; })
+        .then(function () { state.running = false; render(); });
+    }
+  });
+
+  host.on('timelogbook', function () { load(); });
+  // The first load notices it is connected and fetches the tasks.
+  host.on('context', function () { load(); });
+  host.ready();
+</script>
