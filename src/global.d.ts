@@ -1097,6 +1097,11 @@ declare global {
         call(name: string, args?: unknown): Promise<{ ok?: boolean; error?: string; [key: string]: unknown }>;
         onEvent(handler: (event: { type: string; [key: string]: unknown }) => void): () => void;
       };
+      /** Kubrik OS: every verb through one call; the API key never reaches the renderer. */
+      kubrik: {
+        call(name: string, args?: unknown): Promise<{ ok?: boolean; error?: string; [key: string]: unknown }>;
+        onEvent(handler: (event: { type: string; [key: string]: unknown }) => void): () => void;
+      };
       review: {
         call(name: string, args?: unknown): Promise<{ ok: boolean; error?: string; [key: string]: unknown }>;
         onEvent(handler: (payload: { type: string; repoId?: string; prId?: number | null; [key: string]: unknown }) => void): () => void;

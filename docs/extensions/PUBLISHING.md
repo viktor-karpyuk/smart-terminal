@@ -52,6 +52,8 @@ installing it reads this list first, in these words:
 | `jenkins.write` | Change what Jenkins does: run and stop builds, and the servers this app knows |
 | `timelogbook.read` | Read Timelogbook as you: your tasks, hours and projects, through the API key you gave this app |
 | `timelogbook.write` | Change the Timelogbook connection, and run tools that change things in Timelogbook (each one asks you first) |
+| `kubrik.read` | Read Kubrik OS as you: the ERP modules your API key reaches |
+| `kubrik.write` | Change the Kubrik OS connection, and run tools that change things in Kubrik OS (each one asks you first) |
 | `terminal` | Open terminals and Claude sessions about what it shows |
 
 Ask for the fewest that work. A call the extension did not declare is refused

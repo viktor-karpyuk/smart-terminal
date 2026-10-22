@@ -258,10 +258,10 @@ const PANEL_NEEDS = [
  * own hand, and an arbitrary picture there would be the one thing on it that
  * looked like somebody else's.
  */
-const PANEL_ICONS = ['review', 'send', 'teams', 'jenkins', 'remote', 'timelogbook'];
+const PANEL_ICONS = ['review', 'send', 'teams', 'jenkins', 'remote', 'timelogbook', 'kubrik'];
 
 /** The things the app pushes that a panel may ask to hear about, beyond its own subject. */
-const PANEL_LISTENS = ['spring', 'review', 'teams', 'jenkins', 'remote', 'timelogbook'];
+const PANEL_LISTENS = ['spring', 'review', 'teams', 'jenkins', 'remote', 'timelogbook', 'kubrik'];
 
 function panelViews(rows) {
   const panels = [];
