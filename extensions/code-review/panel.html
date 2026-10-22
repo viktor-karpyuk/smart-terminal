@@ -472,6 +472,7 @@
   .avatar { flex: none; width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; font-size: 0.792rem; font-weight: 700; letter-spacing: 0.02em; color: #fff; background: hsl(var(--hue, 210) 42% 44%); }
   .avatar.ours { box-shadow: 0 0 0 2px var(--accent); }
   .cmt-head .avatar { width: 18px; height: 18px; font-size: 0.708rem; }
+  .workshop-error pre { white-space: pre-wrap; word-break: break-word; margin: 6px 0 0; max-height: 180px; overflow: auto; font-size: 0.875rem; }
   .request .req-head { display: flex; align-items: center; gap: 8px; min-width: 0; margin-bottom: 4px; flex-wrap: wrap; }
   .request .req-head .avatar { width: 30px; height: 30px; font-size: 0.875rem; }
   .request .req-who { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
@@ -1111,8 +1112,20 @@
   function say(text, bad) { host.emit('notify', { text: String(text).slice(0, 400), kind: bad ? 'bad' : 'ok' }); }
   function fail(error) { say(error && error.message ? error.message : String(error), true); }
 
+  /**
+   * What went wrong in the workshop, kept beside it rather than only in a toast
+   * that goes away — with the way to hand it to Claude and have it sorted out.
+   */
+  function workshopFailed(action) {
+    var key = prKey('');
+    return function (error) {
+      state.workshopError = { key: key, action: action, message: String(error && error.message ? error.message : error) };
+      draw();
+    };
+  }
+
   /** Runs an action once at a time per key, drawing its button as busy meanwhile. */
-  function act(key, promise, done) {
+  function act(key, promise, done, failed) {
     if (state.busy[key]) return;
     state.busy[key] = true;
     draw();
@@ -1120,7 +1133,9 @@
       .then(promise)
       .then(function (result) { if (done) done(result); })
       .catch(function (error) {
-        if (!/the person said no/.test(String(error && error.message))) fail(error);
+        if (/the person said no/.test(String(error && error.message))) return;
+        fail(error);
+        if (failed) failed(error);
       })
       .then(function () { delete state.busy[key]; draw(); });
   }
@@ -2785,6 +2800,13 @@
       return String(a.createdAt).localeCompare(String(b.createdAt));
     });
     var html = '<div class="faint mono" style="font-size:0.917rem">' + esc(ws.dir) + '</div>';
+    var err = state.workshopError && state.workshopError.key === prKey('') ? state.workshopError : null;
+    if (err) {
+      html += '<div class="banner bad workshop-error"><div><strong>Could not ' + esc(err.action) + '.</strong></div>' +
+        '<pre class="mono">' + esc(err.message) + '</pre>' +
+        '<div class="row" style="margin-top:6px"><button class="btn small primary" data-act="ask-failure"' + busyAttr(prKey('ask-failure')) + ' title="A Claude session in the workshop, told what was tried, what git said and which fixes are waiting">Ask Claude to fix it</button>' +
+        '<button class="btn small" data-act="failure-dismiss">Dismiss</button></div></div>';
+    }
 
     if (!v.repo.checkCommand) {
       html += '<div class="help faint" style="margin-top:4px">No check command for this repository, so a fix is committed without anything being run. Set one in the repository\'s settings and every fix is checked before you are asked to take it.</div>';
@@ -5092,8 +5114,9 @@
         else if (r.pushed.ok) say(r.count + ' fix(es) pushed to origin/' + r.branch + '.' + left);
         else say(r.count + ' fix(es) are in your clone, but the push to origin/' + r.branch + ' was refused: ' + (r.pushed.output || 'git said nothing') + ' Pull, then push from the Commits tab.', true);
         state.commits.data = null;
+        state.workshopError = null;
         load();
-      });
+      }, workshopFailed(push ? (upTo ? 'push the fixes up to one commit to the PR' : 'push the fixes to the PR') : 'hand the fixes back to my clone'));
     },
 
     // ---- judging what is in the workshop before taking it ----
@@ -5132,12 +5155,12 @@
         state.wsDiff = null;
         say(r.how === 'revert' ? 'Reverted in the workshop: another commit sits on top of it, so both stay in the branch and cancel out.' : 'Taken out of the workshop.');
         load();
-      });
+      }, workshopFailed('take a fix out of the workshop'));
     },
-    'discard-workshop': function () { act(prKey('discard'), function () { return call('discardWorkshop', prArgs({ repoName: state.pr.repo.name })); }, function () { say('Workshop discarded.'); }); },
+    'discard-workshop': function () { act(prKey('discard'), function () { return call('discardWorkshop', prArgs({ repoName: state.pr.repo.name })); }, function () { say('Workshop discarded.'); }, workshopFailed('discard the workshop')); },
     push: function () {
       var d = state.commits.data;
-      act(prKey('push'), function () { return call('push', prArgs({ branch: d.branch, count: d.local.length })); }, function () { say('Pushed.'); state.commits.data = null; loadCommits(); });
+      act(prKey('push'), function () { return call('push', prArgs({ branch: d.branch, count: d.local.length })); }, function () { say('Pushed.'); state.commits.data = null; loadCommits(); }, workshopFailed('push my clone to origin'));
     },
     adopt: function (el) {
       var id = el.getAttribute('data-comment');
@@ -5284,6 +5307,12 @@
     'retry-start': function () { $('main').innerHTML = '<div class="loading">Loading…</div>'; start(); },
     // Through call(): the host answers a failure as {ok:false}, which a bare .catch never sees.
     shell: function (el) { call('shell', prArgs({ where: el.getAttribute('data-where') })).catch(fail); },
+    'ask-failure': function () {
+      var err = state.workshopError;
+      if (!err) return;
+      act(prKey('ask-failure'), function () { return call('ask', prArgs({ where: 'workshop', failure: { action: err.action, error: err.message } })); });
+    },
+    'failure-dismiss': function () { state.workshopError = null; draw(); },
     ask: function (el) { call('ask', prArgs({ findingId: el.getAttribute('data-finding') || undefined })).catch(fail); },
     'use-me': function (el) {
       call('saveSettings', { settings: { me: el.getAttribute('data-name') } }).then(function (r) { state.settings = r.settings; if (state.overview) state.overview.settings = r.settings; say('Saved.'); draw(); }, fail);

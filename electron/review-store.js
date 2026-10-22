@@ -1455,6 +1455,11 @@ class ReviewStore {
    * to be discarded — or reset out from under it by the next fix run — taking
    * the only copy with it.
    */
+  /** A fix's commit replayed on a newer tip of its branch: same change, new id. */
+  moveFix(fixId, sha) {
+    this.run('UPDATE cr_finding_fix SET sha = ? WHERE id = ?', sha, fixId);
+  }
+
   markReturned(fixIds = []) {
     const stamp = now();
     for (const id of fixIds) this.run('UPDATE cr_finding_fix SET returned_at = ? WHERE id = ? AND returned_at IS NULL', stamp, id);

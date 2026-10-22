@@ -382,6 +382,28 @@ class FixEngine {
     if (!pending.length) throw new Error('There are no fixes to hand back.');
     const branch = pr.sourceBranch;
     /*
+     * The branch may have moved since the fixes were written — the author
+     * pushed. Handed back as they are, they would be refused as behind; so
+     * they are replayed on the newest tip first, read from origin through the
+     * clone, the same way the workshop is prepared.
+     */
+    await this.git.fetch(repo.localPath, branch);
+    const tipRef = `refs/remotes/pr-head/${branch}`;
+    const tipFetched = (await this.git.run(dir, ['fetch', 'origin', `+refs/remotes/origin/${branch}:${tipRef}`])).ok;
+    if (tipFetched) {
+      const replay = await this.git.replayOnto(dir, branch, tipRef);
+      if (!replay.ok) {
+        const which = replay.conflict ? pending.find((fix) => fix.sha === replay.conflict) : null;
+        throw new Error(replay.conflict
+          ? `${branch} moved since the fixes were written, and ${which ? `the fix "${String(which.summary || which.sha).slice(0, 80)}"` : `commit ${replay.conflict.slice(0, 7)}`} does not apply on top of it. Nothing was changed: take that fix out and run it again.`
+          : replay.output.slice(0, 300));
+      }
+      for (const fix of pending) {
+        const next = replay.moved.get(fix.sha);
+        if (next && next !== fix.sha) { this.store.moveFix(fix.id, next); fix.sha = next; }
+      }
+    }
+    /*
      * Up to one commit, not a pick of any three.
      *
      * Handing back pushes a branch, so what arrives is everything up to the

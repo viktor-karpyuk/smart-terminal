@@ -309,7 +309,7 @@ test('handing back with push puts the fix on origin in one go, and a refused pus
   assert.equal(given.left, 1);
   assert.equal(git(w.origin, 'rev-parse', 'refs/heads/feature'), first.sha, 'the chosen commit is on origin, the other is not');
 
-  // Someone pushed to the branch meanwhile: origin refuses, the fix stays handed back, and the answer says why.
+  // Someone pushed to the branch meanwhile: the rest is replayed on top of it and still reaches origin.
   const other = fs.mkdtempSync(path.join(os.tmpdir(), 'cr-other-'));
   git(other, 'clone', w.origin, '.');
   git(other, 'checkout', 'feature');
@@ -317,11 +317,12 @@ test('handing back with push puts the fix on origin in one go, and a refused pus
   git(other, 'add', '-A');
   git(other, '-c', 'user.name=o', '-c', 'user.email=o@o', 'commit', '-m', 'meanwhile');
   git(other, 'push', 'origin', 'feature');
+  const theirs = git(other, 'rev-parse', 'HEAD');
   const rest = await service.call('giveBack', { repoId: repo.id, prId: 7, push: true });
   assert.equal(rest.ok, true, rest.error);
-  assert.equal(rest.pushed.ok, false);
-  assert.ok(rest.pushed.output.length > 0);
-  assert.equal(service.store.pendingReturn(repo.id, 7).length, 0, 'in the clone, which is true');
+  assert.deepEqual(rest.pushed, { ok: true });
+  assert.equal(git(w.origin, 'rev-parse', 'refs/heads/feature~1'), theirs, 'on top of what was pushed meanwhile');
+  assert.equal(service.store.pendingReturn(repo.id, 7).length, 0);
 
   // Without push, nothing leaves the machine — as before.
   assert.equal((await service.call('giveBack', { repoId: repo.id, prId: 7 })).ok, false, 'nothing left to hand back');
@@ -346,6 +347,61 @@ test('pushing to the PR with the branch checked out in the clone goes straight f
   assert.equal(git(w.origin, 'rev-parse', 'refs/heads/feature'), fix.sha, 'on the PR');
   assert.equal(git(w.clone, 'rev-parse', 'refs/heads/feature'), cloneBefore, 'the clone is left as it was');
   assert.equal(service.store.pendingReturn(repo.id, 7).length, 0);
+});
+
+test('when the branch moved after the fixes were written, they are replayed on the new tip and pushed', { skip }, async () => {
+  const { service, repo, w } = setup([
+    async () => ({ structured: { summary: 's', findings: [finding()] } }),
+    async (options) => { fs.writeFileSync(path.join(options.cwd, 'app.js'), 'function add(a, b) {\n  return a + b;\n}\n'); return { structured: { fixed: true, summary: 'plus' } }; },
+  ]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  const [f] = service.store.findingsForReview(service.store.latestDone(repo.id, 7).id);
+  const fix = (await service.call('fix', { findingId: f.id })).fix;
+
+  // The author pushes another file meanwhile.
+  git(w.seed, 'pull', '-q', 'origin', 'feature');
+  fs.writeFileSync(path.join(w.seed, 'other.txt'), 'theirs\n');
+  git(w.seed, 'add', '-A');
+  git(w.seed, 'commit', '-m', 'meanwhile');
+  git(w.seed, 'push', 'origin', 'HEAD:feature');
+  const theirs = git(w.seed, 'rev-parse', 'HEAD');
+
+  const given = await service.call('giveBack', { repoId: repo.id, prId: 7, push: true });
+  assert.equal(given.ok, true, given.error);
+  assert.deepEqual(given.pushed, { ok: true });
+  const tip = git(w.origin, 'rev-parse', 'refs/heads/feature');
+  assert.equal(git(w.origin, 'rev-parse', 'refs/heads/feature~1'), theirs, 'on top of what the author pushed');
+  const moved = service.store.fix(fix.id);
+  assert.notEqual(moved.sha, fix.sha, 'replayed, so a new id');
+  assert.equal(moved.sha, tip, 'and the fix knows it');
+});
+
+test('a fix that does not apply on the moved branch stops the hand-back and changes nothing', { skip }, async () => {
+  const { service, repo, w } = setup([
+    async () => ({ structured: { summary: 's', findings: [finding()] } }),
+    async (options) => { fs.writeFileSync(path.join(options.cwd, 'app.js'), 'ours\n'); return { structured: { fixed: true, summary: 'ours' } }; },
+  ]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  const [f] = service.store.findingsForReview(service.store.latestDone(repo.id, 7).id);
+  const fix = (await service.call('fix', { findingId: f.id })).fix;
+  const workshop = service.fixer.dirFor(repo, 7);
+  const before = git(workshop, 'rev-parse', 'HEAD');
+
+  git(w.seed, 'pull', '-q', 'origin', 'feature');
+  fs.writeFileSync(path.join(w.seed, 'app.js'), 'theirs\n');
+  git(w.seed, 'commit', '-am', 'same line');
+  git(w.seed, 'push', 'origin', 'HEAD:feature');
+  const theirs = git(w.origin, 'rev-parse', 'refs/heads/feature');
+
+  const given = await service.call('giveBack', { repoId: repo.id, prId: 7, push: true });
+  assert.equal(given.ok, false);
+  assert.match(given.error, /does not apply on top of it[\s\S]*Nothing was changed/);
+  assert.equal(git(workshop, 'rev-parse', 'HEAD'), before, 'the workshop is as it was');
+  assert.equal(git(w.origin, 'rev-parse', 'refs/heads/feature'), theirs);
+  assert.equal(service.store.fix(fix.id).sha, fix.sha);
+  assert.equal(service.store.pendingReturn(repo.id, 7).length, 1, 'still waiting');
 });
 
 test('handing back refuses when the clone has the branch checked out, and says so', { skip }, async () => {
