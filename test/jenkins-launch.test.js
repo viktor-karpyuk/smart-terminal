@@ -1511,3 +1511,59 @@ test('through the service: stopping stops the clocks', { skip }, () => {
   assert.equal(service.launch.timer, null);
   assert.equal(service.launch.stopped, true);
 });
+
+// =====================================================================================
+// Promoting to a target that deploys an image by VERSION: latest unless the person picks another.
+// =====================================================================================
+
+function imageWorld() {
+  const tags = ['latest', 'app-4.0.0.140', 'app-4.0.0.139', 'app-4.0.0.138'];
+  return envWorld({
+    sourceDefs: [def('VERSION', { default: 'BUILD-FROM-SOURCE' }), def('GIT_REF'), def('GIT_REF_OVERRIDE'), def('ENV', { type: 'choice', choices: ['DEV'], default: 'DEV' })],
+    sourceParams: [{ name: 'VERSION', value: 'BUILD-FROM-SOURCE' }, { name: 'GIT_REF', value: 'origin/develop' }, { name: 'GIT_REF_OVERRIDE', value: '' }, { name: 'ENV', value: 'DEV' }],
+    targetDefs: [
+      def('ENV', { type: 'choice', choices: ['PROD'], default: 'PROD' }),
+      def('BRANCH', { description: 'Git branch to build from. Only read when VERSION is BUILD-FROM-SOURCE.' }),
+      def('VERSION', { type: 'choice', choices: ['BUILD-FROM-SOURCE', ...tags], default: 'latest', description: 'Image to DEPLOY, newest first.' }),
+      def('DEPLOY', { type: 'choice', choices: ['YES', 'NO'], default: 'YES' }),
+    ],
+  });
+}
+
+test('a promotion to a job that deploys an image starts from its latest, offers the others, and asks nothing about the branch', { skip }, async () => {
+  const w = imageWorld();
+  const { call } = setup(w);
+  const plan = (await call('promoteCandidates', { path: 'app DEV' })).candidates[0].proposal;
+  assert.deepEqual(plan.params.VERSION, 'latest', 'a build from source in DEV is not what PROD deploys: the target\'s own latest is');
+  const version = plan.copied.find((c) => c.name === 'VERSION');
+  assert.equal(version.how, 'latest');
+  assert.deepEqual(version.choices, ['BUILD-FROM-SOURCE', 'latest', 'app-4.0.0.140', 'app-4.0.0.139', 'app-4.0.0.138'], 'the list Jenkins gives, to pick another from');
+  assert.equal(plan.needsInput.length, 0, 'BRANCH is only read for BUILD-FROM-SOURCE, and GIT_REF has no meaning in a target that deploys an image');
+  assert.deepEqual(plan.irrelevant.map((one) => one.name), ['BRANCH']);
+  assert.ok(plan.unmatched.includes('GIT_REF'));
+  assert.deepEqual(plan.blocked, []);
+  assert.equal(plan.ready, true);
+});
+
+test('picking another image sends that one, and picking BUILD-FROM-SOURCE asks for the branch again', { skip }, async () => {
+  const w = imageWorld();
+  const { call, refused } = setup(w);
+  await call('promote', { from: { path: 'app DEV', number: 7 }, overrides: { VERSION: 'app-4.0.0.139' } });
+  assert.equal(w.runs[0].params.VERSION, 'app-4.0.0.139');
+  assert.equal('BRANCH' in w.runs[0].params, false);
+  const again = imageWorld();
+  const second = setup(again);
+  assert.match(await second.refused('promote', { from: { path: 'app DEV', number: 7 }, overrides: { VERSION: 'BUILD-FROM-SOURCE' }, force: true }), /BRANCH/);
+  assert.equal(again.runs.length, 0);
+  void refused;
+});
+
+test('with no latest to start from the version is still asked for, now with the list to choose from', { skip }, async () => {
+  const w = envWorld({
+    sourceParams: [{ name: 'VERSION', value: '1.4.0-dev.3' }, { name: 'ENV', value: 'dev' }], sourceDefs: [def('VERSION'), def('ENV')],
+    targetDefs: [def('VERSION', { type: 'choice', choices: ['1.3.0', '1.2.0'], default: '1.3.0' }), def('ENV', { default: 'prod' })],
+  });
+  const { call } = setup(w);
+  const version = (await call('promoteCandidates', { path: 'app DEV' })).candidates[0].proposal.needsInput.find((n) => n.name === 'VERSION');
+  assert.deepEqual([version.blocking, version.choices], [true, ['1.3.0', '1.2.0']], 'a default nobody called latest is not trusted');
+});
