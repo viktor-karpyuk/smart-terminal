@@ -266,6 +266,21 @@ function parseForm(html) {
     found.push({ name, kind, refs, id, proxy, uuid, view, initial });
     if (found.length >= 30) break;
   }
+  // A plain `ChoiceParameter` (Single Select) depends on nothing and has no data holder: its list is in the form, already made.
+  const plain = /<div\b((?:[^>"']|"[^"]*"|'[^']*')*\bclass\s*=\s*["'][^"']*\bactive-choice\b[^"']*["'](?:[^>"']|"[^"]*"|'[^']*')*)>/gi;
+  while (found.length < 30 && (m = plain.exec(page))) {
+    const attrs = attributesOf(m[1]);
+    const id = attrs.id;
+    if (!ELEMENT_ID.test(id ?? '')) continue;
+    const after = page.slice(m.index + m[0].length, m.index + m[0].length + 200_000);
+    const named = /<input\b([^>]*\bname\s*=\s*["']name["'][^>]*)>/i.exec(after);
+    const name = named ? attributesOf(named[1]).value : null;
+    if (!PARAM_NAME.test(name ?? '') || found.some((one) => one.name === name)) continue;
+    const end = after.search(/<\/select>|validation-error-area/i);
+    const initial = optionsIn(end >= 0 ? after.slice(0, end + 9) : after.slice(0, 60_000));
+    if (!initial) continue;
+    found.push({ name, kind: 'choice', refs: [], id, proxy: null, uuid: null, view: 'choices', initial });
+  }
   return found;
 }
 

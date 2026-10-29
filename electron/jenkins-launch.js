@@ -5,7 +5,8 @@ const { JenkinsError, jobPath, segment } = require('./jenkins-api');
 const { familyOf, vocabulary } = require('./jenkins-board');
 const { ActiveChoices } = require('./jenkins-active-choices');
 
-const REACTIVE = /^(cascadechoice|dynamicreference)parameter$/;
+const OVERRIDE_NAME = /override/i;
+const REACTIVE = /^(cascadechoice|dynamicreference|choice)parameter$/;
 
 /**
  * Starting builds, and everything a person wants around the click.
@@ -945,7 +946,8 @@ class Launch {
         if (own !== null) options.push({ source: 'default', value: own });
       }
       // The first that the job would still accept: a version that is no longer one of the choices is not a suggestion.
-      const picked = options.find((one) => valueOk(one.value)) ?? null;
+      // An override beats the parameter it overrides, so what was typed there last time is offered, never started from.
+      const picked = options.find((one) => valueOk(one.value) && (!OVERRIDE_NAME.test(definition.name) || one.source === 'default')) ?? null;
       return {
         name: definition.name,
         type: definition.type,
