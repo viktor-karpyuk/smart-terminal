@@ -5710,7 +5710,8 @@
           if (got.view) { p.view = got.view; return; }
           p.choices = got.choices || [];
           p.choiceLabels = got.labels || null;
-          if (p.choices.indexOf(String(state.form.values[p.name])) < 0) state.form.values[p.name] = got.selected !== null && got.selected !== undefined ? got.selected : (p.choices[0] || '');
+          p.multiple = Boolean(got.multiple);
+          if (p.multiple ? String(state.form.values[p.name] || '').split(',').some(function (v) { return p.choices.indexOf(v) < 0; }) : p.choices.indexOf(String(state.form.values[p.name])) < 0) state.form.values[p.name] = got.selected !== null && got.selected !== undefined ? got.selected : (p.choices[0] || '');
         });
         if (state.page.type === 'job' && !typing()) drawMain(); else if (state.formRefresh) state.formRefresh();
       });
@@ -5803,6 +5804,16 @@
     }
     if (p.type === 'boolean') {
       control = h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: current === true || current === 'true', onchange: function (event) { set(event.target.checked); } }), h('span', { text: 'true' }));
+    } else if (p.type === 'choice' && p.choices && p.multiple) {
+      var ticked = String(current || '').split(',').filter(Boolean);
+      var tickBoxes = p.choices.map(function (one) {
+        var box = h('input', { type: 'checkbox', checked: ticked.indexOf(one) >= 0, disabled: p.updating ? true : null, onchange: function () {
+          var now = tickBoxes.filter(function (b) { return b.input.checked; }).map(function (b) { return b.value; });
+          set(now.join(','));
+        } });
+        return { input: box, value: one, el: h('label', { class: 'check flag' }, box, h('span', { text: (p.choiceLabels && p.choiceLabels[one]) || one })) };
+      });
+      control = h('div', { class: 'flaggrid', role: 'group', 'aria-label': p.name }, tickBoxes.map(function (b) { return b.el; }));
     } else if (p.type === 'choice' && p.choices) {
       control = h('select', { 'aria-describedby': 'perr-' + p.name, value: current, disabled: p.updating ? true : null, onchange: function (event) { set(event.target.value); } }, p.choices.map(function (one) { return h('option', { value: one, text: (p.choiceLabels && p.choiceLabels[one]) || one }); }));
     } else if (p.type === 'text') {

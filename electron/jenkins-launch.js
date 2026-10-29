@@ -291,6 +291,12 @@ function splitSecrets(defs, given) {
 }
 
 /** What a definition needs the person to say: no default to fall back on, and not a yes/no or a pick. */
+/** Whether a value is one the parameter lists; a multi-select takes any of them, comma-separated. */
+const acceptsChoice = (definition, value) => {
+  if (!definition.choices) return true;
+  const list = definition.choices.map(String);
+  return definition.multiple ? String(value).split(',').every((one) => list.includes(one)) : list.includes(String(value));
+};
 const isRequired = (definition) => !definition.secret && definition.default === '' && definition.type !== 'boolean' && !definition.choices;
 
 // --- naming families: which jobs are the same service in another environment --------
@@ -834,7 +840,7 @@ class Launch {
     if (!session) return {};
     const found = {};
     for (const param of session.params) {
-      if (param.initial) found[param.name] = { refs: param.refs, ...(param.initial.blocks ? { blocks: param.initial.blocks } : { choices: param.initial.choices, selected: param.initial.selected, labels: param.initial.labels }) };
+      if (param.initial) found[param.name] = { refs: param.refs, ...(param.initial.blocks ? { blocks: param.initial.blocks } : { choices: param.initial.choices, selected: param.initial.selected, labels: param.initial.labels, ...(param.initial.multiple ? { multiple: true } : {}) }) };
     }
     // The page was built with each parameter at its own default. If the form starts anywhere else, what the page holds is for another question.
     const pageValue = (one) => (one.default !== '' && one.default !== undefined ? asText(one.default) : (one.choices?.[0] ?? ''));
@@ -878,7 +884,7 @@ class Launch {
     if (!got) return definition;
     if (got.error) return { ...definition, type: 'string', choices: null, reactiveError: got.error };
     if (got.blocks) return { ...definition, type: 'display', choices: null, default: '', view: got.blocks, reactive: true, refs: got.refs ?? [] };
-    if (got.choices?.length) return { ...definition, type: 'choice', choices: got.choices, choiceLabels: got.labels && Object.keys(got.labels).length ? got.labels : null, default: got.selected ?? got.choices[0], reactive: true, refs: got.refs ?? [] };
+    if (got.choices?.length) return { ...definition, type: 'choice', choices: got.choices, choiceLabels: got.labels && Object.keys(got.labels).length ? got.labels : null, default: got.selected ?? got.choices[0], reactive: true, refs: got.refs ?? [], ...(got.multiple ? { multiple: true } : {}) };
     return definition;
   }
 
@@ -901,7 +907,7 @@ class Launch {
     for (const one of reactive) {
       const result = got[one.name];
       if (!result) continue;
-      params[one.name] = result.error ? { error: result.error } : result.blocks ? { view: result.blocks } : { choices: result.choices, selected: result.selected ?? result.choices?.[0] ?? null, ...(result.labels && Object.keys(result.labels).length ? { labels: result.labels } : {}) };
+      params[one.name] = result.error ? { error: result.error } : result.blocks ? { view: result.blocks } : { choices: result.choices, selected: result.selected ?? result.choices?.[0] ?? null, ...(result.multiple ? { multiple: true } : {}), ...(result.labels && Object.keys(result.labels).length ? { labels: result.labels } : {}) };
     }
     return { params };
   }
@@ -938,7 +944,7 @@ class Launch {
     }
     const rows = defs.map((definition) => {
       const secret = isSecretParam(definition);
-      const valueOk = (value) => !definition.choices || definition.choices.map(String).includes(String(value));
+      const valueOk = (value) => acceptsChoice(definition, value);
       const options = [];
       if (!secret && definition.type !== 'display') {
         for (const one of sources) if (Object.prototype.hasOwnProperty.call(one.values, definition.name)) options.push({ source: one.source, value: one.values[definition.name] });
@@ -955,6 +961,7 @@ class Launch {
         default: secret ? '' : definition.default,
         choices: definition.choices ?? null,
         ...(definition.choiceLabels ? { choiceLabels: definition.choiceLabels } : {}),
+        ...(definition.multiple ? { multiple: true } : {}),
         ...(definition.type === 'display' ? { view: definition.view } : {}),
         ...(definition.reactive ? { reactive: true, refs: definition.refs ?? [] } : {}),
         ...(definition.reactiveError ? { reactiveError: definition.reactiveError } : {}),
@@ -1032,7 +1039,7 @@ class Launch {
     for (const definition of defs) {
       const secret = isSecretParam(definition);
       const has = Object.prototype.hasOwnProperty.call(given, definition.name);
-      if (has && definition.choices && !definition.choices.map(String).includes(given[definition.name])) {
+      if (has && definition.choices && !acceptsChoice(definition, given[definition.name])) {
         out.badChoice.push({ name: definition.name, value: clip(given[definition.name], 60), choices: definition.choices.slice(0, 20) });
         out.errors.push(`${definition.name} has to be one of ${definition.choices.slice(0, 6).join(', ')}${definition.choices.length > 6 ? '…' : ''}`);
       }
@@ -1505,7 +1512,7 @@ class Launch {
     const unmatched = [];
     let environment = null;
     const defaultOf = (definition) => (definition.default === undefined || definition.default === null ? '' : asText(definition.default));
-    const accepts = (definition, value) => !definition.choices || definition.choices.map(String).includes(String(value));
+    const accepts = (definition, value) => acceptsChoice(definition, value);
     const pointAtTarget = (definition) => {
       const choice = definition.choices ? definition.choices.find((one) => envWordOf(one, settings) === targetEnv) : undefined;
       if (choice === undefined) return false;
@@ -1831,7 +1838,7 @@ class Launch {
     // What the person gave: a source parameter sent to a target parameter of another name, and values typed in.
     const byName = new Map(defs.map((one) => [one.name, one]));
     const given = {};
-    const choiceOk = (definition, value) => !definition.choices || definition.choices.map(String).includes(String(value));
+    const choiceOk = (definition, value) => acceptsChoice(definition, value);
     for (const [sourceName, targetName] of Object.entries(map)) {
       const one = sourceParams.find((other) => other.name === sourceName);
       if (!one) throw new JenkinsError(`${fromPath} #${fromNumber} has no parameter called ${clip(sourceName, 40)} to map`);

@@ -180,3 +180,19 @@ test('a plain Active Choices list (ChoiceParameter) is read from the form, with 
   assert.deepEqual(found[0].initial.choices, ['latest', '2.2.0.335 (latest)', '2.2.0.334']);
   assert.equal(found[0].initial.selected, null);
 });
+
+test('a list that allows several (multi-select or checkboxes) is marked, and starts with all the ticked ones', () => {
+  const select = '<div id="choice-parameter-1" class="active-choice"><input name="name" type="hidden" value="MODULES"><select name="value" multiple="multiple"><option value="api" selected>api</option><option value="web">web</option><option value="db" selected>db</option></select></div><div class="validation-error-area"></div>';
+  const [one] = parseForm(select);
+  assert.equal(one.multiple, true);
+  assert.equal(one.initial.multiple, true);
+  assert.equal(one.initial.selected, 'api,db');
+  const boxes = '<div id="choice-parameter-2" class="active-choice"><input name="name" type="hidden" value="ENVS"><div><input type="checkbox" value="qa" checked><input type="checkbox" value="prod"></div></div><div class="validation-error-area"></div>';
+  const [two] = parseForm(boxes);
+  assert.equal(two.multiple, true);
+  assert.equal(two.initial.selected, 'qa');
+  // A single select stays single.
+  const single = select.replace(' multiple="multiple"', '');
+  assert.equal(parseForm(single)[0].multiple, false);
+  assert.equal(parseForm(single)[0].initial.selected, 'api');
+});
