@@ -87,6 +87,12 @@ const INDEX_AGE_MS = 4000;
 /** What a masked value looks like when Jenkins's own record of a build is read. */
 const MASK = '••••••';
 /** Parameters whose value is, in practice, "which version" — what two environments' builds are compared by. */
+/** A version that means "the newest" — what a target that deploys an image starts from when nobody picks one. */
+const LATEST_WORD = /^(latest|newest|current)$/i;
+/** A source value that says "build it from the branch" rather than naming something built: it has no meaning in an environment that deploys. */
+const BUILD_FROM_SOURCE = /^(build[-_ ]?from[-_ ]?(source|branch|git)|from[-_ ]?source)$/i;
+/** A parameter that names a git ref: where the source was built from, no more a thing to deploy than the build it made. */
+const GIT_REF_NAME = /^(git_?(ref|branch|commit|sha)|branch|ref)$/i;
 const VERSION_LIKE = /^(version|tag|image|image_?tag|image_?version|release|build_?number|commit|sha|revision|rev|git_?(commit|sha|ref|branch)|branch|ref)$/i;
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f]/;
@@ -853,6 +859,19 @@ class Launch {
     return found;
   }
 
+  /** A target's parameters with what its reactive ones (Active Choices) list now, so a version that is a list of images has its list. */
+  async #targetDefs(api, path, job) {
+    const defs = job.parameters ?? [];
+    if (!defs.some((one) => REACTIVE.test(one.type))) return defs;
+    try {
+      const found = await this.#reactive(api, path, defs, (one) => (one.default === '' || one.default === undefined ? null : asText(one.default)));
+      // A read-only block (a table the job's script makes) is something to look at, not something to give a value to.
+      return defs.map((one) => this.#withReactive(one, found[one.name])).filter((one) => one.type !== 'display');
+    } catch {
+      return defs;
+    }
+  }
+
   /** A reactive parameter's definition, as a row of the form would have it. */
   #withReactive(definition, got) {
     if (!got) return definition;
@@ -1493,13 +1512,22 @@ class Launch {
       environment = environment ?? { name: definition.name, value: String(choice) };
       return true;
     };
+    /** The value of a target version parameter that means "the newest", when it has one and it is what the job starts from. */
+    const latestOf = (definition) => {
+      const own = defaultOf(definition);
+      if (!LATEST_WORD.test(own)) return null;
+      return definition.choices && !definition.choices.map(String).includes(own) ? null : own;
+    };
     const seen = new Set();
     for (const one of sourceParams) {
       seen.add(one.name);
       const definition = byName.get(one.name);
       const version = VERSION_LIKE.test(one.name);
       if (!definition) {
-        if (version && !one.masked) {
+        if (version && !one.masked && GIT_REF_NAME.test(one.name) && targetDefs.some((other) => VERSION_LIKE.test(other.name) && !isSecretParam(other))) {
+          // Where the source was built from: the target already has the parameter that says what is deployed.
+          unmatched.push(one.name);
+        } else if (version && !one.masked) {
           blocked.push({
             name: one.name,
             sourceValue: asText(one.value),
@@ -1517,13 +1545,19 @@ class Launch {
       const own = defaultOf(definition);
       if (version) {
         const named = envsIn(value, settings)[0];
-        if (named || isHostLike(value)) {
+        const newest = latestOf(definition);
+        const pickFrom = { choices: definition.choices ?? null, ...(definition.choiceLabels ? { labels: definition.choiceLabels } : {}), ...(definition.description ? { description: definition.description } : {}) };
+        if (newest !== null && (BUILD_FROM_SOURCE.test(value) || named || isHostLike(value) || !accepts(definition, value))) {
+          // What the source built or deployed is not what this environment deploys: the newest is, and any other is one pick away.
+          params[one.name] = newest;
+          copied.push({ name: one.name, value: newest, how: 'latest', ...pickFrom });
+        } else if (named || isHostLike(value)) {
           needsInput.push({ name: one.name, kind: 'environment', blocking: true, reason: `${value} looks like it belongs to ${named ?? 'the source environment'} — give the version to deploy`, sourceValue: value, targetDefault: own, choices: definition.choices ?? null });
         } else if (!accepts(definition, value)) {
           needsInput.push({ name: one.name, kind: 'required', blocking: true, reason: `${value} is not one of ${targetLabel}'s choices for ${one.name}`, sourceValue: value, targetDefault: own, choices: definition.choices });
         } else {
           params[one.name] = value;
-          copied.push({ name: one.name, value, how: 'copied' });
+          copied.push({ name: one.name, value, how: 'copied', ...pickFrom });
         }
         continue;
       }
@@ -1557,7 +1591,18 @@ class Launch {
         needsInput.push({ name: definition.name, kind: 'required', blocking: false, reason: 'it has no default and the build has no value for it: Jenkins gets an empty value', choices: definition.choices ?? null });
       }
     }
-    return { params, copied, needsInput, blocked, unmatched, environment, ready: !needsInput.some((one) => one.blocking) && blocked.length === 0 };
+    // A parameter whose own description says it is read only for one value of another ("Only read when VERSION is BUILD-FROM-SOURCE") is not asked while that other has another value.
+    const irrelevant = [];
+    const valueNow = (name) => (name in params ? params[name] : defaultOf(byName.get(name) ?? {}));
+    for (let i = needsInput.length - 1; i >= 0; i -= 1) {
+      const m = /only read when ([A-Za-z0-9_]+) is ([A-Za-z0-9_.-]*[A-Za-z0-9_])/i.exec(byName.get(needsInput[i].name)?.description ?? '');
+      if (!m || !byName.has(m[1]) || needsInput[i].kind === 'secret') continue;
+      const now = valueNow(m[1]);
+      if (now === '' || now.toLowerCase() === m[2].toLowerCase()) continue;
+      irrelevant.unshift({ name: needsInput[i].name, when: { name: m[1], value: m[2] }, now, entry: needsInput[i] });
+      needsInput.splice(i, 1);
+    }
+    return { params, copied, needsInput, blocked, unmatched, irrelevant, environment, ready: !needsInput.some((one) => one.blocking) && blocked.length === 0 };
   }
 
   /** Whether the board was told to hide this job (by its path, or a folder above it). */
@@ -1621,7 +1666,7 @@ class Launch {
 
   async #candidate({ server, api, from, picked, sourceParams, sourceJob, target, blocked, settings = {}, family = null, latest = null }) {
     const job = await this.#job(server.id, api, target.path, { builds: 20, fresh: true });
-    const defs = job.parameters ?? [];
+    const defs = await this.#targetDefs(api, target.path, job);
     const lastPassed = (job.builds ?? []).find((one) => one.status === 'success') ?? null;
     const proposal = this.#proposal(sourceParams, defs, target.env, settings, target.path.split('/').pop());
     const out = {
@@ -1778,7 +1823,7 @@ class Launch {
     if (busy && args.allowBusy !== true) throw new JenkinsError(`${toPath} is ${targetJob.inQueue ? 'already waiting for a build' : 'running now'} — wait for it, or promote anyway`);
     this.#guardRecent(server.id, [toPath], args.force === true);
 
-    const defs = targetJob.parameters ?? [];
+    const defs = await this.#targetDefs(api, toPath, targetJob);
     const sourceParams = (sourceBuild.parameters ?? []).map((one) => ({ name: one.name, value: one.value, masked: one.value === MASK || one.value === undefined || isSecretName(one.name) || looksSecretValue(one.value) }));
     const plan = this.#proposal(sourceParams, defs, familyTo?.me.env ?? null, settings, toPath.split('/').pop());
     // What the person gave: a source parameter sent to a target parameter of another name, and values typed in.
@@ -1803,8 +1848,10 @@ class Launch {
       given[name] = value;
     }
     // Nothing starts until every question that decides what is deployed has an answer.
+    // What was left out because of the version the target would have started with counts again when the person picks the one it is read for.
+    const readNow = plan.irrelevant.filter((one) => String(given[one.when.name] ?? '').toLowerCase() === one.when.value.toLowerCase()).map((one) => one.entry);
     const unresolved = [
-      ...plan.needsInput.filter((one) => one.blocking && !Object.prototype.hasOwnProperty.call(given, one.name)).map((one) => `${one.name} (${one.reason})`),
+      ...[...plan.needsInput, ...readNow].filter((one) => one.blocking && !Object.prototype.hasOwnProperty.call(given, one.name)).map((one) => `${one.name} (${one.reason})`),
       ...plan.blocked.filter((one) => !Object.prototype.hasOwnProperty.call(map, one.name) && !skip.includes(one.name) && !one.candidates.some((name) => Object.prototype.hasOwnProperty.call(given, name))).map((one) => `${one.name} (${one.reason})`),
     ];
     if (unresolved.length) {

@@ -6181,15 +6181,23 @@
    * What the app proposes for one target, as lists to draw — from either shape it has sent: names
    * for what has to be typed, or objects that say why; values copied, or a plan of what was copied.
    */
-  function promoteItems(prop) {
+  function promoteItems(prop, ch) {
     prop = prop || {};
     var needs = (prop.needsInput || []).map(function (n) { return typeof n === 'string' ? { name: n, kind: 'secret', blocking: true } : assign({ blocking: true }, n); });
+    // What was left out for the version the target starts with counts again once the person picks the version it is read for.
+    var later = [];
+    var left = (prop.irrelevant || []).filter(function (x) {
+      var on = x && x.when && ch && String(ch.overrides[x.when.name] || '').toLowerCase() === String(x.when.value).toLowerCase();
+      if (on && x.entry) later.push(assign({ blocking: true }, x.entry));
+      return !on;
+    });
+    needs = needs.concat(later);
     var copied = Array.isArray(prop.copied) ? prop.copied.slice() : Object.keys(prop.params || {}).map(function (name) { return { name: name, value: prop.params[name], how: 'copied' }; });
     // A name that has to be typed is not also a value to copy.
     var asked = {};
     needs.forEach(function (n) { asked[n.name] = true; });
     copied = copied.filter(function (c) { return !asked[c.name]; });
-    return { copied: copied, needs: needs, blocked: prop.blocked || [], unmatched: (prop.unmatched || []).map(function (u) { return typeof u === 'string' ? u : u.name; }) };
+    return { copied: copied, needs: needs, irrelevant: left.filter(function (x) { return x && x.when; }), blocked: prop.blocked || [], unmatched: (prop.unmatched || []).map(function (u) { return typeof u === 'string' ? u : u.name; }) };
   }
 
   /** What is still missing before it can be started: a needed value typed, a blocked one decided. */
@@ -6240,7 +6248,7 @@
     var draw = function () {
       var c = cands[pick];
       var ch = chosen[pick];
-      var items = promoteItems(c.proposal);
+      var items = promoteItems(c.proposal, ch);
       var cur = c.deployed && c.deployed.params ? c.deployed.params : {};
       var field = function (name, value, secret, choices) {
         var control;
@@ -6253,10 +6261,20 @@
       var copiedRows = items.copied.map(function (it) {
         var value = ch.overrides[it.name] !== undefined ? ch.overrides[it.name] : (it.value === undefined || it.value === null ? '' : String(it.value));
         var was = cur[it.name];
+        // A version the target lists: the newest to start with, and a pick of any other, as the Jenkins form has it.
+        var listed = (it.choices || []).length > 1;
+        var control = field(it.name, value, false, null);
+        if (listed) {
+          control = h('select', { 'aria-label': it.name + ': which one to deploy', onchange: function (e) { if (e.target.value === String(it.value)) delete ch.overrides[it.name]; else ch.overrides[it.name] = e.target.value; draw(); } },
+            it.choices.map(function (x) { return h('option', { value: x, text: it.labels && it.labels[x] ? it.labels[x] : x, selected: x === value ? true : null }); }));
+          control.value = value;
+        }
         return h('div', { class: 'pfield field' },
           h('div', { class: 'row', style: 'gap:6px' }, h('span', { class: 'plabel', text: it.name }), it.how === 'environment' ? h('span', { class: 'chip', title: 'The value this environment uses, not the one of the source', text: 'for this environment' }) : null,
-            was !== undefined && String(was) !== String(it.value) ? h('span', { class: 'chip', text: 'was ' + String(was).slice(0, 24) }) : null),
-          field(it.name, value, false, null));
+            it.how === 'latest' && ch.overrides[it.name] === undefined ? h('span', { class: 'chip okc', title: 'What the source built is not what this environment deploys: it starts from its newest', text: 'newest · default' }) : null,
+            was !== undefined && String(was) !== String(value) ? h('span', { class: 'chip', text: 'now in ' + (c.env || 'target') + ': ' + String(was).slice(0, 24) }) : null),
+          control,
+          describe(it.description));
       });
       var needRows = items.needs.map(function (it) {
         var secret = it.kind === 'secret';
@@ -6298,16 +6316,17 @@
         c.reason && !c.canPromote ? h('div', { class: 'banner bad', style: 'margin-top:6px' }, h('div', { class: 'grow', text: c.reason }),
           lifts && !ch.flags[lifts] ? h('button', { class: 'btn small', type: 'button', text: 'Promote anyway', onclick: function () { ch.flags[lifts] = true; draw(); } }) : null) : null,
         items.unmatched.length ? h('div', { class: 'help', style: 'margin-top:6px', text: 'Only in the source, so not sent: ' + items.unmatched.join(', ') + '.' }) : null,
-        blockedRows.length ? [h('h3', { style: 'margin-top:10px', text: 'Needs a decision' }), h('div', { class: 'form' }, blockedRows)] : null,
-        needRows.length ? [h('h3', { style: 'margin-top:10px', text: 'The target asks for' }), h('div', { class: 'form' }, needRows)] : null,
+        items.irrelevant.length ? h('div', { class: 'help', style: 'margin-top:4px', text: items.irrelevant.map(function (x) { return x.name; }).join(', ') + ' only count when ' + items.irrelevant[0].when.name + ' is ' + items.irrelevant[0].when.value + ', so they are not asked.' }) : null,
+        blockedRows.length ? [h('h3', { style: 'margin-top:10px', text: 'Needs a decision' }), h('div', { class: 'form runform' }, blockedRows)] : null,
+        needRows.length ? [h('h3', { style: 'margin-top:10px', text: 'The target asks for' }), h('div', { class: 'form runform' }, needRows)] : null,
         h('h3', { style: 'margin-top:10px', text: 'Parameters it will start with' }),
-        h('div', { class: 'form' }, copiedRows.length ? copiedRows : h('div', { class: 'faint', text: 'None are copied: the target uses its own.' }))]);
+        h('div', { class: 'form runform' }, copiedRows.length ? copiedRows : h('div', { class: 'faint', text: 'None are copied: the target uses its own.' }))]);
       sync();
     };
     var sync = function () {
       var c = cands[pick];
       var ch = chosen[pick];
-      var items = promoteItems(c.proposal);
+      var items = promoteItems(c.proposal, ch);
       var missing = promoteMissing(items, ch);
       var refused = !c.canPromote && !(c.override && ch.flags[c.override]);
       promoteBtn.disabled = refused || missing.length > 0 || Boolean(from.blocked && !ch.flags.allowUnstable);
@@ -6318,7 +6337,7 @@
       var c = cands[pick];
       var ch = chosen[pick];
       promoteBtn.disabled = true;
-      var send = promoteSend(promoteItems(c.proposal), ch);
+      var send = promoteSend(promoteItems(c.proposal, ch), ch);
       var args = assign({ from: { path: path, number: from.number }, to: { path: c.path }, fromLabel: path.split('/').pop() + ' #' + from.number, toLabel: c.path }, send);
       if (force) args.force = true;
       api('promote', args).then(function (res) {
