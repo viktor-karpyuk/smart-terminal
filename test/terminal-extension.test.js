@@ -176,3 +176,10 @@ test('the shipped Terminal manifest asks to be installed on upgrade', () => {
   assert.equal(found.find((one) => one.id === 'terminal').installOnUpgrade, true);
   assert.equal(found.find((one) => one.id === 'markdown').installOnUpgrade, false);
 });
+
+test('the shipped Tables manifest asks to be installed on upgrade, so a CSV opens as a table without a trip to Extensions', () => {
+  const found = discover(path.join(__dirname, '..', 'extensions'), { builtIn: true });
+  const tables = found.find((one) => one.id === 'csv');
+  assert.equal(tables.installOnUpgrade, true);
+  assert.deepEqual(tables.contributes.previews[0].extensions, ['csv', 'tsv', 'psv']);
+});
