@@ -95,6 +95,11 @@ dialog you cannot click.
 
 - Use it when running the job is the next useful step and the user has not
   already said no. Put a real reason in `reason`: they read it.
+- It starts one job. Promoting a build to another environment, or running
+  several jobs together, is done by the user in the Jenkins panel; tell them
+  which build and where, do not try to do it with `request_run`.
+- A parameter the job fills from a script (Active Choices) can be given a
+  value like any other; if you leave it out, Jenkins decides it.
 - Ask once. If the answer is `declined`, they decided; do not ask again, and do
   not rephrase the request to get around it. `timed-out` means they did not
   answer; tell them in the conversation instead. `declined-recently` and
