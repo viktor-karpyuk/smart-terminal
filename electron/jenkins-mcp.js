@@ -855,6 +855,8 @@ class JenkinsMcp {
       if (Object.hasOwn(given, def.name)) continue;
       if (rows.length >= 40) { left += 1; continue; }
       if (def.secret || def.type === 'password') { rows.push(`  ${strip(def.name)} (secret: its default is not shown)`); continue; }
+      // An Active Choices parameter has no default Jenkins reports: its value comes from a script when the build starts.
+      if (/^(cascadechoice|dynamicreference)parameter$/.test(def.type)) { rows.push(`  ${strip(def.name)} = (decided by Jenkins when it starts)`); continue; }
       const value = strip(def.default ?? def.value ?? '');
       effective.push(value);
       rows.push(`  ${strip(def.name)} = ${value === '' ? '(empty)' : flat(value.length > 200 ? `${value.slice(0, 200)}… ${value.length - 200} more characters` : value)} (default)`);

@@ -570,6 +570,19 @@ test('the person says yes: the job is run once, with exactly the parameters aske
   assert.equal(asked[0].detail.includes('production'), false);
 });
 
+test('an Active Choices parameter is accepted, and the person is told Jenkins decides it rather than shown an empty default', async () => {
+  const jobs = { 'lib/release': { path: 'lib/release', kind: 'job', status: 'success', buildable: true, parameters: [{ name: 'VERSION', type: 'string', default: '' }, { name: 'BUMP', type: 'cascadechoiceparameter', default: '', choices: null }], builds: [] } };
+  const asked = [];
+  const { ask, fake } = setup({ service: fakeService({ jobs }), confirm: async (question) => { asked.push(question); return 'yes'; } });
+  const reply = await ask('request_run', { path: 'lib/release', params: { VERSION: '1.2.0', BUMP: 'minor' }, reason: 'Cut the 1.2.0 release' });
+  assert.match(reply.text, /status: started/);
+  assert.deepEqual(fake.calls.find(([verb]) => verb === 'run')[1].params, { VERSION: '1.2.0', BUMP: 'minor' });
+  const left = await setup({ service: fakeService({ jobs }), confirm: async (question) => { asked.push(question); return 'no'; } }).ask('request_run', { path: 'lib/release', params: { VERSION: '1.2.0' }, reason: 'Cut the 1.2.0 release' });
+  assert.match(left.text, /status: declined/);
+  assert.match(asked[1].detail, /BUMP = \(decided by Jenkins when it starts\)/);
+  assert.equal(asked[1].detail.includes('(empty) (default)') && asked[1].detail.includes('BUMP = (empty)'), false);
+});
+
 test('no, a closed dialog and a timeout all start nothing; a refusal is remembered so it is not asked again', async () => {
   for (const [answer, status] of [['no', 'declined'], ['timeout', 'timed-out'], [undefined, 'declined']]) {
     const { ask, fake } = setup({ confirm: async () => answer });
