@@ -1511,3 +1511,15 @@ test('through the service: stopping stops the clocks', { skip }, () => {
   assert.equal(service.launch.timer, null);
   assert.equal(service.launch.stopped, true);
 });
+
+test('an override is not started from what was typed in it last time, but that is still offered', async () => {
+  const w = world();
+  w.add('deploy-prod', { params: [def('VERSION', { default: 'latest' }), def('VERSION_OVERRIDE')], builds: [] });
+  const { launch, call } = setup(w);
+  launch.record('s1', 'deploy-prod', { VERSION: 'latest', VERSION_OVERRIDE: '2.2.0.318' }, { queued: 1 }, { defs: w.jobs.get('deploy-prod').params });
+  const plan = await call('paramPlan', { path: 'deploy-prod' });
+  const of = (name) => plan.params.find((p) => p.name === name);
+  assert.deepEqual([of('VERSION').suggested, of('VERSION').source], ['latest', 'last run by me']);
+  assert.equal(of('VERSION_OVERRIDE').suggested, null, 'so a redeploy does not pin an old version without being asked');
+  assert.deepEqual(of('VERSION_OVERRIDE').others.map((o) => o.value), ['2.2.0.318']);
+});

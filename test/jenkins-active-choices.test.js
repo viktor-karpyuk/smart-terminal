@@ -167,3 +167,16 @@ test('an answer that is not what the plugin sends is an error for that parameter
   assert.equal(choiceOf('a:selected:disabled').value, 'a');
   assert.deepEqual(choiceOf('b'), { value: 'b', selected: false });
 });
+
+test('a plain Active Choices list (ChoiceParameter) is read from the form, with the labels and the first option chosen', () => {
+  // As a real Jenkins writes it: no data holder, the select already filled, a description that has a ">" in it.
+  const html = '<div name="parameter" description="newest first -> latest" id="choice-parameter-6679895081450235" class="active-choice"><input name="name" type="hidden" value="VERSION"><div class="jenkins-select ac-ignore"><select name="value" class="jenkins-select__input"><option value="latest">latest</option><option value="2.2.0.335 (latest)">2.2.0.335 (latest)</option><option value="2.2.0.334">2.2.0.334</option></select></div></div><div class="validation-error-area"></div>'
+    + '<div name="parameter"><input name="name" type="hidden" value="VERSION_OVERRIDE"><input name="value" type="text"></div>';
+  const found = parseForm(html);
+  assert.equal(found.length, 1);
+  assert.equal(found[0].name, 'VERSION');
+  assert.equal(found[0].kind, 'choice');
+  assert.deepEqual(found[0].refs, []);
+  assert.deepEqual(found[0].initial.choices, ['latest', '2.2.0.335 (latest)', '2.2.0.334']);
+  assert.equal(found[0].initial.selected, null);
+});
