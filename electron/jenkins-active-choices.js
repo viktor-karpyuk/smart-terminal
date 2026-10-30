@@ -194,6 +194,8 @@ function optionsIn(html) {
   const choices = [];
   const labels = {};
   let selected = null;
+  const ticked = [];
+  let multiple = /<select\b[^>]*\bmultiple\b/i.test(html);
   const add = (value, label, on) => {
     const v = decode(value);
     if (choices.length >= 500 || choices.includes(v)) return;
@@ -201,6 +203,7 @@ function optionsIn(html) {
     const text = decode(label).replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
     if (text && text !== v) labels[clip(v, 200)] = clip(text, 200);
     if (on && selected === null) selected = clip(v, 200);
+    if (on) ticked.push(clip(v, 200));
   };
   const optionRe = /<option\b([^>]*)>([\s\S]*?)(?:<\/option>|(?=<option\b)|(?=<\/select>))/gi;
   let m;
@@ -212,10 +215,14 @@ function optionsIn(html) {
     const radio = /<input\b([^>]*)>/gi;
     while ((m = radio.exec(html))) {
       const attrs = attributesOf(m[1]);
-      if ((attrs.type === 'radio' || attrs.type === 'checkbox') && attrs.value !== undefined) add(attrs.value, attrs.value, 'checked' in attrs);
+      if ((attrs.type === 'radio' || attrs.type === 'checkbox') && attrs.value !== undefined) {
+        if (attrs.type === 'checkbox') multiple = true;
+        add(attrs.value, attrs.value, 'checked' in attrs);
+      }
     }
   }
-  return choices.length ? { choices, selected, labels } : null;
+  // A list that allows several is answered with the ticked ones, comma-separated, as the plugin's own form sends them.
+  return choices.length ? { choices, selected: multiple && ticked.length ? ticked.join(',') : selected, labels, ...(multiple ? { multiple: true } : {}) } : null;
 }
 
 /** One value as Active Choices says it: `"x"`, or `"x:selected"` for the one that starts chosen. */
@@ -263,7 +270,7 @@ function parseForm(html) {
       const value = input ? attributesOf(input[1]).value ?? '' : '';
       initial = { blocks: value ? [{ type: 'text', runs: [{ t: clip(value, LIMITS.text) }] }] : [] };
     }
-    found.push({ name, kind, refs, id, proxy, uuid, view, initial });
+    found.push({ name, kind, refs, id, proxy, uuid, view, initial, multiple: Boolean(initial?.multiple) });
     if (found.length >= 30) break;
   }
   // A plain `ChoiceParameter` (Single Select) depends on nothing and has no data holder: its list is in the form, already made.
@@ -279,7 +286,7 @@ function parseForm(html) {
     const end = after.search(/<\/select>|validation-error-area/i);
     const initial = optionsIn(end >= 0 ? after.slice(0, end + 9) : after.slice(0, 60_000));
     if (!initial) continue;
-    found.push({ name, kind: 'choice', refs: [], id, proxy: null, uuid: null, view: 'choices', initial });
+    found.push({ name, kind: 'choice', refs: [], id, proxy: null, uuid: null, view: 'choices', initial, multiple: Boolean(initial.multiple) });
   }
   return found;
 }
@@ -358,8 +365,9 @@ class ActiveChoices {
           const labelsRaw = Array.isArray(answer?.[1]) ? answer[1] : [];
           const labels = {};
           parsed.forEach((one, i) => { const label = labelsRaw[i] === undefined ? '' : choiceOf(labelsRaw[i]).value; if (label && label !== one.value) labels[one.value] = label; });
-          out[param.name] = { choices, selected: parsed.find((one) => one.selected)?.value ?? null, labels };
-          if (choices.length) current[param.name] = choices.includes(current[param.name]) ? current[param.name] : (out[param.name].selected ?? choices[0]);
+          const ticked = parsed.filter((one) => one.selected).map((one) => one.value);
+          out[param.name] = { choices, selected: param.multiple ? (ticked.join(',') || null) : (ticked[0] ?? null), labels, ...(param.multiple ? { multiple: true } : {}) };
+          if (choices.length) current[param.name] = (param.multiple ? String(current[param.name] ?? '').split(',').every((one) => choices.includes(one)) : choices.includes(current[param.name])) ? current[param.name] : (out[param.name].selected ?? choices[0]);
         } else if (param.view === 'list') {
           const answer = await this.#call(param, session, crumb, 'getChoicesForUI', []);
           const items = Array.isArray(answer?.[0]) ? answer[0] : [];
