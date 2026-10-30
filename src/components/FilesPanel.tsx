@@ -534,6 +534,39 @@ function ChooseFolder({ panelId }: { panelId: string }) {
   );
 }
 
+/**
+ * Read the folder from the disk again.
+ *
+ * A listing is read when a folder is opened and kept; a file made by something
+ * else — a script, another session, a download — is not in it until it is read
+ * again. This reads the root and every folder that is open, so what is on screen
+ * is what is on the disk, and nothing is collapsed or moved by doing it.
+ */
+function RefreshButton({ panelId, root }: { panelId: string; root: string }) {
+  const loadDir = useStore((s) => s.loadDir);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = async () => {
+    if (busy) return;
+    setBusy(true);
+    const open = asFilePanel(useStore.getState().panels[panelId])?.expanded ?? [];
+    try {
+      await Promise.all([root, ...open].map((dir) => loadDir(dir)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <button className="files-tool" aria-label="Refresh from disk" title="Refresh from disk" disabled={busy} onClick={() => void refresh()}>
+      <svg className={busy ? 'files-refresh is-spinning' : 'files-refresh'} width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M11.6 7a4.6 4.6 0 1 1-1.5-3.4" />
+        <path d="M11.8 1.8v2.6H9.2" />
+      </svg>
+    </button>
+  );
+}
+
 function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string; homedir: string }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
@@ -587,6 +620,7 @@ function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string;
         before it spends it on anything worth reading.
       */}
       <div className="files-head-tools">
+        <RefreshButton panelId={panelId} root={root} />
         <GitButton panelId={panelId} />
         <TerminalButton panelId={panelId} />
         <ExtensionButtons panelId={panelId} />
