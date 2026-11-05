@@ -26,6 +26,8 @@ const PRODUCT = {
   site: 'app',
   devSite: 'dev',
   timeoutMs: 20_000,
+  /** The agent door proposes what needs a person (agent-ms `AppToolGateway`), so this app's dialog is not the only gate. */
+  serverGatesWrites: true,
 };
 
 const apiBase = (input) => baseOf(input, 'your Timelogbook');

@@ -271,7 +271,12 @@
     var o = state.o;
     var h = '<div class="card"><h2>Claude sessions</h2>'
       + '<label class="check"><input type="checkbox" id="claude"' + (o.claude ? ' checked' : '') + (state.busy.claudeAccessSave ? ' disabled' : '') + '> Let Claude sessions use Timelogbook</label>'
-      + '<p class="dim small">Every Claude session in this app gets a <code>timelogbook</code> MCP server with the tools below, running as you. The key stays in this app: it is never written into a session or its config. A tool that changes Timelogbook is shown to you in a dialog before it runs. Sessions started before you switch this on see the tools within half a minute.</p></div>';
+      + '<p class="dim small">Every Claude session in this app gets a <code>timelogbook</code> MCP server with the tools below, running as you. The key stays in this app: it is never written into a session or its config. A tool that changes Timelogbook is shown to you in a dialog before it runs, unless you switch that off below. Sessions started before you switch this on see the tools within half a minute.</p>'
+      + (o.claude
+        ? '<label class="check"><input type="checkbox" id="writes"' + (o.writesWithoutAsking ? ' checked' : '') + (state.busy.writesAccessSave ? ' disabled' : '') + '> Let them make changes without asking me here</label>'
+          + '<p class="dim small">No dialog in this app for Claude sessions. Timelogbook still decides the rest: what it wants confirmed stays a proposal, unless your API key is marked to run without confirmation. Switches off when you disconnect.</p>'
+        : '')
+      + '</div>';
     h += '<div class="card"><h2>What this key reaches</h2><div class="apps">';
     (o.apps || []).forEach(function (a) {
       h += '<div class="app"><span class="dot' + (a.reached ? ' on' : '') + '"></span><b>' + esc(a.name) + '</b>'
@@ -339,6 +344,7 @@
   document.addEventListener('change', function (e) {
     if (e.target.id === 'kind') { state.tasks.kind = e.target.value; loadTasks(); }
     if (e.target.id === 'claude') act('claudeAccessSave', { on: e.target.checked });
+    if (e.target.id === 'writes') act('writesAccessSave', { on: e.target.checked });
   });
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter') return;

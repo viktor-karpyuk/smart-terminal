@@ -475,6 +475,10 @@ test('anything may ask the app to deliver, and nothing may send as somebody else
     assert.equal(host.permissionFor('timelogbook.overview'), 'timelogbook.read');
     assert.equal(host.permissionFor('timelogbook.connect'), 'timelogbook.write');
     assert.equal(host.permissionFor('timelogbook.run'), 'timelogbook.write');
+    assert.equal(host.permissionFor('timelogbook.writesAccessSave'), 'timelogbook.write');
+    assert.equal(host.route('kubrik.writesAccessSave'), null);
+    assert.match(host.needsConsent('timelogbook.writesAccessSave', { on: true }), /without asking/);
+    assert.equal(host.needsConsent('timelogbook.writesAccessSave', { on: false }), null);
     assert.equal(host.permissionFor('timelogbook.ask'), 'terminal');
     // A terminal alone does not read Timelogbook to write a briefing.
     assert.equal(host.permitted({ trusted: false, permissions: ['terminal'] }, 'timelogbook.ask'), false);
