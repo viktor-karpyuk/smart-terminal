@@ -1092,8 +1092,13 @@ declare global {
         /** The system refused to show a notification. */
         onNoticeBlocked(handler: (info: { reason: string }) => void): () => void;
       };
-      /** MCP connections: every verb through one call; no token ever reaches the renderer. */
-      mcp: {
+      /** Timelogbook v4: every verb through one call; the API key never reaches the renderer. */
+      timelogbook: {
+        call(name: string, args?: unknown): Promise<{ ok?: boolean; error?: string; [key: string]: unknown }>;
+        onEvent(handler: (event: { type: string; [key: string]: unknown }) => void): () => void;
+      };
+      /** Kubrik OS: every verb through one call; the API key never reaches the renderer. */
+      kubrik: {
         call(name: string, args?: unknown): Promise<{ ok?: boolean; error?: string; [key: string]: unknown }>;
         onEvent(handler: (event: { type: string; [key: string]: unknown }) => void): () => void;
       };

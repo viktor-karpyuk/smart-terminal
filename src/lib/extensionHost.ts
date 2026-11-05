@@ -303,15 +303,26 @@ const REMOTE_VERBS = new Map<string, Channel>(
 );
 
 /**
- * MCP connections. `save` sends a token to whatever address it is given, so it
+ * Timelogbook. `connect` sends the key to whatever address it is given, so it
  * is a write for the same reason Jenkins' `testServer` is; `run` is a write
  * because a tool may change things — the app asks the person before any tool
- * the server does not mark read-only, whoever asked.
+ * Timelogbook does not mark read-only, whoever asked.
  */
-const MCP_READ = ['list', 'inspect'] as const;
-const MCP_WRITE = ['save', 'remove', 'run', 'claudeSave', 'openLink'] as const;
-const MCP_VERBS = new Map<string, Channel>(
-  [...MCP_READ, ...MCP_WRITE].map((name) => [name, 'mcp'] as [string, Channel]),
+const TIMELOGBOOK_READ = ['overview', 'brief', 'claudeAccess'] as const;
+const TIMELOGBOOK_WRITE = ['connect', 'disconnect', 'run', 'claudeAccessSave', 'openInBrowser', 'openLink'] as const;
+/** A Claude session handed a task. */
+const TIMELOGBOOK_APP = ['ask'] as const;
+const TIMELOGBOOK_VERBS = new Map<string, Channel>([
+  ...TIMELOGBOOK_READ.map((name) => [name, 'timelogbook'] as [string, Channel]),
+  ...TIMELOGBOOK_WRITE.map((name) => [name, 'timelogbook'] as [string, Channel]),
+  ...TIMELOGBOOK_APP.map((name) => [name, 'app'] as [string, Channel]),
+]);
+
+/** Kubrik OS: the same door as Timelogbook, to the ERP's MCP gateway. */
+const KUBRIK_READ = ['overview', 'claudeAccess'] as const;
+const KUBRIK_WRITE = ['connect', 'disconnect', 'run', 'claudeAccessSave', 'openInBrowser', 'openLink'] as const;
+const KUBRIK_VERBS = new Map<string, Channel>(
+  [...KUBRIK_READ, ...KUBRIK_WRITE].map((name) => [name, 'kubrik'] as [string, Channel]),
 );
 
 const JENKINS_VERBS = new Map<string, Channel>([
@@ -334,7 +345,7 @@ const KUBE_VERBS = new Map<string, Channel>([
   ...KUBE_APP.map((name) => [name, 'app'] as [string, Channel]),
 ]);
 
-export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review' | 'teams' | 'jenkins' | 'remote' | 'mcp';
+export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review' | 'teams' | 'jenkins' | 'remote' | 'timelogbook' | 'kubrik';
 
 /**
  * Which door a call goes through, or none.
@@ -355,7 +366,8 @@ export function route(name: string): Channel | null {
   if (name.startsWith('teams.')) return TEAMS_VERBS.get(name.slice(6)) ?? null;
   if (name.startsWith('jenkins.')) return JENKINS_VERBS.get(name.slice(8)) ?? null;
   if (name.startsWith('remote.')) return REMOTE_VERBS.get(name.slice(7)) ?? null;
-  if (name.startsWith('mcp.')) return MCP_VERBS.get(name.slice(4)) ?? null;
+  if (name.startsWith('timelogbook.')) return TIMELOGBOOK_VERBS.get(name.slice(12)) ?? null;
+  if (name.startsWith('kubrik.')) return KUBRIK_VERBS.get(name.slice(7)) ?? null;
   return null;
 }
 
@@ -378,8 +390,10 @@ export const PERMISSIONS: Record<string, string> = {
   deliver: 'Send messages to people in Teams, in its own name',
   'jenkins.read': 'Read your Jenkins servers: jobs, builds, logs, queue and agents',
   'jenkins.write': 'Change what Jenkins does: run and stop builds, and the servers this app knows',
-  'mcp.read': 'See your MCP connections and the tools each one offers',
-  'mcp.write': 'Add, change and remove MCP connections, and run their tools (any that may change something asks you first)',
+  'timelogbook.read': 'Read Timelogbook as you: your tasks, hours and projects, through the API key you gave this app',
+  'timelogbook.write': 'Change the Timelogbook connection, and run tools that change things in Timelogbook (each one asks you first)',
+  'kubrik.read': 'Read Kubrik OS as you: the ERP modules your API key reaches',
+  'kubrik.write': 'Change the Kubrik OS connection, and run tools that change things in Kubrik OS (each one asks you first)',
   terminal: 'Open terminals and Claude sessions about what it shows',
 };
 
@@ -401,7 +415,8 @@ export function permissionFor(name: string): string | null {
   if (channel === 'kube-stream') return KUBE_READ_STREAMS.has(name.slice(5)) ? 'kube.read' : 'kube.write';
   if (channel === 'helm') return (HELM_READ as readonly string[]).includes(name.slice(5)) ? 'helm.read' : 'helm.write';
   if (channel === 'jenkins') return (JENKINS_READ as readonly string[]).includes(name.slice(8)) ? 'jenkins.read' : 'jenkins.write';
-  if (channel === 'mcp') return (MCP_READ as readonly string[]).includes(name.slice(4)) ? 'mcp.read' : 'mcp.write';
+  if (channel === 'timelogbook') return (TIMELOGBOOK_READ as readonly string[]).includes(name.slice(12)) ? 'timelogbook.read' : 'timelogbook.write';
+  if (channel === 'kubrik') return (KUBRIK_READ as readonly string[]).includes(name.slice(7)) ? 'kubrik.read' : 'kubrik.write';
   // Opening a port on this computer is nothing an installed extension gets to ask for.
   if (channel === 'remote') return null;
   return channel;
@@ -443,7 +458,7 @@ export function permitted(view: { trusted?: boolean; permissions?: string[] }, n
  * briefing, which an extension with no word about Jenkins must not be able to
  * do by asking for a terminal.
  */
-const ALSO_NEEDS: Record<string, string[]> = { 'jenkins.ask': ['jenkins.read'] };
+const ALSO_NEEDS: Record<string, string[]> = { 'jenkins.ask': ['jenkins.read'], 'timelogbook.ask': ['timelogbook.read'] };
 
 export function allowed(name: string): boolean {
   return route(name) !== null;
@@ -642,11 +657,17 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
    * learn to click through.
    */
   if (name.startsWith('jenkins.')) return jenkinsConsent(name, args);
-  if (name === 'mcp.claudeSave' && args.on) {
-    return `Let Claude sessions use ${shown(args.name ?? 'this connection', 40)}?\n\nEvery Claude session started from now on gets its tools, running with its token. Anything that may change something is shown to you first.`;
+  if (name === 'timelogbook.claudeAccessSave' && args.on) {
+    return 'Let Claude sessions use Timelogbook?\n\nEvery Claude session in this app can then read what your API key reaches, as you. Anything that would change Timelogbook is shown to you first.';
   }
-  if (name === 'mcp.remove') {
-    return `Remove the connection ${shown(args.name ?? '', 40)}?\n\nIts token is removed from this app. It keeps working wherever it was made until you revoke it there.`;
+  if (name === 'timelogbook.disconnect') {
+    return 'Disconnect Timelogbook?\n\nThe API key is removed from this app. It keeps working in Timelogbook until you revoke it there.';
+  }
+  if (name === 'kubrik.claudeAccessSave' && args.on) {
+    return 'Let Claude sessions use Kubrik OS?\n\nEvery Claude session in this app can then read what your API key reaches, as you. Anything that would change Kubrik OS is shown to you first.';
+  }
+  if (name === 'kubrik.disconnect') {
+    return 'Disconnect Kubrik OS?\n\nThe API key is removed from this app. It keeps working in Kubrik OS until you revoke it there.';
   }
 
   if (name.startsWith('kube.')) {

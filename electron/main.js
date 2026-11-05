@@ -80,7 +80,8 @@ const { ReviewService } = require('./review-service');
 const { TeamsService } = require('./teams-service');
 const { JenkinsService } = require('./jenkins-service');
 const { JenkinsMcp } = require('./jenkins-mcp');
-const { McpConnections } = require('./mcp-connections');
+const { TimelogbookService } = require('./timelogbook-service');
+const { KubrikService } = require('./kubrik-service');
 const { ForgeMcp } = require('./forge-mcp');
 const { SessionSecrets } = require('./session-secrets');
 const { ensurePrivateDir } = require('./socket-guard');
@@ -256,10 +257,10 @@ let jenkinsService = null;
 /** What Claude sessions may ask of it: read-only, and a dialog for anything that starts a build. */
 let jenkinsMcp = null;
 let forgeMcp = null;
-/** MCP servers the person added by hand: addresses, tokens, and the verbs their panel and Claude sessions may call. */
-let mcpConnections = null;
-/** Writes the MCP config sessions start with; set once messaging starts, called again whenever the connections change. */
-let writeMcpConfig = () => {};
+/** Timelogbook v4: the address and the API key, and the verbs its panel and Claude sessions may call. */
+let timelogbookService = null;
+/** Kubrik OS (kubrik.io): the same kind of door, to the ERP's MCP gateway. */
+let kubrikService = null;
 /** The native yes-or-no every tool that acts outward goes through; set once messaging starts. */
 let askPerson = null;
 /**
@@ -668,33 +669,43 @@ function createJenkinsService() {
   }
 }
 
-function createMcpConnections() {
+/** What both API-key products are handed: the keychain, the network, the person, and a way to say something changed. */
+function keyProductOptions(channel) {
+  return {
+    db: db.db,
+    secrets: {
+      encrypt: (text) => {
+        if (!safeStorage.isEncryptionAvailable()) throw new Error('This system offers no encrypted storage, so the API key cannot be kept safely.');
+        return safeStorage.encryptString(text).toString('base64');
+      },
+      decrypt: (cipher) => safeStorage.decryptString(Buffer.from(cipher, 'base64')),
+    },
+    fetch: (url, init) => net.fetch(url, init),
+    confirm: (question) => (askPerson ? askPerson(question) : Promise.resolve('unavailable')),
+    openExternal: (url) => {
+      if (/^https?:\/\//i.test(String(url))) return shell.openExternal(String(url));
+      throw new Error('Only web addresses can be opened.');
+    },
+    language: () => (String(app.getLocale() || '').toLowerCase().startsWith('es') ? 'es' : 'en'),
+    emit: (event) => send(`${channel}:event`, event),
+    log: (line) => console.log(line),
+  };
+}
+
+function createKubrikService() {
   try {
-    return new McpConnections({
-      db: db.db,
-      secrets: {
-        encrypt: (text) => {
-          // A token stored in the clear is worse than a token not stored: refuse, and say why.
-          if (!safeStorage.isEncryptionAvailable()) throw new Error('This system offers no encrypted storage, so the token cannot be kept safely.');
-          return safeStorage.encryptString(text).toString('base64');
-        },
-        decrypt: (cipher) => safeStorage.decryptString(Buffer.from(cipher, 'base64')),
-      },
-      fetch: (url, init) => net.fetch(url, init),
-      confirm: (question) => (askPerson ? askPerson(question) : Promise.resolve('unavailable')),
-      openExternal: (url) => {
-        if (/^https?:\/\//i.test(String(url))) return shell.openExternal(String(url));
-        throw new Error('Only web addresses can be opened.');
-      },
-      language: () => (String(app.getLocale() || '').toLowerCase().startsWith('es') ? 'es' : 'en'),
-      version: app.getVersion(),
-      emit: (event) => send('mcp:event', event),
-      // Which servers a new session is given changed: the config it starts with has to say so.
-      changed: () => writeMcpConfig(),
-      log: (line) => console.log(line),
-    });
+    return new KubrikService(keyProductOptions('kubrik'));
   } catch (error) {
-    console.error('[mcp] could not start:', error);
+    console.error('[kubrik] could not start:', error);
+    return null;
+  }
+}
+
+function createTimelogbookService() {
+  try {
+    return new TimelogbookService(keyProductOptions('timelogbook'));
+  } catch (error) {
+    console.error('[timelogbook] could not start:', error);
     return null;
   }
 }
@@ -2621,10 +2632,16 @@ function registerIpc() {
     return jenkinsService.call(String(name ?? ''), args ?? {});
   });
 
-  /** MCP connections: the same single door. No token ever crosses it. */
-  ipcMain.handle('mcp:call', async (_e, { name, args } = {}) => {
-    if (!mcpConnections) return { ok: false, error: 'MCP connections are not running.' };
-    return mcpConnections.call(String(name ?? ''), args ?? {});
+  /** Timelogbook: the same single door. The key never crosses it. */
+  ipcMain.handle('timelogbook:call', async (_e, { name, args } = {}) => {
+    if (!timelogbookService) return { ok: false, error: 'Timelogbook is not running.' };
+    return timelogbookService.call(String(name ?? ''), args ?? {});
+  });
+
+  /** Kubrik OS: the same single door. The key never crosses it. */
+  ipcMain.handle('kubrik:call', async (_e, { name, args } = {}) => {
+    if (!kubrikService) return { ok: false, error: 'Kubrik OS is not running.' };
+    return kubrikService.call(String(name ?? ''), args ?? {});
   });
 
   ipcMain.handle('review:call', async (_e, { name, args } = {}) => {
@@ -3027,7 +3044,8 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   // Builds that finish while no panel is open are noticed here, on a clock of its own.
   jenkinsService = createJenkinsService();
   jenkinsService?.start();
-  mcpConnections = createMcpConnections();
+  timelogbookService = createTimelogbookService();
+  kubrikService = createKubrikService();
   reviewService = createReviewService();
   if (teamsService && reviewService) {
     teamsBot = new TeamsBot({
@@ -3324,70 +3342,61 @@ function startMessaging() {
   const jenkinsScript = path.join(__dirname, 'jenkins-mcp-stdio.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
   // Pull requests on Bitbucket and GitHub, through the reviewer's repositories: a relay answered by `forgeMcp` below.
   const forgeScript = path.join(__dirname, 'forge-mcp-stdio.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
-  // The person's own MCP connections, one relay each, told which by SMART_TERMINAL_MCP_CONNECTION.
-  const mcpRelayScript = path.join(__dirname, 'mcp-relay-stdio.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
-  const configPath = mcpConfigPath;
+  // Timelogbook and Kubrik OS, through the keys the app holds: one relay, told which by SMART_TERMINAL_RELAY.
+  const keyRelayScript = path.join(__dirname, 'key-mcp-stdio.js').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
 
-  /*
-   * The app's own servers never change; the person's connections do. The file
-   * is written again whenever they do, so a session started afterwards is given
-   * them. One that is already running keeps what it started with: the CLI reads
-   * its MCP config once.
-   */
-  writeMcpConfig = () => {
-    const theirs = {};
-    // A token never goes here: the relay asks the app, which holds it.
-    for (const c of mcpConnections?.forSessions() ?? []) {
-      theirs[c.name] = {
-        command: process.execPath,
-        args: [mcpRelayScript],
-        env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath, SMART_TERMINAL_MCP_CONNECTION: c.id, SMART_TERMINAL_MCP_NAME: c.name },
-      };
-    }
-    try {
-      fs.writeFileSync(
-        configPath,
-        `${JSON.stringify(
-          {
-            mcpServers: {
-              ...theirs,
-              'smart-terminal': {
-                command: process.execPath,
-                args: [script],
-                // Electron's own binary is the only node this app is sure to have.
-                env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
-              },
-              // A session knows itself by the id in its environment, which this server inherits.
-              'code-review': {
-                command: process.execPath,
-                args: [busScript],
-                env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
-              },
-              // Offers no tools until a Jenkins is connected; what it may do is decided in `JenkinsMcp`, never here.
-              jenkins: {
-                command: process.execPath,
-                args: [jenkinsScript],
-                env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
-              },
-              // Offers no tools until the Code Reviewer knows a repository; a PR is only opened after a dialog.
-              bitbucket: {
-                command: process.execPath,
-                args: [forgeScript],
-                env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
-              },
+  try {
+    fs.writeFileSync(
+      mcpConfigPath,
+      `${JSON.stringify(
+        {
+          mcpServers: {
+            'smart-terminal': {
+              command: process.execPath,
+              args: [script],
+              // Electron's own binary is the only node this app is sure to have.
+              env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
+            },
+            // A session knows itself by the id in its environment, which this server inherits.
+            'code-review': {
+              command: process.execPath,
+              args: [busScript],
+              env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
+            },
+            // Offers no tools until a Jenkins is connected; what it may do is decided in `JenkinsMcp`, never here.
+            jenkins: {
+              command: process.execPath,
+              args: [jenkinsScript],
+              env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
+            },
+            // Offers no tools until the Code Reviewer knows a repository; a PR is only opened after a dialog.
+            bitbucket: {
+              command: process.execPath,
+              args: [forgeScript],
+              env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath },
+            },
+            // Offers no tools until Timelogbook is connected and the person lets sessions use it; the key stays in the app.
+            timelogbook: {
+              command: process.execPath,
+              args: [keyRelayScript],
+              env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath, SMART_TERMINAL_RELAY: 'timelogbook' },
+            },
+            // Kubrik OS, the same way: no tools until it is connected and the person lets sessions use it.
+            kubrik: {
+              command: process.execPath,
+              args: [keyRelayScript],
+              env: { ELECTRON_RUN_AS_NODE: '1', SMART_TERMINAL_BRIDGE: socketPath, SMART_TERMINAL_RELAY: 'kubrik' },
             },
           },
-          null,
-          2,
-        )}\n`,
-      );
-      return true;
-    } catch (error) {
-      console.log(`[messages] could not write the MCP config: ${error.message}`);
-      return false;
-    }
-  };
-  if (!writeMcpConfig()) mcpConfigPath = null;
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  } catch (error) {
+    console.log(`[messages] could not write the MCP config: ${error.message}`);
+    mcpConfigPath = null;
+  }
 
   /*
    * What a session may ask of Jenkins. It can ask to run a job; a native
@@ -3463,7 +3472,8 @@ function startMessaging() {
     onBus: (request) => (reviewService ? reviewService.bus.handle(request, liveRoster()) : { ok: false, error: 'The Code Reviewer is not running.' }),
     onJenkins: (request) => jenkinsMcp.handle(request),
     onForge: (request) => forgeMcp.handle(request),
-    onMcp: (request) => (mcpConnections ? mcpConnections.handleSession(request) : { ok: false, error: 'MCP connections are not running.' }),
+    onTimelogbook: (request) => (timelogbookService ? timelogbookService.handleSession(request) : { ok: false, error: 'Timelogbook is not running.' }),
+    onKubrik: (request) => (kubrikService ? kubrikService.handleSession(request) : { ok: false, error: 'Kubrik OS is not running.' }),
     verifySession: (id, secret) => sessionSecrets.verify(id, secret),
     // Sessions the app knows but is not running. Without this, a message to a
     // session that has ended comes back as "no such session", which is false and

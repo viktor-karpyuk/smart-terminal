@@ -1,0 +1,22 @@
+{
+  "id": "kubrik",
+  "name": "Kubrik OS",
+  "version": "0.1.0",
+  "author": "Smart Terminal",
+  "summary": "Kubrik OS (kubrik.io) through its MCP gateway: run the ERP's tools from a panel, and give every Claude session the modules your API key reaches.",
+  "description": "Kubrik OS serves an MCP server for each module of the ERP — accounting, orders, warehouse, CRM, credit, purchasing, people, projects, documents, dashboards and core — at mcp.kubrik.io, and a personal API key you make in Kubrik OS (Profile → API keys) decides which modules you reach and at what level. Paste the key once: the app asks every module what the key reaches and lists its tools, each one runnable from a form built from its own schema, with the answer shown as a tree. Every module's own agent is there too, as <module> ask agent. Switch on Claude access and every Claude session in this app gets a kubrik MCP server with those same tools, running as you. The key is kept by the app, encrypted by your system's keychain; this panel never holds it and it is never written into a session's config. Any tool Kubrik OS does not mark as read-only is shown to you in a dialog before it runs, whoever asked; below the Autonomous level Kubrik OS makes a write a proposal, and the panel opens it in Kubrik OS for you to confirm.",
+  "contributes": {
+    "panels": [
+      {
+        "id": "kubrik",
+        "title": "Kubrik OS",
+        "summary": "The ERP's MCP tools, for you and for Claude.",
+        "needs": null,
+        "launcher": true,
+        "icon": "kubrik",
+        "listens": ["kubrik"],
+        "render": "panel.html"
+      }
+    ]
+  }
+}

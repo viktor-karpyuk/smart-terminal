@@ -468,16 +468,31 @@ test('anything may ask the app to deliver, and nothing may send as somebody else
     for (const permission of Object.values(got)) assert.ok(permission in PERMISSIONS, permission);
   });
 
-  test('MCP connections: seeing them is its own permission; saving, running and opening a link are not', () => {
-    assert.equal(host.route('mcp.list'), 'mcp');
-    assert.equal(host.route('mcp.nonsense'), null);
-    assert.equal(host.permissionFor('mcp.list'), 'mcp.read');
-    assert.equal(host.permissionFor('mcp.inspect'), 'mcp.read');
-    for (const verb of ['save', 'remove', 'run', 'claudeSave', 'openLink']) assert.equal(host.permissionFor(`mcp.${verb}`), 'mcp.write', verb);
-    assert.equal(host.permitted({ trusted: false, permissions: ['mcp.read'] }, 'mcp.run'), false);
-    assert.ok(host.needsConsent('mcp.remove', { name: 'kubrik' }));
-    assert.ok(host.needsConsent('mcp.claudeSave', { on: true, name: 'kubrik' }));
-    assert.equal(host.needsConsent('mcp.claudeSave', { on: false }), null);
+  test('Timelogbook: reading is its own permission; connecting, running a tool and asking Claude are not', () => {
+    assert.equal(host.route('timelogbook.overview'), 'timelogbook');
+    assert.equal(host.route('timelogbook.ask'), 'app');
+    assert.equal(host.route('timelogbook.nonsense'), null);
+    assert.equal(host.permissionFor('timelogbook.overview'), 'timelogbook.read');
+    assert.equal(host.permissionFor('timelogbook.connect'), 'timelogbook.write');
+    assert.equal(host.permissionFor('timelogbook.run'), 'timelogbook.write');
+    assert.equal(host.permissionFor('timelogbook.ask'), 'terminal');
+    // A terminal alone does not read Timelogbook to write a briefing.
+    assert.equal(host.permitted({ trusted: false, permissions: ['terminal'] }, 'timelogbook.ask'), false);
+    assert.equal(host.permitted({ trusted: false, permissions: ['terminal', 'timelogbook.read'] }, 'timelogbook.ask'), true);
+    assert.equal(host.permitted({ trusted: false, permissions: ['timelogbook.read'] }, 'timelogbook.run'), false);
+    assert.ok(host.needsConsent('timelogbook.disconnect', {}));
+    assert.ok(host.needsConsent('timelogbook.claudeAccessSave', { on: true }));
+    assert.equal(host.needsConsent('timelogbook.claudeAccessSave', { on: false }), null);
+  });
+
+  test('Kubrik OS: reading is its own permission; connecting, running a tool and opening a link are not', () => {
+    assert.equal(host.route('kubrik.overview'), 'kubrik');
+    assert.equal(host.route('kubrik.nonsense'), null);
+    assert.equal(host.permissionFor('kubrik.overview'), 'kubrik.read');
+    for (const verb of ['connect', 'disconnect', 'run', 'claudeAccessSave', 'openInBrowser', 'openLink']) assert.equal(host.permissionFor(`kubrik.${verb}`), 'kubrik.write', verb);
+    assert.equal(host.permitted({ trusted: false, permissions: ['kubrik.read'] }, 'kubrik.run'), false);
+    assert.ok(host.needsConsent('kubrik.disconnect', {}));
+    assert.ok(host.needsConsent('kubrik.claudeAccessSave', { on: true }));
   });
 
   test('a downloaded panel may do what it asked for and nothing else; a shipped one anything', () => {

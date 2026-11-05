@@ -312,10 +312,16 @@ contextBridge.exposeInMainWorld('api', {
     onNoticeBlocked: (handler) => on('jenkins:notice-blocked', handler),
   },
 
-  /** MCP connections the person added: one door, and one event for "something changed, read it again". */
-  mcp: {
-    call: (name, args) => ipcRenderer.invoke('mcp:call', { name, args }),
-    onEvent: (handler) => on('mcp:event', handler),
+  /** Timelogbook v4: one door, and one event for "the connection changed, read it again". */
+  timelogbook: {
+    call: (name, args) => ipcRenderer.invoke('timelogbook:call', { name, args }),
+    onEvent: (handler) => on('timelogbook:event', handler),
+  },
+
+  /** Kubrik OS: the same, for the ERP's MCP gateway. */
+  kubrik: {
+    call: (name, args) => ipcRenderer.invoke('kubrik:call', { name, args }),
+    onEvent: (handler) => on('kubrik:event', handler),
   },
 
   /** Maven and Gradle: read by the main process, run by a terminal. */

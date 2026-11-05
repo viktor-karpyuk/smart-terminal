@@ -1,17 +1,16 @@
 'use strict';
 
 /**
- * One of the person's MCP connections, as an MCP server a Claude session
- * starts. Which connection is `SMART_TERMINAL_MCP_CONNECTION` in its
- * environment, set by the app's MCP config; the server's name in the session
- * is the name the person gave it.
+ * A product reached with an API key (Timelogbook, Kubrik OS), as an MCP server
+ * a Claude session starts. Which product is `SMART_TERMINAL_RELAY` in its
+ * environment, set by the app's MCP config.
  *
- * A relay, like `jenkins-mcp-stdio.js`. The real server is on the network and
- * wants the connection's token; the token is the app's, encrypted, and never
- * written into a session's config or environment. So the session talks to
- * this, this crosses the app's socket, and the app — `McpConnections` — calls
- * the server and answers. Which tools exist is whatever the connection reaches,
- * and only while the person lets sessions use it.
+ * A relay, like `jenkins-mcp-stdio.js`. The product's own servers are on the
+ * network and want the person's API key; the key is the app's, encrypted, and
+ * never written into a session's config or environment. So the session talks
+ * to this, this crosses the app's socket, and the app — a `KeyMcpService` —
+ * calls the product with the key and answers. Which tools exist is whatever the
+ * key reaches, and only while the person lets sessions use it.
  *
  * **stdout is the protocol**: a stray `console.log` here takes the tools away.
  */
@@ -19,12 +18,24 @@
 const net = require('node:net');
 const readline = require('node:readline');
 
+/** What a session is told about each product when it starts. */
+const PRODUCTS = {
+  timelogbook: {
+    name: 'Timelogbook',
+    instructions: 'Timelogbook v4: tasks, hours, projects and the rest of the suite, as the person who made the API key sees them. Tool names start with their app (me_, tasks_, projects_…). Read-only tools run at once; anything that changes Timelogbook is shown to the person first.',
+  },
+  kubrik: {
+    name: 'Kubrik OS',
+    instructions: 'Kubrik OS (kubrik.io): the ERP — accounting, orders, warehouse, CRM, purchasing, people, projects, documents — as the person who made the API key sees them. Tool names start with their module (acc_, oms_, crm_…); <module>_ask_agent asks that module\'s own agent. Read-only tools run at once; anything that changes Kubrik OS is shown to the person first, and below the Autonomous tier a write comes back as proposal_pending: nothing changed yet — tell the person to confirm it at confirmUrl in Kubrik OS, and check it with <module>_kos_proposal_status.',
+  },
+};
+
 const BRIDGE = process.env.SMART_TERMINAL_BRIDGE || '';
 const SESSION_ID = process.env.SMART_TERMINAL_SESSION_ID || '';
 const SECRET = process.env.SMART_TERMINAL_SESSION_SECRET || '';
-/** Which connection, and what the person called it. */
-const CONNECTION = process.env.SMART_TERMINAL_MCP_CONNECTION || '';
-const NAME = (process.env.SMART_TERMINAL_MCP_NAME || 'mcp').slice(0, 40);
+/** Which product: the op the app's socket answers it under. */
+const RELAY = PRODUCTS[process.env.SMART_TERMINAL_RELAY] ? process.env.SMART_TERMINAL_RELAY : 'timelogbook';
+const PRODUCT = PRODUCTS[RELAY];
 /** A tool that changes something waits up to two minutes for a person's answer, and an agent's turn may take two and a half more. */
 const TIMEOUT_MS = 5 * 60_000;
 const POLL_MS = Math.max(200, Number(process.env.SMART_TERMINAL_RELAY_POLL_MS) || 30_000);
@@ -35,7 +46,7 @@ const SUPPORTED_PROTOCOLS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
 function ask(tool, args, timeoutMs = TIMEOUT_MS) {
   return new Promise((resolve) => {
     if (!BRIDGE || !SESSION_ID) {
-      resolve({ ok: false, error: `This Claude is not connected to Smart Terminal, so there is no ${NAME} to ask.` });
+      resolve({ ok: false, error: `This Claude is not connected to Smart Terminal, so there is no ${PRODUCT.name} to ask.` });
       return;
     }
     let settled = false;
@@ -53,7 +64,7 @@ function ask(tool, args, timeoutMs = TIMEOUT_MS) {
     };
     const timer = setTimeout(() => done({ ok: false, error: 'Smart Terminal did not answer.' }), timeoutMs);
     timer.unref?.();
-    socket.on('connect', () => socket.write(`${JSON.stringify({ op: 'mcp', connection: CONNECTION, tool, args, from: SESSION_ID, secret: SECRET })}\n`));
+    socket.on('connect', () => socket.write(`${JSON.stringify({ op: RELAY, tool, args, from: SESSION_ID, secret: SECRET })}\n`));
     let buffer = '';
     socket.on('data', (chunk) => {
       buffer += chunk.toString('utf8');
@@ -80,11 +91,7 @@ let polling = null;
 async function available() {
   const reply = await ask('_available', {}, 30_000);
   if (!reply.ok || !Array.isArray(reply.tools)) return { tools: [], message: null };
-  return {
-    tools: reply.tools,
-    message: reply.enabled === false && typeof reply.message === 'string' ? reply.message : null,
-    instructions: typeof reply.instructions === 'string' ? reply.instructions : null,
-  };
+  return { tools: reply.tools, message: reply.enabled === false && typeof reply.message === 'string' ? reply.message : null };
 }
 
 const names = (tools) => tools.map((t) => t.name).join(',');
@@ -126,11 +133,8 @@ async function handle(message) {
       result: {
         protocolVersion: SUPPORTED_PROTOCOLS.has(asked) ? asked : PROTOCOL_VERSION,
         capabilities: { tools: { listChanged: true } },
-        serverInfo: { name: NAME, version: '1.0.0' },
-        instructions: offer.message ?? [
-          `${NAME}: an MCP connection the person added in Smart Terminal. Tools run with that connection's token; read-only tools run at once, anything else is shown to the person first. If an answer says proposal_pending, nothing has changed yet: give the person its confirmUrl.`,
-          offer.instructions,
-        ].filter(Boolean).join('\n\n'),
+        serverInfo: { name: RELAY, version: '1.0.0' },
+        instructions: offer.message ?? PRODUCT.instructions,
       },
     });
   }

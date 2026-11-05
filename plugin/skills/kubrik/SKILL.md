@@ -5,20 +5,16 @@ description: Work with Kubrik OS (kubrik.io), the ERP, from a Smart Terminal ses
 
 # Kubrik OS from a Smart Terminal session
 
-The user connects Kubrik OS in Smart Terminal's **MCP connections** panel,
-with a personal API key they made in Kubrik OS (Profile → API keys). The
-connection has whatever name they gave it — usually `kubrik` — and that is the
-MCP server its tools come from. You never see the key and do not need it: the
-app holds it, makes each call and hands you the answer. Every tool runs **as
-the user**, with their permissions in Kubrik OS and only the modules — and the
-level — their key was made for.
+Smart Terminal is connected to Kubrik OS through a personal API key the user
+made there. You reach it with the `kubrik` MCP tools. You never see the key and
+do not need it: the app holds it, makes each call and hands you the answer.
+Every tool runs **as the user**, with their permissions in Kubrik OS and only
+the modules — and the level — their key was made for.
 
-If no Kubrik tools (`acc_…`, `crm_…`) are listed, either it is not connected,
-the user has not let Claude sessions use it, or this session started before
-they did. Say so and point at the MCP connections panel: add a connection with
-the address `https://mcp.kubrik.io`, the key, and the modules they work in
-(`acc, crm, oms…`), tick "Let Claude sessions use it", and start a new
-session. Do not reach for `curl` or guess at addresses.
+If no `kubrik` tools are listed, either Kubrik OS is not connected or the user
+has not let Claude sessions use it. Say so and point at the Kubrik OS panel
+(Settings → "Let Claude sessions use Kubrik OS"). Do not reach for `curl` or
+guess at addresses.
 
 ## The tools
 
@@ -57,8 +53,8 @@ change something does not change it: the answer is `status: proposal_pending`
 with a `proposalId` and a `confirmUrl`.
 
 - Say plainly that **nothing has changed yet**, and give the user the
-  `confirmUrl` to confirm it in Kubrik OS. The MCP connections panel also has
-  an "Open to confirm" button for it.
+  `confirmUrl` to confirm it in Kubrik OS. The Kubrik OS panel also has a
+  "Confirm in Kubrik OS" button for it.
 - Check it afterwards with `<module>_kos_proposal_status`. Never report a
   proposal as done until that says it was executed.
 
