@@ -838,7 +838,7 @@ test('a chat the bot is in is a room like any other, and its own webhook still w
 
   service.store.matchPerson('bitbucket:Inés Núñez', 'ines@kubrik.com');
   assert.equal((await service.send('code-review', 'Code Reviewer', { to: { channel: 'pos devs', mention: tagInes }, title: 'in the chat', key: 'c1' })).ok, true);
-  assert.deepEqual(said, [['19:a', 'in the chat', { address: 'ines@kubrik.com', name: 'Inés Núñez' }]]);
+  assert.deepEqual(said, [['19:a', 'in the chat', [{ address: 'ines@kubrik.com', name: 'Inés Núñez' }]]]);
   assert.equal(calls.length, 0);
 
   service.saveChannel({ name: 'POS devs', webhookUrl: 'https://example.invalid/own' });
@@ -997,4 +997,66 @@ test('another registration is another sign-in; the same one saved again is not',
   service.saveConnection({ tenantId: 't', clientId: 'other' });
   assert.equal(service.connection().person.ready, false);
   assert.equal(service.store.secret('graph.refreshToken'), null);
+});
+
+// ------------------------------------------------------------- several people at once
+
+test('several people separately: a private message to each, answered for each', { skip }, async () => {
+  const { service, calls } = setup();
+  graph(service);
+  const out = await service.compose({ title: 'hola', to: ['b@kubrik.com', 'braian@kubrik.com', 'nobody@kubrik.com', 'B@kubrik.com'] });
+  assert.deepEqual(out.people.map((one) => [one.address, one.ok]), [['b@kubrik.com', true], ['braian@kubrik.com', true], ['nobody@kubrik.com', false]], 'each once, whatever the case');
+  assert.equal(out.person.ok, false, 'one did not go, and that is not hidden');
+  assert.match(out.person.detail, /nobody@kubrik.com: Teams has nobody/);
+  const chats = calls.filter((call) => call.url.endsWith('/v1.0/chats')).map((call) => JSON.parse(call.body));
+  assert.deepEqual(chats.map((chat) => [chat.chatType, chat.members.length]), [['oneOnOne', 2], ['oneOnOne', 2]]);
+});
+
+test('several people together: one group chat with all of them and you, and a retry is the same chat', { skip }, async () => {
+  const { service, calls } = setup({ fail: (url) => url.endsWith('/messages') && calls.filter((call) => call.url.endsWith('/messages')).length === 1 });
+  graph(service);
+  const out = await service.compose({ title: 'hola', to: 'b@kubrik.com, braian@kubrik.com', together: true });
+  assert.equal(out.person.ok, false);
+  const chat = JSON.parse(calls.find((call) => call.url.endsWith('/v1.0/chats')).body);
+  assert.equal(chat.chatType, 'group');
+  const seats = chat.members.map((one) => one['user@odata.bind']);
+  assert.equal(new Set(seats).size, 3, 'you and the two of them');
+  assert.ok(seats.some((seat) => seat.includes('id-of-me@kubrik.com')));
+
+  assert.equal((await service.retry(out.person.id)).ok, true);
+  const again = calls.filter((call) => call.url.endsWith('/v1.0/chats')).at(-1);
+  assert.equal(JSON.parse(again.body).chatType, 'group');
+});
+
+test('one person with "together" is still a direct message, and yourself in a group is refused', { skip }, async () => {
+  const { service, calls } = setup();
+  graph(service);
+  await service.compose({ title: 'hola', to: ['b@kubrik.com'], together: true });
+  assert.equal(JSON.parse(calls.find((call) => call.url.endsWith('/v1.0/chats')).body).chatType, 'oneOnOne');
+  const self = await service.compose({ title: 'hola', to: ['b@kubrik.com', 'me@kubrik.com'], together: true });
+  assert.match(self.person.detail, /cannot be sent to me@kubrik.com/);
+});
+
+test('several people can be tagged in one post', { skip }, async () => {
+  const { service, calls } = setup();
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  const out = await service.compose({ title: 'hola', channel: '', mention: ['b@kubrik.com', 'braian@kubrik.com'] });
+  assert.equal(out.channel.ok, true);
+  const content = bodyOf(calls[0]);
+  assert.deepEqual(content.msteams.entities.map((one) => one.mentioned.id), ['b@kubrik.com', 'braian@kubrik.com']);
+  assert.ok(content.body.some((block) => block.text === '<at>b@kubrik.com</at> <at>braian@kubrik.com</at>'), 'every name in the card, or Teams shows no tag');
+});
+
+test('the reviewer can ask for one chat with several; no other extension can', { skip }, async () => {
+  const { service, calls } = setup();
+  graph(service);
+  service.store.setAppStance('code-review', 'ALLOW');
+  const out = await service.send('code-review', 'Code Reviewer', { to: { email: 'b@kubrik.com' }, group: ['b@kubrik.com', 'braian@kubrik.com'], title: 'x', byHand: true });
+  assert.equal(out.ok, true, JSON.stringify(out));
+  assert.equal(JSON.parse(calls.find((call) => call.url.endsWith('/v1.0/chats')).body).chatType, 'group');
+
+  calls.length = 0;
+  service.store.setAppStance('other', 'ALLOW');
+  await service.send('other', 'Other', { to: { email: 'braian@kubrik.com' }, group: ['b@kubrik.com', 'braian@kubrik.com'], title: 'y', key: 'o1' });
+  assert.equal(JSON.parse(calls.find((call) => call.url.endsWith('/v1.0/chats')).body).chatType, 'oneOnOne', 'a direct message to the one it named');
 });
