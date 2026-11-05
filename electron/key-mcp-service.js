@@ -22,7 +22,10 @@
  * `ask_agent` — is offered as `<app>_<name>`, so every name means one server.
  *
  * A tool the product does not mark read-only is never run on anybody's word but
- * a person's, in a native dialog — whether the panel or a session asked.
+ * a person's, in a native dialog — whether the panel or a session asked. The one
+ * exception is a product whose server decides for itself what needs a person
+ * (`serverGatesWrites`): there the person may switch off the dialog for Claude
+ * sessions, and what the server wants confirmed still comes back as a proposal.
  */
 
 /** What a session is handed of one answer. A page of records is a few kilobytes; more than this is a page too big to read. */
@@ -177,6 +180,11 @@ class KeyMcpService {
     }
   }
 
+  /** Claude sessions run writes without this app's dialog: only where the server is the gate, and only if the person said so. */
+  writesWithoutAsking() {
+    return Boolean(this.product.serverGatesWrites) && this.setting('writes') === 'on';
+  }
+
   claudeOn() {
     return this.setting('claude') === 'on';
   }
@@ -301,13 +309,14 @@ class KeyMcpService {
   /**
    * Run one tool, by the name it is offered under. `who` says who asked, for the
    * dialog: a tool that is not read-only waits for a person to say yes, and
-   * nobody's word but theirs starts it.
+   * nobody's word but theirs starts it — unless `unasked`, which only a session
+   * of a product with `writesWithoutAsking()` on gets.
    */
-  async run(name, args = {}, who = 'This panel') {
+  async run(name, args = {}, who = 'This panel', { unasked = false } = {}) {
     await this.reach();
     const tool = this.tools().find((t) => t.name === name);
     if (!tool) throw new KeyMcpError(`This key cannot use ${String(name).slice(0, 80)}.`);
-    if (!readOnly(tool)) {
+    if (!readOnly(tool) && !unasked) {
       if (!this.confirm) throw new KeyMcpError(`${name} changes something in ${this.name}, and there is nobody here to ask.`);
       const answer = await this.confirm({
         title: this.name,
@@ -335,7 +344,7 @@ class KeyMcpService {
   async overview({ fresh = false } = {}) {
     const conn = this.connection();
     const claude = this.claudeOn();
-    if (!conn) return { ok: true, connected: false, claude };
+    if (!conn) return { ok: true, connected: false, claude, writesWithoutAsking: false };
     const prefix = this.keyPrefix(conn.key);
     const found = conn.keyError ? null : await this.reach({ fresh });
     return {
@@ -345,6 +354,7 @@ class KeyMcpService {
       keyHint: prefix ? `${this.product.keyMark}${prefix}_…` : null,
       keyError: conn.keyError,
       claude,
+      writesWithoutAsking: this.writesWithoutAsking(),
       checkedAt: found?.at ?? null,
       error: conn.keyError ? 'The API key saved here can no longer be read on this computer. Paste it again.' : (found?.error ?? null),
       apps: (found?.apps ?? []).map((a) => ({
@@ -381,7 +391,8 @@ class KeyMcpService {
   }
 
   disconnect() {
-    for (const k of ['base', 'key']) this.setSetting(k, null);
+    // The next key may reach more than this one did: the person says it again for that one.
+    for (const k of ['base', 'key', 'writes']) this.setSetting(k, null);
     this.found = null;
     this.emit({ type: 'changed' });
     return { ok: true, connected: false, claude: this.claudeOn() };
@@ -436,6 +447,11 @@ class KeyMcpService {
           this.setSetting('claude', args.on ? 'on' : 'off');
           this.emit({ type: 'changed' });
           return { ok: true, on: this.claudeOn() };
+        case 'writesAccessSave':
+          if (!this.product.serverGatesWrites) return { ok: false, error: `${this.name} always asks.` };
+          this.setSetting('writes', args.on ? 'on' : 'off');
+          this.emit({ type: 'changed' });
+          return { ok: true, on: this.writesWithoutAsking() };
         case 'openInBrowser': {
           const conn = this.connection();
           if (!conn || !this.openExternal) throw new KeyMcpError(`${this.name} is not connected.`);
@@ -480,7 +496,7 @@ class KeyMcpService {
     recent.push(now);
     this.calls.set(id, recent);
     try {
-      const r = await this.run(String(tool ?? ''), args ?? {}, `The Claude session “${session?.name ?? id}”`);
+      const r = await this.run(String(tool ?? ''), args ?? {}, `The Claude session “${session?.name ?? id}”`, { unasked: this.writesWithoutAsking() });
       this.log(`[${this.product.table}] ${session?.name ?? id} ran ${tool}`);
       return r.isError ? { ok: false, error: cut(r.text, MAX_SESSION_TEXT) } : { ok: true, text: cut(r.text, MAX_SESSION_TEXT) };
     } catch (error) {

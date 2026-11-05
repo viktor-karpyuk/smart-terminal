@@ -170,6 +170,33 @@ test('sessions get nothing until the person lets them, then exactly what the key
   assert.match(r.text, /KBK-12/);
 });
 
+test('a write from a session asks first, unless the person switched that off', { skip }, async () => {
+  const { svc, fake, asked } = service({ answer: 'no' });
+  await svc.call('connect', { url: 'https://tlb.example', key: KEY });
+  await svc.call('claudeAccessSave', { on: true });
+  const session = { id: 's3', name: 'writer' };
+  const moved = () => fake.sent.filter((s) => s.body?.params?.name === 'tasks_move_task').length;
+
+  assert.equal((await svc.handleSession({ tool: 'tasks_move_task', args: {}, session })).ok, false);
+  assert.equal(asked.length, 1);
+  assert.equal(moved(), 0);
+
+  assert.deepEqual(await svc.call('writesAccessSave', { on: true }), { ok: true, on: true });
+  assert.equal((await svc.call('overview')).writesWithoutAsking, true);
+  await svc.handleSession({ tool: 'tasks_move_task', args: {}, session });
+  assert.equal(asked.length, 1, 'no dialog');
+  assert.equal(moved(), 1);
+
+  // The panel's own button still asks: the switch is about sessions.
+  await svc.call('run', { tool: 'tasks_move_task', args: {} });
+  assert.equal(asked.length, 2);
+  assert.equal(moved(), 1);
+
+  // A new key is a new decision.
+  await svc.call('disconnect');
+  assert.equal(svc.writesWithoutAsking(), false);
+});
+
 test('a session is held to a rate', { skip }, async () => {
   const { svc } = service();
   await svc.call('connect', { url: 'https://tlb.example', key: KEY });
