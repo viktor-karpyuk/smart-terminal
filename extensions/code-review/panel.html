@@ -3134,9 +3134,16 @@
     var delivery = (state.overview && state.overview.settings && state.overview.settings.delivery) || {};
     var html = '';
     if (row.reminded && row.reminded.at) html += '<span class="chip" title="Last asked ' + esc(new Date(row.reminded.at).toLocaleString()) + ' (' + esc(row.reminded.how || '') + ')">reminded ' + esc(when(row.reminded.at)) + '</span>';
-    if (waiting && delivery.person && row.pr.state === 'OPEN') {
-      var key = 'remind-row-' + row.repoId + '#' + row.pr.id;
-      html += '<button class="btn small" data-act="remind-row" data-repo="' + esc(row.repoId) + '" data-pr="' + row.pr.id + '" data-author="' + esc(row.pr.author) + '"' + busyAttr(key) + ' title="A direct message to ' + esc(row.pr.author) + ' with every comment still open">' + (state.busy[key] ? 'Reminding…' : 'Remind') + '</button>';
+    if (row.pr.state !== 'OPEN' || row.mine) return html;
+    var at = ' data-repo="' + esc(row.repoId) + '" data-pr="' + row.pr.id + '" data-author="' + esc(row.pr.author) + '"';
+    var open = row.findings && row.findings.unresolved > 0 ? ' with every comment still open' : '';
+    var key = 'remind-row-' + row.repoId + '#' + row.pr.id;
+    if (delivery.person) {
+      html += '<button class="btn small" data-act="remind-row" data-to="person"' + at + busyAttr(key + '-person') + ' title="A direct message to ' + esc(row.pr.author) + open + '">' + (state.busy[key + '-person'] ? 'Telling…' : (waiting ? 'Remind' : 'Tell')) + '</button>';
+    }
+    var room = roomFor(repoOfRow(row));
+    if (delivery.channel && room) {
+      html += '<button class="btn small" data-act="remind-row" data-to="channel"' + at + busyAttr(key + '-channel') + ' title="Posted in ' + esc(room) + open + ', tagging ' + esc(row.pr.author) + ' so Teams tells them">' + (state.busy[key + '-channel'] ? 'Posting…' : 'Channel') + '</button>';
     }
     return html;
   }
@@ -3163,23 +3170,50 @@
       document.body.appendChild(box);
     }
     var ask = state.needAddress;
-    if (!ask) { box.innerHTML = ''; box.hidden = true; return; }
+    if (!ask) { box.innerHTML = ''; box.hidden = true; box.removeAttribute('data-for'); return; }
     box.hidden = false;
+    /*
+     * Left alone once it is up. This lives outside `main`, so nothing puts the
+     * focus back after a redraw — and an age ticking or a review's progress
+     * rebuilt the box under whoever was typing an address into it.
+     */
+    var key = ask.repoId + '#' + ask.prId + ':' + ask.author;
+    if (box.getAttribute('data-for') === key) {
+      var save = box.querySelector('[data-act="address-save"]');
+      if (save) save.disabled = Boolean(state.busy['address-save']);
+      return;
+    }
+    box.setAttribute('data-for', key);
     box.innerHTML = '<div class="ask-address-card"><strong>Who is ' + esc(ask.author) + ' on Teams?</strong>' +
       '<div class="faint">Teams has no address for the name Bitbucket uses. Say it once; it is kept on the Teams panel\'s People page.</div>' +
-      '<input type="email" data-edit="ask-address" placeholder="somebody@yourcompany.com" value="' + esc(edit('ask-address', '')) + '">' +
+      '<input type="text" inputmode="email" autocomplete="off" spellcheck="false" data-edit="ask-address" placeholder="somebody@yourcompany.com" value="' + esc(edit('ask-address', '')) + '">' +
       '<div class="row"><button class="btn small primary" data-act="address-save"' + busyAttr('address-save') + '>Save and send again</button><button class="btn small" data-act="address-cancel">Cancel</button></div></div>';
+  }
+
+  function repoOfRow(row) {
+    return ((state.overview && state.overview.repos) || []).filter(function (one) { return one.id === row.repoId; })[0] || null;
+  }
+
+  /**
+   * Where "the channel" is for this repository: its own, the reviewer's, or the
+   * webhook there always was. With only the last set up the button used to stay
+   * hidden, so a working connection offered no way to post anything.
+   */
+  function roomFor(repo) {
+    var settings = (state.overview && state.overview.settings) || {};
+    var delivery = settings.delivery || {};
+    return (repo && repo.alertChannel) || settings.announceChannel || (delivery.defaultChannel ? 'the default Teams channel' : '');
   }
 
   /** "Tell the author" and "post in the channel", for one finding or — with no id — every open one. */
   function notifyButtons(v, findingId) {
     var delivery = (v.settings && v.settings.delivery) || {};
-    var channel = (v.settings && v.settings.announceChannel) || (v.repo && v.repo.alertChannel) || '';
+    var channel = (v.repo && v.repo.alertChannel) || (v.settings && v.settings.announceChannel) || (delivery.defaultChannel ? 'the default Teams channel' : '');
     var key = 'notify-' + (findingId || 'all');
     var at = findingId ? ' data-finding="' + esc(findingId) + '"' : '';
     var html = '';
     if (delivery.person) html += '<button class="btn small" data-act="notify" data-to="person"' + at + busyAttr(key + '-person') + ' title="A direct message on Teams, from you, asking to resolve ' + (findingId ? 'it' : 'them') + '">Tell ' + esc(shortName(v.pr.author)) + '</button>';
-    if (delivery.channel && channel) html += '<button class="btn small" data-act="notify" data-to="channel"' + at + busyAttr(key + '-channel') + ' title="Posted in ' + esc(channel) + '">Post in the channel</button>';
+    if (delivery.channel && channel) html += '<button class="btn small" data-act="notify" data-to="channel"' + at + busyAttr(key + '-channel') + ' title="Posted in ' + esc(channel) + ', tagging ' + esc(shortName(v.pr.author)) + ' so Teams tells them">Post in the channel</button>';
     return html;
   }
 
@@ -3187,10 +3221,11 @@
   function remindHtml(v) {
     if (v.pr.state !== 'OPEN') return '';
     var open = (v.findings || []).concat(v.earlierFindings || []).filter(function (f) { return f.publishedId && !f.dismissedAt && !findingDone(f); });
-    var buttons = open.length ? notifyButtons(v, null) : '';
+    var buttons = notifyButtons(v, null);
     if (!buttons) return '';
     var last = v.reminded && v.reminded.at ? ' <span class="faint">· reminded ' + esc(when(v.reminded.at)) + '</span>' : '';
-    return '<div class="remind"><span>' + open.length + ' published comment' + (open.length === 1 ? '' : 's') + ' still open' + last + '</span><span class="remind-buttons">' + buttons + '</span></div>';
+    var what = open.length ? open.length + ' published comment' + (open.length === 1 ? '' : 's') + ' still open' : 'No comments open — tell the author anyway';
+    return '<div class="remind"><span>' + what + last + '</span><span class="remind-buttons">' + buttons + '</span></div>';
   }
 
   function recheckButton(f) {
@@ -4416,6 +4451,7 @@
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')) {
       if (event.key === 'Escape') target.blur();
+      if (event.key === 'Enter' && target.getAttribute('data-edit') === 'ask-address') { event.preventDefault(); actions['address-save'](); }
       return;
     }
     if (event.key === '?') { event.preventDefault(); toggleKeys(); return; }
@@ -5081,9 +5117,11 @@
     'remind-row': function (el) {
       var repoId = el.getAttribute('data-repo');
       var prId = Number(el.getAttribute('data-pr'));
-      act('remind-row-' + repoId + '#' + prId, function () { return call('notifyFindings', { repoId: repoId, prId: prId, person: true }); }, function (r) {
-        if (r.person && r.person.ok) say('Reminded.');
-        else if (!askAddress(r.person, repoId, prId, el.getAttribute('data-author') || '', function () { actions['remind-row'](el); })) say('Could not send it: ' + ((r.person && (r.person.detail || r.person.why)) || 'nothing answered'), true);
+      var to = el.getAttribute('data-to') || 'person';
+      act('remind-row-' + repoId + '#' + prId + '-' + to, function () { return call('notifyFindings', { repoId: repoId, prId: prId, channel: to === 'channel', person: to === 'person' }); }, function (r) {
+        var res = r[to];
+        if (res && res.ok) say(to === 'channel' ? 'Posted in the channel.' : 'Told ' + shortName(el.getAttribute('data-author') || 'them') + '.');
+        else if (!askAddress(res, repoId, prId, el.getAttribute('data-author') || '', function () { actions['remind-row'](el); })) say('Could not send it: ' + ((res && (res.detail || res.why)) || 'nothing answered'), true);
         load();
       });
     },

@@ -18,7 +18,7 @@
  */
 
 const brain = require('./teams-bot-brain');
-const { card } = require('./teams-send');
+const { card, tagged } = require('./teams-send');
 const { closed } = require('./review-rules');
 
 const LOGIN = 'https://login.microsoftonline.com';
@@ -101,6 +101,7 @@ class TeamsBot {
       hasSecret: Boolean(c.secret),
       hasQueueKey: Boolean(c.queueSas),
       people: Object.values(this.people()).map((p) => ({ name: p.name ?? null, address: p.address ?? null, since: p.since ?? null })),
+      rooms: Object.entries(this.rooms()).map(([id, room]) => ({ id, name: room.name, kind: room.kind })),
       lastHeard: this.lastHeard || null,
       lastError: this.lastError,
     };
@@ -151,6 +152,89 @@ class TeamsBot {
   /** Whether a private message to this address can go through the bot. */
   canReach(address) {
     return this.ready() && Boolean(this.personByAddress(address));
+  }
+
+  // --- the chats and channels it was added to ------------------------------------
+
+  rooms() {
+    try {
+      return JSON.parse(this.store.setting('bot.rooms', '{}')) ?? {};
+    } catch {
+      return {};
+    }
+  }
+
+  #saveRooms(all) {
+    this.store.setSetting('bot.rooms', JSON.stringify(all));
+    this.changed();
+  }
+
+  /**
+   * A chat or a channel, kept the moment the bot is added to it or spoken to there.
+   *
+   * Being added is the only time it learns how to write there first. A name
+   * somebody gave it here outlasts whatever Teams calls it; a group chat often has
+   * no name at all, so it starts as one that can be told apart and renamed.
+   */
+  rememberRoom(activity, ref) {
+    const all = this.rooms();
+    const channel = activity.conversation.conversationType === 'channel';
+    // A channel's id carries the thread it was spoken in; the room is the channel.
+    const id = String(ref.conversationId).split(';messageid=')[0];
+    const data = activity.channelData ?? {};
+    const told = channel
+      ? [data.team?.name, data.channel?.name].filter(Boolean).join(' / ')
+      : activity.conversation.name;
+    const had = all[id];
+    const name = had?.named ? had.name : (String(told ?? '').trim() || had?.name || `${channel ? 'Channel' : 'Group chat'} ${id.slice(-6)}`);
+    if (had && had.name === name && had.serviceUrl === ref.serviceUrl) return had;
+    all[id] = { ...had, name, kind: channel ? 'channel' : 'chat', serviceUrl: ref.serviceUrl, tenantId: ref.tenantId };
+    this.#saveRooms(all);
+    return all[id];
+  }
+
+  forgetRoom(id) {
+    const all = this.rooms();
+    delete all[id];
+    this.#saveRooms(all);
+    return this.state();
+  }
+
+  renameRoom(id, name) {
+    const clean = String(name ?? '').trim().replace(/^#+/, '').trim().slice(0, 80);
+    if (!clean) throw new Error('A chat needs a name — the one a sender will ask for it by.');
+    const all = this.rooms();
+    if (!all[id]) throw new Error('The bot is not in that chat any more.');
+    if (Object.entries(all).some(([other, room]) => other !== id && room.name.toLowerCase() === clean.toLowerCase())) {
+      throw new Error(`There is already a chat called “${clean}”.`);
+    }
+    all[id] = { ...all[id], name: clean, named: true };
+    this.#saveRooms(all);
+    return this.state();
+  }
+
+  /** A chat or channel by the name a sender asks for it by. */
+  roomNamed(name) {
+    const wanted = String(name ?? '').trim().replace(/^#+/, '').trim().toLowerCase();
+    if (!wanted || !this.ready()) return null;
+    const found = Object.entries(this.rooms()).find(([, room]) => room.name.toLowerCase() === wanted);
+    return found ? { id: found[0], ...found[1] } : null;
+  }
+
+  /** Into a chat or channel, as the bot, somebody tagged if somebody is meant. */
+  async sendToRoom(room, message, tag = null) {
+    await this.post({ conversationId: room.id, serviceUrl: room.serviceUrl }, {
+      type: 'message',
+      attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', content: tagged(this.cardFor(message), tag) }],
+    });
+    if (message.about?.repoId) {
+      const all = this.rooms();
+      if (all[room.id]) {
+        all[room.id].about = { repoId: message.about.repoId, prId: message.about.prId };
+        this.store.setSetting('bot.rooms', JSON.stringify(all));
+      }
+    }
+    return { ok: true, how: 'bot' };
   }
 
   // --- snoozed reminders ---------------------------------------------------------
@@ -344,13 +428,20 @@ class TeamsBot {
         this.remember(aad, { ...ref, address, name: activity.from?.name ?? null });
         this.changed();
       }
+      if (!personal) {
+        const bot = activity.recipient?.id;
+        const removed = activity.action === 'remove' || (activity.membersRemoved ?? []).some((member) => member.id === bot);
+        if (removed) this.forgetRoom(ref.conversationId.split(';messageid=')[0]);
+        else this.rememberRoom(activity, ref);
+      }
       return;
     }
     if (activity.type !== 'message') return;
 
     const address = await this.addressOf(activity);
     const known = personal && aad ? this.remember(aad, { ...ref, address, name: activity.from?.name ?? null }) : null;
-    const command = brain.readCommand(activity, known?.about ?? null);
+    const room = personal ? null : this.rememberRoom(activity, ref);
+    const command = brain.readCommand(activity, known?.about ?? room?.about ?? null);
     if (!command) return;
     const reply = (text, extra) => this.say(ref, text, extra);
 

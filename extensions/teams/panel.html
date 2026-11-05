@@ -206,7 +206,7 @@
       // One chip per way out: both can be on, and each says so for itself.
       var c = state.data.connection;
       html += '<span class="chip ' + (c.channel.ready ? 'okc' : '') + '" title="' + (c.channel.ready ? 'Can post in a channel' : 'No webhook yet') + '"># channel</span>' +
-        '<span class="chip ' + (c.person.ready ? 'okc' : '') + '" title="' + (c.person.ready ? 'Can message somebody directly' : 'No app registration or bot yet') + '">@ person</span>';
+        '<span class="chip ' + (c.person.ready ? 'okc' : '') + '" title="' + (c.person.ready ? 'Can message somebody directly' : 'Not signed in and no bot yet') + '">@ person</span>';
     }
     $('top').innerHTML = html;
   }
@@ -251,12 +251,12 @@
   function drawChannelRoute(c) {
     var html = '<div class="card route' + (c.channel.ready ? ' ready' : '') + '">';
     html += routeHead('#', 'To a channel', c.channel.ready, 'ready', 'not set up');
-    html += '<div class="why">Posted as the app, in a channel where everybody reads it. For what the team should know: a review started, something waiting too long, two migrations with the same number.</div>';
-    html += '<div class="costs"><span><b>Needs</b>an Incoming Webhook URL</span><span><b>Setup</b>two minutes, no administrator</span></div>';
+    html += '<div class="why">Posted where everybody in it reads it, with whoever it is meant for tagged so Teams tells them. For what the team should know: a review started, something waiting too long, comments to resolve.</div>';
+    html += '<div class="costs"><span><b>Needs</b>an Incoming Webhook URL, or the bot added to the chat</span><span><b>Setup</b>two minutes, no administrator</span></div>';
     html += '<label class="field"><span>Default room — its webhook</span>' +
       '<input type="password" data-edit="webhookUrl" placeholder="' + (c.hasWebhook ? '•••••••• kept encrypted; type a new one to replace it' : 'https://…') + '" value="' + esc(edit('webhookUrl', '')) + '"></label>' +
       '<div class="help" style="margin-top:-6px">Where anything goes that names a room not listed below. Kept encrypted and never shown again.</div>';
-    html += '<hr>' + drawRooms();
+    html += '<hr>' + drawRooms() + '<hr>' + drawBotRooms(c.bot);
     html += '<div class="row foot">' +
       '<button class="btn primary" data-act="save-channel-route"' + busyAttr('save-channel-route') + '>Save</button>' +
       '<button class="btn" data-act="test-default-room"' + busyAttr('test-default-room') + (c.hasWebhook ? '' : ' disabled') + '>Send a test</button>' +
@@ -269,28 +269,42 @@
     var html = '<div class="card route' + (c.person.ready ? ' ready' : '') + '">';
     html += routeHead('@', 'To a person', c.person.ready, via, 'not set up');
     html += '<div class="why">A direct message only they see. For what is theirs to act on: a comment waiting on them, a reminder, your own words about their pull request.</div>';
-    html += '<div class="costs"><span><b>Needs</b>app registration + admin consent, or the bot below</span><span><b>Reaches</b>anyone in the tenant</span></div>';
+    html += '<div class="costs"><span><b>Needs</b>you signed in, or the bot below</span><span><b>Reaches</b>anyone in the tenant</span></div>';
     html += '<div class="cols">' +
       '<label class="field"><span>Tenant ID</span><input type="text" class="mono" data-edit="tenantId" value="' + esc(edit('tenantId', c.tenantId)) + '"></label>' +
       '<label class="field"><span>Client ID</span><input type="text" class="mono" data-edit="clientId" value="' + esc(edit('clientId', c.clientId)) + '"></label>' +
       '</div>' +
-      /*
-       * Who the message is from. A one-to-one chat in Teams has two people in
-       * it and an app is not a person, so a direct message is between whoever
-       * is being told and a real account it comes from.
-       */
-      '<label class="field"><span>Sent from</span>' +
-      '<input type="text" data-edit="sender" placeholder="you@yourcompany.com" value="' + esc(edit('sender', c.sender)) + '"></label>' +
-      '<div class="help" style="margin-top:-6px">The account these messages come from. A chat has two people in it, so without one there is nobody at the other end of it.</div>' +
-      '<label class="field"><span>Client secret</span>' +
-      '<input type="password" data-edit="clientSecret" placeholder="' + (c.hasGraph ? '•••••••• kept encrypted; type a new one to replace it' : 'the secret from the app registration') + '" value="' + esc(edit('clientSecret', '')) + '"></label>' +
-      '<div class="help" style="margin-top:-6px">Needs <span class="mono">Chat.ReadWrite</span> granted by an administrator. Kept encrypted; left empty, whatever is stored stays.</div>';
+      '';
+    html += drawSignIn(c);
     html += '<div class="row foot">' +
       '<button class="btn primary" data-act="save-person-route"' + busyAttr('save-person-route') + '>Save</button>' +
       '<input type="text" data-edit="testTo" placeholder="somebody@yourcompany.com" value="' + esc(edit('testTo', '')) + '" style="flex:1;min-width:150px">' +
       '<button class="btn" data-act="test"' + busyAttr('test') + (c.person.ready ? '' : ' disabled') + '>Send a test</button>' +
       '</div><div class="row"><span class="spacer"></span>' + checkState(c.person) + '</div>';
     return html + '</div>';
+  }
+
+  /*
+   * Signing in as yourself.
+   *
+   * A message to somebody comes from you, so it takes you. The code is typed at
+   * Microsoft's page and the answer comes back here as a `teams` event; nothing
+   * typed on this screen is a password.
+   */
+  function drawSignIn(c) {
+    if (c.signedInAs) {
+      return '<div class="row"><span>Signed in as <strong>' + esc(c.signedInAs.name || c.signedInAs.address) + '</strong>' + (c.signedInAs.name ? ' <span class="faint">' + esc(c.signedInAs.address) + '</span>' : '') + '</span><span class="spacer"></span>' +
+        '<button class="btn" data-act="sign-out"' + busyAttr('sign-out') + '>Sign out</button></div>';
+    }
+    if (c.signingIn) {
+      return '<div class="banner"><strong>Type this code at Microsoft’s page</strong>' +
+        '<div class="mono" style="font-size:1.4rem;letter-spacing:.08em;margin:6px 0;user-select:all">' + esc(c.signingIn.code) + '</div>' +
+        '<div class="help">The page should have opened; if not, it is <span class="mono" style="user-select:all">' + esc(c.signingIn.url) + '</span>. This screen changes on its own when you finish.</div>' +
+        '<div class="row" style="margin-top:8px"><button class="btn" data-act="sign-out"' + busyAttr('sign-out') + '>Cancel</button></div></div>';
+    }
+    return (c.signInError ? '<div class="banner bad">' + esc(c.signInError) + '</div>' : '') +
+      '<div class="row"><button class="btn primary" data-act="sign-in"' + busyAttr('sign-in') + (c.clientId ? '' : ' disabled') + '>Sign in to Teams</button></div>' +
+      '<div class="help" style="margin-top:-6px">Messages go from your account. In Entra ID the registration needs the delegated permissions <span class="mono">ChatMessage.Send</span>, <span class="mono">Chat.Create</span> and <span class="mono">User.ReadBasic.All</span>, and “Allow public client flows” turned on.</div>';
   }
 
   /*
@@ -302,7 +316,7 @@
   function drawBot(b) {
     if (!b) return '<div class="card"><strong>The Code Reviewer bot</strong><div class="help">Needs the Code Reviewer running as well.</div></div>';
     var html = '<div class="card"><div class="row" style="margin-bottom:6px"><strong>The Code Reviewer bot</strong><span class="spacer"></span>' + botState(b) + '</div>';
-    html += '<div class="help" style="margin-bottom:10px">Private messages go out as the bot to whoever has the Code Reviewer app in Teams, and they can answer: look again, put the reminder off, mark a comment resolved, or fix it and push. Anybody who does not have the app yet is reached through the app registration under <em>To a person</em>. What you write yourself always goes from your own account.</div>';
+    html += '<div class="help" style="margin-bottom:10px">Private messages go out as the bot to whoever has the Code Reviewer app in Teams, and they can answer: look again, put the reminder off, mark a comment resolved, or fix it and push. Anybody who does not have the app yet is reached through your sign-in under <em>To a person</em>. What you write yourself always goes from your own account.</div>';
     html += '<div class="cols" style="margin-bottom:10px">' +
       '<label class="field"><span>Tenant ID</span><input type="text" class="mono" data-edit="botTenant" value="' + esc(edit('botTenant', b.tenantId)) + '"></label>' +
       '<label class="field"><span>Bot app ID</span><input type="text" class="mono" data-edit="botAppId" value="' + esc(edit('botAppId', b.appId)) + '"></label>' +
@@ -346,6 +360,39 @@
       '<input type="password" data-edit="roomUrl" placeholder="its webhook URL" value="' + esc(edit('roomUrl', '')) + '" style="flex:1;min-width:120px">' +
       '<button class="btn" data-act="save-room"' + busyAttr('save-room') + '>Add</button></div>';
     return html + '</div>';
+  }
+
+  /*
+   * The chats and channels the bot is in.
+   *
+   * A webhook posts into one channel and nobody can answer it. The bot can also
+   * write into a group chat, and what it posts there has buttons that work. It
+   * learns about a chat by being added to it, which happens in Teams, so this
+   * list is only ever what Teams has told it.
+   */
+  function drawBotRooms(b) {
+    var head = '<div><strong>Chats and channels with the bot</strong>';
+    if (!b || !b.ready) return head + '<div class="help">Needs the Code Reviewer bot, below.</div></div>';
+    var rooms = b.rooms || [];
+    var html = head + '<div class="help" style="margin-bottom:8px">Add the Code Reviewer app to a group chat or a team in Teams and it appears here. Senders ask for it by this name, and people can answer it there.</div>';
+    if (!rooms.length) return html + '<div class="faint">It has not been added anywhere yet.</div></div>';
+    html += '<table style="width:100%"><tbody>' + rooms.map(function (room) {
+      var key = 'botroom-' + room.id;
+      return '<tr><td><span class="chip">' + (room.kind === 'channel' ? 'channel' : 'chat') + '</span></td>' +
+        '<td style="width:100%"><input type="text" data-edit="' + esc(key) + '" value="' + esc(edit(key, room.name)) + '" style="width:100%;box-sizing:border-box"></td>' +
+        '<td style="white-space:nowrap;text-align:right"><button class="btn" data-act="rename-bot-room" data-id="' + esc(room.id) + '"' + busyAttr(key) + '>Rename</button> ' +
+        '<button class="btn" data-act="test-room" data-name="' + esc(room.name) + '"' + busyAttr('room-' + room.name) + '>Test</button> ' +
+        '<button class="btn" data-act="forget-bot-room" data-id="' + esc(room.id) + '"' + busyAttr(key) + '>Forget</button></td></tr>';
+    }).join('') + '</tbody></table>';
+    return html + '</div>';
+  }
+
+  /* Every room a message can name, webhook or bot, each once. */
+  function roomNames() {
+    var names = (state.data.channels || []).map(function (room) { return room.name; });
+    var bot = state.data.connection.bot;
+    if (bot && bot.ready) (bot.rooms || []).forEach(function (room) { if (names.indexOf(room.name) < 0) names.push(room.name); });
+    return names;
   }
 
   /* When this way out was last proved, and what it said. */
@@ -545,30 +592,31 @@
    */
   function drawSend() {
     var c = state.data.connection;
-    var rooms = state.data.channels || [];
     var to = state.sendTo;
     var html = '<div class="page">';
     html += '<div><h2>Say something yourself</h2>' +
       '<p class="lead">Post in a channel, write to one person privately, or both with the same words. Sent now, whatever the hours — the limits on the Delivery tab protect people from a machine that will not stop, not from you pressing Send.</p></div>';
 
-    var roomOptions = (c.hasWebhook ? '<option value="">the default room</option>' : '') + rooms.map(function (room) {
-      return '<option value="' + esc(room.name) + '"' + (edit('sendRoom', '') === room.name ? ' selected' : '') + '># ' + esc(room.name) + '</option>';
+    var roomOptions = (c.hasWebhook ? '<option value="">the default room</option>' : '') + roomNames().map(function (name) {
+      return '<option value="' + esc(name) + '"' + (edit('sendRoom', '') === name ? ' selected' : '') + '># ' + esc(name) + '</option>';
     }).join('');
     var addresses = state.data.people.filter(function (one) { return one.address; });
 
+    html += '<datalist id="known-people">' + addresses.map(function (one) { return '<option value="' + esc(one.address) + '">' + esc(one.display || one.handle) + '</option>'; }).join('') + '</datalist>';
     html += '<div class="card" style="display:flex;flex-direction:column;gap:12px">';
     html += '<div class="where">' +
       '<label class="' + (!c.channel.ready ? 'off' : to.channel ? 'on' : '') + '"><span class="row"><input type="checkbox" data-act="send-where" data-where="channel"' + (to.channel ? ' checked' : '') + (c.channel.ready ? '' : ' disabled') + '><strong># In a channel</strong></span>' +
       (c.channel.ready
-        ? '<select data-edit="sendRoom"' + (to.channel ? '' : ' disabled') + '>' + roomOptions + '</select><span class="help" style="margin:0">Everybody in it reads it. Posted as the app.</span>'
-        : '<span class="help" style="margin:0">No webhook yet — set one up on <a href="#" data-act="nav" data-view="connection">Connection</a>.</span>') +
+        ? '<select data-edit="sendRoom"' + (to.channel ? '' : ' disabled') + '>' + roomOptions + '</select>' +
+          '<input type="text" list="known-people" data-edit="sendMention" placeholder="tag somebody: somebody@yourcompany.com" value="' + esc(edit('sendMention', '')) + '"' + (to.channel ? '' : ' disabled') + '>' +
+          '<span class="help" style="margin:0">Everybody in it reads it; whoever is tagged gets told.</span>'
+        : '<span class="help" style="margin:0">No webhook or chat yet — set one up on <a href="#" data-act="nav" data-view="connection">Connection</a>.</span>') +
       '</label>' +
       '<label class="' + (!c.person.ready ? 'off' : to.person ? 'on' : '') + '"><span class="row"><input type="checkbox" data-act="send-where" data-where="person"' + (to.person ? ' checked' : '') + (c.person.ready ? '' : ' disabled') + '><strong>@ To a person</strong></span>' +
       (c.person.ready
         ? '<input type="text" list="known-people" data-edit="sendPerson" placeholder="somebody@yourcompany.com" value="' + esc(edit('sendPerson', '')) + '"' + (to.person ? '' : ' disabled') + '>' +
-          '<datalist id="known-people">' + addresses.map(function (one) { return '<option value="' + esc(one.address) + '">' + esc(one.display || one.handle) + '</option>'; }).join('') + '</datalist>' +
           '<span class="help" style="margin:0">Only they see it. ' + (c.hasGraph ? 'From ' + esc(c.sender) + '.' : 'From the bot.') + '</span>'
-        : '<span class="help" style="margin:0">No app registration or bot yet — set one up on <a href="#" data-act="nav" data-view="connection">Connection</a>.</span>') +
+        : '<span class="help" style="margin:0">Not signed in and no bot yet — set one up on <a href="#" data-act="nav" data-view="connection">Connection</a>.</span>') +
       '</label></div>';
 
     html += '<label class="field"><span>Title</span><input type="text" data-edit="sendTitle" placeholder="kubrik-pos-fe is frozen until 15:00" value="' + esc(edit('sendTitle', '')) + '"></label>';
@@ -616,12 +664,17 @@
     },
     'save-person-route': function () {
       var c = state.data.connection;
-      var connection = { tenantId: edit('tenantId', c.tenantId), clientId: edit('clientId', c.clientId), sender: edit('sender', c.sender), clientSecret: edit('clientSecret', '') };
+      var connection = { tenantId: edit('tenantId', c.tenantId), clientId: edit('clientId', c.clientId) };
       act('save-person-route', function () { return call('saveConnection', { connection: connection }); }, function () {
-        delete state.edits.clientSecret;
         say('Saved.');
         load();
       });
+    },
+    'sign-in': function () {
+      act('sign-in', function () { return call('signIn'); }, load);
+    },
+    'sign-out': function () {
+      act('sign-out', function () { return call('signOut'); }, load);
     },
     'test-default-room': function () {
       act('test-default-room', function () { return call('testChannel', { name: '' }); }, function (result) {
@@ -638,7 +691,8 @@
       var message = {
         title: edit('sendTitle', ''),
         body: edit('sendBody', ''),
-        channel: state.sendTo.channel ? edit('sendRoom', state.data.connection.hasWebhook ? '' : ((state.data.channels || [])[0] || { name: '' }).name) : null,
+        channel: state.sendTo.channel ? edit('sendRoom', state.data.connection.hasWebhook ? '' : (roomNames()[0] || '')) : null,
+        mention: state.sendTo.channel ? edit('sendMention', '') : '',
         to: state.sendTo.person ? edit('sendPerson', '') : '',
       };
       act('compose', function () { return call('compose', { message: message }); }, function (result) {
@@ -679,6 +733,20 @@
         say('Room kept.');
         load();
       });
+    },
+    'rename-bot-room': function (el) {
+      var id = el.getAttribute('data-id');
+      var bot = state.data.connection.bot || {};
+      var room = (bot.rooms || []).filter(function (one) { return one.id === id; })[0] || {};
+      act('botroom-' + id, function () { return call('renameBotRoom', { id: id, name: edit('botroom-' + id, room.name) }); }, function () {
+        delete state.edits['botroom-' + id];
+        say('Renamed.');
+        load();
+      });
+    },
+    'forget-bot-room': function (el) {
+      var id = el.getAttribute('data-id');
+      act('botroom-' + id, function () { return call('forgetBotRoom', { id: id }); }, function () { say('Forgotten.'); load(); });
     },
     'forget-room': function (el) {
       var name = el.getAttribute('data-name');

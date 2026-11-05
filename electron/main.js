@@ -354,6 +354,8 @@ const TEAMS_VERBS = {
   skip: (service, args) => service.skip(String(args.id ?? '')),
   retry: (service, args) => service.retry(String(args.id ?? '')),
   botState: (service) => ({ ok: true, bot: service.bot ? service.bot.state() : null }),
+  renameBotRoom: (service, args) => ({ ok: true, bot: service.renameBotRoom(args.id, args.name) }),
+  forgetBotRoom: (service, args) => ({ ok: true, bot: service.forgetBotRoom(args.id) }),
   saveBot: (service, args) => {
     if (!service.bot) throw new Error('The bot needs both Teams and the Code Reviewer running.');
     return { ok: true, bot: service.bot.save(args.bot ?? {}) };

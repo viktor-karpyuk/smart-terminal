@@ -28,6 +28,9 @@ function setup({ at = WEDNESDAY_10, fail = null, known = ['b@kubrik.com', 'braia
   const db = new sqlite.DatabaseSync(':memory:');
   const calls = [];
   const notices = [];
+  const pollAnswers = [];
+  const timers = [];
+  const opened = [];
   let now = at;
   /*
    * A fake that refuses what the real thing refuses.
@@ -40,8 +43,22 @@ function setup({ at = WEDNESDAY_10, fail = null, known = ['b@kubrik.com', 'braia
   const fetch = async (url, init) => {
     calls.push({ url: String(url), body: init?.body ? String(init.body) : null });
     if (fail && fail(String(url))) return { ok: false, status: 500, json: async () => ({}) };
+    if (String(url).endsWith('/oauth2/v2.0/devicecode')) {
+      return { ok: true, status: 200, json: async () => ({ device_code: 'dc', user_code: 'ABC123', verification_uri: 'https://microsoft.com/devicelogin', interval: 5, expires_in: 900 }) };
+    }
     if (String(url).includes('/oauth2/v2.0/token')) {
-      return { ok: true, status: 200, json: async () => ({ access_token: 'tok', expires_in: 3600 }) };
+      const body = new URLSearchParams(init.body);
+      if (body.get('grant_type') === 'refresh_token' && body.get('refresh_token') === 'revoked') {
+        return { ok: false, status: 400, json: async () => ({ error: 'invalid_grant', error_description: 'AADSTS70008: expired' }) };
+      }
+      if (body.get('device_code') === 'dc' && pollAnswers.length) {
+        const answer = pollAnswers.shift();
+        return { ok: !answer.error, status: answer.error ? 400 : 200, json: async () => answer };
+      }
+      return { ok: true, status: 200, json: async () => ({ access_token: 'tok', refresh_token: 'r2', expires_in: 3600 }) };
+    }
+    if (String(url).endsWith('/v1.0/me')) {
+      return { ok: true, status: 200, json: async () => ({ id: 'id-of-me@kubrik.com', displayName: 'Me Myself', userPrincipalName: 'me@kubrik.com' }) };
     }
     if (String(url).includes('/v1.0/users/')) {
       const who = decodeURIComponent(String(url).split('/v1.0/users/')[1]);
@@ -65,12 +82,19 @@ function setup({ at = WEDNESDAY_10, fail = null, known = ['b@kubrik.com', 'braia
     fetch,
     notify: (title, body) => notices.push(`${title} | ${body}`),
     now: () => now,
+    openExternal: (url) => opened.push(url),
+    later: (fn) => timers.push(fn),
   });
-  return { service, calls, notices, db, setNow: (value) => { now = value; } };
+  return { service, calls, notices, db, pollAnswers, timers, opened, setNow: (value) => { now = value; } };
 }
 
-const graph = (service, sender = 'me@kubrik.com') =>
-  service.saveConnection({ way: 'graph', tenantId: 't', clientId: 'c', clientSecret: 's', sender: sender });
+/** Signed in, as far as anything after signing in can tell. */
+const graph = (service, address = 'me@kubrik.com') => {
+  service.saveConnection({ tenantId: 't', clientId: 'c' });
+  service.store.setSecret('graph.refreshToken', 'r1');
+  service.store.setSetting('graph.me.name', 'Me Myself');
+  service.store.setSetting('graph.me.address', address);
+};
 
 const note = (extra = {}) => ({
   to: { handle: 'bitbucket:bchavez' },
@@ -238,7 +262,7 @@ test('a failure is kept with its reason, and can be tried again', { skip }, asyn
 
 test('a webhook is the other way in, and posts a card', { skip }, async () => {
   const { service, calls } = setup();
-  service.saveConnection({ way: 'webhook', webhookUrl: 'https://outlook.office.com/webhook/abc' });
+  service.saveConnection({ webhookUrl: 'https://outlook.office.com/webhook/abc' });
   service.store.setAppStance('spring-boot', 'ALLOW');
 
   const out = await service.send('spring-boot', 'Spring Boot', {
@@ -256,7 +280,7 @@ test('a webhook is the other way in, and posts a card', { skip }, async () => {
 
 test('a webhook URL that is not https is refused before it is stored', { skip }, () => {
   const { service } = setup();
-  assert.throws(() => service.saveConnection({ way: 'webhook', webhookUrl: 'http://inside/hook' }), /https/);
+  assert.throws(() => service.saveConnection({ webhookUrl: 'http://inside/hook' }), /https/);
 });
 
 // ---------------------------------------------------------------- what a panel may see
@@ -268,22 +292,22 @@ test('a webhook URL that is not https is refused before it is stored', { skip },
  */
 test('nothing a panel is given contains a secret', { skip }, async () => {
   const { service } = setup();
-  service.saveConnection({ way: 'graph', tenantId: 'tenant-1', clientId: 'client-1', clientSecret: 'THE-SECRET', sender: 'me@kubrik.com' });
-  service.saveConnection({ way: 'webhook', webhookUrl: 'https://outlook.office.com/webhook/SECRET-PATH' });
+  service.saveConnection({ tenantId: 'tenant-1', clientId: 'client-1' });
+  service.store.setSecret('graph.refreshToken', 'THE-SECRET');
+  service.saveConnection({ webhookUrl: 'https://outlook.office.com/webhook/SECRET-PATH' });
 
   const text = JSON.stringify(service.overview());
-  assert.ok(!text.includes('THE-SECRET'), 'the client secret');
+  assert.ok(!text.includes('THE-SECRET'), 'the sign-in');
   assert.ok(!text.includes('SECRET-PATH'), 'the webhook URL');
   assert.ok(text.includes('tenant-1'), 'what is not a secret is still shown');
   assert.strictEqual(service.connection().hasGraph, true);
 });
 
-test('an empty secret means “leave it alone”, not “erase it”', { skip }, async () => {
+test('an empty box means “leave it alone”, not “erase it”', { skip }, async () => {
   const { service } = setup();
-  service.saveConnection({ way: 'graph', tenantId: 't', clientId: 'c', clientSecret: 's', sender: 'me@kubrik.com' });
-  service.saveConnection({ way: 'graph', tenantId: 't2', clientId: 'c', clientSecret: '' });
-  assert.strictEqual(service.connection().hasGraph, true, 'still set up');
-  assert.strictEqual(service.connection().tenantId, 't2');
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  service.saveConnection({ webhookUrl: '' });
+  assert.strictEqual(service.connection().hasWebhook, true, 'still set up');
 });
 
 // ---------------------------------------------------------------- a chat has two people in it
@@ -311,12 +335,13 @@ test('a direct message is between two people, and names them both', { skip }, as
   assert.ok(seats.some((seat) => seat.includes('id-of-b@kubrik.com')), 'the one being told');
 });
 
-test('an app registration with nobody to send from is not ready', { skip }, () => {
+test('a registration with nobody signed in is not ready', { skip }, () => {
   const { service } = setup();
-  service.saveConnection({ way: 'graph', tenantId: 't', clientId: 'c', clientSecret: 's' });
-  assert.strictEqual(service.connection().ready, false, 'a green light in front of a failure is worse than a red one');
-  service.saveConnection({ way: 'graph', sender: 'me@kubrik.com' });
-  assert.strictEqual(service.connection().ready, true);
+  service.saveConnection({ tenantId: 't', clientId: 'c' });
+  assert.strictEqual(service.connection().person.ready, false, 'a green light in front of a failure is worse than a red one');
+  graph(service);
+  assert.strictEqual(service.connection().person.ready, true);
+  assert.deepEqual(service.connection().signedInAs, { name: 'Me Myself', address: 'me@kubrik.com' });
 });
 
 test('sending to the account it is sent from is refused in words', { skip }, async () => {
@@ -389,7 +414,7 @@ test('a hand-made match can still be changed by hand', { skip }, () => {
  */
 test('a message held outside the hours goes out when they open', { skip }, async () => {
   const { service, calls, setNow } = setup({ at: new Date('2026-09-23T23:40:00').getTime() });
-  service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/hook' });
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
   service.saveSettings({ hoursFrom: 9, hoursTo: 18, weekdaysOnly: true, perPersonPerDay: 5, dedupeDays: 7 });
   service.store.setAppStance('code-review', 'ALLOW');
 
@@ -406,7 +431,7 @@ test('a message held outside the hours goes out when they open', { skip }, async
 
 test('still outside the hours means it keeps waiting, not that it is dropped', { skip }, async () => {
   const { service, calls, setNow } = setup({ at: new Date('2026-09-23T23:40:00').getTime() });
-  service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/hook' });
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
   service.saveSettings({ hoursFrom: 9, hoursTo: 18, weekdaysOnly: true, perPersonPerDay: 5, dedupeDays: 7 });
   service.store.setAppStance('code-review', 'ALLOW');
   const held = await service.send('code-review', 'Code Reviewer', { to: { channel: 'reviews' }, title: 'later', body: 'x', key: 'k2' });
@@ -423,7 +448,7 @@ test('still outside the hours means it keeps waiting, not that it is dropped', {
  */
 test('a message held for more than a day is let go of, and says so', { skip }, async () => {
   const { service, calls, setNow } = setup({ at: new Date('2026-09-23T23:40:00').getTime() });
-  service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/hook' });
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
   service.saveSettings({ hoursFrom: 9, hoursTo: 18, weekdaysOnly: true, perPersonPerDay: 5, dedupeDays: 7 });
   service.store.setAppStance('code-review', 'ALLOW');
   const held = await service.send('code-review', 'Code Reviewer', { to: { channel: 'reviews' }, title: 'stale', body: 'x', key: 'k3' });
@@ -444,7 +469,7 @@ test('a message held for more than a day is let go of, and says so', { skip }, a
  */
 test('releasing judges the row it has rather than making another', { skip }, async () => {
   const { service, setNow } = setup({ at: new Date('2026-09-23T23:40:00').getTime() });
-  service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/hook' });
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
   service.saveSettings({ hoursFrom: 9, hoursTo: 18, weekdaysOnly: true, perPersonPerDay: 5, dedupeDays: 7 });
   service.store.setAppStance('code-review', 'ALLOW');
   await service.send('code-review', 'Code Reviewer', { to: { channel: 'reviews' }, title: 'one', body: 'x', key: 'k4' });
@@ -463,7 +488,7 @@ test('releasing judges the row it has rather than making another', { skip }, asy
  */
 test('a message waiting on you is in the outbox however much came after it', { skip }, async () => {
   const { service } = setup();
-  service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/hook' });
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
   service.store.setAppStance('code-review', 'ALLOW');
   service.saveSettings({ hoursFrom: 0, hoursTo: 24, weekdaysOnly: false, perPersonPerDay: 0, dedupeDays: 0 });
   service.store.seeApp('newcomer', 'Newcomer');
@@ -489,20 +514,20 @@ test('a message waiting on you is in the outbox however much came after it', { s
  */
 test('a message for one person does not go into the room', { skip }, async () => {
   const { service, calls } = setup();
-  service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/hook' });
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
   service.store.setAppStance('code-review', 'ALLOW');
 
   const out = await service.send('code-review', 'Code Reviewer', {
     to: { email: 'b@kubrik.com' }, title: 'a word in your ear', body: 'x', key: 'p1',
   });
   assert.equal(out.ok, false, 'there is no way to reach a person yet');
-  assert.match(out.detail ?? '', /app registration/);
+  assert.match(out.detail ?? '', /signed in/);
   assert.equal(calls.length, 0, 'and nothing was posted where everybody would read it');
 });
 
 test('a message for the room goes out on the webhook alone', { skip }, async () => {
   const { service, calls } = setup();
-  service.saveConnection({ way: 'graph', webhookUrl: 'https://example.invalid/hook' });
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
   service.store.setAppStance('code-review', 'ALLOW');
 
   const out = await service.send('code-review', 'Code Reviewer', {
@@ -518,7 +543,7 @@ test('each way out answers for itself', { skip }, () => {
     [service.connection().channel.ready, service.connection().person.ready],
     [false, false],
   );
-  service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/hook' });
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
   assert.equal(service.connection().channel.ready, true, 'the room can be reached');
   assert.equal(service.connection().person.ready, false, 'and nobody privately, yet');
 });
@@ -532,7 +557,7 @@ test('each way out answers for itself', { skip }, () => {
  */
 test('a room with a name of its own gets its own webhook', { skip }, async () => {
   const { service, calls } = setup();
-  service.saveConnection({ way: 'webhook', webhookUrl: 'https://example.invalid/default' });
+  service.saveConnection({ webhookUrl: 'https://example.invalid/default' });
   service.saveChannel({ name: '#Payments', webhookUrl: 'https://example.invalid/payments' });
   service.store.setAppStance('code-review', 'ALLOW');
 
@@ -552,7 +577,7 @@ test('a room can be the only way out, and a name nobody set up then says so', { 
 
   const out = await service.send('code-review', 'Code Reviewer', { to: { channel: 'elsewhere' }, title: 'x', key: 'm3' });
   assert.equal(out.ok, false);
-  assert.match(out.detail, /no webhook for “elsewhere”/);
+  assert.match(out.detail, /no webhook or chat called “elsewhere”/);
   assert.equal(calls.length, 0);
 });
 
@@ -602,7 +627,7 @@ test('saving one way out leaves the other as it was', { skip }, () => {
   graph(service);
   service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
   assert.equal(service.connection().person.ready, true, 'the webhook did not switch the registration off');
-  service.saveConnection({ tenantId: 't2', clientId: 'c', sender: 'me@kubrik.com', clientSecret: '' });
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook2' });
   assert.equal(service.connection().channel.ready, true, 'nor the registration the webhook');
   assert.equal(service.connection().way, undefined, 'and there is no switch between them any more');
 });
@@ -697,4 +722,279 @@ test('a room name that cleans to nothing is asked about, not taken for the defau
   assert.equal((await service.testChannel('## ')).error, 'Which room?');
   assert.equal(calls.length, 0);
   assert.equal(service.connection().channel.checkedAt, null, 'and nothing was recorded as the channel’s test');
+});
+
+// ------------------------------------------------- a name kept the way it is sent
+
+/*
+ * "Who is Inés Núñez on Teams?" asked again after every answer: the address
+ * was kept under `bitbucket:Inés Núñez` and looked for under
+ * `bitbucket:inés núñez`, so the answer sat in a row nothing ever read.
+ */
+test('an address given for a name with capitals reaches the messages sent to that name', { skip }, async () => {
+  const { service } = setup();
+  graph(service);
+  service.store.setAppStance('code-review', 'ALLOW');
+  const to = { handle: 'bitbucket:Inés Núñez', display: 'Inés Núñez' };
+
+  const before = await service.send('code-review', 'Code Reviewer', { to, title: 'first', key: 'n1' });
+  assert.equal(before.why, 'no-address');
+
+  service.store.matchPerson('bitbucket:Inés Núñez', 'b@kubrik.com');
+  const after = await service.send('code-review', 'Code Reviewer', { to, title: 'again', key: 'n2' });
+  assert.equal(after.ok, true, 'the second try finds what was said');
+
+  assert.equal(service.store.person('bitbucket:Inés Núñez').address, 'b@kubrik.com', 'and asking by the name as written finds it too');
+  assert.equal(service.store.people().length, 1, 'one person, one row');
+});
+
+test('answers already kept under the name as written are found again on the next start', { skip }, async () => {
+  const { service, db } = setup();
+  graph(service);
+  service.store.setAppStance('code-review', 'ALLOW');
+  const to = { handle: 'bitbucket:Inés Núñez', display: 'Inés Núñez' };
+  await service.send('code-review', 'Code Reviewer', { to, title: 'first', key: 'n1' });
+  // What the old build left: the answer in a row of its own, and one nobody chose to fold.
+  const row = (handle, address) => db.prepare("INSERT INTO tm_person (id, handle, display, address, matched_by, created_at) VALUES (?,?,?,?,'HAND','2026-01-01')").run(`id-${handle}`, handle, handle, address);
+  row('bitbucket:Inés Núñez', 'b@kubrik.com');
+  row('bitbucket:Ana', 'ana@kubrik.com');
+  db.prepare("INSERT INTO tm_message (id, app_id, person_id, state, created_at) VALUES ('m1', 'x', 'id-bitbucket:Inés Núñez', 'SENT', '2026-01-01')").run();
+
+  const { TeamsStore } = require('../electron/teams-store');
+  const store = new TeamsStore(db, { encrypt: (t) => t, decrypt: (t) => t });
+
+  assert.deepEqual(store.people().map((one) => [one.handle, one.address]).sort(), [['bitbucket:ana', 'ana@kubrik.com'], ['bitbucket:inés núñez', 'b@kubrik.com']]);
+  assert.equal(store.message('m1').personId, store.person('bitbucket:inés núñez').id, 'and what was sent to them stays theirs');
+  new TeamsStore(db, { encrypt: (t) => t, decrypt: (t) => t });
+  assert.equal(store.people().length, 2, 'starting again changes nothing');
+});
+
+// ------------------------------------------------- somebody, in a channel or chat
+
+const asReviewer = (service) => { service.store.setAppStance('code-review', 'ALLOW'); };
+const tagInes = { handle: 'bitbucket:Inés Núñez', display: 'Inés Núñez' };
+const bodyOf = (call) => JSON.parse(call.body).attachments[0].content;
+
+test('a post meant for somebody tags them, so Teams tells them', { skip }, async () => {
+  const { service, calls } = setup();
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  asReviewer(service);
+  service.store.matchPerson('bitbucket:Inés Núñez', 'ines@kubrik.com');
+
+  const out = await service.send('code-review', 'Code Reviewer', { to: { channel: 'pos', mention: tagInes }, title: 'Comments to resolve', key: 't1' });
+  assert.equal(out.ok, true);
+  assert.deepEqual(bodyOf(calls[0]).msteams.entities[0].mentioned, { id: 'ines@kubrik.com', name: 'Inés Núñez' });
+  assert.equal(service.store.messages()[0].to, '#pos @Inés Núñez');
+});
+
+test('a post for somebody nobody knows is asked about rather than posted past them', { skip }, async () => {
+  const { service, calls } = setup();
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  asReviewer(service);
+
+  const out = await service.send('code-review', 'Code Reviewer', { to: { channel: 'pos', mention: tagInes }, title: 'x', key: 't2' });
+  assert.equal(out.why, 'no-address', 'the same word a direct message gets, so the same question answers it');
+  assert.equal(calls.length, 0);
+  assert.equal(service.store.person('bitbucket:inés núñez').display, 'Inés Núñez', 'and they are on the People page to be matched');
+
+  service.store.matchPerson('bitbucket:Inés Núñez', 'ines@kubrik.com');
+  assert.equal((await service.send('code-review', 'Code Reviewer', { to: { channel: 'pos', mention: tagInes }, title: 'x', key: 't3' })).ok, true);
+});
+
+test('being tagged in a room does not spend the one message a day they get privately', { skip }, async () => {
+  const { service } = setup();
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  graph(service);
+  asReviewer(service);
+  service.store.matchPerson('bitbucket:Inés Núñez', 'b@kubrik.com');
+  await service.send('code-review', 'Code Reviewer', { to: { channel: 'pos', mention: tagInes }, title: 'x', key: 't4' });
+  const direct = await service.send('code-review', 'Code Reviewer', { to: tagInes, title: 'y', key: 't5' });
+  assert.equal(direct.ok, true);
+});
+
+test('only the Code Reviewer may tag anybody', { skip }, async () => {
+  const { service, calls } = setup();
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  service.store.setAppStance('other', 'ALLOW');
+  service.store.matchPerson('bitbucket:Inés Núñez', 'ines@kubrik.com');
+  const out = await service.send('other', 'Other', { to: { channel: 'pos', mention: tagInes }, title: 'x', key: 't6' });
+  assert.equal(out.ok, true, 'it still posts');
+  assert.equal(bodyOf(calls[0]).msteams, undefined, 'without a tag');
+});
+
+test('a chat the bot is in is a room like any other, and its own webhook still wins', { skip }, async () => {
+  const { service, calls } = setup();
+  const said = [];
+  service.setBot({
+    ready: () => true, state: () => ({ ready: true, rooms: [] }), canReach: () => false,
+    rooms: () => ({ '19:a': { name: 'POS devs' } }),
+    roomNamed: (name) => (String(name).toLowerCase() === 'pos devs' ? { id: '19:a', name: 'POS devs' } : null),
+    sendToRoom: async (room, message, tag) => { said.push([room.id, message.title, tag]); return { ok: true, how: 'bot' }; },
+  });
+  asReviewer(service);
+  const c = service.connection();
+  assert.equal(c.channel.ready, true, 'a chat is enough to say a room can be reached');
+  assert.deepEqual(c.channels, ['POS devs'], 'and senders can ask for it by name');
+
+  service.store.matchPerson('bitbucket:Inés Núñez', 'ines@kubrik.com');
+  assert.equal((await service.send('code-review', 'Code Reviewer', { to: { channel: 'pos devs', mention: tagInes }, title: 'in the chat', key: 'c1' })).ok, true);
+  assert.deepEqual(said, [['19:a', 'in the chat', { address: 'ines@kubrik.com', name: 'Inés Núñez' }]]);
+  assert.equal(calls.length, 0);
+
+  service.saveChannel({ name: 'POS devs', webhookUrl: 'https://example.invalid/own' });
+  await service.send('code-review', 'Code Reviewer', { to: { channel: 'pos devs' }, title: 'by webhook', key: 'c2' });
+  assert.equal(said.length, 1);
+  assert.equal(calls[0].url, 'https://example.invalid/own');
+});
+
+test('what you write can tag somebody, and a retry tags them too', { skip }, async () => {
+  const { service, calls } = setup({ fail: (url) => url === 'https://example.invalid/hook' && calls.length === 1 });
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  const out = await service.compose({ title: 'hola', channel: '', mention: 'ines@kubrik.com' });
+  assert.equal(out.channel.ok, false);
+  assert.equal((await service.retry(out.channel.id)).ok, true);
+  assert.equal(bodyOf(calls[1]).msteams.entities[0].mentioned.id, 'ines@kubrik.com');
+
+  const bad = await service.compose({ title: 'hola', channel: '', mention: 'ines' });
+  assert.equal(bad.channel.why, 'no-address');
+  assert.equal(calls.length, 2, 'a name is not an address, and nothing went');
+});
+
+test('nothing a panel is given about a chat holds how to reach it', { skip }, () => {
+  const { service } = setup();
+  service.setBot({ ready: () => true, state: () => ({ ready: true, rooms: [{ id: '19:a', name: 'x', kind: 'chat' }] }), rooms: () => ({ '19:a': { name: 'x' } }) });
+  assert.ok(!JSON.stringify(service.overview()).includes('serviceUrl'));
+});
+
+// ------------------------------------------------------- somebody pressed a button
+
+test('a button somebody pressed goes now, even for an app that asks first; never still means never', { skip }, async () => {
+  const { service, calls } = setup();
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  service.store.seeApp('code-review', 'Code Reviewer');
+  assert.equal(service.store.app('code-review').stance, 'ASK');
+
+  const pressed = await service.send('code-review', 'Code Reviewer', { to: { channel: 'pos' }, title: 'x', byHand: true });
+  assert.equal(pressed.ok, true);
+  assert.equal(calls.length, 1);
+
+  const onItsOwn = await service.send('code-review', 'Code Reviewer', { to: { channel: 'pos' }, title: 'y', key: 'auto' });
+  assert.equal(onItsOwn.why, 'asks-first', 'what it decides by itself still asks');
+
+  service.store.setAppStance('code-review', 'DENY');
+  assert.equal((await service.send('code-review', 'Code Reviewer', { to: { channel: 'pos' }, title: 'z', byHand: true })).why, 'not-allowed');
+});
+
+test('another extension cannot claim somebody pressed a button', { skip }, async () => {
+  const { service, calls } = setup();
+  service.saveConnection({ webhookUrl: 'https://example.invalid/hook' });
+  service.store.seeApp('other', 'Other');
+  const out = await service.send('other', 'Other', { to: { channel: 'pos' }, title: 'x', byHand: true });
+  assert.equal(out.why, 'asks-first');
+  assert.equal(calls.length, 0);
+});
+
+test('a refusal from Graph is said in Graph\'s words, rather than blaming the person', { skip }, async () => {
+  const { service, calls } = setup();
+  graph(service);
+  service.store.setAppStance('code-review', 'ALLOW');
+  const real = service.fetch;
+  service.fetch = async (url, init) => (String(url).endsWith('/messages')
+    ? { ok: false, status: 403, json: async () => ({ error: { code: 'Forbidden', message: 'Insufficient privileges.' } }) }
+    : real(url, init));
+  const out = await service.send('code-review', 'Code Reviewer', { to: { email: 'b@kubrik.com' }, title: 'x', key: 'p1' });
+  assert.equal(out.ok, false);
+  assert.match(out.detail, /sending answered 403: Insufficient privileges/);
+  assert.ok(calls.length > 0);
+});
+
+// -------------------------------------------------------- signing in as yourself
+
+/*
+ * An app registration can open a chat and can never write in it, so a direct
+ * message comes from a person who signed in. Every step here is what Microsoft's
+ * device code flow really answers, including the ones that mean "not yet".
+ */
+test('signing in shows a code, opens the page, and finishes on its own', { skip }, async () => {
+  const { service, timers, opened, pollAnswers } = setup();
+  service.saveConnection({ tenantId: 't', clientId: 'c' });
+  const started = await service.signIn();
+  assert.equal(started.code, 'ABC123');
+  assert.deepEqual(opened, ['https://microsoft.com/devicelogin']);
+  assert.equal(service.connection().signingIn.code, 'ABC123');
+  assert.equal(service.connection().person.ready, false, 'not until it is finished');
+
+  pollAnswers.push({ error: 'authorization_pending' });
+  await timers.shift()();
+  assert.equal(service.connection().signingIn.code, 'ABC123', 'still waiting');
+  assert.equal(timers.length, 1, 'and asking again');
+
+  pollAnswers.push({ access_token: 'a', refresh_token: 'THE-REFRESH', expires_in: 3600 });
+  await timers.shift()();
+  const c = service.connection();
+  assert.equal(c.signingIn, null);
+  assert.equal(c.person.ready, true);
+  assert.equal(c.sender, 'me@kubrik.com', 'from whoever signed in, and nobody typed it');
+  assert.equal(timers.length, 0, 'and it stops asking');
+  assert.ok(!JSON.stringify(service.overview()).includes('THE-REFRESH'));
+});
+
+test('a registration that does not allow it says which switch to turn on', { skip }, async () => {
+  const { service, timers, pollAnswers } = setup();
+  service.saveConnection({ tenantId: 't', clientId: 'c' });
+  await service.signIn();
+  pollAnswers.push({ error: 'invalid_client', error_description: "AADSTS7000218: The request body must contain 'client_secret'.\r\nTrace ID: x" });
+  await timers.shift()();
+  assert.match(service.connection().signInError, /Allow public client flows/);
+  assert.equal(service.connection().signingIn, null);
+});
+
+test('a code that ran out says so, and asks no more', { skip }, async () => {
+  const { service, timers, setNow } = setup();
+  service.saveConnection({ tenantId: 't', clientId: 'c' });
+  await service.signIn();
+  setNow(WEDNESDAY_10 + 16 * 60 * 1000);
+  await timers.shift()();
+  assert.match(service.connection().signInError, /expired/);
+  assert.equal(timers.length, 0);
+});
+
+test('cancelling a sign-in stops it, even with an answer already on its way', { skip }, async () => {
+  const { service, timers, pollAnswers } = setup();
+  service.saveConnection({ tenantId: 't', clientId: 'c' });
+  await service.signIn();
+  service.signOut();
+  pollAnswers.push({ access_token: 'a', refresh_token: 'r', expires_in: 3600 });
+  await timers.shift()();
+  assert.equal(service.connection().person.ready, false);
+});
+
+test('a new refresh token is kept the moment it arrives', { skip }, async () => {
+  const { service } = setup();
+  graph(service);
+  service.store.setAppStance('code-review', 'ALLOW');
+  assert.equal((await service.send('code-review', 'Code Reviewer', { to: { email: 'b@kubrik.com' }, title: 'x', key: 'k' })).ok, true);
+  assert.equal(service.store.secret('graph.refreshToken'), 'r2', 'the old one stops working');
+});
+
+test('a sign-in Microsoft ended is said where it can be fixed, once', { skip }, async () => {
+  const { service } = setup();
+  graph(service);
+  service.store.setSecret('graph.refreshToken', 'revoked');
+  service.store.setAppStance('code-review', 'ALLOW');
+  const out = await service.send('code-review', 'Code Reviewer', { to: { email: 'b@kubrik.com' }, title: 'x', key: 'k' });
+  assert.match(out.detail, /sign in again/);
+  const c = service.connection();
+  assert.equal(c.person.ready, false, 'no green light in front of the same failure');
+  assert.match(c.signInError, /Sign in again/);
+});
+
+test('another registration is another sign-in; the same one saved again is not', { skip }, () => {
+  const { service } = setup();
+  graph(service);
+  service.saveConnection({ tenantId: 't', clientId: 'c' });
+  assert.equal(service.connection().person.ready, true);
+  service.saveConnection({ tenantId: 't', clientId: 'other' });
+  assert.equal(service.connection().person.ready, false);
+  assert.equal(service.store.secret('graph.refreshToken'), null);
 });

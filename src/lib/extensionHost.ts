@@ -234,7 +234,7 @@ const DELIVER = 'deliver';
  * somebody else.
  */
 const TEAMS_READ = ['overview', 'botState'] as const;
-const TEAMS_WRITE = ['saveConnection', 'saveSettings', 'test', 'saveChannel', 'forgetChannel', 'testChannel', 'compose', 'setAppStance', 'setAppCap', 'matchPerson', 'approve', 'skip', 'retry', 'saveBot'] as const;
+const TEAMS_WRITE = ['saveConnection', 'saveSettings', 'test', 'saveChannel', 'forgetChannel', 'testChannel', 'compose', 'setAppStance', 'setAppCap', 'matchPerson', 'approve', 'skip', 'retry', 'saveBot', 'renameBotRoom', 'forgetBotRoom', 'signIn', 'signOut'] as const;
 // `deliverFor` is deliberately absent: the app makes that call, naming the
 // caller itself, so no panel can send under another extension's name.
 const TEAMS_VERBS = new Map<string, Channel>(

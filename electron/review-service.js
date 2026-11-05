@@ -668,23 +668,23 @@ class ReviewService {
     const findings = findingId
       ? [this.store.finding(findingId)].filter(Boolean)
       : this.store.findingsForPr(repoId, prId).filter((one) => one.publishedId && !one.dismissedAt && !one.closedAt && !['RESOLVED', 'WONT_FIX'].includes(one.resolution));
-    if (!findings.length) throw new Error('There is nothing open to ask about.');
-    const message = findingsMessage({
-      repo,
-      pr,
-      findings,
-      intro: findings.length === 1 ? `Please resolve this comment on ${repo.name} #${pr.id}` : `${findings.length} comments still to resolve on ${repo.name} #${pr.id}`,
-      note,
-    });
+    if (findingId && !findings.length) throw new Error('That comment is gone.');
+    // Nothing open is still something to say: somebody can want the author to look.
+    const intro = !findings.length
+      ? `Please take a look at ${repo.name} #${pr.id}`
+      : findings.length === 1 ? `Please resolve this comment on ${repo.name} #${pr.id}` : `${findings.length} comments still to resolve on ${repo.name} #${pr.id}`;
+    const message = { ...findingsMessage({ repo, pr, findings, intro, note }), byHand: true };
     const out = { channel: null, person: null };
-    const where = this.channelFor(repo);
+    // Pressed by somebody, so the webhook there always was will do when no room is named.
+    const where = this.channelFor(repo) || (this.deliveryState().defaultChannel ? 'the default room' : '');
+    const provider = String(repo.provider ?? 'forge').toLowerCase();
     if (channel) {
+      // Tagged, so the author is told: a post nobody is named in is a post for whoever looks.
       out.channel = where
-        ? await this.deliver({ ...message, to: { channel: where }, level: 'urgent', key: null }).catch((error) => ({ ok: false, why: 'failed', detail: String(error?.message ?? error) }))
+        ? await this.deliver({ ...message, to: { channel: where, mention: { handle: `${provider}:${pr.author}`, display: pr.author } }, level: 'urgent', key: null }).catch((error) => ({ ok: false, why: 'failed', detail: String(error?.message ?? error) }))
         : { ok: false, why: 'no-channel' };
     }
     if (person) {
-      const provider = String(repo.provider ?? 'forge').toLowerCase();
       out.person = await this.deliver({ ...message, voice: 'me', to: { handle: `${provider}:${pr.author}`, display: pr.author }, level: 'urgent', key: null })
         .catch((error) => ({ ok: false, why: 'failed', detail: String(error?.message ?? error) }));
     }
@@ -860,6 +860,7 @@ class ReviewService {
       // that will not stop, and neither is about you pressing Send.
       level: 'urgent',
       key: null,
+      byHand: true,
     };
 
     const channel = this.store.pref('announce.channel', '').trim();

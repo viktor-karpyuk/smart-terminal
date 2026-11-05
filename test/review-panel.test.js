@@ -868,3 +868,73 @@ test('the code and commit diffs are keyed by what they show', () => {
   assert.match(source, /<section data-scroll-key="' \+ esc\('commit:' \+ \(c\.sha \|\| ''\)\)/);
   assert.match(source, /var sectionScrolls = keptPlaces\(main\);[\s\S]*main\.innerHTML = html;[\s\S]*putPlacesBack\(main, sectionScrolls\);/);
 });
+
+/*
+ * "Who is … on Teams?" sits outside `main`, so nothing puts the focus back after
+ * a redraw: rebuilding it on each one took the box away from whoever was typing.
+ */
+test('asking for an address leaves the field alone while somebody types in it', () => {
+  const at = html.indexOf('function drawAddressAsk()');
+  assert.ok(at >= 0, 'the panel no longer defines drawAddressAsk');
+  const source = html.slice(at, html.indexOf('\n  }\n', at) + 5);
+  const box = {
+    attributes: {}, hidden: true, writes: 0,
+    save: { disabled: false },
+    getAttribute(name) { return this.attributes[name] ?? null; },
+    setAttribute(name, value) { this.attributes[name] = value; },
+    removeAttribute(name) { delete this.attributes[name]; },
+    querySelector() { return this.save; },
+    set innerHTML(_) { this.writes += 1; },
+  };
+  const state = { busy: {}, needAddress: { repoId: 'r', prId: 7, author: 'Inés Núñez' } };
+  const draw = new Function('document', 'state', 'esc', 'edit', 'busyAttr', `${source}; return drawAddressAsk;`)(
+    { getElementById: () => box }, state, String, () => '', () => '',
+  );
+
+  draw();
+  assert.equal(box.writes, 1, 'drawn once when it opens');
+  state.busy['address-save'] = true;
+  draw();
+  assert.equal(box.writes, 1, 'and not again while it is up');
+  assert.equal(box.save.disabled, true, 'though its button still says it is busy');
+
+  state.needAddress = null;
+  draw();
+  assert.equal(box.hidden, true);
+  state.needAddress = { repoId: 'r', prId: 8, author: 'Ana' };
+  draw();
+  assert.equal(box.hidden, false);
+  assert.equal(box.writes, 3, 'cleared when it closes, drawn anew for the next person');
+});
+
+/*
+ * Telling somebody from the list of pull requests, and not only from inside one.
+ * The channel button used to need a room by name, so a working default webhook
+ * offered nowhere to post.
+ */
+test('a row in the list offers both ways to tell its author', () => {
+  const at = html.indexOf('function remindCell(row)');
+  assert.ok(at >= 0, 'the panel no longer defines remindCell');
+  const source = html.slice(at, html.indexOf('\n  }\n', at) + 5);
+  const named = (name) => {
+    const from = html.indexOf(`function ${name}(`);
+    return html.slice(from, html.indexOf('\n  }\n', from) + 5);
+  };
+  const cell = (delivery, row, { alertChannel = null, announceChannel = '' } = {}) => {
+    const state = { busy: {}, overview: { settings: { delivery, announceChannel }, repos: [{ id: 'r', alertChannel }] } };
+    return new Function('state', 'esc', 'busyAttr', 'when', `${source}${named('repoOfRow')}${named('roomFor')}; return remindCell;`)(state, String, () => '', String)(row);
+  };
+  const row = { repoId: 'r', mine: false, flags: [], findings: { unresolved: 0 }, pr: { id: 7, state: 'OPEN', author: 'Inés Núñez' } };
+  const all = { person: true, channel: true, defaultChannel: true };
+
+  const both = cell(all, row);
+  assert.match(both, /data-to="person"[^>]*>Tell</, 'with nothing waiting on them, it is still there');
+  assert.match(both, /data-to="channel"[^>]*>Channel</);
+  assert.match(both, /Posted in the default Teams channel/, 'the webhook there always was is enough');
+  assert.match(cell(all, { ...row, flags: ['AWAITING_THEM'] }), />Remind</);
+  assert.match(cell(all, row, { alertChannel: 'pos', announceChannel: 'other' }), /Posted in pos/, 'the repository\'s own room first');
+  assert.doesNotMatch(cell({ person: true, channel: false }, row), /data-to="channel"/);
+  assert.doesNotMatch(cell({ person: false, channel: true, defaultChannel: false }, row), /data-to=/, 'nowhere to post, nobody to tell');
+  assert.equal(cell(all, { ...row, mine: true }), '', 'not on your own');
+  assert.equal(cell(all, { ...row, pr: { ...row.pr, state: 'MERGED' } }), '');
+});
