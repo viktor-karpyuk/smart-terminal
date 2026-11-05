@@ -60,15 +60,18 @@ function asText(message) {
  * The name goes in a line of its own and has to match the entity exactly, which
  * is the only rule Teams has about it — so nothing in it may look like markup.
  */
-function tagged(content, tag) {
-  if (!tag) return content;
-  const name = String(tag.name || tag.address).replace(/[<>]/g, '').trim() || tag.address;
-  const text = `<at>${name}</at>`;
+function tagged(content, tags) {
+  const list = [].concat(tags ?? []).filter(Boolean);
+  if (!list.length) return content;
+  const entities = list.map((tag) => {
+    const name = String(tag.name || tag.address).replace(/[<>]/g, '').trim() || tag.address;
+    return { type: 'mention', text: `<at>${name}</at>`, mentioned: { id: tag.address, name } };
+  });
   const [title, ...rest] = content.body;
   return {
     ...content,
-    body: [title, { type: 'TextBlock', text, wrap: true, spacing: 'Small' }, ...rest],
-    msteams: { entities: [{ type: 'mention', text, mentioned: { id: tag.address, name } }] },
+    body: [title, { type: 'TextBlock', text: entities.map((one) => one.text).join(' '), wrap: true, spacing: 'Small' }, ...rest],
+    msteams: { entities },
   };
 }
 
@@ -184,10 +187,10 @@ function tokenCache() {
  * have sent one message.
  */
 async function sendDirect(fetch, credentials, tokens, { address, message }) {
+  const addresses = [].concat(address);
   const from = String(credentials.senderAddress ?? '').trim();
-  if (from && from.toLowerCase() === String(address).toLowerCase()) {
-    throw new Error(`These messages are sent from ${from}, so they cannot be sent to ${from}.`);
-  }
+  const self = addresses.find((one) => from && from.toLowerCase() === String(one).toLowerCase());
+  if (self) throw new Error(`These messages are sent from ${from}, so they cannot be sent to ${from}.`);
 
   const token = await tokens.get(fetch, credentials);
   const auth = { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
@@ -196,9 +199,12 @@ async function sendDirect(fetch, credentials, tokens, { address, message }) {
     return new Error(`${what} answered ${response.status}${said ? `: ${said}` : ''}`);
   };
 
-  const found = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(address)}`, { headers: auth });
-  if (!found.ok) throw found.status === 404 ? new Error(`Teams has nobody at ${address}`) : await refused(`looking up ${address}`, found);
-  const user = await found.json();
+  const users = [];
+  for (const one of addresses) {
+    const found = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(one)}`, { headers: auth });
+    if (!found.ok) throw found.status === 404 ? new Error(`Teams has nobody at ${one}`) : await refused(`looking up ${one}`, found);
+    users.push(await found.json());
+  }
   const sender = await whoAmI(fetch, token);
 
   const member = (id) => ({
@@ -206,10 +212,12 @@ async function sendDirect(fetch, credentials, tokens, { address, message }) {
     roles: ['owner'],
     'user@odata.bind': `https://graph.microsoft.com/v1.0/users('${id}')`,
   });
+  // One other person is the chat you already have with them; Graph hands the same
+  // one back. Several is a new group chat every time: Graph has no way to find one.
   const chat = await fetch('https://graph.microsoft.com/v1.0/chats', {
     method: 'POST',
     headers: auth,
-    body: JSON.stringify({ chatType: 'oneOnOne', members: [member(sender.id), member(user.id)] }),
+    body: JSON.stringify({ chatType: users.length > 1 ? 'group' : 'oneOnOne', members: [member(sender.id), ...users.map((one) => member(one.id))] }),
   });
   if (!chat.ok) throw await refused('opening the chat', chat);
   const { id: chatId } = await chat.json();

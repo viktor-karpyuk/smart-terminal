@@ -115,7 +115,7 @@
 (function () {
   'use strict';
 
-  var state = { started: false, showing: true, view: 'connection', data: null, error: null, busy: {}, edits: {}, sendTo: { channel: false, person: false }, sent: null };
+  var state = { started: false, showing: true, view: 'connection', data: null, error: null, busy: {}, edits: {}, sendTo: { channel: false, person: false }, sendPeople: [], sendTags: [], sendTogether: false, sent: null };
 
   function $(id) { return document.getElementById(id); }
   function esc(value) {
@@ -600,22 +600,23 @@
     var roomOptions = (c.hasWebhook ? '<option value="">the default room</option>' : '') + roomNames().map(function (name) {
       return '<option value="' + esc(name) + '"' + (edit('sendRoom', '') === name ? ' selected' : '') + '># ' + esc(name) + '</option>';
     }).join('');
-    var addresses = state.data.people.filter(function (one) { return one.address; });
 
-    html += '<datalist id="known-people">' + addresses.map(function (one) { return '<option value="' + esc(one.address) + '">' + esc(one.display || one.handle) + '</option>'; }).join('') + '</datalist>';
     html += '<div class="card" style="display:flex;flex-direction:column;gap:12px">';
     html += '<div class="where">' +
       '<label class="' + (!c.channel.ready ? 'off' : to.channel ? 'on' : '') + '"><span class="row"><input type="checkbox" data-act="send-where" data-where="channel"' + (to.channel ? ' checked' : '') + (c.channel.ready ? '' : ' disabled') + '><strong># In a channel</strong></span>' +
       (c.channel.ready
         ? '<select data-edit="sendRoom"' + (to.channel ? '' : ' disabled') + '>' + roomOptions + '</select>' +
-          '<input type="text" list="known-people" data-edit="sendMention" placeholder="tag somebody: somebody@yourcompany.com" value="' + esc(edit('sendMention', '')) + '"' + (to.channel ? '' : ' disabled') + '>' +
+          picker('sendTags', 'sendMention', 'tag somebody@yourcompany.com', to.channel) +
           '<span class="help" style="margin:0">Everybody in it reads it; whoever is tagged gets told.</span>'
         : '<span class="help" style="margin:0">No webhook or chat yet — set one up on <a href="#" data-act="nav" data-view="connection">Connection</a>.</span>') +
       '</label>' +
       '<label class="' + (!c.person.ready ? 'off' : to.person ? 'on' : '') + '"><span class="row"><input type="checkbox" data-act="send-where" data-where="person"' + (to.person ? ' checked' : '') + (c.person.ready ? '' : ' disabled') + '><strong>@ To a person</strong></span>' +
       (c.person.ready
-        ? '<input type="text" list="known-people" data-edit="sendPerson" placeholder="somebody@yourcompany.com" value="' + esc(edit('sendPerson', '')) + '"' + (to.person ? '' : ' disabled') + '>' +
-          '<span class="help" style="margin:0">Only they see it. ' + (c.hasGraph ? 'From ' + esc(c.sender) + '.' : 'From the bot.') + '</span>'
+        ? picker('sendPeople', 'sendPerson', 'somebody@yourcompany.com', to.person) +
+          (state.sendPeople.length > 1 && to.person
+            ? '<span class="row"><button class="btn' + (state.sendTogether ? '' : ' primary') + '" data-act="send-together" data-on="">Separately</button><button class="btn' + (state.sendTogether ? ' primary' : '') + '" data-act="send-together" data-on="1">In a group chat</button></span>' +
+              '<span class="help" style="margin:0">' + (state.sendTogether ? 'One new chat with all of them, from you. They all see it.' : 'A private message to each. None of them sees the others.') + '</span>'
+            : '<span class="help" style="margin:0">Only they see it. ' + (c.hasGraph ? 'From ' + esc(c.sender) + '.' : 'From the bot.') + '</span>')
         : '<span class="help" style="margin:0">Not signed in and no bot yet — set one up on <a href="#" data-act="nav" data-view="connection">Connection</a>.</span>') +
       '</label></div>';
 
@@ -625,7 +626,7 @@
     // Only whether somewhere is chosen: what is typed is checked when it is sent,
     // because typing does not redraw this and a button waiting for it never woke.
     var ready = (to.channel && c.channel.ready) || (to.person && c.person.ready);
-    var label = to.channel && to.person ? 'Send to both' : to.person ? 'Send to them' : 'Post in the channel';
+    var label = to.channel && to.person ? 'Send to both' : to.person ? (state.sendTogether && state.sendPeople.length > 1 ? 'Send to the group' : 'Send to them') : 'Post in the channel';
     html += '<div class="row"><button class="btn primary" data-act="compose"' + busyAttr('compose') + (ready ? '' : ' disabled') + '>' + label + '</button>' +
       '</div>' + (state.sent ? '<div style="display:flex;flex-direction:column;gap:6px">' + sentState() + '</div>' : '<div>' + sentState() + '</div>');
     html += '</div>';
@@ -636,6 +637,41 @@
    * What became of each half, one line each. Chips first, and a reason from
    * Microsoft is a paragraph long: on one line it pushed the panel sideways.
    */
+  /* Everybody with an address, each once, by the best name known for them. */
+  function knownPeople() {
+    var byAddress = {};
+    state.data.people.forEach(function (one) {
+      if (!one.address) return;
+      var key = one.address.toLowerCase();
+      var named = one.display && one.display.indexOf(':') < 0 ? one.display : '';
+      if (!byAddress[key]) byAddress[key] = { address: one.address, name: named };
+      else if (named) byAddress[key].name = named;
+    });
+    return Object.keys(byAddress).sort().map(function (key) { return byAddress[key]; });
+  }
+
+  /* Pick several: press whoever is known, or type an address and add it. */
+  function picker(list, field, placeholder, enabled) {
+    var picked = state[list];
+    var known = knownPeople();
+    picked.forEach(function (address) {
+      if (!known.some(function (one) { return one.address.toLowerCase() === address.toLowerCase(); })) known.push({ address: address, name: '' });
+    });
+    var off = enabled ? '' : ' disabled';
+    return '<span class="row" style="gap:6px">' + known.map(function (one) {
+      var on = picked.some(function (address) { return address.toLowerCase() === one.address.toLowerCase(); });
+      return '<button class="btn' + (on ? ' primary' : '') + '" aria-pressed="' + on + '" data-act="pick" data-list="' + list + '" data-address="' + esc(one.address) + '" title="' + esc(one.address) + '"' + off + '>' + esc(one.name || one.address) + '</button>';
+    }).join('') + '</span>' +
+      '<span class="row" style="flex-wrap:nowrap"><input type="text" data-edit="' + field + '" data-adds="' + list + '" placeholder="' + esc(placeholder) + '" value="' + esc(edit(field, '')) + '"' + off + ' style="flex:1;min-width:0">' +
+      '<button class="btn" data-act="pick-typed" data-list="' + list + '" data-field="' + field + '"' + off + '>Add</button></span>';
+  }
+
+  /* What was typed and not added yet goes too: nobody expects it to be left out. */
+  function chosen(list, field) {
+    var typed = String(edit(field, '')).split(/[\s,;]+/).filter(Boolean);
+    return state[list].concat(typed);
+  }
+
   function sentState() {
     var r = state.sent;
     if (!r) return '<span class="faint">Everything you send is in the Outbox, from <span class="mono">you</span>.</span>';
@@ -645,7 +681,8 @@
     };
     var html = '';
     if (r.channel) html += line('#', r.to.channel || 'the default room', r.channel, 'posted');
-    if (r.person) html += line('@', r.to.person, r.person, 'delivered');
+    if (r.people && r.people.length) r.people.forEach(function (one) { html += line('@', one.address, one, 'delivered'); });
+    else if (r.person) html += line('@', r.to.person, r.person, 'delivered');
     return html;
   }
 
@@ -682,6 +719,24 @@
         load();
       });
     },
+    pick: function (el) {
+      var list = el.getAttribute('data-list');
+      var address = el.getAttribute('data-address');
+      var had = state[list].some(function (one) { return one.toLowerCase() === address.toLowerCase(); });
+      state[list] = had ? state[list].filter(function (one) { return one.toLowerCase() !== address.toLowerCase(); }) : state[list].concat(address);
+      state.sent = null;
+      draw();
+    },
+    'pick-typed': function (el) {
+      var list = el.getAttribute('data-list');
+      var field = el.getAttribute('data-field');
+      String(edit(field, '')).split(/[\s,;]+/).filter(Boolean).forEach(function (address) {
+        if (!state[list].some(function (one) { return one.toLowerCase() === address.toLowerCase(); })) state[list] = state[list].concat(address);
+      });
+      delete state.edits[field];
+      draw();
+    },
+    'send-together': function (el) { state.sendTogether = Boolean(el.getAttribute('data-on')); draw(); },
     'send-where': function (el) {
       state.sendTo[el.getAttribute('data-where')] = el.checked;
       state.sent = null;
@@ -692,16 +747,18 @@
         title: edit('sendTitle', ''),
         body: edit('sendBody', ''),
         channel: state.sendTo.channel ? edit('sendRoom', state.data.connection.hasWebhook ? '' : (roomNames()[0] || '')) : null,
-        mention: state.sendTo.channel ? edit('sendMention', '') : '',
-        to: state.sendTo.person ? edit('sendPerson', '') : '',
+        mention: state.sendTo.channel ? chosen('sendTags', 'sendMention') : [],
+        to: state.sendTo.person ? chosen('sendPeople', 'sendPerson') : [],
+        together: state.sendTogether,
       };
       act('compose', function () { return call('compose', { message: message }); }, function (result) {
         state.sent = result;
-        state.sent.to = { channel: message.channel, person: message.to };
+        state.sent.to = { channel: message.channel, person: message.to.join(', ') };
         var went = [result.channel, result.person].filter(function (one) { return one && one.ok; }).length;
         var tried = [result.channel, result.person].filter(Boolean).length;
         if (went === tried) {
-          delete state.edits.sendTitle; delete state.edits.sendBody;
+          delete state.edits.sendTitle; delete state.edits.sendBody; delete state.edits.sendPerson; delete state.edits.sendMention;
+          state.sendPeople = []; state.sendTags = [];
           say(tried > 1 ? 'Posted in the channel and sent to them.' : result.channel ? 'Posted in the channel.' : 'Sent to them.');
         } else {
           say(went ? 'Only part of it went — see beside the button.' : 'It did not go — see beside the button.', true);
@@ -818,6 +875,13 @@
     if (!handler) return;
     if (el.tagName !== 'INPUT') event.preventDefault();
     handler(el);
+  });
+
+  // Enter in a picker's box adds what was typed, the same as its button.
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Enter' || !event.target.getAttribute || !event.target.getAttribute('data-adds')) return;
+    event.preventDefault();
+    actions['pick-typed']({ getAttribute: function (name) { return name === 'data-list' ? event.target.getAttribute('data-adds') : event.target.getAttribute('data-edit'); } });
   });
 
   document.addEventListener('input', function (event) {

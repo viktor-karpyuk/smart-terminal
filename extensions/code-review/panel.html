@@ -3130,16 +3130,22 @@
    * and a way to ask again without opening the pull request.
    */
   function remindCell(row) {
+    refreshTeamsPeople();
     var waiting = row.flags.indexOf('AWAITING_THEM') >= 0 || (row.findings && row.findings.unresolved > 0 && !row.mine);
     var delivery = (state.overview && state.overview.settings && state.overview.settings.delivery) || {};
     var html = '';
     if (row.reminded && row.reminded.at) html += '<span class="chip" title="Last asked ' + esc(new Date(row.reminded.at).toLocaleString()) + ' (' + esc(row.reminded.how || '') + ')">reminded ' + esc(when(row.reminded.at)) + '</span>';
-    if (row.pr.state !== 'OPEN' || row.mine) return html;
+    // `row.mine` is "waiting on you", not "yours": those are the very rows to tell somebody from.
+    if (row.pr.state !== 'OPEN' || isMe(row.pr.author)) return html;
     var at = ' data-repo="' + esc(row.repoId) + '" data-pr="' + row.pr.id + '" data-author="' + esc(row.pr.author) + '"';
     var open = row.findings && row.findings.unresolved > 0 ? ' with every comment still open' : '';
     var key = 'remind-row-' + row.repoId + '#' + row.pr.id;
+    var label = waiting ? 'Remind' : 'Tell';
+    var told = at + ' data-open="' + Number((row.findings && row.findings.unresolved) || 0) + '" data-conflicts="' + ((row.pr.conflicts || []).length) + '"';
     if (delivery.person) {
-      html += '<button class="btn small" data-act="remind-row" data-to="person"' + at + busyAttr(key + '-person') + ' title="A direct message to ' + esc(row.pr.author) + open + '">' + (state.busy[key + '-person'] ? 'Telling…' : (waiting ? 'Remind' : 'Tell')) + '</button>';
+      html += '<button class="btn small" data-act="tell-others" data-to="person"' + told + busyAttr('tell-others') + ' title="' + esc(connectedTitle(row.pr.author, 'A direct message to ' + row.pr.author + ': say what you need')) + '">' + label + connectedDot(row.pr.author) + '</button>';
+    } else if (delivery.installed) {
+      html += '<button class="btn small" data-act="tell-sign-in" data-again="tell-others" data-to="person"' + told + busyAttr('tell-sign-in') + ' title="A direct message comes from your account, so this signs you in to Teams first">' + label + '</button>';
     }
     var room = roomFor(repoOfRow(row));
     if (delivery.channel && room) {
@@ -3170,8 +3176,44 @@
       document.body.appendChild(box);
     }
     var ask = state.needAddress;
-    if (!ask) { box.innerHTML = ''; box.hidden = true; box.removeAttribute('data-for'); return; }
+    var signIn = state.needSignIn;
+    var others = state.tellOthers;
+    if (!ask && !signIn && !others) { box.innerHTML = ''; box.hidden = true; box.removeAttribute('data-for'); return; }
     box.hidden = false;
+    if (signIn) {
+      if (box.getAttribute('data-for') === 'sign-in:' + signIn.code) return;
+      box.setAttribute('data-for', 'sign-in:' + signIn.code);
+      box.innerHTML = '<div class="ask-address-card"><strong>Sign in to Teams</strong>' +
+        '<div class="faint">A direct message comes from your account. Type this code at Microsoft\'s page, which should have opened: <span class="mono" style="user-select:all">' + esc(signIn.url) + '</span></div>' +
+        '<div class="mono" style="font-size:1.3rem;letter-spacing:.08em;user-select:all">' + esc(signIn.code) + '</div>' +
+        '<div class="row"><button class="btn small primary" data-act="sign-in-done">Done, send it</button><button class="btn small" data-act="sign-in-cancel">Cancel</button></div></div>';
+      return;
+    }
+    if (others) {
+      var count = others.picked.length + (others.author ? 1 : 0);
+      var shape = others.picked.join() + '|' + others.author + '|' + others.together + '|' + others.reason + '|' + Boolean(state.busy['tell-others-send']);
+      if (box.getAttribute('data-for') === 'others:' + shape) return;
+      box.setAttribute('data-for', 'others:' + shape);
+      var person = function (address, name, on, act) {
+        return '<button class="btn small' + (on ? ' primary' : '') + '" aria-pressed="' + on + '" data-act="' + act + '" data-address="' + esc(address) + '" title="' + esc(address) + '">' + esc(name) + '</button>';
+      };
+      var why = function (reason, text) {
+        var on = others.reason === reason;
+        return '<button class="btn small' + (on ? ' primary' : '') + '" aria-pressed="' + on + '" data-act="tell-others-reason" data-reason="' + reason + '">' + esc(text) + '</button>';
+      };
+      box.innerHTML = '<div class="ask-address-card"><strong>Who should hear about this?</strong>' +
+        '<div class="row" style="flex-wrap:wrap">' +
+        '<button class="btn small" data-act="tell-others-all">' + (others.picked.length === others.people.length && others.people.length ? 'Nobody' : 'Everyone') + '</button>' +
+        (others.authorName ? person('', shortName(others.authorName) + (authorOnTeams(others.authorName) ? ' ●' : ''), others.author, 'tell-others-author') : '') +
+        others.people.map(function (one) { return person(one.address, one.name, others.picked.indexOf(one.address) >= 0, 'tell-others-pick'); }).join('') + '</div>' +
+        '<input type="text" inputmode="email" autocomplete="off" spellcheck="false" data-edit="others-typed" placeholder="or somebody@yourcompany.com" value="' + esc(edit('others-typed', '')) + '">' +
+        '<strong>What for?</strong><div class="row" style="flex-wrap:wrap">' + why('review', 'Review it') + why('merge', 'Resolve the merge') + (others.open ? why('comments', 'Resolve ' + others.open + ' comment' + (others.open === 1 ? '' : 's')) : '') + why('other', 'Something else') + '</div>' +
+        '<input type="text" data-edit="others-note" placeholder="' + (others.reason === 'other' ? 'What do you need from them?' : 'add a line (optional)') + '" value="' + esc(edit('others-note', '')) + '">' +
+        '<div id="tell-mode"' + (count > 1 || edit('others-typed', '') ? '' : ' hidden') + '><div class="row"><button class="btn small' + (others.together ? '' : ' primary') + '" data-act="tell-others-mode" data-on="">Separately</button><button class="btn small' + (others.together ? ' primary' : '') + '" data-act="tell-others-mode" data-on="1">In a group chat</button></div>' +
+        '<div class="faint">' + (others.together ? 'One new chat with all of them, from you. They all see it.' : 'A private message to each, from you.') + '</div></div>' +
+        '<div class="row"><button class="btn small primary" data-act="tell-others-send"' + busyAttr('tell-others-send') + '>Send</button><button class="btn small" data-act="tell-others-cancel">Cancel</button></div></div>';
+      return;
+    }
     /*
      * Left alone once it is up. This lives outside `main`, so nothing puts the
      * focus back after a redraw — and an age ticking or a review's progress
@@ -3188,6 +3230,48 @@
       '<div class="faint">Teams has no address for the name Bitbucket uses. Say it once; it is kept on the Teams panel\'s People page.</div>' +
       '<input type="text" inputmode="email" autocomplete="off" spellcheck="false" data-edit="ask-address" placeholder="somebody@yourcompany.com" value="' + esc(edit('ask-address', '')) + '">' +
       '<div class="row"><button class="btn small primary" data-act="address-save"' + busyAttr('address-save') + '>Save and send again</button><button class="btn small" data-act="address-cancel">Cancel</button></div></div>';
+  }
+
+  /** Whether this name is you: as you named yourself in Settings, or as Teams knows you. */
+  function isMe(name) {
+    var settings = (state.overview && state.overview.settings) || {};
+    var wanted = String(name || '').trim().toLowerCase();
+    if (!wanted) return false;
+    return [settings.me, (settings.delivery || {}).signedInName].some(function (one) { return String(one || '').trim().toLowerCase() === wanted; });
+  }
+
+  /*
+   * Who Teams already knows, from its people list: the first message asks for the
+   * address and from then on the person shows as connected. Refreshed at most
+   * once a minute unless something just changed it.
+   */
+  function refreshTeamsPeople(now) {
+    var at = Date.now();
+    if (!now && state.teamsPeopleAt && at - state.teamsPeopleAt < 60000) return;
+    state.teamsPeopleAt = at;
+    host.call('teams.overview', {}).then(function (r) {
+      if (!r || r.ok === false) return;
+      state.teamsPeople = r.people || [];
+      draw();
+    }, function () { /* no Teams here: nobody shows as connected */ });
+  }
+
+  /** The address Teams has for this forge name, if anybody gave it one. */
+  function authorOnTeams(name) {
+    var wanted = String(name || '').trim().toLowerCase();
+    var found = (state.teamsPeople || []).filter(function (one) {
+      return one.address && String(one.handle || '').slice(String(one.handle || '').indexOf(':') + 1).toLowerCase() === wanted;
+    })[0];
+    return found ? found.address : '';
+  }
+
+  /** What a Tell button says about its person: connected, or asked for the first time. */
+  function connectedDot(name) {
+    return authorOnTeams(name) ? ' <span style="color:var(--ok)" aria-hidden="true">●</span>' : '';
+  }
+  function connectedTitle(name, text) {
+    var address = authorOnTeams(name);
+    return text + (address ? '. Connected: ' + address : '. The first time, it asks for their address');
   }
 
   function repoOfRow(row) {
@@ -3207,12 +3291,20 @@
 
   /** "Tell the author" and "post in the channel", for one finding or — with no id — every open one. */
   function notifyButtons(v, findingId) {
+    refreshTeamsPeople();
     var delivery = (v.settings && v.settings.delivery) || {};
     var channel = (v.repo && v.repo.alertChannel) || (v.settings && v.settings.announceChannel) || (delivery.defaultChannel ? 'the default Teams channel' : '');
     var key = 'notify-' + (findingId || 'all');
     var at = findingId ? ' data-finding="' + esc(findingId) + '"' : '';
     var html = '';
-    if (delivery.person) html += '<button class="btn small" data-act="notify" data-to="person"' + at + busyAttr(key + '-person') + ' title="A direct message on Teams, from you, asking to resolve ' + (findingId ? 'it' : 'them') + '">Tell ' + esc(shortName(v.pr.author)) + '</button>';
+    var open = (v.findings || []).concat(v.earlierFindings || []).filter(function (f) { return f.publishedId && !f.dismissedAt && !findingDone(f); }).length;
+    // For the whole pull request Tell asks who and why; for one comment, that comment is the why.
+    var card = ' data-repo="' + esc(state.repoId) + '" data-pr="' + esc(v.pr.id) + '" data-author="' + esc(v.pr.author) + '" data-open="' + open + '" data-conflicts="' + (v.pr.conflicts || []).length + '"';
+    var who = at + (findingId ? '' : card);
+    var again = findingId ? 'notify' : 'tell-others';
+    if (isMe(v.pr.author)) { if (!findingId && delivery.person) html += '<button class="btn small" data-act="tell-others"' + card + busyAttr('tell-others') + ' title="Choose who to tell and why">Tell…</button>'; }
+    else if (!delivery.person && delivery.installed) html += '<button class="btn small" data-act="tell-sign-in" data-again="' + again + '" data-to="person"' + who + busyAttr('tell-sign-in') + ' title="A direct message comes from your account, so this signs you in to Teams first">Tell ' + esc(shortName(v.pr.author)) + '</button>';
+    else if (delivery.person) html += '<button class="btn small" data-act="' + (findingId ? 'notify' : 'tell-others') + '" data-to="person"' + who + busyAttr(findingId ? key + '-person' : 'tell-others') + ' title="' + esc(connectedTitle(v.pr.author, findingId ? 'A direct message on Teams, from you, asking to resolve it' : 'A direct message on Teams, from you: say what you need')) + '">Tell ' + esc(shortName(v.pr.author)) + connectedDot(v.pr.author) + '</button>';
     if (delivery.channel && channel) html += '<button class="btn small" data-act="notify" data-to="channel"' + at + busyAttr(key + '-channel') + ' title="Posted in ' + esc(channel) + ', tagging ' + esc(shortName(v.pr.author)) + ' so Teams tells them">Post in the channel</button>';
     return html;
   }
@@ -5107,12 +5199,106 @@
       if (!ask) return;
       act('address-save', function () { return call('matchAuthor', { repoId: ask.repoId, prId: ask.prId, address: edit('ask-address', '') }); }, function (r) {
         if (!r || r.ok === false) return say('Could not save it: ' + ((r && (r.why || r.error)) || 'nothing answered'), true);
+        refreshTeamsPeople(true);
         delete state.edits['ask-address'];
         state.needAddress = null;
         draw();
         if (ask.retry) ask.retry();
       });
     },
+    /*
+     * Asked for where it was wanted, rather than hiding the button until
+     * somebody finds the Teams panel. What "Done" retries answers for itself:
+     * not finished yet comes back as a sentence saying nobody is signed in.
+     */
+    'tell-sign-in': function (el) {
+      act('tell-sign-in', function () { return host.call('teams.signIn', {}); }, function (r) {
+        if (!r || r.ok === false || !r.code) return say('Could not start signing in: ' + ((r && r.error) || 'open the Teams panel, Connection'), true);
+        var again = el.getAttribute('data-again');
+        state.needSignIn = { code: r.code, url: r.url, retry: function () { actions[again](el); } };
+        draw();
+      });
+    },
+    'sign-in-done': function () {
+      var ask = state.needSignIn;
+      state.needSignIn = null;
+      draw();
+      if (ask) ask.retry();
+      load();
+    },
+    /* Several people, from the pull request. Who is known comes from the Teams people list. */
+    'tell-others': function (el) {
+      var repoId = el.getAttribute('data-repo');
+      var prId = Number(el.getAttribute('data-pr'));
+      var author = el.getAttribute('data-author') || '';
+      var opened = Number(el.getAttribute('data-open')) || 0;
+      var conflicts = Number(el.getAttribute('data-conflicts')) || 0;
+      // What was written for another pull request and never sent does not follow you to this one.
+      delete state.edits['others-typed'];
+      delete state.edits['others-note'];
+      act('tell-others', function () { return host.call('teams.overview', {}); }, function (r) {
+        var seen = {};
+        (r && r.people || []).forEach(function (one) {
+          if (!one.address) return;
+          var key = one.address.toLowerCase();
+          var named = one.display && one.display.indexOf(':') < 0 ? one.display : '';
+          if (!seen[key]) seen[key] = { address: one.address, name: named || one.address };
+          else if (named) seen[key].name = named;
+        });
+        var mine = isMe(author);
+        state.teamsPeople = (r && r.people) || state.teamsPeople;
+        var authorAddress = authorOnTeams(author).toLowerCase();
+        var people = Object.keys(seen).sort().map(function (key) { return seen[key]; }).filter(function (one) {
+          // The author has their own button, and "Everyone" must not tell them twice.
+          return !isMe(one.name) && one.name.toLowerCase() !== String(author).toLowerCase() && one.address.toLowerCase() !== authorAddress;
+        });
+        state.tellOthers = { repoId: repoId, prId: prId, people: people, picked: [], together: false, author: !mine, authorName: mine ? '' : author, open: opened, reason: conflicts ? 'merge' : opened ? 'comments' : 'review' };
+        draw();
+      });
+    },
+    'tell-others-all': function () {
+      var ask = state.tellOthers;
+      var all = ask.picked.length === ask.people.length && ask.people.length;
+      ask.picked = all ? [] : ask.people.map(function (one) { return one.address; });
+      if (ask.authorName) ask.author = !all;
+      draw();
+    },
+    'tell-others-reason': function (el) { state.tellOthers.reason = el.getAttribute('data-reason'); draw(); },
+    'tell-others-author': function () { state.tellOthers.author = !state.tellOthers.author; draw(); },
+    'tell-others-pick': function (el) {
+      var address = el.getAttribute('data-address');
+      var at = state.tellOthers.picked.indexOf(address);
+      if (at >= 0) state.tellOthers.picked.splice(at, 1); else state.tellOthers.picked.push(address);
+      draw();
+    },
+    'tell-others-mode': function (el) { state.tellOthers.together = Boolean(el.getAttribute('data-on')); draw(); },
+    'tell-others-cancel': function () { state.tellOthers = null; delete state.edits['others-typed']; draw(); },
+    'tell-others-send': function () {
+      var ask = state.tellOthers;
+      if (!ask) return;
+      var also = ask.picked.concat(String(edit('others-typed', '')).split(/[\s,;]+/).filter(Boolean));
+      if (!also.length && !ask.author) return say('Choose somebody to tell.', true);
+      if (ask.reason === 'other' && !String(edit('others-note', '')).trim()) return say('Say what you need from them.', true);
+      act('tell-others-send', function () { return call('notifyFindings', { repoId: ask.repoId, prId: ask.prId, person: ask.author, also: also, together: ask.together, reason: ask.reason, note: edit('others-note', '') }); }, function (r) {
+        var authorName = ask.authorName;
+        // The author nobody knows yet: the same question, and then this same send again.
+        if (askAddress(r.person, ask.repoId, ask.prId, authorName, function () { state.tellOthers = ask; actions['tell-others-send'](); })) {
+          state.tellOthers = null;
+          draw();
+          return;
+        }
+        var wrong = [].concat(r.group && !r.group.ok ? [r.group.detail || r.group.why] : [], r.person && !r.person.ok ? [authorName + ': ' + (r.person.detail || r.person.why)] : [], (r.others || []).filter(function (one) { return !one.ok; }).map(function (one) { return one.address + ': ' + (one.detail || one.why); }));
+        if (wrong.length) say('Could not tell everybody: ' + wrong.join('; '), true);
+        else say(r.group ? 'Sent to the group chat.' : ask.author && !also.length ? 'Told ' + shortName(authorName) + '.' : 'Told them.');
+        state.tellOthers = null;
+        delete state.edits['others-typed'];
+        delete state.edits['others-note'];
+        refreshTeamsPeople(true);
+        draw();
+        load();
+      });
+    },
+    'sign-in-cancel': function () { state.needSignIn = null; draw(); },
     'address-cancel': function () { state.needAddress = null; delete state.edits['ask-address']; draw(); },
     'remind-row': function (el) {
       var repoId = el.getAttribute('data-repo');
@@ -5430,6 +5616,10 @@
     var el = event.target;
     var key = el.getAttribute('data-edit');
     if (key) state.edits[key] = el.value;
+    if (key === 'others-typed' && state.tellOthers) {
+      var mode = document.getElementById('tell-mode');
+      if (mode) mode.hidden = !(el.value.trim() || state.tellOthers.picked.length + (state.tellOthers.author ? 1 : 0) > 1);
+    }
     var formField = el.getAttribute('data-form');
     if (formField && state.form && el.type !== 'radio' && el.type !== 'checkbox') state.form[formField] = el.value;
     // Mid-composition (a dead key, an IME) the text is not final, and a redraw would lose it.

@@ -800,6 +800,8 @@ function createReviewService() {
           // The rooms it knows by name, so a repository can be pointed at one. Names only.
           channels: connection?.channels ?? [],
           defaultChannel: Boolean(connection?.hasWebhook),
+          // Who signed in, which is also how the reviewer knows which pull requests are yours.
+          signedInName: connection?.signedInAs?.name ?? '',
         };
       },
     });

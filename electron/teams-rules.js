@@ -21,9 +21,10 @@ function readMessage(input = {}) {
       handle: text(to.handle, 200) || null,
       channel: text(to.channel, 200) || null,
       // Who a post in a room is meant for: tagged there, so Teams tells them.
-      mention: to.mention && typeof to.mention === 'object' && text(to.mention.handle, 200)
-        ? { handle: text(to.mention.handle, 200), display: text(to.mention.display, 120) }
-        : null,
+      mention: [].concat(to.mention ?? [])
+        .filter((one) => one && typeof one === 'object' && text(one.handle, 200))
+        .slice(0, 20)
+        .map((one) => ({ handle: text(one.handle, 200), display: text(one.display, 120) })),
     },
     title: text(input.title, 300),
     body: text(input.body, 4000),
@@ -53,6 +54,8 @@ function readMessage(input = {}) {
     voice: input.voice === 'me' ? 'me' : null,
     // Somebody pressed a button for this one, now. The same: only the app may say it.
     byHand: input.byHand === true,
+    // Everybody in one chat, for a message written to several at once. Only the app may ask.
+    group: Array.isArray(input.group) && input.group.length > 1 ? input.group.map((one) => text(one, 320)).filter(Boolean).slice(0, 20) : null,
   };
 }
 

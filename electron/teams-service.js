@@ -385,15 +385,16 @@ class TeamsService {
     if (appId !== 'code-review') {
       message.about = null;
       message.voice = null;
-      message.to.mention = null;
+      message.to.mention = [];
       message.byHand = false;
+      message.group = null;
     }
     const app = this.store.seeApp(appId, appName);
     const settings = this.settings();
 
     const { person, handle, decision } = this.#judge(message, app, { display: input?.to?.display ?? '' });
     const to = message.to.channel
-      ? `#${message.to.channel}${message.to.mention ? ` @${message.to.mention.display || message.to.mention.handle}` : ''}`
+      ? `#${message.to.channel}${message.to.mention.map((one) => ` @${one.display || one.handle}`).join('')}`
       : (person?.display ?? handle ?? '');
     const record = (state, reason) =>
       this.store.addMessage({
@@ -408,7 +409,7 @@ class TeamsService {
     }
     // Meant for somebody and nobody knows who they are on Teams: asked, not posted
     // past them, so the same "Who is …?" that a direct message gets can answer it.
-    if (message.to.channel && message.to.mention && !this.#tagFor(message)) {
+    if (message.to.channel && this.#tagsFor(message).some((one) => !one.tag)) {
       const row = record('SKIPPED', 'no-address');
       this.changed();
       return { ok: false, why: 'no-address', detail: null, id: row.id };
@@ -464,6 +465,7 @@ class TeamsService {
     // The default room by no name at all, which no room called "default" can be
     // taken for — so a retry goes where the first try went.
     if (message.defaultRoom) return this.#toDefaultRoom(message);
+    if (message.group) return this.#toPerson(message, { address: message.group });
     if (message.to.channel) return this.#toChannel(message);
     return this.#toPerson(message, person);
   }
@@ -474,7 +476,7 @@ class TeamsService {
    * can be answered, which is why a chat of the bot's beats the catch-all.
    */
   async #toChannel(message) {
-    const tag = this.#requiredTag(message);
+    const tag = this.#requiredTags(message);
     const name = message.to.channel;
     const own = this.store.secret(channelKey(name));
     if (own) return postWebhook(this.fetch, own, message, tag);
@@ -485,21 +487,22 @@ class TeamsService {
     return postWebhook(this.fetch, url, message, tag);
   }
 
-  /** Who a post is meant for, as Teams knows them, or nothing if nobody knows. */
-  #tagFor(message) {
-    const mention = message.to.mention;
-    if (!mention) return null;
-    const read = rules.readHandle(mention.handle);
-    if (!read) return null;
-    const address = rules.addressFrom(read.handle, { matchByEmail: this.settings().matchByEmail });
-    const person = this.store.rememberPerson({ handle: read.handle, display: mention.display, address, matchedBy: address ? 'EMAIL' : null });
-    return person?.address ? { address: person.address, name: mention.display || read.name } : null;
+  /** Everybody a post is meant for who can be tagged, as Teams knows them. */
+  #tagsFor(message) {
+    return message.to.mention.map((mention) => {
+      const read = rules.readHandle(mention.handle);
+      if (!read) return { mention, tag: null };
+      const address = rules.addressFrom(read.handle, { matchByEmail: this.settings().matchByEmail });
+      const person = this.store.rememberPerson({ handle: read.handle, display: mention.display, address, matchedBy: address ? 'EMAIL' : null });
+      return { mention, tag: person?.address ? { address: person.address, name: mention.display || read.name } : null };
+    });
   }
 
-  #requiredTag(message) {
-    const tag = this.#tagFor(message);
-    if (message.to.mention && !tag) throw new Error(`There is no Teams address for ${message.to.mention.display || message.to.mention.handle}, so they cannot be tagged.`);
-    return tag;
+  #requiredTags(message) {
+    const found = this.#tagsFor(message);
+    const missing = found.find((one) => !one.tag);
+    if (missing) throw new Error(`There is no Teams address for ${missing.mention.display || missing.mention.handle}, so they cannot be tagged.`);
+    return found.map((one) => one.tag);
   }
 
   /** One person, privately. */
@@ -727,13 +730,13 @@ class TeamsService {
    * about you pressing Send. It is still written in the outbox, from `you`,
    * like everything else that went out.
    */
-  async compose({ title, body, channel, to, mention } = {}) {
+  async compose({ title, body, channel, to, mention, together = false } = {}) {
     const heading = String(title ?? '').trim();
     const text = String(body ?? '').trim();
     if (!heading && !text) throw new Error('There is nothing to say.');
     const room = channel == null || channel === false ? null : channelName(channel === true ? '' : channel);
-    const address = String(to ?? '').trim();
-    if (room === null && !address) throw new Error('Choose a room, somebody to tell, or both.');
+    const addresses = listOf(to);
+    if (room === null && !addresses.length) throw new Error('Choose a room, somebody to tell, or both.');
 
     // With no title, the first line stands in for one — and the rest is still said.
     const [first, ...rest] = text.split('\n');
@@ -743,31 +746,48 @@ class TeamsService {
     const out = { channel: null, person: null };
 
     if (room !== null) {
-      const tagAddress = String(mention ?? '').trim();
-      if (tagAddress && !tagAddress.includes('@')) {
+      const tags = listOf(mention);
+      if (tags.some((one) => !one.includes('@'))) {
         out.channel = { ok: false, why: 'no-address', detail: 'Somebody is tagged by their Teams address — something@yourcompany.com.' };
       } else {
-        const known = tagAddress ? this.store.people().find((one) => String(one.address ?? '').toLowerCase() === tagAddress.toLowerCase() && !one.display.includes(':')) : null;
-        const message = this.#forRoom(room, shared, tagAddress ? { handle: `email:${tagAddress}`, display: known?.display ?? tagAddress } : null);
-        const label = `${room ? `#${room}` : '# the default room'}${tagAddress ? ` @${message.to.mention.display}` : ''}`;
+        const message = this.#forRoom(room, shared, tags.map((one) => ({ handle: `email:${one}`, display: this.#nameOf(one) })));
+        const label = `${room ? `#${room}` : '# the default room'}${message.to.mention.map((one) => ` @${one.display}`).join('')}`;
         out.channel = await this.#sendNow(message, null, label, () => this.deliver(message, null));
       }
     }
 
-    if (address) {
-      if (!address.includes('@')) {
-        out.person = { ok: false, why: 'no-address', detail: 'A person is reached by their Teams address — something@yourcompany.com.' };
-      } else {
+    const wrong = addresses.find((one) => !one.includes('@'));
+    if (wrong) {
+      out.person = { ok: false, why: 'no-address', detail: `A person is reached by their Teams address — something@yourcompany.com, not “${wrong}”.` };
+    } else if (together && addresses.length > 1) {
+      // One message in one chat: all of them see it and each other.
+      const message = rules.readMessage({ ...shared, to: { email: addresses[0] } });
+      message.group = addresses;
+      message.voice = 'me';
+      out.person = await this.#sendNow(message, null, `chat: ${addresses.map((one) => this.#nameOf(one)).join(', ')}`, () => this.deliver(message, null));
+    } else if (addresses.length) {
+      out.people = [];
+      for (const address of addresses) {
         const message = rules.readMessage({ ...shared, to: { email: address } });
         // Your words, from your own account when there is one; the bot otherwise.
         message.voice = this.#hasGraph() ? 'me' : null;
         const person = this.store.rememberPerson({ handle: `email:${address}`, address, matchedBy: 'EMAIL' });
-        out.person = await this.#sendNow(message, person, address, () => this.deliver(message, person));
+        out.people.push({ address, ...await this.#sendNow(message, person, address, () => this.deliver(message, person)) });
       }
+      const failed = out.people.filter((one) => !one.ok);
+      out.person = addresses.length === 1
+        ? out.people[0]
+        : { ok: !failed.length, why: failed.length ? 'failed' : undefined, detail: failed.map((one) => `${one.address}: ${one.detail ?? one.why}`).join('; ') || undefined };
     }
 
     this.changed();
     return { ok: true, ...out };
+  }
+
+  /** The name somebody is known by here, or their address. */
+  #nameOf(address) {
+    const known = this.store.people().find((one) => String(one.address ?? '').toLowerCase() === address.toLowerCase() && !one.display.includes(':'));
+    return known?.display ?? address;
   }
 
   /**
@@ -786,7 +806,7 @@ class TeamsService {
   #toDefaultRoom(message) {
     const url = this.store.secret('webhook.url');
     if (!url) throw new Error('There is no default webhook — paste one under “To a channel” first.');
-    return postWebhook(this.fetch, url, message, this.#requiredTag(message));
+    return postWebhook(this.fetch, url, message, this.#requiredTags(message));
   }
 
   /** Written as being tried, then as what became of it — the same life as any other message. */
@@ -839,6 +859,13 @@ class TeamsService {
       send: (appId, appName, message) => this.send(appId, appName, message),
     };
   }
+}
+
+/** Several addresses, however they were written or handed over, each once. */
+function listOf(value) {
+  const all = [].concat(value ?? []).flatMap((one) => String(one).split(/[\s,;]+/)).map((one) => one.trim()).filter(Boolean);
+  const seen = new Set();
+  return all.filter((one) => !seen.has(one.toLowerCase()) && seen.add(one.toLowerCase()));
 }
 
 /** A room's name as written, without the `#` people put in front of channel names out of habit. */

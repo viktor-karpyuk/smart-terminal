@@ -661,19 +661,36 @@ class ReviewService {
    * open on the pull request — in the channel, to the author, or both. Sent as
    * you, now, like anything said from the panel.
    */
-  async notifyFindings(repoId, prId, { findingId = null, channel = false, person = false, note = '' } = {}) {
+  /** Whether this name is the person using the app: as they named themselves, or as Teams knows them. */
+  isMe(name) {
+    const wanted = String(name ?? '').trim().toLowerCase();
+    if (!wanted) return false;
+    return [this.store.pref('me.author', ''), this.deliveryState().signedInName].some((one) => String(one ?? '').trim().toLowerCase() === wanted);
+  }
+
+  async notifyFindings(repoId, prId, { findingId = null, channel = false, person = false, note = '', also = [], together = false, reason = null } = {}) {
     const repo = this.store.repo(repoId);
     const pr = this.store.pr(repoId, prId);
     if (!repo || !pr) throw new Error('That pull request is gone.');
+    // Asking for a review or a merge is not asking about the comments: those stay out of it.
+    const aboutComments = findingId || !reason || reason === 'comments';
     const findings = findingId
       ? [this.store.finding(findingId)].filter(Boolean)
-      : this.store.findingsForPr(repoId, prId).filter((one) => one.publishedId && !one.dismissedAt && !one.closedAt && !['RESOLVED', 'WONT_FIX'].includes(one.resolution));
+      : !aboutComments ? [] : this.store.findingsForPr(repoId, prId).filter((one) => one.publishedId && !one.dismissedAt && !one.closedAt && !['RESOLVED', 'WONT_FIX'].includes(one.resolution));
     if (findingId && !findings.length) throw new Error('That comment is gone.');
+    if (!findingId && reason === 'other' && !String(note ?? '').trim()) throw new Error('Say what you need from them.');
     // Nothing open is still something to say: somebody can want the author to look.
-    const intro = !findings.length
+    const name = `${repo.name} #${pr.id}`;
+    const conflicting = Array.isArray(pr.conflicts) ? pr.conflicts : [];
+    const intro = !aboutComments
+      ? { review: `Please review ${name}`, merge: `Please resolve the merge conflict on ${name}`, other: `About ${name}` }[reason]
+      : !findings.length
       ? `Please take a look at ${repo.name} #${pr.id}`
       : findings.length === 1 ? `Please resolve this comment on ${repo.name} #${pr.id}` : `${findings.length} comments still to resolve on ${repo.name} #${pr.id}`;
-    const message = { ...findingsMessage({ repo, pr, findings, intro, note }), byHand: true };
+    const said = !findingId && reason === 'merge' && conflicting.length
+      ? [...conflicting.slice(0, 20).map((file) => `• \`${file}\``), ...(String(note ?? '').trim() ? ['', String(note).trim()] : [])].join('\n')
+      : note;
+    const message = { ...findingsMessage({ repo, pr, findings, intro, note: said }), byHand: true };
     const out = { channel: null, person: null };
     // Pressed by somebody, so the webhook there always was will do when no room is named.
     const where = this.channelFor(repo) || (this.deliveryState().defaultChannel ? 'the default room' : '');
@@ -681,14 +698,30 @@ class ReviewService {
     if (channel) {
       // Tagged, so the author is told: a post nobody is named in is a post for whoever looks.
       out.channel = where
-        ? await this.deliver({ ...message, to: { channel: where, mention: { handle: `${provider}:${pr.author}`, display: pr.author } }, level: 'urgent', key: null }).catch((error) => ({ ok: false, why: 'failed', detail: String(error?.message ?? error) }))
+        ? await this.deliver({ ...message, to: { channel: where, mention: this.isMe(pr.author) ? null : { handle: `${provider}:${pr.author}`, display: pr.author } }, level: 'urgent', key: null }).catch((error) => ({ ok: false, why: 'failed', detail: String(error?.message ?? error) }))
         : { ok: false, why: 'no-channel' };
     }
-    if (person) {
-      out.person = await this.deliver({ ...message, voice: 'me', to: { handle: `${provider}:${pr.author}`, display: pr.author }, level: 'urgent', key: null })
-        .catch((error) => ({ ok: false, why: 'failed', detail: String(error?.message ?? error) }));
+    const failed = (error) => ({ ok: false, why: 'failed', detail: String(error?.message ?? error) });
+    const others = [...new Set(also.map((one) => String(one).trim()).filter(Boolean))];
+    const direct = { ...message, voice: 'me', level: 'urgent', key: null };
+    const author = { handle: `${provider}:${pr.author}`, display: pr.author };
+    if (together && others.length + (person ? 1 : 0) > 1) {
+      // One chat with all of them. The author has to be known first: it is asked, not skipped.
+      const authorAddress = person ? this.personAddress(`${provider}:${pr.author}`) : null;
+      if (person && !authorAddress) {
+        out.person = { ok: false, why: 'no-address' };
+      } else {
+        const group = [...(authorAddress ? [authorAddress] : []), ...others];
+        out.group = await this.deliver({ ...direct, group, to: { email: group[0] } }).catch(failed);
+      }
+    } else {
+      if (person) out.person = await this.deliver({ ...direct, to: author }).catch(failed);
+      if (others.length) {
+        out.others = [];
+        for (const address of others) out.others.push({ address, ...await this.deliver({ ...direct, to: { email: address } }).catch(failed) });
+      }
     }
-    const went = [out.channel?.ok && 'channel', out.person?.ok && 'author'].filter(Boolean);
+    const went = [out.channel?.ok && 'channel', (out.person?.ok || out.group?.ok) && 'author', out.others?.some((one) => one.ok) && 'others'].filter(Boolean);
     if (went.length) this.markReminded(repoId, prId, { how: went.join(' and '), findingIds: findings.map((one) => one.id) });
     this.engine.changed(repoId, prId);
     return out;
@@ -1794,6 +1827,9 @@ class ReviewService {
         channel: Boolean(args.channel),
         person: Boolean(args.person),
         note: String(args.note ?? '').slice(0, 1000),
+        also: Array.isArray(args.also) ? args.also.map(String).slice(0, 20) : [],
+        together: Boolean(args.together),
+        reason: ['review', 'merge', 'comments', 'other'].includes(args.reason) ? args.reason : null,
       }),
       /** The author, by direct message: their branch does not merge, and what is in the way. */
       tellConflicts: (args) => s.tellConflicts(str(args.repoId, 'A repository'), num(args.prId), { note: args.note }),

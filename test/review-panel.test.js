@@ -920,9 +920,9 @@ test('a row in the list offers both ways to tell its author', () => {
     const from = html.indexOf(`function ${name}(`);
     return html.slice(from, html.indexOf('\n  }\n', from) + 5);
   };
-  const cell = (delivery, row, { alertChannel = null, announceChannel = '' } = {}) => {
-    const state = { busy: {}, overview: { settings: { delivery, announceChannel }, repos: [{ id: 'r', alertChannel }] } };
-    return new Function('state', 'esc', 'busyAttr', 'when', `${source}${named('repoOfRow')}${named('roomFor')}; return remindCell;`)(state, String, () => '', String)(row);
+  const cell = (delivery, row, { alertChannel = null, announceChannel = '', teamsPeople = [] } = {}) => {
+    const state = { busy: {}, teamsPeople, overview: { settings: { delivery, announceChannel }, repos: [{ id: 'r', alertChannel }] } };
+    return new Function('state', 'esc', 'busyAttr', 'when', `${source}${named('isMe')}${named('repoOfRow')}${named('roomFor')}${named('authorOnTeams')}${named('connectedDot')}${named('connectedTitle')}; function refreshTeamsPeople() {}; return remindCell;`)(state, String, () => '', String)(row);
   };
   const row = { repoId: 'r', mine: false, flags: [], findings: { unresolved: 0 }, pr: { id: 7, state: 'OPEN', author: 'Inés Núñez' } };
   const all = { person: true, channel: true, defaultChannel: true };
@@ -935,6 +935,16 @@ test('a row in the list offers both ways to tell its author', () => {
   assert.match(cell(all, row, { alertChannel: 'pos', announceChannel: 'other' }), /Posted in pos/, 'the repository\'s own room first');
   assert.doesNotMatch(cell({ person: true, channel: false }, row), /data-to="channel"/);
   assert.doesNotMatch(cell({ person: false, channel: true, defaultChannel: false }, row), /data-to=/, 'nowhere to post, nobody to tell');
-  assert.equal(cell(all, { ...row, mine: true }), '', 'not on your own');
+  assert.match(cell(all, { ...row, mine: true }), /data-to="person"/, '"mine" is waiting on you, and those are the rows to tell somebody from');
+  assert.match(cell({ ...all, signedInName: 'Otra Persona' }, row), /data-to="person"/, 'somebody else signed in, it is still theirs to be told');
+  assert.equal(cell({ ...all, signedInName: 'ana lópez' }, { ...row, pr: { ...row.pr, author: 'Ana López' } }), '', 'not on your own, known from who signed in');
+  const notSignedIn = cell({ installed: true, person: false, channel: true, defaultChannel: true }, row);
+  assert.match(notSignedIn, /data-act="tell-sign-in"[^>]*data-to="person"[^>]*>Tell</, 'not signed in, the button stays and signs you in');
+  assert.match(notSignedIn, /data-to="channel"/);
+  assert.doesNotMatch(cell(all, row), /●/, 'nobody has given an address yet');
+  assert.match(cell(all, row), /The first time, it asks for their address/);
+  const known = cell(all, row, { teamsPeople: [{ handle: '', address: 'x@example.com' }].map((one) => ({ ...one, handle: 'bitbucket:' + row.pr.author.toLowerCase() })) });
+  assert.match(known, /●/, 'from then on they show as connected');
+  assert.match(known, /Connected: x@example\.com/);
   assert.equal(cell(all, { ...row, pr: { ...row.pr, state: 'MERGED' } }), '');
 });

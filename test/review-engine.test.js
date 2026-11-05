@@ -1621,3 +1621,67 @@ test('the author can be told with no comments open, and in the default room when
   service.deliveryState = () => ({ defaultChannel: false });
   assert.equal((await service.call('notifyFindings', { repoId: repo.id, prId: 7, channel: true })).channel.why, 'no-channel');
 });
+
+test('your own pull request tags nobody, and you are known by who signed in', { skip }, async () => {
+  const { service, repo } = setup([]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  const said = [];
+  service.deliver = async (message) => { said.push(message); return { ok: true }; };
+  service.deliveryState = () => ({ defaultChannel: true, signedInName: 'ana' });
+  await service.call('notifyFindings', { repoId: repo.id, prId: 7, channel: true });
+  assert.equal(said[0].to.mention, null);
+  service.deliveryState = () => ({ defaultChannel: true, signedInName: 'someone else' });
+  await service.call('notifyFindings', { repoId: repo.id, prId: 7, channel: true });
+  assert.equal(said[1].to.mention.display, 'Ana');
+});
+
+test('a notice says what it is for: a review, the merge, or whatever you write', { skip }, async () => {
+  const { service, repo } = setup([]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  const said = [];
+  service.deliver = async (message) => { said.push(message); return { ok: true }; };
+  service.deliveryState = () => ({ defaultChannel: false });
+  const tell = (args) => service.call('notifyFindings', { repoId: repo.id, prId: 7, person: true, ...args });
+
+  await tell({ reason: 'review' });
+  assert.match(said.at(-1).title, /^Please review .* #7$/);
+
+  service.store.setConflicts(repo.id, 7, ['src/a.js']);
+  await tell({ reason: 'merge', note: 'before Friday' });
+  assert.match(said.at(-1).title, /^Please resolve the merge conflict on .* #7$/);
+  assert.match(said.at(-1).body, /src\/a\.js[^]*before Friday/, 'the files, then what you added');
+
+  await tell({ reason: 'other', note: 'Can you pair on this?' });
+  assert.match(said.at(-1).title, /^About .* #7$/);
+  assert.match(said.at(-1).body, /Can you pair on this\?/);
+  assert.match((await tell({ reason: 'other', note: '  ' })).error, /Say what you need/, 'something else has to say what');
+
+  await tell({ reason: 'nonsense' });
+  assert.match(said.at(-1).title, /^Please take a look at/, 'an unknown reason is no reason');
+});
+
+test('telling several from a pull request: each privately, or one chat with all of them', { skip }, async () => {
+  const { service, repo } = setup([]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  const said = [];
+  service.deliver = async (message) => { said.push(message); return { ok: true }; };
+  service.deliveryState = () => ({ defaultChannel: false });
+  service.personAddress = () => 'ana@example.com';
+
+  const apart = await service.call('notifyFindings', { repoId: repo.id, prId: 7, person: true, also: ['b@example.com', 'b@example.com', 'c@example.com'] });
+  assert.equal(apart.person.ok, true);
+  assert.deepEqual(apart.others.map((one) => one.address), ['b@example.com', 'c@example.com']);
+  assert.deepEqual(said.map((one) => one.to.email ?? one.to.handle), ['github:Ana', 'b@example.com', 'c@example.com']);
+  assert.ok(said.every((one) => one.byHand && one.voice === 'me' && !one.group));
+
+  said.length = 0;
+  const together = await service.call('notifyFindings', { repoId: repo.id, prId: 7, person: true, also: ['b@example.com'], together: true });
+  assert.equal(together.group.ok, true);
+  assert.deepEqual(said.map((one) => one.group), [['ana@example.com', 'b@example.com']], 'one message, one chat');
+
+  said.length = 0;
+  service.personAddress = () => null;
+  const unknown = await service.call('notifyFindings', { repoId: repo.id, prId: 7, person: true, also: ['b@example.com'], together: true });
+  assert.equal(unknown.person.why, 'no-address', 'the author is asked about, so the chat is not started without them');
+  assert.equal(said.length, 0);
+});
