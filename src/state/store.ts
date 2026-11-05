@@ -37,6 +37,7 @@ import type {
   GitFile,
   GitMerge,
   GitResult,
+  GroupRecord,
   UsageReport,
 } from '../global';
 import {
@@ -4129,21 +4130,7 @@ export const useStore = create<State>((set, get) => ({
     const toOpen = members.filter((member) => !live[member.id]);
 
     // Recreate the group itself first, so each session can join as it opens.
-    if (!get().groups.some((group) => group.id === groupId)) {
-      set((state) => ({
-        groups: [
-          ...state.groups,
-          {
-            id: groupId,
-            name: record.name,
-            color: record.color ?? '#7dcfff',
-            fontSize: record.fontSize,
-            collapsed: false,
-            arrangement: record.arrangement ?? 'tabs',
-          },
-        ],
-      }));
-    }
+    recreateGroup(set, get, record);
     for (const member of alreadyOpen) get().assignToGroup(member.id, groupId);
 
     const profiles = get().profiles;
@@ -4354,6 +4341,19 @@ export const useStore = create<State>((set, get) => ({
     // Restoring several keeps the list up until the last one is through, so the
     // panel does not vanish out from under a selection that is still being acted on.
     if (options?.closeHistory !== false) set({ historyOpen: false });
+
+    // Back in the group it was in, or the tab comes back looking like it never
+    // had one. The group may have closed with it, in which case it is rebuilt
+    // from history; one deleted since is simply not there to return to.
+    let groupId: string | null = null;
+    if (past.groupId) {
+      if (get().groups.some((group) => group.id === past.groupId)) groupId = past.groupId;
+      else {
+        const [record] = (await window.api.history.groups({ limit: 500 })).filter((g) => g.id === past.groupId);
+        if (record) groupId = recreateGroup(set, get, record);
+      }
+    }
+
     const newId = await get().newSession({
       profileId: profile.id,
       kind: past.kind === 'login' ? 'shell' : past.kind,
@@ -4362,7 +4362,10 @@ export const useStore = create<State>((set, get) => ({
       resumeSessionId: conversation,
       resumedFrom: past.id,
       handoffFrom: moving && original ? { profileId: original.id, at: Date.now() } : undefined,
+      groupId,
     });
+    // Beside the members already open, so the group's label covers it.
+    if (newId && groupId) get().addToGroup(newId, groupId);
 
     if (newId && note) {
       announce(newId, `\r\n\x1b[38;5;214m── ${note} ──\x1b[0m\r\n`);
@@ -4583,6 +4586,27 @@ function filesPanel(state: State, panelId: string): FilePanel | null {
  * instead of being poured in as tabs among somebody else's work. A single tab has
  * no section to rebuild, so it simply joins the pane in front.
  */
+/** Put a group from history back in the workspace, unless it is there already. */
+function recreateGroup(set: SetState, get: GetState, record: GroupRecord): string {
+  if (!get().groups.some((group) => group.id === record.id)) {
+    set((state) => ({
+      groups: [
+        ...state.groups,
+        {
+          id: record.id,
+          name: record.name,
+          color: record.color ?? '#7dcfff',
+          fontSize: record.fontSize,
+          collapsed: false,
+          arrangement: record.arrangement ?? 'tabs',
+        },
+      ],
+    }));
+    window.api.groups.save(get().groups);
+  }
+  return record.id;
+}
+
 function restoreTabs(
   set: (fn: (state: State) => Partial<State>) => void,
   get: () => State,

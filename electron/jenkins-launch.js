@@ -5,7 +5,8 @@ const { JenkinsError, jobPath, segment } = require('./jenkins-api');
 const { familyOf, vocabulary } = require('./jenkins-board');
 const { ActiveChoices } = require('./jenkins-active-choices');
 
-const REACTIVE = /^(cascadechoice|dynamicreference)parameter$/;
+const OVERRIDE_NAME = /override/i;
+const REACTIVE = /^(cascadechoice|dynamicreference|choice)parameter$/;
 
 /**
  * Starting builds, and everything a person wants around the click.
@@ -87,6 +88,12 @@ const INDEX_AGE_MS = 4000;
 /** What a masked value looks like when Jenkins's own record of a build is read. */
 const MASK = '••••••';
 /** Parameters whose value is, in practice, "which version" — what two environments' builds are compared by. */
+/** A version that means "the newest" — what a target that deploys an image starts from when nobody picks one. */
+const LATEST_WORD = /^(latest|newest|current)$/i;
+/** A source value that says "build it from the branch" rather than naming something built: it has no meaning in an environment that deploys. */
+const BUILD_FROM_SOURCE = /^(build[-_ ]?from[-_ ]?(source|branch|git)|from[-_ ]?source)$/i;
+/** A parameter that names a git ref: where the source was built from, no more a thing to deploy than the build it made. */
+const GIT_REF_NAME = /^(git_?(ref|branch|commit|sha)|branch|ref)$/i;
 const VERSION_LIKE = /^(version|tag|image|image_?tag|image_?version|release|build_?number|commit|sha|revision|rev|git_?(commit|sha|ref|branch)|branch|ref)$/i;
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f]/;
@@ -284,6 +291,12 @@ function splitSecrets(defs, given) {
 }
 
 /** What a definition needs the person to say: no default to fall back on, and not a yes/no or a pick. */
+/** Whether a value is one the parameter lists; a multi-select takes any of them, comma-separated. */
+const acceptsChoice = (definition, value) => {
+  if (!definition.choices) return true;
+  const list = definition.choices.map(String);
+  return definition.multiple ? String(value).split(',').every((one) => list.includes(one)) : list.includes(String(value));
+};
 const isRequired = (definition) => !definition.secret && definition.default === '' && definition.type !== 'boolean' && !definition.choices;
 
 // --- naming families: which jobs are the same service in another environment --------
@@ -827,7 +840,7 @@ class Launch {
     if (!session) return {};
     const found = {};
     for (const param of session.params) {
-      if (param.initial) found[param.name] = { refs: param.refs, ...(param.initial.blocks ? { blocks: param.initial.blocks } : { choices: param.initial.choices, selected: param.initial.selected, labels: param.initial.labels }) };
+      if (param.initial) found[param.name] = { refs: param.refs, ...(param.initial.blocks ? { blocks: param.initial.blocks } : { choices: param.initial.choices, selected: param.initial.selected, labels: param.initial.labels, ...(param.initial.multiple ? { multiple: true } : {}) }) };
     }
     // The page was built with each parameter at its own default. If the form starts anywhere else, what the page holds is for another question.
     const pageValue = (one) => (one.default !== '' && one.default !== undefined ? asText(one.default) : (one.choices?.[0] ?? ''));
@@ -853,12 +866,25 @@ class Launch {
     return found;
   }
 
+  /** A target's parameters with what its reactive ones (Active Choices) list now, so a version that is a list of images has its list. */
+  async #targetDefs(api, path, job) {
+    const defs = job.parameters ?? [];
+    if (!defs.some((one) => REACTIVE.test(one.type))) return defs;
+    try {
+      const found = await this.#reactive(api, path, defs, (one) => (one.default === '' || one.default === undefined ? null : asText(one.default)));
+      // A read-only block (a table the job's script makes) is something to look at, not something to give a value to.
+      return defs.map((one) => this.#withReactive(one, found[one.name])).filter((one) => one.type !== 'display');
+    } catch {
+      return defs;
+    }
+  }
+
   /** A reactive parameter's definition, as a row of the form would have it. */
   #withReactive(definition, got) {
     if (!got) return definition;
     if (got.error) return { ...definition, type: 'string', choices: null, reactiveError: got.error };
     if (got.blocks) return { ...definition, type: 'display', choices: null, default: '', view: got.blocks, reactive: true, refs: got.refs ?? [] };
-    if (got.choices?.length) return { ...definition, type: 'choice', choices: got.choices, choiceLabels: got.labels && Object.keys(got.labels).length ? got.labels : null, default: got.selected ?? got.choices[0], reactive: true, refs: got.refs ?? [] };
+    if (got.choices?.length) return { ...definition, type: 'choice', choices: got.choices, choiceLabels: got.labels && Object.keys(got.labels).length ? got.labels : null, default: got.selected ?? got.choices[0], reactive: true, refs: got.refs ?? [], ...(got.multiple ? { multiple: true } : {}) };
     return definition;
   }
 
@@ -881,7 +907,7 @@ class Launch {
     for (const one of reactive) {
       const result = got[one.name];
       if (!result) continue;
-      params[one.name] = result.error ? { error: result.error } : result.blocks ? { view: result.blocks } : { choices: result.choices, selected: result.selected ?? result.choices?.[0] ?? null, ...(result.labels && Object.keys(result.labels).length ? { labels: result.labels } : {}) };
+      params[one.name] = result.error ? { error: result.error } : result.blocks ? { view: result.blocks } : { choices: result.choices, selected: result.selected ?? result.choices?.[0] ?? null, ...(result.multiple ? { multiple: true } : {}), ...(result.labels && Object.keys(result.labels).length ? { labels: result.labels } : {}) };
     }
     return { params };
   }
@@ -918,7 +944,7 @@ class Launch {
     }
     const rows = defs.map((definition) => {
       const secret = isSecretParam(definition);
-      const valueOk = (value) => !definition.choices || definition.choices.map(String).includes(String(value));
+      const valueOk = (value) => acceptsChoice(definition, value);
       const options = [];
       if (!secret && definition.type !== 'display') {
         for (const one of sources) if (Object.prototype.hasOwnProperty.call(one.values, definition.name)) options.push({ source: one.source, value: one.values[definition.name] });
@@ -926,7 +952,8 @@ class Launch {
         if (own !== null) options.push({ source: 'default', value: own });
       }
       // The first that the job would still accept: a version that is no longer one of the choices is not a suggestion.
-      const picked = options.find((one) => valueOk(one.value)) ?? null;
+      // An override beats the parameter it overrides, so what was typed there last time is offered, never started from.
+      const picked = options.find((one) => valueOk(one.value) && (!OVERRIDE_NAME.test(definition.name) || one.source === 'default')) ?? null;
       return {
         name: definition.name,
         type: definition.type,
@@ -934,6 +961,7 @@ class Launch {
         default: secret ? '' : definition.default,
         choices: definition.choices ?? null,
         ...(definition.choiceLabels ? { choiceLabels: definition.choiceLabels } : {}),
+        ...(definition.multiple ? { multiple: true } : {}),
         ...(definition.type === 'display' ? { view: definition.view } : {}),
         ...(definition.reactive ? { reactive: true, refs: definition.refs ?? [] } : {}),
         ...(definition.reactiveError ? { reactiveError: definition.reactiveError } : {}),
@@ -1011,7 +1039,7 @@ class Launch {
     for (const definition of defs) {
       const secret = isSecretParam(definition);
       const has = Object.prototype.hasOwnProperty.call(given, definition.name);
-      if (has && definition.choices && !definition.choices.map(String).includes(given[definition.name])) {
+      if (has && definition.choices && !acceptsChoice(definition, given[definition.name])) {
         out.badChoice.push({ name: definition.name, value: clip(given[definition.name], 60), choices: definition.choices.slice(0, 20) });
         out.errors.push(`${definition.name} has to be one of ${definition.choices.slice(0, 6).join(', ')}${definition.choices.length > 6 ? '…' : ''}`);
       }
@@ -1484,7 +1512,7 @@ class Launch {
     const unmatched = [];
     let environment = null;
     const defaultOf = (definition) => (definition.default === undefined || definition.default === null ? '' : asText(definition.default));
-    const accepts = (definition, value) => !definition.choices || definition.choices.map(String).includes(String(value));
+    const accepts = (definition, value) => acceptsChoice(definition, value);
     const pointAtTarget = (definition) => {
       const choice = definition.choices ? definition.choices.find((one) => envWordOf(one, settings) === targetEnv) : undefined;
       if (choice === undefined) return false;
@@ -1493,13 +1521,22 @@ class Launch {
       environment = environment ?? { name: definition.name, value: String(choice) };
       return true;
     };
+    /** The value of a target version parameter that means "the newest", when it has one and it is what the job starts from. */
+    const latestOf = (definition) => {
+      const own = defaultOf(definition);
+      if (!LATEST_WORD.test(own)) return null;
+      return definition.choices && !definition.choices.map(String).includes(own) ? null : own;
+    };
     const seen = new Set();
     for (const one of sourceParams) {
       seen.add(one.name);
       const definition = byName.get(one.name);
       const version = VERSION_LIKE.test(one.name);
       if (!definition) {
-        if (version && !one.masked) {
+        if (version && !one.masked && GIT_REF_NAME.test(one.name) && targetDefs.some((other) => VERSION_LIKE.test(other.name) && !isSecretParam(other))) {
+          // Where the source was built from: the target already has the parameter that says what is deployed.
+          unmatched.push(one.name);
+        } else if (version && !one.masked) {
           blocked.push({
             name: one.name,
             sourceValue: asText(one.value),
@@ -1517,13 +1554,19 @@ class Launch {
       const own = defaultOf(definition);
       if (version) {
         const named = envsIn(value, settings)[0];
-        if (named || isHostLike(value)) {
+        const newest = latestOf(definition);
+        const pickFrom = { choices: definition.choices ?? null, ...(definition.choiceLabels ? { labels: definition.choiceLabels } : {}), ...(definition.description ? { description: definition.description } : {}) };
+        if (newest !== null && (BUILD_FROM_SOURCE.test(value) || named || isHostLike(value) || !accepts(definition, value))) {
+          // What the source built or deployed is not what this environment deploys: the newest is, and any other is one pick away.
+          params[one.name] = newest;
+          copied.push({ name: one.name, value: newest, how: 'latest', ...pickFrom });
+        } else if (named || isHostLike(value)) {
           needsInput.push({ name: one.name, kind: 'environment', blocking: true, reason: `${value} looks like it belongs to ${named ?? 'the source environment'} — give the version to deploy`, sourceValue: value, targetDefault: own, choices: definition.choices ?? null });
         } else if (!accepts(definition, value)) {
           needsInput.push({ name: one.name, kind: 'required', blocking: true, reason: `${value} is not one of ${targetLabel}'s choices for ${one.name}`, sourceValue: value, targetDefault: own, choices: definition.choices });
         } else {
           params[one.name] = value;
-          copied.push({ name: one.name, value, how: 'copied' });
+          copied.push({ name: one.name, value, how: 'copied', ...pickFrom });
         }
         continue;
       }
@@ -1557,7 +1600,18 @@ class Launch {
         needsInput.push({ name: definition.name, kind: 'required', blocking: false, reason: 'it has no default and the build has no value for it: Jenkins gets an empty value', choices: definition.choices ?? null });
       }
     }
-    return { params, copied, needsInput, blocked, unmatched, environment, ready: !needsInput.some((one) => one.blocking) && blocked.length === 0 };
+    // A parameter whose own description says it is read only for one value of another ("Only read when VERSION is BUILD-FROM-SOURCE") is not asked while that other has another value.
+    const irrelevant = [];
+    const valueNow = (name) => (name in params ? params[name] : defaultOf(byName.get(name) ?? {}));
+    for (let i = needsInput.length - 1; i >= 0; i -= 1) {
+      const m = /only read when ([A-Za-z0-9_]+) is ([A-Za-z0-9_.-]*[A-Za-z0-9_])/i.exec(byName.get(needsInput[i].name)?.description ?? '');
+      if (!m || !byName.has(m[1]) || needsInput[i].kind === 'secret') continue;
+      const now = valueNow(m[1]);
+      if (now === '' || now.toLowerCase() === m[2].toLowerCase()) continue;
+      irrelevant.unshift({ name: needsInput[i].name, when: { name: m[1], value: m[2] }, now, entry: needsInput[i] });
+      needsInput.splice(i, 1);
+    }
+    return { params, copied, needsInput, blocked, unmatched, irrelevant, environment, ready: !needsInput.some((one) => one.blocking) && blocked.length === 0 };
   }
 
   /** Whether the board was told to hide this job (by its path, or a folder above it). */
@@ -1621,7 +1675,7 @@ class Launch {
 
   async #candidate({ server, api, from, picked, sourceParams, sourceJob, target, blocked, settings = {}, family = null, latest = null }) {
     const job = await this.#job(server.id, api, target.path, { builds: 20, fresh: true });
-    const defs = job.parameters ?? [];
+    const defs = await this.#targetDefs(api, target.path, job);
     const lastPassed = (job.builds ?? []).find((one) => one.status === 'success') ?? null;
     const proposal = this.#proposal(sourceParams, defs, target.env, settings, target.path.split('/').pop());
     const out = {
@@ -1778,13 +1832,13 @@ class Launch {
     if (busy && args.allowBusy !== true) throw new JenkinsError(`${toPath} is ${targetJob.inQueue ? 'already waiting for a build' : 'running now'} — wait for it, or promote anyway`);
     this.#guardRecent(server.id, [toPath], args.force === true);
 
-    const defs = targetJob.parameters ?? [];
+    const defs = await this.#targetDefs(api, toPath, targetJob);
     const sourceParams = (sourceBuild.parameters ?? []).map((one) => ({ name: one.name, value: one.value, masked: one.value === MASK || one.value === undefined || isSecretName(one.name) || looksSecretValue(one.value) }));
     const plan = this.#proposal(sourceParams, defs, familyTo?.me.env ?? null, settings, toPath.split('/').pop());
     // What the person gave: a source parameter sent to a target parameter of another name, and values typed in.
     const byName = new Map(defs.map((one) => [one.name, one]));
     const given = {};
-    const choiceOk = (definition, value) => !definition.choices || definition.choices.map(String).includes(String(value));
+    const choiceOk = (definition, value) => acceptsChoice(definition, value);
     for (const [sourceName, targetName] of Object.entries(map)) {
       const one = sourceParams.find((other) => other.name === sourceName);
       if (!one) throw new JenkinsError(`${fromPath} #${fromNumber} has no parameter called ${clip(sourceName, 40)} to map`);
@@ -1803,8 +1857,10 @@ class Launch {
       given[name] = value;
     }
     // Nothing starts until every question that decides what is deployed has an answer.
+    // What was left out because of the version the target would have started with counts again when the person picks the one it is read for.
+    const readNow = plan.irrelevant.filter((one) => String(given[one.when.name] ?? '').toLowerCase() === one.when.value.toLowerCase()).map((one) => one.entry);
     const unresolved = [
-      ...plan.needsInput.filter((one) => one.blocking && !Object.prototype.hasOwnProperty.call(given, one.name)).map((one) => `${one.name} (${one.reason})`),
+      ...[...plan.needsInput, ...readNow].filter((one) => one.blocking && !Object.prototype.hasOwnProperty.call(given, one.name)).map((one) => `${one.name} (${one.reason})`),
       ...plan.blocked.filter((one) => !Object.prototype.hasOwnProperty.call(map, one.name) && !skip.includes(one.name) && !one.candidates.some((name) => Object.prototype.hasOwnProperty.call(given, name))).map((one) => `${one.name} (${one.reason})`),
     ];
     if (unresolved.length) {

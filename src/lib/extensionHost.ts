@@ -306,10 +306,11 @@ const REMOTE_VERBS = new Map<string, Channel>(
  * Timelogbook. `connect` sends the key to whatever address it is given, so it
  * is a write for the same reason Jenkins' `testServer` is; `run` is a write
  * because a tool may change things — the app asks the person before any tool
- * Timelogbook does not mark read-only, whoever asked.
+ * Timelogbook does not mark read-only, whoever asked, unless the person switched
+ * that off for Claude sessions (`writesAccessSave`).
  */
 const TIMELOGBOOK_READ = ['overview', 'brief', 'claudeAccess'] as const;
-const TIMELOGBOOK_WRITE = ['connect', 'disconnect', 'run', 'claudeAccessSave', 'openInBrowser', 'openLink'] as const;
+const TIMELOGBOOK_WRITE = ['connect', 'disconnect', 'run', 'claudeAccessSave', 'writesAccessSave', 'openInBrowser', 'openLink'] as const;
 /** A Claude session handed a task. */
 const TIMELOGBOOK_APP = ['ask'] as const;
 const TIMELOGBOOK_VERBS = new Map<string, Channel>([
@@ -659,6 +660,9 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
   if (name.startsWith('jenkins.')) return jenkinsConsent(name, args);
   if (name === 'timelogbook.claudeAccessSave' && args.on) {
     return 'Let Claude sessions use Timelogbook?\n\nEvery Claude session in this app can then read what your API key reaches, as you. Anything that would change Timelogbook is shown to you first.';
+  }
+  if (name === 'timelogbook.writesAccessSave' && args.on) {
+    return 'Let Claude sessions change Timelogbook without asking you here?\n\nEvery Claude session in this app can then create and edit tasks, comment, log draft hours and more, as you, with no dialog. Timelogbook still decides the rest: what it wants confirmed stays a proposal, unless your API key is marked to run without confirmation.';
   }
   if (name === 'timelogbook.disconnect') {
     return 'Disconnect Timelogbook?\n\nThe API key is removed from this app. It keeps working in Timelogbook until you revoke it there.';

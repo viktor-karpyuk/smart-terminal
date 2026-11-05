@@ -3594,6 +3594,10 @@ input[type='range'] { width: 100%; accent-color: var(--accent); padding: 0; bord
 }
 
 .files-tool:hover { background: var(--bg-hover); color: var(--text); }
+.files-tool:disabled { cursor: default; }
+.files-refresh.is-spinning { animation: files-refresh-spin 0.8s linear infinite; }
+@keyframes files-refresh-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .files-refresh.is-spinning { animation: none; opacity: 0.5; } }
 .files-tool.is-on { background: var(--bg-active); color: var(--accent); }
 .files-tool.has-changes { color: var(--accent); }
 

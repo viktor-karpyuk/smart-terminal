@@ -125,6 +125,13 @@ test('a write asks the person first, and a proposal opens only on kubrik.io', { 
   assert.equal(opened.length, 1);
 });
 
+test('Kubrik always asks: its dialog cannot be switched off', { skip }, async () => {
+  const { svc } = service();
+  const r = await svc.call('writesAccessSave', { on: true });
+  assert.equal(r.ok, false);
+  assert.equal(svc.writesWithoutAsking(), false);
+});
+
 test('sessions get the tools only once the person lets them', { skip }, async () => {
   const { svc } = service();
   const session = { id: 's1', name: 'work' };
