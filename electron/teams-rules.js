@@ -20,6 +20,10 @@ function readMessage(input = {}) {
       email: text(to.email, 320) || null,
       handle: text(to.handle, 200) || null,
       channel: text(to.channel, 200) || null,
+      // Who a post in a room is meant for: tagged there, so Teams tells them.
+      mention: to.mention && typeof to.mention === 'object' && text(to.mention.handle, 200)
+        ? { handle: text(to.mention.handle, 200), display: text(to.mention.display, 120) }
+        : null,
     },
     title: text(input.title, 300),
     body: text(input.body, 4000),
@@ -47,6 +51,8 @@ function readMessage(input = {}) {
       ? { repoId: text(input.about.repoId, 200), prId: Number(input.about.prId) }
       : null,
     voice: input.voice === 'me' ? 'me' : null,
+    // Somebody pressed a button for this one, now. The same: only the app may say it.
+    byHand: input.byHand === true,
   };
 }
 
@@ -117,6 +123,13 @@ function decide({
   if (!toChannel && !person?.address) return { verdict: 'REFUSE', why: 'no-address' };
 
   if (alreadySent) return { verdict: 'HOLD', why: 'already-sent', detail: `said ${describeAge(now - Date.parse(alreadySent.sentAt ?? alreadySent.createdAt))} ago` };
+
+  /*
+   * Asking first and the ceilings are about what a machine decides on its own.
+   * Somebody who pressed "Tell Inés" has already decided; stopping to ask them
+   * again read as the button not working. "Never" still means never.
+   */
+  if (message.byHand) return { verdict: 'SEND', why: null };
 
   if (app.stance === 'ASK') return { verdict: 'ASK', why: 'asks-first' };
 

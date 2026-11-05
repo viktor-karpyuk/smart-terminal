@@ -187,12 +187,15 @@ test('your own words go from your account; the app\'s go as the bot; an extensio
     graph.push(url);
     const ok = (body) => ({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
     if (url.includes('/oauth2/')) return ok({ access_token: 't', expires_in: 3600 });
+    if (url.endsWith('/me')) return ok({ id: 'me', userPrincipalName: 'viktor@kubrik.com' });
     if (url.includes('/users/')) return ok({ id: url.split('/users/')[1] });
     if (url.endsWith('/chats')) return ok({ id: 'chat1' });
     return ok({});
   };
   const service = new TeamsService({ db: new sqlite.DatabaseSync(':memory:'), secrets: { encrypt: (t) => t, decrypt: (t) => t }, fetch, now: () => Date.parse('2026-09-23T10:00:00') });
-  service.saveConnection({ way: 'graph', tenantId: 't', clientId: 'c', clientSecret: 's', sender: 'viktor@kubrik.com' });
+  service.saveConnection({ tenantId: 't', clientId: 'c' });
+  service.store.setSecret('graph.refreshToken', 'r');
+  service.store.setSetting('graph.me.address', 'viktor@kubrik.com');
   service.store.matchPerson('bitbucket:mateo perano', MATEO.email);
   service.store.matchPerson('bitbucket:santiago', SANTI.email);
   const viaBot = [];
@@ -218,4 +221,85 @@ test('your own words go from your account; the app\'s go as the bot; an extensio
   assert.equal(last.title, 'Hi', 'it went, and through the bot, because it did not get to speak as you');
   assert.equal(last.about, null, 'no buttons that act on a PR from an extension');
   assert.equal(last.voice, null);
+});
+
+// ── the chats and channels it is added to ───────────────────────────────────
+const chatWith = (w, over = {}) => w.from(MATEO, {
+  type: 'conversationUpdate',
+  recipient: { id: '28:app1' },
+  membersAdded: [{ id: '28:app1' }],
+  conversation: { id: '19:abc@thread.v2', conversationType: 'groupChat', name: 'POS devs', tenantId: 't1' },
+  ...over,
+});
+
+test('being added to a chat is when it learns how to write there first', async () => {
+  const w = world();
+  w.queue.push(chatWith(w));
+  await w.bot.tick();
+  assert.deepEqual(w.bot.state().rooms, [{ id: '19:abc@thread.v2', name: 'POS devs', kind: 'chat' }]);
+  assert.equal(w.bot.canReach(MATEO.email), false, 'a chat is not a way to reach one person privately');
+
+  const room = w.bot.roomNamed('#pos DEVS');
+  assert.ok(room, 'asked for the way a person writes it');
+  await w.bot.sendToRoom(room, { title: 'Comments to resolve', facts: [], links: [] }, { address: MATEO.email, name: 'Mateo Perano' });
+  assert.match(w.sent[0].url, /19%3Aabc%40thread\.v2\/activities$/);
+  const content = w.sent[0].body.attachments[0].content;
+  assert.deepEqual(content.msteams.entities, [{ type: 'mention', text: '<at>Mateo Perano</at>', mentioned: { id: MATEO.email, name: 'Mateo Perano' } }]);
+  assert.ok(content.body.some((block) => block.text === '<at>Mateo Perano</at>'), 'the name in the card is the one in the entity, or Teams shows no tag');
+});
+
+test('a channel is the channel, whichever thread it was spoken in', async () => {
+  const w = world();
+  const conversation = { id: '19:chan@thread.tacv2;messageid=123', conversationType: 'channel', tenantId: 't1' };
+  w.queue.push(chatWith(w, { conversation, channelData: { team: { name: 'Kubrik' }, channel: { name: 'POS' } } }));
+  await w.bot.tick();
+  assert.deepEqual(w.bot.state().rooms, [{ id: '19:chan@thread.tacv2', name: 'Kubrik / POS', kind: 'channel' }]);
+});
+
+test('a chat Teams gave no name can be told apart and renamed, and the name stays', async () => {
+  const w = world();
+  const conversation = { id: '19:nameless@thread.v2', conversationType: 'groupChat', tenantId: 't1' };
+  w.queue.push(chatWith(w, { conversation }));
+  w.queue.push(chatWith(w));
+  await w.bot.tick();
+  assert.equal(w.bot.rooms()[conversation.id].name, 'Group chat ead.v2');
+
+  assert.throws(() => w.bot.renameRoom(conversation.id, 'pos devs'), /already a chat/);
+  assert.throws(() => w.bot.renameRoom(conversation.id, '  '), /needs a name/);
+  w.bot.renameRoom(conversation.id, '#equipo');
+  w.queue.push(chatWith(w, { conversation: { ...conversation, name: 'Whatever Teams says' } }));
+  await w.bot.tick();
+  assert.equal(w.bot.rooms()[conversation.id].name, 'equipo');
+});
+
+test('removed from a chat, it stops offering it', async () => {
+  const w = world();
+  w.queue.push(chatWith(w));
+  await w.bot.tick();
+  w.queue.push(chatWith(w, { membersAdded: undefined, membersRemoved: [{ id: '29:somebody' }] }));
+  await w.bot.tick();
+  assert.equal(w.bot.state().rooms.length, 1, 'somebody else leaving changes nothing');
+  w.queue.push(chatWith(w, { membersAdded: undefined, membersRemoved: [{ id: '28:app1' }] }));
+  await w.bot.tick();
+  assert.deepEqual(w.bot.state().rooms, []);
+  assert.equal(w.bot.roomNamed('POS devs'), null);
+});
+
+test('in a chat, words mean the pull request it last posted about, and only its author may act', async () => {
+  const w = world();
+  w.queue.push(chatWith(w));
+  await w.bot.tick();
+  await w.bot.sendToRoom(w.bot.roomNamed('POS devs'), { title: 'x', facts: [], links: [], about: { repoId: 'r1', prId: 43 } });
+  assert.ok(w.sent[0].body.attachments[0].content.actions.some((one) => one.data?.action === 'rereview'), 'its buttons come with it');
+
+  const conversation = { id: '19:abc@thread.v2', conversationType: 'groupChat', tenantId: 't1' };
+  w.queue.push(w.from(SANTI, { text: '<at>Code Reviewer</at> volvé a revisar', conversation }));
+  await w.bot.tick();
+  assert.match(w.texts().at(-1), /sólo el autor/);
+  assert.ok(!w.verbs.some(([name]) => name === 'review'), 'and nothing happened');
+
+  w.queue.push(w.from(MATEO, { text: '<at>Code Reviewer</at> volvé a revisar', conversation }));
+  await w.bot.tick();
+  await w.settle();
+  assert.ok(w.verbs.some(([name, args]) => name === 'review' && args.prId === 43), 'the author is obeyed');
 });

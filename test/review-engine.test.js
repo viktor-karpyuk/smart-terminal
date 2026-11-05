@@ -1601,3 +1601,23 @@ test('the author\'s Teams address, given from the reviewer, is matched to the na
   assert.equal(saved.ok, true);
   assert.deepEqual(matched, [['github:Ana', 'ana@example.com']], 'the same handle every message to them uses');
 });
+
+test('the author can be told with no comments open, and in the default room when none is named', { skip }, async () => {
+  const { service, repo } = setup([]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  const said = [];
+  service.deliver = async (message) => { said.push(message); return { ok: true }; };
+  service.deliveryState = () => ({ defaultChannel: true });
+
+  const out = await service.call('notifyFindings', { repoId: repo.id, prId: 7, channel: true, person: true });
+  assert.equal(out.channel.ok, true);
+  assert.equal(out.person.ok, true);
+  assert.match(said[0].title, /take a look/);
+  assert.equal(said[0].to.channel, 'the default room');
+  assert.deepEqual(said[0].to.mention, { handle: 'github:Ana', display: 'Ana' }, 'tagged, so they hear about it');
+  assert.equal(said[1].to.handle, 'github:Ana');
+  assert.ok(said.every((message) => message.byHand), 'somebody pressed this');
+
+  service.deliveryState = () => ({ defaultChannel: false });
+  assert.equal((await service.call('notifyFindings', { repoId: repo.id, prId: 7, channel: true })).channel.why, 'no-channel');
+});

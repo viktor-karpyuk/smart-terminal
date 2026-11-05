@@ -3,7 +3,7 @@
 const { TeamsStore } = require('./teams-store');
 const rules = require('./teams-rules');
 const { NoRoute } = require('./teams-bot');
-const { postWebhook, sendDirect, tokenCache, card, asText } = require('./teams-send');
+const { postWebhook, sendDirect, tokenCache, startSignIn, checkSignIn, whoAmI, SignedOut, card, asText } = require('./teams-send');
 
 /** Often enough that "waits for the morning" is the morning, rarely enough to be nothing. */
 const HOLD_SWEEP_MS = 5 * 60 * 1000;
@@ -22,14 +22,22 @@ const HOLD_SWEEP_MS = 5 * 60 * 1000;
  * none of them ever holds a token.
  */
 class TeamsService {
-  constructor({ db, secrets, fetch, notify = () => {}, emit = () => {}, now = Date.now }) {
+  constructor({
+    db, secrets, fetch, notify = () => {}, emit = () => {}, now = Date.now,
+    openExternal = () => {},
+    later = (fn, ms) => { const timer = setTimeout(fn, ms); timer.unref?.(); return timer; },
+  }) {
     // One clock for deciding and for stamping: the store dates its rows by the same "now".
     this.store = new TeamsStore(db, secrets, () => this.now());
     this.fetch = fetch;
     this.notify = notify;
     this.emit = emit;
     this.now = now;
+    this.openExternal = openExternal;
+    this.later = later;
     this.tokens = tokenCache();
+    /** A sign-in somebody has started and not finished at Microsoft yet. Memory only. */
+    this.signing = null;
     this.timer = null;
     /** The Code Reviewer's bot, once main has made it. Private messages go through it when it can. */
     this.bot = null;
@@ -56,7 +64,8 @@ class TeamsService {
     const channels = this.channels();
     const hasGraph = this.#hasGraph();
     const botReady = Boolean(this.bot?.ready());
-    const channel = { ready: hasWebhook || channels.length > 0, via: 'webhook', ...this.#check('channel') };
+    const botRooms = botReady ? Object.values(this.bot.rooms()).map((room) => room.name) : [];
+    const channel = { ready: hasWebhook || channels.length > 0 || botRooms.length > 0, via: botRooms.length ? 'webhook-or-bot' : 'webhook', ...this.#check('channel') };
     const person = { ready: hasGraph || botReady, via: botReady ? (hasGraph ? 'bot-or-graph' : 'bot') : 'graph', ...this.#check('person') };
     // The newest of the two proofs, for anything that still reads one.
     const latest = [channel, person].filter((one) => one.checkedAt).sort((a, b) => b.checkedAt.localeCompare(a.checkedAt))[0];
@@ -65,8 +74,8 @@ class TeamsService {
       ready: channel.ready || person.ready,
       /** A room: the webhook posts as the app rather than as anybody. */
       channel,
-      /** The rooms that have a webhook of their own, by name. Names only: a URL is a secret. */
-      channels: channels.map((one) => one.name),
+      /** Every room a sender can name: a webhook of its own, or a chat the bot is in. Names only: a URL is a secret. */
+      channels: [...new Set([...channels.map((one) => one.name), ...botRooms])],
       /** One person, privately: as the bot to whoever has it installed, through Graph otherwise. */
       person,
       bot: this.bot ? this.bot.state() : null,
@@ -74,21 +83,96 @@ class TeamsService {
       hasGraph,
       tenantId: this.store.setting('graph.tenantId', ''),
       clientId: this.store.setting('graph.clientId', ''),
-      sender: this.store.setting('graph.sender', ''),
+      sender: hasGraph ? this.store.setting('graph.me.address', '') : '',
+      /** Who is signed in: a name and an address, never a token. */
+      signedInAs: hasGraph ? { name: this.store.setting('graph.me.name', ''), address: this.store.setting('graph.me.address', '') } : null,
+      /** The code to type at Microsoft while a sign-in is under way. It is good for nothing else. */
+      signingIn: this.signing ? { code: this.signing.code, url: this.signing.url } : null,
+      signInError: this.store.setting('graph.signInError'),
       checkedAt: latest?.checkedAt ?? null,
       checkError: latest?.checkError ?? null,
     };
   }
 
   /*
-   * A direct message needs somebody it is from, so a registration without one
-   * is not ready — saying it is would be a green light in front of a failure.
+   * A direct message is written by whoever signed in, so with nobody signed in
+   * it is not ready — saying it is would be a green light in front of a failure.
    */
   #hasGraph() {
-    return Boolean(
-      this.store.setting('graph.tenantId') && this.store.setting('graph.clientId') &&
-      this.store.secret('graph.clientSecret') && this.store.setting('graph.sender'),
-    );
+    return Boolean(this.store.setting('graph.clientId') && this.store.secret('graph.refreshToken'));
+  }
+
+  // --- signing in as yourself ---------------------------------------------------
+
+  /**
+   * A code, and Microsoft's page opened to type it into.
+   *
+   * The rest happens at Microsoft. This finds out by asking every few seconds,
+   * which is how the device code flow is meant to be used, and it needs no
+   * secret here: what it gets is good only for the person who signed in.
+   */
+  async signIn() {
+    const clientId = this.store.setting('graph.clientId', '');
+    if (!clientId) throw new Error('Put in the Client ID of the app registration first, and save it.');
+    const tenantId = this.store.setting('graph.tenantId', '');
+    this.store.setSetting('graph.signInError', null);
+    const started = await startSignIn(this.fetch, { tenantId, clientId });
+    const attempt = { ...started, tenantId, clientId, expiresAt: this.now() + started.expiresIn * 1000 };
+    this.signing = attempt;
+    this.later(() => this.#poll(attempt), attempt.interval * 1000);
+    try { this.openExternal(started.url); } catch { /* the code and the address are on screen */ }
+    this.changed();
+    return { ok: true, code: started.code, url: started.url };
+  }
+
+  async #poll(attempt) {
+    if (this.signing !== attempt) return;
+    const stop = (reason) => {
+      this.signing = null;
+      if (reason) this.store.setSetting('graph.signInError', reason);
+      this.changed();
+    };
+    if (this.now() > attempt.expiresAt) return stop('The code expired before it was used. Sign in again.');
+    let result;
+    try {
+      result = await checkSignIn(this.fetch, attempt);
+    } catch {
+      // The network blinked. The code is still good until it expires.
+      result = { state: 'pending' };
+    }
+    if (this.signing !== attempt) return;
+    if (result.state === 'failed') return stop(result.reason);
+    if (result.state === 'done') {
+      try {
+        const me = await whoAmI(this.fetch, result.accessToken);
+        this.store.setSecret('graph.refreshToken', result.refreshToken);
+        this.store.setSetting('graph.me.name', me.name);
+        this.store.setSetting('graph.me.address', me.address);
+        this.tokens.forget();
+        return stop(null);
+      } catch (error) {
+        return stop(String(error?.message ?? error));
+      }
+    }
+    if (result.state === 'slower') attempt.interval += 5;
+    this.later(() => this.#poll(attempt), attempt.interval * 1000);
+  }
+
+  /** Signed out here, or a sign-in under way called off. */
+  signOut() {
+    this.signing = null;
+    this.store.setSetting('graph.signInError', null);
+    this.#forgetSignIn();
+    this.changed();
+    return this.connection();
+  }
+
+  #forgetSignIn() {
+    this.signing = null;
+    this.store.setSecret('graph.refreshToken', null);
+    this.store.setSetting('graph.me.name', null);
+    this.store.setSetting('graph.me.address', null);
+    this.tokens.forget();
   }
 
   /** When one way out was last tried, and what it said. */
@@ -129,7 +213,7 @@ class TeamsService {
     };
   }
 
-  saveConnection({ webhookUrl, tenantId, clientId, clientSecret, sender } = {}) {
+  saveConnection({ webhookUrl, tenantId, clientId } = {}) {
     /*
      * Refuse first, write second.
      *
@@ -142,19 +226,25 @@ class TeamsService {
     /*
      * An empty box is "leave it alone", not "erase it".
      *
-     * Neither secret is ever sent back to the panel — the field shows a
+     * The webhook URL is never sent back to the panel — the field shows a
      * placeholder saying so — which means pressing Save without retyping sends
-     * an empty string. The client secret had this guard from the start; the
-     * webhook URL did not, so saving the Connection screen without touching it
-     * deleted a working webhook and every reminder after it came back with
+     * an empty string. Saving the Connection screen without touching it used to
+     * delete a working webhook and every reminder after it came back with
      * nowhere to go.
      */
     if (url) this.store.setSecret('webhook.url', url);
+
+    /*
+     * A different registration or tenant is a different sign-in.
+     *
+     * A refresh token belongs to the client it was issued for, so keeping one
+     * across a change would show "signed in" in front of a refusal.
+     */
+    const identity = () => `${this.store.setting('graph.tenantId', '')}:${this.store.setting('graph.clientId', '')}`;
+    const before = identity();
     if (typeof tenantId === 'string') this.store.setSetting('graph.tenantId', tenantId.trim());
     if (typeof clientId === 'string') this.store.setSetting('graph.clientId', clientId.trim());
-    if (typeof sender === 'string') this.store.setSetting('graph.sender', sender.trim());
-    if (typeof clientSecret === 'string' && clientSecret.trim()) this.store.setSecret('graph.clientSecret', clientSecret.trim());
-    this.tokens.forget();
+    if (identity() !== before) this.#forgetSignIn();
     this.changed();
     return this.connection();
   }
@@ -295,12 +385,16 @@ class TeamsService {
     if (appId !== 'code-review') {
       message.about = null;
       message.voice = null;
+      message.to.mention = null;
+      message.byHand = false;
     }
     const app = this.store.seeApp(appId, appName);
     const settings = this.settings();
 
     const { person, handle, decision } = this.#judge(message, app, { display: input?.to?.display ?? '' });
-    const to = message.to.channel ? `#${message.to.channel}` : (person?.display ?? handle ?? '');
+    const to = message.to.channel
+      ? `#${message.to.channel}${message.to.mention ? ` @${message.to.mention.display || message.to.mention.handle}` : ''}`
+      : (person?.display ?? handle ?? '');
     const record = (state, reason) =>
       this.store.addMessage({
         appId, key: message.key, personId: person?.id ?? null, to,
@@ -311,6 +405,13 @@ class TeamsService {
       const row = record('SKIPPED', decision.detail ?? decision.why);
       this.changed();
       return { ok: false, why: decision.why, detail: decision.detail ?? null, id: row.id };
+    }
+    // Meant for somebody and nobody knows who they are on Teams: asked, not posted
+    // past them, so the same "Who is …?" that a direct message gets can answer it.
+    if (message.to.channel && message.to.mention && !this.#tagFor(message)) {
+      const row = record('SKIPPED', 'no-address');
+      this.changed();
+      return { ok: false, why: 'no-address', detail: null, id: row.id };
     }
     if (decision.verdict === 'HOLD') {
       const row = record('HELD', decision.detail ?? decision.why);
@@ -367,11 +468,38 @@ class TeamsService {
     return this.#toPerson(message, person);
   }
 
-  /** A room. The webhook is the app's own identity there, which is what a room wants. */
+  /**
+   * A room: its own webhook if it has one, then a chat or channel the bot is in,
+   * then the webhook there always was. The webhook posts one way; the bot's post
+   * can be answered, which is why a chat of the bot's beats the catch-all.
+   */
   async #toChannel(message) {
-    const url = this.webhookFor(message.to.channel);
-    if (!url) throw new Error(`There is no webhook for “${message.to.channel}”, and no default one to fall back on.`);
-    return postWebhook(this.fetch, url, message);
+    const tag = this.#requiredTag(message);
+    const name = message.to.channel;
+    const own = this.store.secret(channelKey(name));
+    if (own) return postWebhook(this.fetch, own, message, tag);
+    const room = this.bot?.roomNamed(name);
+    if (room) return this.bot.sendToRoom(room, message, tag);
+    const url = this.webhookFor(name);
+    if (!url) throw new Error(`There is no webhook or chat called “${name}”, and no default one to fall back on.`);
+    return postWebhook(this.fetch, url, message, tag);
+  }
+
+  /** Who a post is meant for, as Teams knows them, or nothing if nobody knows. */
+  #tagFor(message) {
+    const mention = message.to.mention;
+    if (!mention) return null;
+    const read = rules.readHandle(mention.handle);
+    if (!read) return null;
+    const address = rules.addressFrom(read.handle, { matchByEmail: this.settings().matchByEmail });
+    const person = this.store.rememberPerson({ handle: read.handle, display: mention.display, address, matchedBy: address ? 'EMAIL' : null });
+    return person?.address ? { address: person.address, name: mention.display || read.name } : null;
+  }
+
+  #requiredTag(message) {
+    const tag = this.#tagFor(message);
+    if (message.to.mention && !tag) throw new Error(`There is no Teams address for ${message.to.mention.display || message.to.mention.handle}, so they cannot be tagged.`);
+    return tag;
   }
 
   /** One person, privately. */
@@ -380,8 +508,8 @@ class TeamsService {
     if (!address) throw new Error('There is no Teams address for them.');
     /*
      * As the bot, unless it is you speaking. The bot can only write first to
-     * somebody who has it installed; anybody else is reached through Graph as
-     * before, so nothing that used to arrive stops arriving.
+     * somebody who has it installed; anybody else is reached through whoever
+     * signed in, so nothing that used to arrive stops arriving.
      */
     if (message.voice !== 'me' && this.bot?.canReach(address)) {
       try {
@@ -390,19 +518,24 @@ class TeamsService {
         if (!(error instanceof NoRoute)) throw error;
       }
     }
+    if (!this.#hasGraph()) throw new Error('Nobody is signed in to Teams here, so nothing can be said to somebody directly.');
     const credentials = {
       tenantId: this.store.setting('graph.tenantId'),
       clientId: this.store.setting('graph.clientId'),
-      clientSecret: this.store.secret('graph.clientSecret'),
-      senderAddress: this.store.setting('graph.sender') || null,
+      refreshToken: this.store.secret('graph.refreshToken'),
+      senderAddress: this.store.setting('graph.me.address') || null,
+      keep: (next) => this.store.setSecret('graph.refreshToken', next),
     };
-    if (!credentials.tenantId || !credentials.clientId || !credentials.clientSecret) {
-      throw new Error('The app registration is not filled in, so nothing can be said to somebody directly.');
+    try {
+      return await sendDirect(this.fetch, credentials, this.tokens, { address, message });
+    } catch (error) {
+      if (!(error instanceof SignedOut)) throw error;
+      // Said once, on the screen where it can be fixed, instead of failing the same way for ever.
+      this.#forgetSignIn();
+      this.store.setSetting('graph.signInError', 'Your sign-in ended. Sign in again.');
+      this.changed();
+      throw new Error('The sign-in to Teams ended; sign in again on the Teams panel.');
     }
-    if (!credentials.senderAddress) {
-      throw new Error('Nobody is set as who these messages come from — a direct message is between two people.');
-    }
-    return sendDirect(this.fetch, credentials, this.tokens, { address, message });
   }
 
   /** A message somebody had to say yes to. */
@@ -594,7 +727,7 @@ class TeamsService {
    * about you pressing Send. It is still written in the outbox, from `you`,
    * like everything else that went out.
    */
-  async compose({ title, body, channel, to } = {}) {
+  async compose({ title, body, channel, to, mention } = {}) {
     const heading = String(title ?? '').trim();
     const text = String(body ?? '').trim();
     if (!heading && !text) throw new Error('There is nothing to say.');
@@ -610,8 +743,15 @@ class TeamsService {
     const out = { channel: null, person: null };
 
     if (room !== null) {
-      const message = this.#forRoom(room, shared);
-      out.channel = await this.#sendNow(message, null, room ? `#${room}` : '# the default room', () => this.deliver(message, null));
+      const tagAddress = String(mention ?? '').trim();
+      if (tagAddress && !tagAddress.includes('@')) {
+        out.channel = { ok: false, why: 'no-address', detail: 'Somebody is tagged by their Teams address — something@yourcompany.com.' };
+      } else {
+        const known = tagAddress ? this.store.people().find((one) => String(one.address ?? '').toLowerCase() === tagAddress.toLowerCase() && !one.display.includes(':')) : null;
+        const message = this.#forRoom(room, shared, tagAddress ? { handle: `email:${tagAddress}`, display: known?.display ?? tagAddress } : null);
+        const label = `${room ? `#${room}` : '# the default room'}${tagAddress ? ` @${message.to.mention.display}` : ''}`;
+        out.channel = await this.#sendNow(message, null, label, () => this.deliver(message, null));
+      }
     }
 
     if (address) {
@@ -636,8 +776,8 @@ class TeamsService {
    * The mark is set after `readMessage`, which drops it: only this service can
    * say "the default room", never a sender.
    */
-  #forRoom(name, input) {
-    const message = rules.readMessage({ ...input, to: { channel: name || 'the default room' } });
+  #forRoom(name, input, mention = null) {
+    const message = rules.readMessage({ ...input, to: { channel: name || 'the default room', mention } });
     if (!name) message.defaultRoom = true;
     return message;
   }
@@ -646,7 +786,7 @@ class TeamsService {
   #toDefaultRoom(message) {
     const url = this.store.secret('webhook.url');
     if (!url) throw new Error('There is no default webhook — paste one under “To a channel” first.');
-    return postWebhook(this.fetch, url, message);
+    return postWebhook(this.fetch, url, message, this.#requiredTag(message));
   }
 
   /** Written as being tried, then as what became of it — the same life as any other message. */
@@ -668,6 +808,20 @@ class TeamsService {
       messages: this.store.messages({ limit: 60 }),
       waiting: this.store.waiting().length,
     };
+  }
+
+  renameBotRoom(id, name) {
+    if (!this.bot) throw new Error('The bot needs both Teams and the Code Reviewer running.');
+    const bot = this.bot.renameRoom(String(id ?? ''), name);
+    this.changed();
+    return bot;
+  }
+
+  forgetBotRoom(id) {
+    if (!this.bot) throw new Error('The bot needs both Teams and the Code Reviewer running.');
+    const bot = this.bot.forgetRoom(String(id ?? ''));
+    this.changed();
+    return bot;
   }
 
   changed() {

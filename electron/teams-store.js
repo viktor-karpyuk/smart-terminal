@@ -1,6 +1,7 @@
 'use strict';
 
 const { randomUUID } = require('node:crypto');
+const { readHandle } = require('./teams-rules');
 
 /**
  * Where the Teams extension keeps what it knows.
@@ -13,6 +14,9 @@ const { randomUUID } = require('node:crypto');
  * that asked, a message and what became of it — the whole point of this being
  * an extension of its own is that it can be handed anything.
  */
+/** A person's handle the one way it is kept and looked for, whoever is asking. */
+const folded = (handle) => readHandle(handle)?.handle ?? String(handle);
+
 const MIGRATIONS = [
   `CREATE TABLE IF NOT EXISTS tm_setting (k TEXT PRIMARY KEY, v TEXT);
    CREATE TABLE IF NOT EXISTS tm_person (
@@ -116,6 +120,36 @@ class TeamsStore {
       decrypt: (cipher) => Buffer.from(cipher, 'base64').toString(),
     };
     this.#migrate();
+    this.#foldPeople();
+  }
+
+  /**
+   * People kept under a handle nothing looks for, put back with the rest.
+   *
+   * The address given in the reviewer's "Who is … on Teams?" was kept under the
+   * name as written while every message looked under the folded one, so each
+   * answer sat in a row of its own. Those answers are still wanted. In code and
+   * not in a migration because SQLite's `lower()` leaves accented letters alone,
+   * and it has to agree with `readHandle`.
+   */
+  #foldPeople() {
+    const strays = this.all('SELECT * FROM tm_person').filter((row) => folded(row.handle) !== row.handle);
+    for (const stray of strays) {
+      const handle = folded(stray.handle);
+      const home = this.get('SELECT * FROM tm_person WHERE handle = ?', handle);
+      this.transaction(() => {
+        if (!home) {
+          this.run('UPDATE tm_person SET handle = ? WHERE id = ?', handle, stray.id);
+          return;
+        }
+        // A hand-made answer outranks a guess; among equals, the row in use stays.
+        if (stray.address && (!home.address || (stray.matched_by === 'HAND' && home.matched_by !== 'HAND'))) {
+          this.run('UPDATE tm_person SET address = ?, matched_by = ? WHERE id = ?', stray.address, stray.matched_by, home.id);
+        }
+        this.run('UPDATE tm_message SET person_id = ? WHERE person_id = ?', home.id, stray.id);
+        this.run('DELETE FROM tm_person WHERE id = ?', stray.id);
+      });
+    }
   }
 
   #migrate() {
@@ -189,12 +223,13 @@ class TeamsStore {
   }
 
   person(handle) {
-    return personRow(this.get('SELECT * FROM tm_person WHERE handle = ?', String(handle)));
+    return personRow(this.get('SELECT * FROM tm_person WHERE handle = ?', folded(handle)));
   }
 
   /** Remember somebody an extension named, whether or not we can reach them yet. */
-  rememberPerson({ handle, display = '', address = null, matchedBy = null }) {
-    const existing = this.get('SELECT * FROM tm_person WHERE handle = ?', String(handle));
+  rememberPerson({ handle: named, display = '', address = null, matchedBy = null }) {
+    const handle = folded(named);
+    const existing = this.get('SELECT * FROM tm_person WHERE handle = ?', handle);
     if (existing) {
       /*
        * A choice outranks a guess.
@@ -219,9 +254,10 @@ class TeamsStore {
   }
 
   /** A person matched by hand; the choice outranks anything worked out later. */
-  matchPerson(handle, address) {
+  matchPerson(named, address) {
+    const handle = folded(named);
     this.rememberPerson({ handle });
-    this.run('UPDATE tm_person SET address = ?, matched_by = ? WHERE handle = ?', nul(address), address ? 'HAND' : null, String(handle));
+    this.run('UPDATE tm_person SET address = ?, matched_by = ? WHERE handle = ?', nul(address), address ? 'HAND' : null, handle);
     return this.person(handle);
   }
 
