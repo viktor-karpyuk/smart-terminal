@@ -33,7 +33,7 @@ Names start with the app they belong to. Which ones exist depends on the key:
   task, change its status, assign it, comment and plan it into a sprint.
 - `projects_*` — Projects: projects, team, assignments, milestones, budget,
   plan against actual, utilisation.
-- `crm_*`, `people_*`, `billing_*`, `admin_*`, `marketing_*` — the other apps,
+- `crm_*`, `people_*`, `billing_*`, `admin_*`, `marketing_*`, `support_*` — the other apps,
   when the key includes them.
 
 Read each tool's description before calling it: it says which arguments are

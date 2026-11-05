@@ -12,13 +12,13 @@
 const { KeyMcpService, KeyMcpError, apiBase: baseOf, mcpUrl: urlOf, siteOf: siteFor, cut } = require('./key-mcp-service');
 
 /** The apps of the suite with a server (AppCode in Timelogbook; `home` delegates and has none). */
-const APPS = ['me', 'tasks', 'projects', 'crm', 'people', 'billing', 'admin', 'marketing'];
+const APPS = ['me', 'tasks', 'projects', 'crm', 'people', 'billing', 'admin', 'marketing', 'support'];
 
 const PRODUCT = {
   name: 'Timelogbook',
   table: 'tlb',
   apps: APPS,
-  appNames: { me: 'My work', tasks: 'Tasks', projects: 'Projects', crm: 'CRM', people: 'People', billing: 'Billing', admin: 'Console', marketing: 'Marketing' },
+  appNames: { me: 'My work', tasks: 'Tasks', projects: 'Projects', crm: 'CRM', people: 'People', billing: 'Billing', admin: 'Console', marketing: 'Marketing', support: 'Support' },
   keyShape: /^tlbk_([0-9A-Za-z]{8})_[0-9A-Za-z]{40}$/,
   keyMark: 'tlbk_',
   keyWhere: 'Timelogbook, Profile → API keys',
