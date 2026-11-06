@@ -703,9 +703,14 @@ class JenkinsService {
     }
   }
 
-  /** The room a pipeline tells: its own pick (an empty one is "none"), else the one for every pipeline of the server. */
+  /** The room a pipeline tells: its own pick (an empty one is "none"), else its folder's, else the one for every pipeline of the server. */
   #roomFor(map, path) {
-    if (Object.prototype.hasOwnProperty.call(map, path)) return map[path] || null;
+    // The pipeline's own pick, else the nearest folder above it that has one, else the server's.
+    const parts = String(path).split('/');
+    for (let n = parts.length; n >= 1; n -= 1) {
+      const key = parts.slice(0, n).join('/');
+      if (Object.prototype.hasOwnProperty.call(map, key)) return map[key] || null;
+    }
     return map['*'] || null;
   }
 

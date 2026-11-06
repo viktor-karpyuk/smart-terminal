@@ -2110,24 +2110,33 @@
     var none = room === '\u0000none';
     return api('teamsRoomSave', { path: path, room: none ? false : (room || null) }).then(function (data) {
       state.teams[state.server].map = data.map || {};
-      say(none ? 'Builds of ' + path + ' are not told on Teams.' : room ? 'Builds of ' + path + ' will be told in ' + room + ' when they start and end.' : 'Builds of ' + path + ' follow the server\'s room.');
+      say(none ? 'Builds of ' + path + ' are not told on Teams.' : room ? 'Builds of ' + path + ' (and anything inside it) will be told in ' + room + ' when they start and end.' : 'Builds of ' + path + ' follow the room above them.');
       drawMain();
     }, fail);
   }
 
-  /** Where this pipeline tells Teams: nothing, or one of the rooms set up on the Teams screen. Nothing at all to show without rooms. */
-  function teamsRoomPicker(job) {
+  /** The room a path would tell without a pick of its own: its nearest folder's, else the server's. */
+  function inheritedRoom(map, path) {
+    var parts = String(path).split('/');
+    for (var n = parts.length - 1; n >= 1; n -= 1) {
+      var key = parts.slice(0, n).join('/');
+      if (Object.prototype.hasOwnProperty.call(map, key)) return map[key] || '';
+    }
+    return map['*'] || '';
+  }
+
+  /** Where a pipeline or a folder tells Teams: what it inherits, another room, or none. Nothing at all to show without rooms. */
+  function teamsRoomPicker(job, what) {
     loadTeamsRooms();
     var teams = state.teams && state.teams[state.server];
     if (!teams || !teams.rooms.length) return null;
     var own = Object.prototype.hasOwnProperty.call(teams.map, job.path);
     var current = own ? (teams.map[job.path] ? teams.map[job.path] : '\u0000none') : '';
-    var everyone = teams.map['*'];
-    if (!everyone && !own) return h('select', { class: 'otherpick', 'aria-label': 'Teams room for this pipeline', title: 'Tell a room when a build of this pipeline starts and when it ends', value: '', onchange: function (event) { setTeamsRoom(job.path, event.target.value); } },
-      [h('option', { value: '', text: 'Teams: not told' })].concat(teams.rooms.map(function (name) { return h('option', { value: name, text: 'Teams: ' + name }); })));
-    var options = [h('option', { value: '', text: everyone ? 'Teams: ' + everyone + ' (every pipeline)' : 'Teams: not told' }), h('option', { value: '\u0000none', text: 'Teams: not this one' })]
-      .concat(teams.rooms.map(function (name) { return h('option', { value: name, text: 'Teams: ' + name }); }));
-    return h('select', { class: 'otherpick', 'aria-label': 'Teams room told when builds of this pipeline start and end', title: 'Tell this room when a build of this pipeline starts and when it ends', value: current, onchange: function (event) { setTeamsRoom(job.path, event.target.value); } }, options);
+    var inherited = inheritedRoom(teams.map, job.path);
+    var options = [h('option', { value: '', text: inherited ? 'Teams: ' + inherited + (what === 'folder' ? ' (inherited)' : ' (inherited)') : 'Teams: not told' })];
+    if (inherited || own) options.push(h('option', { value: '\u0000none', text: 'Teams: not this ' + what }));
+    teams.rooms.forEach(function (name) { options.push(h('option', { value: name, text: 'Teams: ' + name })); });
+    return h('select', { class: 'otherpick', 'aria-label': 'Teams room told when builds of this ' + what + ' start and end', title: 'Tell this room when a build of ' + (what === 'folder' ? 'any pipeline in this folder' : 'this pipeline') + ' starts and when it ends', value: current, onchange: function (event) { setTeamsRoom(job.path, event.target.value); } }, options);
   }
 
   function isFavorite(path) { return (state.favorites[state.server] || []).indexOf(path) >= 0; }
@@ -2975,7 +2984,7 @@
         h('button', { class: 'btn', type: 'button', text: 'Launches', title: 'What was started from here, and again', onclick: function () { go({ type: 'launches', path: job.path }); } }),
         withForm ? null : h('button', { class: 'btn', type: 'button', text: 'Run at…', title: 'Start it later', onclick: function () { openSchedule(job.path, {}); } }),
         job.buildable ? h('button', { class: 'btn', type: 'button', text: 'Disable', title: 'Stop anything from building this job until it is enabled again', disabled: isBusy('enable:' + job.path), onclick: function () { setJobEnabled(job.path, false); } }) : null,
-        teamsRoomPicker(job),
+        teamsRoomPicker(job, 'pipeline'),
         h('button', { class: 'btn' + (fav ? ' on' : ''), 'aria-pressed': fav ? 'true' : 'false', text: fav ? '★ Favorite' : '☆ Favorite', onclick: function () { setFavorite(job.path, !fav); } }),
         h('button', {
           class: 'btn primary', text: withForm ? (state.form.open ? 'Hide parameters' : 'Run with parameters…') : '▶ Run now',
@@ -3086,6 +3095,7 @@
     replace(v.head, [
       listCrumbs(page),
       h('h2', null, page.type === 'view' && page.kind === 'jenkins' ? h('span', { title: 'Managed in Jenkins — read only', 'aria-label': 'Managed in Jenkins', text: '🔒' }) : (page.type === 'folder' ? h('span', { 'aria-hidden': 'true', text: '📁' }) : null), h('span', { text: title })),
+      page.type === 'folder' ? h('div', { class: 'row', style: 'margin:6px 0' }, teamsRoomPicker({ path: page.path }, 'folder')) : null,
       note ? h('div', { class: 'lead', text: note }) : null
     ]);
     drawListBody();
@@ -7331,14 +7341,25 @@
     var got = state.teamsAll[s.id];
     if (got === undefined) {
       state.teamsAll[s.id] = null;
-      call('teamsRooms', { server: s.id }).then(function (data) { state.teamsAll[s.id] = { rooms: data.rooms || [], room: (data.map || {})['*'] || '' }; drawNotify(); }, function () { state.teamsAll[s.id] = { rooms: [], room: '' }; });
+      call('teamsRooms', { server: s.id }).then(function (data) { state.teamsAll[s.id] = { rooms: data.rooms || [], room: (data.map || {})['*'] || '', map: data.map || {} }; drawNotify(); }, function () { state.teamsAll[s.id] = { rooms: [], room: '' }; });
     }
     if (!got || !got.rooms.length) return null;
     var select = h('select', { 'aria-label': 'Teams room for every pipeline of ' + s.name, value: got.room, onchange: function (event) {
       var room = event.target.value;
-      act('teamsAll:' + s.id, function () { return call('teamsRoomSave', { server: s.id, all: true, room: room || null }); }, function (res) { got.room = (res.map || {})['*'] || ''; if (state.teams) delete state.teams[s.id]; say(got.room ? 'Every pipeline of ' + s.name + ' tells ' + got.room + ' when a build starts and ends, unless it picks another.' : s.name + ' no longer tells a room by default.'); drawNotify(); });
+      act('teamsAll:' + s.id, function () { return call('teamsRoomSave', { server: s.id, all: true, room: room || null }); }, function (res) { got.room = (res.map || {})['*'] || ''; got.map = res.map || {}; if (state.teams) delete state.teams[s.id]; say(got.room ? 'Every pipeline of ' + s.name + ' tells ' + got.room + ' when a build starts and ends, unless it picks another.' : s.name + ' no longer tells a room by default.'); drawNotify(); });
     } }, [h('option', { value: '', text: 'No room' })].concat(got.rooms.map(function (name) { return h('option', { value: name, text: name }); })));
-    return h('div', { class: 'row', style: 'margin-top:8px;gap:8px;align-items:center' }, h('div', { style: 'flex:1;min-width:0' }, h('div', { text: 'Tell a Teams room when a build starts and ends' }), h('div', { class: 'help', text: 'Every pipeline of this server, automatically. A pipeline can pick another room, or none, from its own page.' })), select);
+    var own = Object.keys(got.map || {}).filter(function (key) { return key !== '*'; }).sort();
+    var list = own.length ? h('div', { style: 'margin-top:6px' }, own.map(function (key) {
+      return h('div', { class: 'row', style: 'gap:8px;align-items:center;margin-top:4px' },
+        h('code', { style: 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis', title: key, text: key }),
+        h('span', { class: 'faint', text: got.map[key] ? '→ ' + got.map[key] : '→ none' }),
+        h('button', { type: 'button', class: 'btn small', text: 'Remove', 'aria-label': 'Stop using its own room for ' + key, onclick: function () {
+          act('teamsAll:' + s.id + key, function () { return call('teamsRoomSave', { server: s.id, path: key, room: null }); }, function (res) { got.map = res.map || {}; if (state.teams) delete state.teams[s.id]; drawNotify(); });
+        } }));
+    })) : null;
+    return h('div', { style: 'margin-top:8px' },
+      h('div', { class: 'row', style: 'gap:8px;align-items:center' }, h('div', { style: 'flex:1;min-width:0' }, h('div', { text: 'Tell a Teams room when a build starts and ends' }), h('div', { class: 'help', text: 'Every pipeline of this server, automatically. A folder or a pipeline can pick another room, or none: from its own page. Those picks:' + (own.length ? '' : ' none yet.') })), select),
+      list);
   }
 
   function notifySection() {
