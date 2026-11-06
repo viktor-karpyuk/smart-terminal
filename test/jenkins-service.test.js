@@ -3515,3 +3515,44 @@ test('R1/S3: a certificate trusted for an IPv6 address matches the host as the b
   }
   assert.equal(service.archive.hasBuild(id2, 'r', 2), true, 'what was saved is kept');
 });
+
+test('a pipeline with a Teams room tells it when a build starts and when it ends, and a pipeline without one tells nobody', { skip }, async () => {
+  const told = [];
+  const { jenkins, call, look } = custom({ tell: async (message) => { told.push(message); return { ok: true }; }, rooms: () => ['payments', 'infra'] });
+  const id = (await call('saveServer', { name: 'ci', url: 'https://ci.test', user: 'u', token: 't' })).id;
+  jenkins.job('pay'); jenkins.build('pay', 1, { result: 'SUCCESS' });
+  jenkins.job('other'); jenkins.build('other', 1, { result: 'SUCCESS' });
+  await assert.rejects(call('teamsRoomSave', { server: id, path: 'pay', room: 'nowhere' }), /not a Teams room/);
+  assert.deepEqual((await call('teamsRoomSave', { server: id, path: 'pay', room: 'payments' })).map, { pay: 'payments' });
+  assert.deepEqual((await call('teamsRooms', { server: id })).rooms, ['payments', 'infra']);
+  await look(id);
+  jenkins.build('pay', 2, { result: null }); jenkins.build('other', 2, { result: null });
+  await look(id);
+  jenkins.finish('pay', 2, 'FAILURE'); jenkins.finish('other', 2, 'FAILURE');
+  await look(id);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(told.map((m) => [m.to.channel, m.title]), [['payments', '▶ pay #2 started'], ['payments', '✖ pay #2 failed']]);
+  assert.match(told[0].links[0].url, /^https:\/\/ci\.test\/job\/pay\/2\/$/);
+  assert.deepEqual(told.map((m) => m.key), ['jenkins:' + id + ':pay:2:started', 'jenkins:' + id + ':pay:2:finished']);
+  // Taken off, it is quiet again.
+  await call('teamsRoomSave', { server: id, path: 'pay', room: null });
+  jenkins.build('pay', 3, { result: null });
+  await look(id);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(told.length, 2);
+});
+
+test('a room for every pipeline tells all of them, one pipeline can pick another or none, and the message goes without asking', { skip }, async () => {
+  const told = [];
+  const { jenkins, call, look } = custom({ tell: async (message) => { told.push(message); return { ok: true }; }, rooms: () => ['payments', 'infra'] });
+  const id = (await call('saveServer', { name: 'ci', url: 'https://ci.test', user: 'u', token: 't' })).id;
+  for (const name of ['a', 'b', 'c']) { jenkins.job(name); jenkins.build(name, 1, { result: 'SUCCESS' }); }
+  await call('teamsRoomSave', { server: id, all: true, room: 'infra' });
+  await call('teamsRoomSave', { server: id, path: 'b', room: 'payments' });
+  assert.deepEqual((await call('teamsRoomSave', { server: id, path: 'c', room: false })).map, { '*': 'infra', b: 'payments', c: '' });
+  await look(id);
+  for (const name of ['a', 'b', 'c']) jenkins.build(name, 2, { result: null });
+  await look(id);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(told.map((m) => [m.to.channel, m.title]).sort(), [['infra', '▶ a #2 started'], ['payments', '▶ b #2 started']]);
+});

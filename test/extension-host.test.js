@@ -564,11 +564,11 @@ test('renumbering migrations asks first, listing every branch and rename', () =>
  * only read must not be able to point it somewhere.
  */
 test('Jenkins verbs are routed, split into reading and changing, and nothing else gets through', () => {
-  for (const verb of ['overview', 'home', 'tree', 'views', 'viewJobs', 'smart', 'search', 'job', 'build', 'stages', 'log', 'followLog', 'stopLog', 'brief', 'queue', 'agents', 'archive', 'dashboard', 'timeline', 'runningAt', 'failingStep', 'whyNotRunning', 'lint', 'replayScript', 'searchArchive', 'seenBefore', 'notes', 'link', 'presets', 'claudeAccess', 'launchpad', 'launchHistory', 'launchPlan', 'paramPlan', 'promoteCandidates', 'schedules', 'board', 'heatmap', 'insights', 'report', 'wallboard', 'notifySettings', 'watch', 'pendingInput', 'compare', 'tests']) {
+  for (const verb of ['overview', 'home', 'tree', 'views', 'viewJobs', 'smart', 'search', 'job', 'build', 'stages', 'log', 'followLog', 'stopLog', 'brief', 'queue', 'agents', 'archive', 'dashboard', 'timeline', 'runningAt', 'failingStep', 'whyNotRunning', 'lint', 'replayScript', 'searchArchive', 'seenBefore', 'notes', 'link', 'presets', 'claudeAccess', 'launchpad', 'launchHistory', 'launchPlan', 'paramPlan', 'promoteCandidates', 'schedules', 'board', 'heatmap', 'insights', 'report', 'wallboard', 'notifySettings', 'watch', 'teamsRooms', 'pendingInput', 'compare', 'tests']) {
     assert.equal(H.route(`jenkins.${verb}`), 'jenkins', verb);
     assert.equal(H.permissionFor(`jenkins.${verb}`), 'jenkins.read', verb);
   }
-  for (const verb of ['saveServer', 'testServer', 'deleteServer', 'run', 'stop', 'follow', 'favorite', 'cancelQueued', 'archiveSettings', 'save', 'forget', 'importServers', 'exportServers', 'replay', 'restartFromStage', 'noteSet', 'noteDelete', 'openInBrowser', 'presetSave', 'presetDelete', 'claudeAccessSave', 'runMany', 'promote', 'scheduleRun', 'scheduleCancel', 'boardSettings', 'notifySettingsSave', 'inputSubmit', 'inputAbort', 'rebuild', 'jobEnabled', 'nodeToggle', 'certificate', 'trustCertificate', 'forgetCertificate']) {
+  for (const verb of ['saveServer', 'testServer', 'deleteServer', 'run', 'stop', 'follow', 'favorite', 'cancelQueued', 'archiveSettings', 'save', 'forget', 'importServers', 'exportServers', 'replay', 'restartFromStage', 'noteSet', 'noteDelete', 'openInBrowser', 'presetSave', 'presetDelete', 'claudeAccessSave', 'runMany', 'promote', 'scheduleRun', 'scheduleCancel', 'boardSettings', 'notifySettingsSave', 'teamsRoomSave', 'inputSubmit', 'inputAbort', 'rebuild', 'jobEnabled', 'nodeToggle', 'certificate', 'trustCertificate', 'forgetCertificate']) {
     assert.equal(H.route(`jenkins.${verb}`), 'jenkins', verb);
     assert.equal(H.permissionFor(`jenkins.${verb}`), 'jenkins.write', verb);
   }

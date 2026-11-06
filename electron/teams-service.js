@@ -379,7 +379,7 @@ class TeamsService {
     return { person, handle, decision };
   }
 
-  async send(appId, appName, input) {
+  async send(appId, appName, input, { chosen = false } = {}) {
     const message = rules.readMessage(input);
     // Buttons that act on a pull request, and speaking as you, are the Code Reviewer's alone.
     if (appId !== 'code-review') {
@@ -389,6 +389,9 @@ class TeamsService {
       message.byHand = false;
       message.group = null;
     }
+    // Said by the app itself, never by an extension: somebody picked this room for this by hand, so it goes without asking
+    // each time — the same as pressing Send. "Never" (Deny) still means never.
+    if (chosen) message.byHand = true;
     const app = this.store.seeApp(appId, appName);
     const settings = this.settings();
 
