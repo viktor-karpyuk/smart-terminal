@@ -3556,3 +3556,20 @@ test('a room for every pipeline tells all of them, one pipeline can pick another
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(told.map((m) => [m.to.channel, m.title]).sort(), [['infra', '▶ a #2 started'], ['payments', '▶ b #2 started']]);
 });
+
+test('a folder can pick a room for everything inside it: the nearest pick wins, a pipeline can still pick another or none', { skip }, async () => {
+  const told = [];
+  const { jenkins, call, look } = custom({ tell: async (message) => { told.push(message); return { ok: true }; }, rooms: () => ['payments', 'infra', 'erp'] });
+  const id = (await call('saveServer', { name: 'ci', url: 'https://ci.test', user: 'u', token: 't' })).id;
+  jenkins.folder('KUBRIK'); jenkins.folder('KUBRIK/TIMELOG');
+  for (const path of ['KUBRIK/TIMELOG/api', 'KUBRIK/TIMELOG/web', 'KUBRIK/other', 'loose']) { jenkins.job(path); jenkins.build(path, 1, { result: 'SUCCESS' }); }
+  await call('teamsRoomSave', { server: id, all: true, room: 'infra' });
+  await call('teamsRoomSave', { server: id, path: 'KUBRIK', room: 'erp' });
+  await call('teamsRoomSave', { server: id, path: 'KUBRIK/TIMELOG', room: 'payments' });
+  await call('teamsRoomSave', { server: id, path: 'KUBRIK/TIMELOG/web', room: false });
+  await look(id);
+  for (const path of ['KUBRIK/TIMELOG/api', 'KUBRIK/TIMELOG/web', 'KUBRIK/other', 'loose']) jenkins.build(path, 2, { result: null });
+  await look(id);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(told.map((m) => [m.to.channel, m.facts[0].value]).sort(), [['erp', 'KUBRIK/other'], ['infra', 'loose'], ['payments', 'KUBRIK/TIMELOG/api']]);
+});
