@@ -259,7 +259,7 @@ const JENKINS_READ = [
   // Launching: what to launch next and with what, what was launched before, the services-by-environment board, and the dashboard's richer views.
   'launchpad', 'launchHistory', 'launchPlan', 'paramPlan', 'promoteCandidates', 'schedules', 'board', 'heatmap', 'insights', 'report', 'wallboard',
   // What the person is told about, per server — and a panel saying it is looking, so the server is read often while it is.
-  'notifySettings', 'watch',
+  'notifySettings', 'watch', 'teamsRooms',
   // Waiting for an approval, what changed since the last green build, and the test results.
   'pendingInput', 'compare', 'tests',
 ] as const;
@@ -278,7 +278,7 @@ const JENKINS_WRITE = [
   'runMany', 'promote', 'scheduleRun', 'scheduleCancel', 'boardSettings',
   // Asking the job's own script on Jenkins what its reactive parameters hold for the values the form has now (it runs that script).
   'paramRefresh',
-  'notifySettingsSave',
+  'notifySettingsSave', 'teamsRoomSave',
   // Answering a pipeline's question, starting a build again, switching a job or an agent on and off.
   'inputSubmit', 'inputAbort', 'rebuild', 'jobEnabled', 'nodeToggle',
   /*

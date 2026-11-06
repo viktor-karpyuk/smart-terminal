@@ -1,7 +1,7 @@
 'use strict';
 
 const { JenkinsStore } = require('./jenkins-store');
-const { JenkinsApi, JenkinsError, bulk, normalizeBase, LOG_TAIL_BYTES, stageNames, stageAverages } = require('./jenkins-api');
+const { JenkinsApi, JenkinsError, bulk, normalizeBase, jobPath, LOG_TAIL_BYTES, stageNames, stageAverages } = require('./jenkins-api');
 const { JenkinsArchive, gzipSink } = require('./jenkins-archive');
 const { MetricsCollector } = require('./jenkins-metrics');
 const { Extras } = require('./jenkins-extras');
@@ -200,7 +200,7 @@ function transition(settled, outcome) {
 const WORDS = { success: 'passed', failed: 'failed', unstable: 'is unstable', aborted: 'was aborted' };
 
 class JenkinsService {
-  constructor({ db, secrets, fetch, notify = () => {}, emit = () => {}, now = Date.now, sleep, tickMs = TICK_MS, logMs = LOG_MS, nudgeMs = NUDGE_MS, archiveDb = null, archiveRetryMs = ARCHIVE_RETRY_MS, pickFile = null, saveFile = null, openExternal = null, random = Math.random, certificatesChanged = null, apiOptions = {} }) {
+  constructor({ db, secrets, fetch, notify = () => {}, emit = () => {}, now = Date.now, sleep, tickMs = TICK_MS, logMs = LOG_MS, nudgeMs = NUDGE_MS, archiveDb = null, archiveRetryMs = ARCHIVE_RETRY_MS, pickFile = null, saveFile = null, openExternal = null, random = Math.random, certificatesChanged = null, apiOptions = {}, tell = null, rooms = null }) {
     this.store = new JenkinsStore(db, secrets);
     // Finished builds are kept in a file of their own, which a person may delete. A file that cannot be opened
     // costs the archive and nothing else: everything works as it did, live.
@@ -251,6 +251,10 @@ class JenkinsService {
     /** For the clients made here: a shorter timeout, another way of pacing (tests, and a Jenkins that needs it). */
     this.apiOptions = apiOptions;
     this.notify = notify;
+    /** Says something in a Teams room: `(message) => Promise`. Without it, a pipeline's room is kept and nothing is posted. */
+    this.tell = tell;
+    /** The names of the rooms Teams has a webhook for. */
+    this.rooms = rooms ?? (() => []);
     this.emitter = emit;
     this.now = now;
     this.sleep = sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -595,6 +599,7 @@ class JenkinsService {
     for (const one of [...started, ...finished]) this.#dropStages(id, one.path);
     if (started.length || finished.length) this.emit({ type: 'changed', server: id, started, finished });
     this.#queueArchive(id, finished);
+    this.#tellRooms(id, started, finished);
     await this.#judgeFinished(id, finished);
   }
 
@@ -686,6 +691,54 @@ class JenkinsService {
   #notifySettings(id) {
     const on = (key) => this.store.setting(`notify.${id}.${key}`, '1') !== '0';
     return { mine: on('mine'), favorites: on('favorites'), system: on('system') };
+  }
+
+  /** Which Teams room each pipeline of a server tells, by job path: `{ 'team/app': 'payments' }`. */
+  #roomsOf(id) {
+    try {
+      const map = JSON.parse(this.store.setting(`teams.${id}`, '{}'));
+      return map && typeof map === 'object' && !Array.isArray(map) ? map : {};
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * A build began, a build ended: said in the room its pipeline was given, and nowhere else. Best effort and quiet — a
+   * room that cannot be reached must not hold up the poller — and one message per build and moment (the key), so a
+   * look that sees the same change twice says it once.
+   */
+  #tellRooms(id, started, finished) {
+    if (!this.tell) return;
+    const rooms = this.#roomsOf(id);
+    if (!Object.keys(rooms).length) return;
+    const jobs = [...started.map((one) => ({ ...one, began: true })), ...finished.map((one) => ({ ...one, began: false }))];
+    for (const one of jobs) {
+      const room = rooms[one.path];
+      if (!room || !one.number) continue;
+      this.#tellOne(id, room, one).catch(() => { /* the Teams screen's outbox says what became of it */ });
+    }
+  }
+
+  async #tellOne(id, room, one) {
+    const server = this.store.server(id);
+    if (!server) return;
+    const name = String(one.path).split('/').pop();
+    const link = `${normalizeBase(server.url).replace(/\/$/, '')}${jobPath(one.path)}/${one.number}/`;
+    const facts = [{ label: 'Pipeline', value: one.path }, { label: 'Build', value: `#${one.number}` }, { label: 'Server', value: this.#serverName(id) }];
+    let title;
+    if (one.began) {
+      title = `▶ ${name} #${one.number} started`;
+    } else {
+      const mark = { success: '✔', failed: '✖', unstable: '⚠', aborted: '■' }[one.status] ?? '•';
+      title = `${mark} ${name} #${one.number} ${WORDS[one.status] ?? one.status ?? 'finished'}`;
+      facts.push({ label: 'Result', value: String(one.status ?? 'unknown') });
+      try {
+        const done = await this.#on(id, false).api.buildSummary(one.path, one.number);
+        if (done?.duration > 0) facts.push({ label: 'Took', value: `${Math.max(1, Math.round(done.duration / 1000))} s` });
+      } catch { /* the message is still worth sending without how long it took */ }
+    }
+    await this.tell({ to: { channel: room }, title, facts, links: [{ text: 'Open the build', url: link }], key: `jenkins:${id}:${one.path}:${one.number}:${one.began ? 'started' : 'finished'}`, level: 'urgent' });
   }
 
   #serverName(id) {
@@ -2158,6 +2211,23 @@ class JenkinsService {
           throw new JenkinsError(error.message);
         }
         return { follows: this.store.follows() };
+      },
+      // Which Teams room each pipeline of this server tells when a build starts and ends, and the rooms there are to pick from.
+      teamsRooms: async (args) => {
+        const { server } = serverOf(args);
+        return { rooms: this.rooms(), map: this.#roomsOf(server.id) };
+      },
+      teamsRoomSave: async (args) => {
+        const { server } = serverOf(args);
+        const path = jobOf(args);
+        const room = args.room === null || args.room === undefined || args.room === '' ? null : String(args.room).trim().slice(0, 200);
+        if (room !== null && !this.rooms().includes(room)) throw new JenkinsError(`${room} is not a Teams room here — add its webhook on the Teams screen first`);
+        const map = this.#roomsOf(server.id);
+        if (room === null) delete map[path];
+        else map[path] = room;
+        if (Object.keys(map).length > 500) throw new JenkinsError('That is 500 pipelines with a room already');
+        this.store.setSetting(`teams.${server.id}`, Object.keys(map).length ? JSON.stringify(map) : null);
+        return { map };
       },
       favorite: async (args) => {
         const { server } = serverOf(args);

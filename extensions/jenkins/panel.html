@@ -621,7 +621,7 @@
   }
 
   /** Verbs that wait for a person (a question the app asks, a dialog it opens) must not be given up on. */
-  var PATIENT = ['run', 'stop', 'runMany', 'promote', 'scheduleRun', 'scheduleCancel', 'replay', 'restartFromStage', 'rebuild', 'inputSubmit', 'inputAbort', 'jobEnabled', 'nodeToggle', 'trustCertificate', 'certificate', 'forgetCertificate', 'exportServers', 'importServers', 'forget', 'deleteServer', 'saveServer', 'testServer', 'ask', 'cancelQueued', 'openInBrowser', 'claudeAccessSave', 'notifySettingsSave', 'boardSettings', 'archiveSettings', 'save', 'kill', 'noteSet', 'noteDelete', 'presetSave', 'presetDelete', 'favorite', 'follow'];
+  var PATIENT = ['run', 'stop', 'runMany', 'promote', 'scheduleRun', 'scheduleCancel', 'replay', 'restartFromStage', 'rebuild', 'inputSubmit', 'inputAbort', 'jobEnabled', 'nodeToggle', 'trustCertificate', 'certificate', 'forgetCertificate', 'exportServers', 'importServers', 'forget', 'deleteServer', 'saveServer', 'testServer', 'ask', 'cancelQueued', 'openInBrowser', 'claudeAccessSave', 'notifySettingsSave', 'boardSettings', 'archiveSettings', 'save', 'kill', 'noteSet', 'noteDelete', 'presetSave', 'presetDelete', 'favorite', 'follow', 'teamsRoomSave'];
   var ANSWER_WITHIN = 60000;
 
   /** A read that never answers does not leave a page spinning for ever: it fails, readably, after a minute. */
@@ -2094,6 +2094,36 @@
     }, fail);
   }
 
+  /** The Teams rooms there are to pick from, and which one each pipeline of this server tells (loaded once per server). */
+  function loadTeamsRooms() {
+    var server = state.server;
+    if (!server || (state.teams && state.teams[server] !== undefined)) return;
+    state.teams = state.teams || {};
+    state.teams[server] = null;
+    api('teamsRooms', {}).then(function (data) {
+      state.teams[server] = { rooms: data.rooms || [], map: data.map || {} };
+      if (state.page.type === 'job' && !typing()) drawMain();
+    }, function () { state.teams[server] = { rooms: [], map: {} }; });
+  }
+
+  function setTeamsRoom(path, room) {
+    return api('teamsRoomSave', { path: path, room: room || null }).then(function (data) {
+      state.teams[state.server].map = data.map || {};
+      say(room ? 'Builds of ' + path + ' will be told in ' + room + ' when they start and end. (On the Teams screen, Apps, set Jenkins to Allow with no daily limit — otherwise each message waits for your OK.)' : 'Builds of ' + path + ' are no longer told on Teams.');
+      drawMain();
+    }, fail);
+  }
+
+  /** Where this pipeline tells Teams: nothing, or one of the rooms set up on the Teams screen. Nothing at all to show without rooms. */
+  function teamsRoomPicker(job) {
+    loadTeamsRooms();
+    var teams = state.teams && state.teams[state.server];
+    if (!teams || !teams.rooms.length) return null;
+    var current = teams.map[job.path] || '';
+    var options = [h('option', { value: '', text: 'Teams: not told' })].concat(teams.rooms.map(function (name) { return h('option', { value: name, text: 'Teams: ' + name }); }));
+    return h('select', { class: 'otherpick', 'aria-label': 'Teams room told when builds of this pipeline start and end', title: 'Tell this room when a build of this pipeline starts and when it ends', value: current, onchange: function (event) { setTeamsRoom(job.path, event.target.value); } }, options);
+  }
+
   function isFavorite(path) { return (state.favorites[state.server] || []).indexOf(path) >= 0; }
 
   function isFollowed(path, number) {
@@ -2939,6 +2969,7 @@
         h('button', { class: 'btn', type: 'button', text: 'Launches', title: 'What was started from here, and again', onclick: function () { go({ type: 'launches', path: job.path }); } }),
         withForm ? null : h('button', { class: 'btn', type: 'button', text: 'Run at…', title: 'Start it later', onclick: function () { openSchedule(job.path, {}); } }),
         job.buildable ? h('button', { class: 'btn', type: 'button', text: 'Disable', title: 'Stop anything from building this job until it is enabled again', disabled: isBusy('enable:' + job.path), onclick: function () { setJobEnabled(job.path, false); } }) : null,
+        teamsRoomPicker(job),
         h('button', { class: 'btn' + (fav ? ' on' : ''), 'aria-pressed': fav ? 'true' : 'false', text: fav ? '★ Favorite' : '☆ Favorite', onclick: function () { setFavorite(job.path, !fav); } }),
         h('button', {
           class: 'btn primary', text: withForm ? (state.form.open ? 'Hide parameters' : 'Run with parameters…') : '▶ Run now',
