@@ -1060,3 +1060,20 @@ test('the reviewer can ask for one chat with several; no other extension can', {
   await service.send('other', 'Other', { to: { email: 'braian@kubrik.com' }, group: ['b@kubrik.com', 'braian@kubrik.com'], title: 'y', key: 'o1' });
   assert.equal(JSON.parse(calls.find((call) => call.url.endsWith('/v1.0/chats')).body).chatType, 'oneOnOne', 'a direct message to the one it named');
 });
+
+test('a room somebody picked for an app is told without asking, an extension cannot claim that for itself, and Deny still means never', { skip }, async () => {
+  const { service, calls } = setup();
+  service.saveConnection({ webhookUrl: 'https://outlook.office.com/webhook/abc' });
+  service.store.seeApp('jenkins', 'Jenkins');
+  const message = (key, extra = {}) => ({ to: { channel: 'builds' }, title: 'pay #2 started', key, ...extra });
+
+  // A new app asks first, whatever it says about itself.
+  assert.equal((await service.send('jenkins', 'Jenkins', message('k1', { byHand: true }))).why, 'asks-first');
+  assert.equal(calls.length, 0);
+  // The app's own call, for a room a person chose, goes.
+  assert.equal((await service.send('jenkins', 'Jenkins', message('k2'), { chosen: true })).ok, true);
+  assert.equal(calls.length, 1);
+  service.store.setAppStance('jenkins', 'DENY');
+  assert.equal((await service.send('jenkins', 'Jenkins', message('k3'), { chosen: true })).why, 'not-allowed');
+  assert.equal(calls.length, 1);
+});

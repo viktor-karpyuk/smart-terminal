@@ -3541,3 +3541,18 @@ test('a pipeline with a Teams room tells it when a build starts and when it ends
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(told.length, 2);
 });
+
+test('a room for every pipeline tells all of them, one pipeline can pick another or none, and the message goes without asking', { skip }, async () => {
+  const told = [];
+  const { jenkins, call, look } = custom({ tell: async (message) => { told.push(message); return { ok: true }; }, rooms: () => ['payments', 'infra'] });
+  const id = (await call('saveServer', { name: 'ci', url: 'https://ci.test', user: 'u', token: 't' })).id;
+  for (const name of ['a', 'b', 'c']) { jenkins.job(name); jenkins.build(name, 1, { result: 'SUCCESS' }); }
+  await call('teamsRoomSave', { server: id, all: true, room: 'infra' });
+  await call('teamsRoomSave', { server: id, path: 'b', room: 'payments' });
+  assert.deepEqual((await call('teamsRoomSave', { server: id, path: 'c', room: false })).map, { '*': 'infra', b: 'payments', c: '' });
+  await look(id);
+  for (const name of ['a', 'b', 'c']) jenkins.build(name, 2, { result: null });
+  await look(id);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(told.map((m) => [m.to.channel, m.title]).sort(), [['infra', '▶ a #2 started'], ['payments', '▶ b #2 started']]);
+});

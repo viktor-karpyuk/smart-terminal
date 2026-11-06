@@ -703,6 +703,12 @@ class JenkinsService {
     }
   }
 
+  /** The room a pipeline tells: its own pick (an empty one is "none"), else the one for every pipeline of the server. */
+  #roomFor(map, path) {
+    if (Object.prototype.hasOwnProperty.call(map, path)) return map[path] || null;
+    return map['*'] || null;
+  }
+
   /**
    * A build began, a build ended: said in the room its pipeline was given, and nowhere else. Best effort and quiet — a
    * room that cannot be reached must not hold up the poller — and one message per build and moment (the key), so a
@@ -714,7 +720,7 @@ class JenkinsService {
     if (!Object.keys(rooms).length) return;
     const jobs = [...started.map((one) => ({ ...one, began: true })), ...finished.map((one) => ({ ...one, began: false }))];
     for (const one of jobs) {
-      const room = rooms[one.path];
+      const room = this.#roomFor(rooms, one.path);
       if (!room || !one.number) continue;
       this.#tellOne(id, room, one).catch(() => { /* the Teams screen's outbox says what became of it */ });
     }
@@ -738,7 +744,7 @@ class JenkinsService {
         if (done?.duration > 0) facts.push({ label: 'Took', value: `${Math.max(1, Math.round(done.duration / 1000))} s` });
       } catch { /* the message is still worth sending without how long it took */ }
     }
-    await this.tell({ to: { channel: room }, title, facts, links: [{ text: 'Open the build', url: link }], key: `jenkins:${id}:${one.path}:${one.number}:${one.began ? 'started' : 'finished'}`, level: 'urgent' });
+    await this.tell({ to: { channel: room }, title, facts, links: [{ text: 'Open the build', url: link }], key: `jenkins:${id}:${one.path}:${one.number}:${one.began ? 'started' : 'finished'}`, level: 'normal' });
   }
 
   #serverName(id) {
@@ -2219,11 +2225,14 @@ class JenkinsService {
       },
       teamsRoomSave: async (args) => {
         const { server } = serverOf(args);
-        const path = jobOf(args);
-        const room = args.room === null || args.room === undefined || args.room === '' ? null : String(args.room).trim().slice(0, 200);
+        // `all` is every pipeline of the server; a pipeline's own pick beats it, and `room: false` is its pick of none.
+        const path = args.all === true ? '*' : jobOf(args);
+        const none = args.room === false;
+        const room = none || args.room === null || args.room === undefined || args.room === '' ? null : String(args.room).trim().slice(0, 200);
         if (room !== null && !this.rooms().includes(room)) throw new JenkinsError(`${room} is not a Teams room here — add its webhook on the Teams screen first`);
         const map = this.#roomsOf(server.id);
-        if (room === null) delete map[path];
+        if (none) map[path] = '';
+        else if (room === null) delete map[path];
         else map[path] = room;
         if (Object.keys(map).length > 500) throw new JenkinsError('That is 500 pipelines with a room already');
         this.store.setSetting(`teams.${server.id}`, Object.keys(map).length ? JSON.stringify(map) : null);
