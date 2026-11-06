@@ -560,7 +560,12 @@ function createJenkinsService() {
       certificatesChanged: makeJenkinsSession,
       // A pipeline's room on Teams: told through the Teams service as the app 'jenkins', so its rules, its outbox and its Apps tab apply.
       tell: (message) => (teamsService ? teamsService.send('jenkins', 'Jenkins', message, { chosen: true }) : Promise.resolve({ ok: false, why: 'no-delivery' })),
-      rooms: () => (teamsService ? teamsService.channels().filter((one) => one.hasWebhook).map((one) => one.name) : []),
+      // The rooms with a webhook of their own, and the one webhook there always was (what a name nobody set up falls back to).
+      rooms: () => {
+        if (!teamsService) return [];
+        const named = teamsService.channels().filter((one) => one.hasWebhook).map((one) => one.name);
+        return teamsService.connection().hasWebhook && !named.includes('Default room') ? ['Default room', ...named] : named;
+      },
       // Opening a build in the browser: the service builds the address from the server it knows and checks it; this only opens web addresses.
       openExternal: (url) => {
         if (/^https?:\/\//i.test(String(url))) return shell.openExternal(String(url));
