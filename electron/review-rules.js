@@ -150,6 +150,87 @@ const REVIEW_DENIED = ['Edit', 'Write', 'WebFetch', 'WebSearch', 'Bash(git *--ou
 const FIX_TOOLS = ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'Bash', 'TodoWrite'];
 
 /**
+ * How far a fix goes, chosen by the person: the change that settles the finding
+ * and nothing else, the finding settled properly with the code around it left
+ * better, or the part it lives in written again. Each says it in the prompt,
+ * and the deeper ones get a stronger model and more time, because they need it.
+ */
+const FIX_DEPTHS = {
+  FIX: {
+    label: 'Just the fix',
+    blurb: 'The smallest change that really settles it.',
+    model: 'sonnet',
+    timeout: 30 * 60 * 1000,
+    instructions: [
+      'ALCANCE: SÓLO EL ARREGLO',
+      'Hacé el cambio más chico que resuelva el problema de verdad (no un parche que lo esconda).',
+      'Tocá otros archivos sólo si el arreglo lo exige.',
+    ],
+  },
+  IMPROVE: {
+    label: 'Improve',
+    blurb: 'Settle it properly: the cause, the code around it, a test.',
+    model: 'opus',
+    timeout: 45 * 60 * 1000,
+    instructions: [
+      'ALCANCE: MEJORA',
+      'Resolvé la causa, no sólo el síntoma. Podés reorganizar el código involucrado, extraer o',
+      'unificar lógica repetida, endurecer validaciones y agregar o ajustar tests que cubran el caso.',
+      'Si hay casos hermanos del mismo problema cerca (la misma guarda en otro lugar, el mismo patrón),',
+      'arreglalos también. Mantené el cambio enfocado en esta zona del código.',
+    ],
+  },
+  REWRITE: {
+    label: 'Rewrite',
+    blurb: 'Write the part it lives in again, when patching it is the wrong answer.',
+    model: 'opus',
+    timeout: 60 * 60 * 1000,
+    instructions: [
+      'ALCANCE: REHACER COMPLETO',
+      'Si el diseño de la parte afectada es lo que produce el problema, rehacela: reescribí la',
+      'función, la clase o el flujo como debería ser, con sus tests. Conservá el comportamiento',
+      'público que otros usan salvo que el hallazgo sea justamente sobre ese contrato; si lo',
+      'cambiás, actualizá a quienes lo usan dentro de este repositorio y decilo en el resumen.',
+    ],
+  },
+};
+
+/** The depth a fix runs at: the one asked for, else the repository's, else just the fix. */
+function fixDepth(asked, repoDefault) {
+  const key = String(asked || repoDefault || 'FIX').toUpperCase();
+  return FIX_DEPTHS[key] ? key : 'FIX';
+}
+
+/**
+ * Instructions a person reaches for often, one click away. They are only text:
+ * a click adds it to the note, where it can be changed before the fix runs.
+ * The person's own list replaces this one when they save it.
+ */
+const FIX_PRESETS = [
+  { label: 'Add a test', text: 'Agregá un test que falle sin el arreglo y pase con él.' },
+  { label: 'Keep the API', text: 'No cambies firmas públicas, endpoints ni DTOs: el arreglo va por dentro.' },
+  { label: 'Follow existing style', text: 'Seguí el estilo y los patrones que ya usa este código; no introduzcas uno nuevo.' },
+  { label: 'Fix siblings too', text: 'Buscá el mismo problema en el resto del PR y arreglalo en todos los lugares.' },
+  { label: 'No migrations', text: 'No crees ni modifiques migraciones de base de datos.' },
+  { label: 'Explain the choice', text: 'En el resumen, explicá por qué elegiste este enfoque y qué otros descartaste.' },
+];
+
+/** The preset list as saved, or the default one: only entries with both a label and a text. */
+function fixPresets(saved) {
+  let list = null;
+  try {
+    list = saved ? JSON.parse(saved) : null;
+  } catch {
+    list = null;
+  }
+  if (!Array.isArray(list)) return FIX_PRESETS;
+  return list
+    .filter((item) => item && String(item.label ?? '').trim() && String(item.text ?? '').trim())
+    .map((item) => ({ label: String(item.label).trim().slice(0, 40), text: String(item.text).trim().slice(0, 1000) }))
+    .slice(0, 20);
+}
+
+/**
  * What a fix cannot do even while fixing.
  *
  * Pushing is a person's decision; a reset in a workshop holding the only copy of
@@ -486,13 +567,27 @@ function finalPassText(parsed) {
 
 function parseFix(raw) {
   const object = parseJsonLoose(raw);
-  if (!object) return { fixed: false, summary: '', reason: '', elsewhere: [] };
+  if (!object) return { fixed: false, summary: '', reason: '', elsewhere: [], options: [], alternatives: '', alsoResolves: [] };
   // What has to change in another repository: named, and described well enough to be done there.
   const elsewhere = (Array.isArray(object.elsewhere) ? object.elsewhere : [])
     .filter((item) => item && String(item.repo ?? '').trim() && String(item.change ?? '').trim())
     .map((item) => ({ repo: String(item.repo).trim(), change: String(item.change).trim().slice(0, 4000) }))
     .slice(0, 3);
-  return { fixed: object.fixed === true, summary: String(object.summary ?? ''), reason: String(object.reason ?? ''), elsewhere };
+  // The ways it offers when choosing is not its call: a title and a plan the next run can be told to follow.
+  const options = (Array.isArray(object.options) ? object.options : [])
+    .filter((item) => item && String(item.title ?? '').trim() && String(item.plan ?? '').trim())
+    .map((item) => ({ title: String(item.title).trim().slice(0, 160), plan: String(item.plan).trim().slice(0, 3000) }))
+    .slice(0, 4);
+  const alsoResolves = (Array.isArray(object.alsoResolves) ? object.alsoResolves : []).map((item) => String(item ?? '').trim()).filter(Boolean).slice(0, 10);
+  return {
+    fixed: object.fixed === true,
+    summary: String(object.summary ?? ''),
+    reason: String(object.reason ?? ''),
+    elsewhere,
+    options,
+    alternatives: String(object.alternatives ?? '').slice(0, 3000),
+    alsoResolves,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1206,6 +1301,10 @@ module.exports = {
   REVIEW_DENIED,
   FIX_TOOLS,
   FIX_DENIED,
+  FIX_DEPTHS,
+  FIX_PRESETS,
+  fixDepth,
+  fixPresets,
   FLAGS,
   THREAD_ORDER,
   pathWords,

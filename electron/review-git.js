@@ -93,32 +93,93 @@ class ReviewGit {
    * branch moved after the fixes were written — what keeps "refused: the tip of
    * your branch is behind" from being the answer to handing them back.
    *
-   * One commit at a time, so each old id maps to its new one. A commit that
-   * does not apply cleanly stops everything and puts the branch back exactly
-   * where it was: nothing half-replayed is ever left behind.
+   * Only the workshop's own commits, walked by first parent. It used to list
+   * `tip..head` with `--no-merges`, which for a fix that was a merge listed
+   * every commit that merge brought in — commits of develop, of other people's
+   * PRs — and cherry-picked them one by one, so the hand-back failed on a
+   * commit that was never a fix. A merge is now replayed as a merge of the
+   * same parents, and is simply not needed when the tip already has them.
+   *
+   * One commit at a time, and one commit's trouble is that commit's:
+   * - `already`: the tip has the change already (the merge's parents, or a
+   *   pick that leaves nothing to commit). It is not replayed.
+   * - `stuck`: it does not apply on the new tip. Left out, kept reachable under
+   *   `refs/workshop/stuck/<sha>` so it can still be read, and the rest go on.
+   * A commit `droppable` refuses — one that is not a fix waiting in the
+   * workshop — stops everything and puts the branch back where it was, as
+   * before: nothing that is not ours to redo is ever left out.
    */
-  async replayOnto(dir, branch, tipRef) {
+  async replayOnto(dir, branch, tipRef, { droppable = () => true } = {}) {
     const tip = await this.revParse(dir, tipRef);
     const head = await this.branchHead(dir, branch);
-    if (!tip || !head || (await this.isAncestor(dir, tip, head))) return { ok: true, moved: new Map() };
+    const none = { ok: true, moved: new Map(), already: [], stuck: [] };
+    if (!tip || !head || (await this.isAncestor(dir, tip, head))) return none;
     if (await this.isDirty(dir)) return { ok: false, output: 'The workshop has uncommitted changes; commit or discard them first.' };
     if ((await this.currentBranch(dir)) !== branch) return { ok: false, output: `The workshop is not on "${branch}".` };
-    const listed = await this.run(dir, ['rev-list', '--reverse', '--no-merges', `${tip}..${head}`]);
-    if (!listed.ok) return { ok: false, output: listed.output };
-    const ours = listed.stdout.split('\n').map((line) => line.trim()).filter(Boolean);
+    const ours = await this.ownCommits(dir, tip, head);
+    if (!ours) return { ok: false, output: 'git could not list the workshop\'s commits.' };
     const reset = await this.run(dir, ['reset', '--hard', tip]);
     if (!reset.ok) return { ok: false, output: reset.output };
     const moved = new Map();
+    const already = [];
+    const stuck = [];
+    const rollback = async (sha, output) => {
+      await this.run(dir, ['reset', '--hard', head]);
+      return { ok: false, conflict: sha, output };
+    };
     for (const sha of ours) {
+      const parents = await this.parentsOf(dir, sha);
+      if (parents.length > 1) {
+        const others = parents.slice(1);
+        let present = true;
+        for (const parent of others) if (!(await this.isAncestor(dir, parent, 'HEAD'))) present = false;
+        if (present) { already.push(sha); continue; }
+        const message = (await this.run(dir, ['log', '-1', '--format=%B', sha])).stdout.trim() || `Merge ${others.join(' ')}`;
+        const merged = await this.run(dir, ['merge', '--no-ff', '--no-edit', '-m', message, ...others]);
+        if (merged.ok) { moved.set(sha, await this.head(dir)); continue; }
+        await this.run(dir, ['merge', '--abort']);
+        await this.run(dir, ['reset', '--hard', 'HEAD']);
+        if (!droppable(sha)) return rollback(sha, merged.output);
+        await this.run(dir, ['update-ref', `refs/workshop/stuck/${sha}`, sha]);
+        stuck.push({ sha, output: merged.output.slice(0, 600) });
+        continue;
+      }
+      const before = await this.head(dir);
       const picked = await this.run(dir, ['cherry-pick', '--allow-empty', '--keep-redundant-commits', sha]);
       if (!picked.ok) {
         await this.run(dir, ['cherry-pick', '--abort']);
-        await this.run(dir, ['reset', '--hard', head]);
-        return { ok: false, conflict: sha, output: picked.output };
+        await this.run(dir, ['reset', '--hard', before]);
+        if (!droppable(sha)) return rollback(sha, picked.output);
+        await this.run(dir, ['update-ref', `refs/workshop/stuck/${sha}`, sha]);
+        stuck.push({ sha, output: picked.output.slice(0, 600) });
+        continue;
       }
-      moved.set(sha, await this.head(dir));
+      // Applied, and changed nothing: the tip had it already.
+      const after = await this.head(dir);
+      const wasEmpty = (await this.treeOf(dir, sha)) === (await this.treeOf(dir, `${sha}^`));
+      if (!wasEmpty && (await this.treeOf(dir, after)) === (await this.treeOf(dir, before))) {
+        await this.run(dir, ['reset', '--hard', before]);
+        already.push(sha);
+        continue;
+      }
+      moved.set(sha, after);
     }
-    return { ok: true, moved };
+    return { ok: true, moved, already, stuck };
+  }
+
+  /** The workshop's own commits on top of `tip`, oldest first — by first parent, so a merge is one of them and what it brought in is not. */
+  async ownCommits(dir, tip, head) {
+    const listed = await this.run(dir, ['rev-list', '--reverse', '--first-parent', `${tip}..${head}`]);
+    return listed.ok ? listed.stdout.split('\n').map((line) => line.trim()).filter(Boolean) : null;
+  }
+
+  async parentsOf(dir, sha) {
+    const res = await this.run(dir, ['rev-list', '--parents', '-n', '1', sha]);
+    return res.ok ? res.stdout.trim().split(/\s+/).slice(1) : [];
+  }
+
+  async treeOf(dir, rev) {
+    return this.revParse(dir, `${rev}^{tree}`);
   }
 
   async remoteUrl(dir) {

@@ -92,6 +92,23 @@
   .crossfix { margin-top: 8px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); border-radius: var(--r-sm); background: color-mix(in srgb, var(--accent) 6%, var(--bg-panel)); }
   .crossfix-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
   .crossfix-change { color: var(--text-dim); }
+  /* the Workshop tab */
+  .ws-tab .ws-h { font-size: 1rem; margin: 18px 0 6px; font-weight: 600; }
+  .ws-tab .ws-h:first-child { margin-top: 0; }
+  .ws-tab textarea, .ws-compose textarea { width: 100%; box-sizing: border-box; margin-top: 4px; }
+  .ws-compose { margin-top: 8px; }
+  .ws-prompt { font-size: 0.875rem; line-height: 1.45; min-height: 240px; }
+  .ws-presets { flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+  .ws-todo + .ws-todo { margin-top: 6px; }
+  .ws-todo .t { flex: 1; min-width: 200px; }
+  .ws-run .ws-lines { max-height: 360px; }
+  .ws-run .ws-lines .now { color: var(--text); }
+  .ws-details { padding: 6px 2px; }
+  .ws-k { margin-top: 8px; font-size: 0.833rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); }
+  .ws-log { max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 0.875rem; }
+  .ws-option { margin-top: 6px; }
+  .seg { display: inline-flex; gap: 2px; }
+  .seg .btn.on { font-weight: 600; }
   .merge-confirm { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; max-width: 360px; }
   .merge-confirm .btn { justify-content: center; }
   .btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
@@ -1124,6 +1141,21 @@
     };
   }
 
+  /**
+   * A fix started from anywhere — the Review tab, the Workshop tab, an option
+   * it offered — always shows its progress in the Workshop tab.
+   */
+  function startFix(id, opts) {
+    opts = opts || {};
+    ['fixnote-', 'fixdepth-', 'fixprompt-'].forEach(function (k) { delete state.edits[k + id]; });
+    if (state.wsCompose) delete state.wsCompose[id];
+    if (state.view === 'pr') { state.prTab = 'workshop'; remember(); }
+    draw();
+    call('fix', { findingId: id, note: opts.note || '', depth: opts.depth || null, prompt: opts.prompt || null }).then(function (r) {
+      say(!r.fix ? 'Already closed: there was nothing left to fix.' : r.fix.sha ? 'Fix committed in the workshop: ' + r.fix.sha.slice(0, 7) : (r.fix.options && r.fix.options.length ? 'It left the choice to you — ' + r.fix.options.length + ' way(s) in the Workshop tab.' : 'The fix changed nothing: ' + (r.fix.summary || '')));
+    }, fail);
+  }
+
   /** Runs an action once at a time per key, drawing its button as busy meanwhile. */
   function act(key, promise, done, failed) {
     if (state.busy[key]) return;
@@ -1614,6 +1646,8 @@
     var asides = main.querySelectorAll('aside');
     for (var a = 0; a < asides.length; a++) if (asideScrolls[a] != null) asides[a].scrollTop = asideScrolls[a];
     putPlacesBack(main, sectionScrolls);
+    // A run's steps follow the newest one, the way a terminal does.
+    Array.prototype.forEach.call(main.querySelectorAll('.ws-lines'), function (el) { el.scrollTop = el.scrollHeight; });
     var list = main.querySelector('.split > aside');
     if (list) {
       // The file in front stays in sight as Enter walks down the list; nothing moves if it already is.
@@ -2308,9 +2342,10 @@
     var counts = {
       review: (v.findings || []).filter(function (f) { return !f.publishedId && !f.dismissedAt && !f.closedAt; }).length,
       conversation: v.threads.filter(function (t) { return t.state === 'NEEDS_ANSWER' || t.state === 'DRAFT_READY'; }).length,
-      commits: 0
+      commits: 0,
+      workshop: (v.running || []).filter(function (run) { return run.kind === 'fix' || run.kind === 'crossfix'; }).length + ((v.workshop && v.workshop.pendingReturn) || 0)
     };
-    var html = '<div class="subtabs">' + [['review', 'Review'], ['code', 'Code'], ['commits', 'Commits'], ['conversation', 'Conversation'], ['history', 'History']].map(function (t, i) {
+    var html = '<div class="subtabs">' + [['review', 'Review'], ['code', 'Code'], ['commits', 'Commits'], ['conversation', 'Conversation'], ['history', 'History'], ['workshop', 'Workshop']].map(function (t, i) {
       return '<button class="tab' + (state.prTab === t[0] ? ' on' : '') + '" data-act="pr-tab" data-tab="' + t[0] + '" title="' + (i + 1) + '">' + t[1] + (counts[t[0]] ? '<span class="count">' + counts[t[0]] + '</span>' : '') + '</button>';
     }).join('') + '<span class="spacer"></span>' + (runs.length ? '<span class="chip accent" style="align-self:center"><span class="dot busy"></span>' + runs.length + ' running</span>' : '') +
       '<button class="link faint keys-hint" data-act="keys-open" title="Keyboard shortcuts"><span class="kbd">?</span> keys</button></div>';
@@ -2320,6 +2355,7 @@
     else if (state.prTab === 'code') html += drawCodeTab(v);
     else if (state.prTab === 'commits') html += drawCommitsTab(v);
     else if (state.prTab === 'conversation') html += drawConversationTab(v);
+    else if (state.prTab === 'workshop') html += drawWorkshopTab(v);
     else html += drawHistoryTab(v);
     return html + '</div>';
   }
@@ -2762,7 +2798,7 @@
     if (settledByYou(f) && v.pr.state === 'OPEN') html += '<button class="btn small" data-act="settle" data-id="' + esc(f.id) + '" data-on="0"' + busyAttr('settle-' + f.id) + ' title="It is not settled after all — put it back on the list">Unsettle</button>';
     if (f.publishedUrl) html += '<button class="btn small" data-act="open-url" data-url="' + esc(f.publishedUrl) + '">View on PR ↗</button>';
     if (fixOn) {
-      if (fixing) html += '<span class="chip accent"><span class="dot busy"></span>fixing</span>';
+      if (fixing) html += '<span class="chip accent click" data-act="pr-tab" data-tab="workshop" title="Watch it in the Workshop tab"><span class="dot busy"></span>fixing — watch</span>';
       else if (fix && fix.state === 'COMMITTED') {
         html += '<span class="chip okc" title="' + esc(fix.summary || '') + '">✔ ' + sha7(fix.sha) + (fix.returnedAt ? ' handed back' : ' in the workshop') + '</span>';
         if (!fix.replyId) html += '<button class="btn small" data-act="retry-fix-reply" data-id="' + esc(fix.id) + '"' + busyAttr('fixreply-' + fix.id) + ' title="' + esc(fix.replyError || '') + '">Answer the thread</button>';
@@ -2861,9 +2897,11 @@
     if ((v.fixes || []).length) {
       html += '<table class="list" style="margin-top:6px">' + v.fixes.slice(0, 20).map(function (fix) {
         var finding = findings.filter(function (f) { return f.id === fix.findingId; })[0];
-        var where = fix.droppedAt ? 'taken out' : fix.returnedAt ? 'handed back' : fix.state === 'COMMITTED' ? 'in the workshop' : '';
+        var where = fix.stuckAt ? 'no longer fit the branch' : fix.droppedAt ? 'taken out' : fix.returnedAt ? 'handed back' : fix.state === 'COMMITTED' ? 'in the workshop' : '';
         var rows = '<tr><td>' + statusChip(fix.state === 'COMMITTED' ? 'DONE' : fix.state) + '</td>' +
           '<td class="wrap">' + esc(finding ? finding.title : 'a finding from an earlier review') +
+          (fix.depth ? ' <span class="chip">' + esc(depthLabel(state.pr, fix.depth)) + '</span>' : '') +
+          (fix.options && fix.options.length ? ' <span class="chip mine click" data-act="fold" data-key="ws-fix-' + esc(fix.id) + '">' + fix.options.length + ' way(s) to choose</span>' : '') +
           (fix.note ? '<div class="faint">asked: ' + esc(fix.note.slice(0, 160)) + '</div>' : '') +
           (fix.summary ? '<div class="faint">' + esc(fix.summary.slice(0, 200)) + '</div>' : '') +
           (fix.error ? '<div class="bad">' + esc(fix.error.slice(0, 200)) + '</div>' : '') + '</td>' +
@@ -2882,6 +2920,7 @@
             '<div class="row" style="margin-top:4px"><button class="btn small danger" data-act="drop-fix" data-id="' + esc(fix.id) + '"' + busyAttr('drop-' + fix.id) + '>Take it out</button>' +
             '<button class="btn small" data-act="drop-close" data-id="' + esc(fix.id) + '">Cancel</button></div></div></td></tr>';
         }
+        if (isOpen('ws-fix-' + fix.id)) rows += '<tr><td colspan="7">' + fixDetails(state.pr, fix) + '</td></tr>';
         if (state.fixOutput === fix.id && fix.check) {
           rows += '<tr><td colspan="7"><pre class="mono" style="max-height:260px;overflow:auto;white-space:pre-wrap">' + esc(fix.check.output || 'It said nothing.') + '</pre></td></tr>';
         }
@@ -2893,8 +2932,9 @@
 
   /** What can be done to one attempt, given where its commit is. */
   function fixRowActions(fix, pending, open) {
-    if (!fix.sha || fix.droppedAt) return '';
-    var html = '<button class="btn small" data-act="fix-diff" data-id="' + esc(fix.id) + '"' + busyAttr('fixdiff-' + fix.id) + '>' +
+    var details = '<button class="btn small" data-act="fold" data-key="ws-fix-' + esc(fix.id) + '">' + (isOpen('ws-fix-' + fix.id) ? 'Less' : 'Details') + '</button>';
+    if (!fix.sha || fix.droppedAt) return details;
+    var html = details + '<button class="btn small" data-act="fix-diff" data-id="' + esc(fix.id) + '"' + busyAttr('fixdiff-' + fix.id) + '>' +
       (state.fixDiff && state.fixDiff.fixId === fix.id ? 'Hide' : 'Diff') + '</button>';
     if (!open || fix.returnedAt) return html;
     var index = pending.map(function (x) { return x.id; }).indexOf(fix.id);
@@ -2923,6 +2963,187 @@
       return '<span class="chip click' + (one.path === file.path ? ' on' : '') + '" data-act="' + act + '" data-file="' + esc(one.path) + '" title="' + esc(one.path) + '">' +
         esc(one.path.split('/').pop()) + ' <span class="added">+' + one.added + '</span> <span class="removed">−' + one.deleted + '</span></span>';
     }).join('') + '</div>' + diffTable(file.lines || [], { file: file.path, status: file.status, layout: diffLayout() }) + '</div>';
+  }
+
+  /* ---- the Workshop tab ----------------------------------------------------
+   *
+   * Everything about fixing this pull request in one place: what is running and
+   * what it is doing right now, what is waiting to go to the PR, how every fix
+   * here should be done, things asked for by hand, and the prompt itself — read
+   * before it is sent, and changed if it is not what you want.
+   */
+
+  function wsDepths(v) {
+    return (v.workshop && v.workshop.depths) || [
+      { key: 'FIX', label: 'Just the fix', blurb: '' }, { key: 'IMPROVE', label: 'Improve', blurb: '' }, { key: 'REWRITE', label: 'Rewrite', blurb: '' }
+    ];
+  }
+
+  function depthLabel(v, key) {
+    var d = wsDepths(v).filter(function (x) { return x.key === key; })[0];
+    return d ? d.label : String(key || '').toLowerCase();
+  }
+
+  /** Three buttons, one on: how far this fix should go. */
+  function depthPicker(v, editKey) {
+    var current = edit(editKey, (v.workshop && v.workshop.depth) || 'FIX');
+    return '<span class="seg">' + wsDepths(v).map(function (d) {
+      return '<button class="btn small' + (current === d.key ? ' on primary' : '') + '" data-act="ws-depth" data-key="' + esc(editKey) + '" data-depth="' + esc(d.key) + '" title="' + esc(d.blurb + (d.model ? ' · ' + d.model : '')) + '">' + esc(d.label) + '</button>';
+    }).join('') + '</span>';
+  }
+
+  /** The saved instructions, one click each: they go into the note, where they can still be changed. */
+  function presetChips(v, editKey) {
+    var presets = (v.workshop && v.workshop.presets) || [];
+    if (!presets.length) return '';
+    return '<div class="row ws-presets">' + presets.map(function (p, i) {
+      return '<span class="chip click" data-act="ws-preset" data-key="' + esc(editKey) + '" data-i="' + i + '" title="' + esc(p.text) + '">+ ' + esc(p.label) + '</span>';
+    }).join('') + '</div>';
+  }
+
+  /**
+   * Fixing one finding, steered: how deep, what to keep in mind, and the prompt
+   * itself when you want to see it — which, once loaded, is what is sent.
+   */
+  function fixComposer(v, f) {
+    var id = f.id;
+    var promptKey = 'fixprompt-' + id;
+    var previewing = state.edits[promptKey] != null;
+    var html = '<div class="ws-compose">' +
+      '<div class="row"><span class="faint">Depth</span>' + depthPicker(v, 'fixdepth-' + id) + '</div>' +
+      '<textarea rows="3" data-edit="fixnote-' + esc(id) + '" placeholder="Anything it should know or do — e.g. solve it with the tenant lock, keep the DTO as it is, the real cause is in AccessQuery">' + esc(edit('fixnote-' + id, '')) + '</textarea>' +
+      presetChips(v, 'fixnote-' + id);
+    if (previewing) {
+      html += '<div class="faint" style="margin-top:6px">This is exactly what will be sent' + (state.wsPreviewModel && state.wsPreviewModel[id] ? ' to <strong>' + esc(state.wsPreviewModel[id]) + '</strong>' : '') + '. Change anything; the coordination section is added when it runs.</div>' +
+        '<textarea class="mono ws-prompt" rows="18" data-edit="' + esc(promptKey) + '">' + esc(edit(promptKey, '')) + '</textarea>';
+    }
+    html += '<div class="row" style="margin-top:6px">' +
+      '<button class="btn small go" data-act="fix" data-id="' + esc(id) + '"' + busyAttr('fix-' + id) + '>' + (previewing ? 'Fix with this prompt' : 'Fix') + '</button>' +
+      (previewing
+        ? '<button class="btn small" data-act="ws-prompt-close" data-id="' + esc(id) + '">Back to the note</button>'
+        : '<button class="btn small" data-act="ws-prompt" data-id="' + esc(id) + '"' + busyAttr('preview-' + id) + ' title="Build the prompt from the depth and the note, and show it before sending">See and edit the prompt</button>') +
+      '<button class="btn small" data-act="ws-compose-close" data-id="' + esc(id) + '">Cancel</button></div></div>';
+    return html;
+  }
+
+  /** What a fix running in this PR is doing, step by step, as it does it. */
+  function wsRunning(v) {
+    var runs = (v.running || []).filter(function (run) { return run.kind === 'fix' || run.kind === 'crossfix'; });
+    if (!runs.length) return '';
+    return '<h3 class="ws-h">Working now</h3>' + runs.map(function (run) {
+      var lines = run.lines || [];
+      return '<div class="run ws-run"><div class="row"><span class="dot busy"></span><strong>' + esc(run.kind === 'crossfix' ? 'Change in another repository' : 'Fix') + '</strong> <span class="dim">' + esc(run.title) + '</span>' +
+        (run.depth ? ' <span class="chip">' + esc(depthLabel(v, run.depth)) + '</span>' : '') +
+        (run.model ? ' <span class="chip">' + esc(run.model) + '</span>' : '') +
+        '<span class="spacer"></span><span class="faint">' + lines.length + ' step(s) · started ' + esc(when(new Date(run.startedAt).toISOString())) + '</span>' +
+        ' <button class="btn small danger" data-act="cancel-run" data-key="' + esc(run.key) + '">Cancel</button></div>' +
+        '<div class="lines ws-lines">' + lines.map(function (line, i) {
+          return '<div class="' + (i === lines.length - 1 ? 'now' : '') + '">' + esc(line) + '</div>';
+        }).join('') + '</div></div>';
+    }).join('');
+  }
+
+  /** Everything known about one attempt: how it was asked, what it decided, what it did. */
+  function fixDetails(v, fix) {
+    var html = '<div class="ws-details">';
+    html += '<div class="row">' + (fix.depth ? '<span class="chip">' + esc(depthLabel(v, fix.depth)) + '</span>' : '') +
+      (fix.costUsd ? '<span class="chip">$' + Number(fix.costUsd).toFixed(2) + '</span>' : '') +
+      (fix.finishedAt ? '<span class="faint">took ' + esc(duration(fix.createdAt, fix.finishedAt)) + '</span>' : '') + '</div>';
+    if (fix.note) html += '<div class="ws-k">Asked</div><div class="md">' + md(fix.note) + '</div>';
+    if (fix.summary) html += '<div class="ws-k">' + (fix.state === 'COMMITTED' ? 'What it did' : 'What it said') + '</div><div class="md">' + md(fix.summary) + '</div>';
+    if (fix.alternatives) html += '<div class="ws-k">What it weighed and did not do</div><div class="md">' + md(fix.alternatives) + '</div>';
+    if (fix.alsoResolves && fix.alsoResolves.length) {
+      html += '<div class="ws-k">Also settled</div>' + fix.alsoResolves.map(function (fid) {
+        var other = (v.findings || []).filter(function (f) { return f.id === fid; })[0];
+        return '<div>✔ ' + esc(other ? other.title : fid) + '</div>';
+      }).join('');
+    }
+    if (fix.stuckAt) html += '<div class="ws-k">Taken out</div><div class="bad">' + esc(fix.error || '') + '</div>';
+    if (fix.options && fix.options.length) {
+      html += '<div class="ws-k">It left the choice to you</div>' + fix.options.map(function (o, i) {
+        return '<div class="card ws-option"><strong>' + esc(o.title) + '</strong><div class="md">' + md(o.plan) + '</div>' +
+          '<div class="row" style="margin-top:4px"><button class="btn small go" data-act="fix-option" data-id="' + esc(fix.findingId) + '" data-fix="' + esc(fix.id) + '" data-i="' + i + '">Do it this way</button></div></div>';
+      }).join('');
+    }
+    if (fix.log && fix.log.length) {
+      html += fold('ws-log-' + fix.id, '<strong>What it did, step by step</strong>', fix.log.length + ' step(s)', '<pre class="mono ws-log">' + esc(fix.log.join('\n')) + '</pre>', false);
+    }
+    if (fix.prompt) {
+      html += fold('ws-sent-' + fix.id, '<strong>The prompt it was given</strong>', '', '<pre class="mono ws-log">' + esc(fix.prompt) + '</pre>' +
+        '<div class="row"><button class="btn small" data-act="ws-reuse-prompt" data-id="' + esc(fix.findingId) + '" data-fix="' + esc(fix.id) + '" title="Open it in the editor, change it, and run the fix again">Edit and run again</button></div>', false);
+    }
+    return html + '</div>';
+  }
+
+  function duration(from, to) {
+    var s = Math.max(0, Math.round((new Date(to) - new Date(from)) / 1000));
+    return s < 90 ? s + 's' : Math.round(s / 60) + ' min';
+  }
+
+  function drawWorkshopTab(v) {
+    var ws = v.workshop || {};
+    var findings = v.findings || [];
+    var open = v.pr.state === 'OPEN';
+    var fixOn = v.repo.fixMode !== 'OFF' && open;
+    var html = '<div class="page ws-tab">';
+    if (v.repo.fixMode === 'OFF') html += '<div class="banner">Fixes are switched off for ' + esc(v.repo.name) + '. Turn them on in the repository\'s settings.</div>';
+
+    html += wsRunning(v);
+
+    // --- what is waiting, and every attempt
+    html += '<h3 class="ws-h">In the workshop</h3>';
+    if (ws.exists || (v.fixes || []).length) html += workshopBody(v, ws, findings);
+    else html += '<div class="faint">Nothing yet. The first fix makes a copy of the repository here, on <span class="mono">' + esc(v.pr.sourceBranch) + '</span>, and writes there — never in your clone.</div>';
+
+    if (fixOn) {
+      // --- how fixes here are done
+      html += '<h3 class="ws-h">How fixes are done here</h3><div class="card">' +
+        '<div class="row"><strong>Depth when nobody says</strong>' + depthPicker(v, 'ws-default-depth') +
+        '<button class="btn small" data-act="ws-default-depth-save"' + busyAttr('ws-default-depth') + ' title="For every fix in ' + esc(v.repo.name) + '">Save for ' + esc(v.repo.name) + '</button></div>' +
+        '<div class="faint" style="margin:2px 0 8px">' + wsDepths(v).map(function (d) { return '<strong>' + esc(d.label) + '</strong>: ' + esc(d.blurb) + (d.model ? ' (' + esc(d.model) + ')' : ''); }).join(' · ') + '</div>' +
+        '<strong>For every fix in this PR</strong><div class="faint">Kept with the PR and given to every fix, written again or new. What you know that the code does not say.</div>' +
+        '<textarea rows="3" data-edit="ws-brief" placeholder="e.g. the two last-admin guards must take the same lock; do not touch V0758; answer in English">' + esc(edit('ws-brief', ws.brief || '')) + '</textarea>' +
+        presetChips(v, 'ws-brief') +
+        '<div class="row" style="margin-top:4px"><button class="btn small primary" data-act="ws-brief-save"' + busyAttr('ws-brief') + '>Save</button>' +
+        (ws.brief ? '<span class="chip okc">in use</span>' : '') +
+        '<span class="spacer"></span><button class="link faint" data-act="ws-presets-open">Edit the quick instructions</button></div>';
+      if (state.edits['ws-presets'] != null) {
+        html += '<div class="card" style="margin-top:6px"><strong>Quick instructions</strong><div class="faint">One per line: <span class="mono">label | what to tell it</span>. Empty and saved brings the defaults back.</div>' +
+          '<textarea rows="7" class="mono" data-edit="ws-presets">' + esc(edit('ws-presets', '')) + '</textarea>' +
+          '<div class="row" style="margin-top:4px"><button class="btn small primary" data-act="ws-presets-save">Save</button><button class="btn small" data-act="ws-presets-close">Cancel</button></div></div>';
+      }
+      html += '</div>';
+
+      // --- asked for by hand
+      html += '<h3 class="ws-h">Ask for something by hand</h3><div class="card">' +
+        '<div class="faint">Something you saw yourself. It becomes a task of this PR, fixed like a finding and never posted on the pull request.</div>' +
+        '<textarea rows="3" data-edit="ws-task" placeholder="e.g. RoleGrantPolicy.assertAllowed should reject POS roles for a tenant without the POS app — do it in the policy, not the controller">' + esc(edit('ws-task', '')) + '</textarea>' +
+        presetChips(v, 'ws-task') +
+        '<div class="row" style="margin-top:4px"><input type="text" class="mono" data-edit="ws-task-file" placeholder="file, optional — src/…/AccessQuery.java:120" value="' + esc(edit('ws-task-file', '')) + '" style="flex:1;min-width:200px">' +
+        '<span class="faint">Depth</span>' + depthPicker(v, 'ws-task-depth') + '</div>' +
+        '<div class="row" style="margin-top:6px"><button class="btn small go" data-act="ws-task" data-run="1"' + busyAttr('ws-task') + '>Add and fix</button>' +
+        '<button class="btn small" data-act="ws-task"' + busyAttr('ws-task') + ' title="Add it to the list below, to look at the prompt first">Add to the list</button></div></div>';
+
+      // --- what is open, each with its own way to be fixed
+      var fixing = {};
+      (v.running || []).forEach(function (run) { if (run.kind === 'fix') fixing[run.findingId] = true; });
+      var todo = findings.filter(function (f) { return !f.dismissedAt && !f.closedAt && f.resolution !== 'RESOLVED' && !findingDone(f); });
+      html += '<h3 class="ws-h">Open, to fix <span class="faint">' + todo.length + '</span></h3>';
+      if (!todo.length) html += '<div class="faint">Nothing open.</div>';
+      html += todo.map(function (f) {
+        var last = (v.fixes || []).filter(function (x) { return x.findingId === f.id; })[0];
+        var composing = state.wsCompose && state.wsCompose[f.id];
+        return '<div class="card ws-todo"><div class="row"><span class="sev ' + esc(f.severity) + '">' + esc(f.severity) + '</span>' +
+          (f.askedBy === 'you' ? '<span class="chip accent">by hand</span>' : f.askedBy ? '<span class="chip accent">asked by ' + esc(f.askedBy) + '</span>' : '') +
+          '<strong class="t">' + titleHtml(f.title) + '</strong>' +
+          (f.filePath ? '<span class="faint mono">' + anchor(f.filePath, f.lineNo) + '</span>' : '') +
+          '<span class="spacer"></span>' +
+          (last ? '<span class="chip" title="' + esc(last.summary || last.error || '') + '">last: ' + esc(last.stuckAt ? 'taken out' : last.state.toLowerCase()) + '</span>' : '') +
+          (fixing[f.id] ? '<span class="chip accent"><span class="dot busy"></span>fixing</span>' : composing ? '' : '<button class="btn small go" data-act="ws-compose" data-id="' + esc(f.id) + '">Fix…</button>') +
+          '</div>' + (composing && !fixing[f.id] ? fixComposer(v, f) : '') + '</div>';
+      }).join('');
+    }
+    return html + '</div>';
   }
 
   /**
@@ -3032,7 +3253,8 @@
     // --- the workshop
     var ws = v.workshop;
     if (ws && (ws.exists || (v.fixes || []).length)) {
-      html += fold('workshop', '<strong>Fix workshop</strong>' + workshopChips(v, ws), (v.fixes || []).length + ' fix attempt(s)', workshopBody(v, ws, findings), ws.pendingReturn > 0);
+      html += fold('workshop', '<strong>Fix workshop</strong>' + workshopChips(v, ws), (v.fixes || []).length + ' fix attempt(s)',
+        '<div class="row"><button class="btn small" data-act="pr-tab" data-tab="workshop">Open the Workshop tab</button><span class="faint">to steer fixes, ask for one by hand, see the prompts and watch them run.</span></div>' + workshopBody(v, ws, findings), ws.pendingReturn > 0);
     }
 
     // --- the general comment
@@ -3107,11 +3329,16 @@
         html += '<div class="row" style="margin-top:6px"><span class="chip okc">ready</span><span>Branch <span class="mono">' + esc(job.branch) + '</span> from <span class="mono">' + esc(job.base) + '</span>, commit <span class="mono">' + sha7(job.sha) + '</span></span>' +
           (job.check ? '<span class="chip ' + (job.check.state === 'PASSED' ? 'okc' : 'badc') + '" title="' + esc(job.check.output || '') + '">check ' + esc(String(job.check.state).toLowerCase()) + '</span>' : '') + '</div>';
         if (job.summary) html += '<div class="md" style="margin-top:4px">' + md(job.summary) + '</div>';
+        if (job.alternatives) html += '<div class="ws-k">What it weighed and did not do</div><div class="md">' + md(job.alternatives) + '</div>';
+        if (job.note) html += '<div class="faint">asked: ' + esc(String(job.note).slice(0, 200)) + '</div>';
         if (job.stat) html += '<pre class="plain-diff stat">' + esc(job.stat) + '</pre>';
         html += '<button class="link" data-act="fold" data-key="crossfix-diff-' + esc(fix.id) + '-' + index + '">' + (isOpen('crossfix-diff-' + fix.id + '-' + index) ? 'Hide the change' : 'Show the change') + '</button>';
         if (isOpen('crossfix-diff-' + fix.id + '-' + index)) html += plainDiffHtml(job.diff);
         return html + '<div class="merge-confirm" style="max-width:460px"><button class="btn go solid" data-act="crossfix-publish"' + at + busyAttr('crossfix-publish-' + fix.id + '-' + index) + '>Push and open the PR</button>' +
-          '<button class="btn danger" data-act="crossfix-discard"' + at + '>Discard</button></div>' +
+          '<button class="btn danger" data-act="crossfix-discard"' + at + '>Discard</button>' +
+          '<button class="btn" data-act="crossfix-redo"' + at + ' title="Throw this one away and prepare it again with the note below">Prepare it differently…</button></div>' +
+          (state.edits['crossnote-' + fix.id + '-' + index] != null ? '<div class="ws-compose"><textarea rows="2" data-edit="crossnote-' + esc(fix.id + '-' + index) + '" placeholder="What to do differently">' + esc(edit('crossnote-' + fix.id + '-' + index, '')) + '</textarea>' +
+            '<div class="row"><button class="btn small primary" data-act="crossfix-prepare"' + at + '>Prepare it again</button></div></div>' : '') +
           '<div class="faint" style="margin-top:4px">A new branch in ' + esc(item.repo) + ', never forced, and a pull request into ' + esc(job.base) + '.</div></div>';
       }
       if (job.state === 'OPENED') {
@@ -3120,8 +3347,18 @@
         if (!findingDone(f) && !f.closedAt) html += '<div class="row" style="margin-top:6px"><button class="btn small go" data-act="crossfix-front"' + at + ' data-finding="' + esc(f.id) + '" title="Fix this side now, told that the other half is in that pull request">Fix this side with it</button></div>';
         return html + '</div>';
       }
-      return html + '<div class="row" style="margin-top:6px"><button class="btn small primary" data-act="crossfix-prepare"' + at + '>Prepare the change in ' + esc(item.repo) + '</button>' +
-        '<span class="faint">A new branch in a copy of ' + esc(item.repo) + '; you see the diff before anything is pushed.</span></div></div>';
+      var ck = 'crossnote-' + fix.id + '-' + index;
+      if (job.options && job.options.length) {
+        html += '<div class="ws-k">It left the choice to you</div>' + job.options.map(function (o, i) {
+          return '<div class="card ws-option"><strong>' + esc(o.title) + '</strong><div class="md">' + md(o.plan) + '</div>' +
+            '<div class="row" style="margin-top:4px"><button class="btn small go" data-act="crossfix-prepare"' + at + ' data-option="' + i + '">Prepare it this way</button></div></div>';
+        }).join('');
+      }
+      return html + '<div class="ws-compose"><div class="row"><span class="faint">Depth</span>' + depthPicker(v, 'crossdepth-' + fix.id + '-' + index) + '</div>' +
+        '<textarea rows="2" data-edit="' + esc(ck) + '" placeholder="Decide for it if you want — e.g. use the prefix plat.suite.app, codes in camelCase, no migration">' + esc(edit(ck, '')) + '</textarea>' +
+        presetChips(v, ck) + '</div>' +
+        '<div class="row" style="margin-top:6px"><button class="btn small primary" data-act="crossfix-prepare"' + at + '>' + (job.state === 'FAILED' ? 'Prepare it again' : 'Prepare the change in ' + esc(item.repo)) + '</button>' +
+        '<span class="faint">A new branch in a copy of ' + esc(item.repo) + '. It decides what is left open and says so; you see the diff and push it from here.</span></div></div>';
     }).join('');
   }
 
@@ -4550,7 +4787,7 @@
     if (event.key === 'Escape' && $('keys')) { event.preventDefault(); toggleKeys(false); return; }
     if (state.view === 'pr') {
       if (event.key === 'Escape') { event.preventDefault(); actions.back(); return; }
-      var tab = ['review', 'code', 'commits', 'conversation', 'history'][Number(event.key) - 1];
+      var tab = ['review', 'code', 'commits', 'conversation', 'history', 'workshop'][Number(event.key) - 1];
       if (tab) { event.preventDefault(); actions['pr-tab']({ getAttribute: function () { return tab; } }); return; }
     }
     if (state.view === 'pr' && state.prTab === 'code') {
@@ -4716,7 +4953,7 @@
   /** Every shortcut on one card, so they can be found without reading the source. `?` opens and closes it. */
   var KEYS = [
     ['Anywhere', [['?', 'This list'], ['/', 'Search the board']]],
-    ['A pull request', [['1 – 5', 'Review, Code, Commits, Conversation, History'], ['Esc', 'Back']]],
+    ['A pull request', [['1 – 6', 'Review, Code, Commits, Conversation, History, Workshop'], ['Esc', 'Back']]],
     ['Code', [['[  ]', 'Previous or next file'], ['n  p', 'Next or previous finding'], ['⏎', 'Viewed, and on to the next file not yet viewed'], ['v', 'Viewed on or off, moving on when it marks'], ['c', 'Show or hide comments']]]
   ];
   function toggleKeys(show) {
@@ -5188,11 +5425,80 @@
     },
     fix: function (el) {
       var id = el.getAttribute('data-id');
-      var note = state.edits['fixnote-' + id] || '';
-      delete state.edits['fixnote-' + id];
-      call('fix', { findingId: id, note: note }).then(function (r) {
-        say(!r.fix ? 'Already closed: there was nothing left to fix.' : r.fix.sha ? 'Fix committed in the workshop: ' + r.fix.sha.slice(0, 7) : 'The fix changed nothing: ' + (r.fix.summary || ''));
-      }, fail);
+      startFix(id, { note: state.edits['fixnote-' + id] || '', depth: state.edits['fixdepth-' + id] || null, prompt: state.edits['fixprompt-' + id] || null });
+    },
+    // ---- the Workshop tab ----
+    'ws-depth': function (el) { state.edits[el.getAttribute('data-key')] = el.getAttribute('data-depth'); draw(); },
+    'ws-preset': function (el) {
+      var key = el.getAttribute('data-key');
+      var p = ((state.pr.workshop && state.pr.workshop.presets) || [])[Number(el.getAttribute('data-i'))];
+      if (!p) return;
+      var current = edit(key, key === 'ws-brief' ? (state.pr.workshop.brief || '') : '');
+      state.edits[key] = current && !/\n$/.test(current) ? current + '\n' + p.text : current + p.text;
+      draw();
+    },
+    'ws-compose': function (el) { state.wsCompose = state.wsCompose || {}; state.wsCompose[el.getAttribute('data-id')] = true; draw(); },
+    'ws-compose-close': function (el) {
+      var id = el.getAttribute('data-id');
+      if (state.wsCompose) delete state.wsCompose[id];
+      ['fixnote-', 'fixdepth-', 'fixprompt-'].forEach(function (k) { delete state.edits[k + id]; });
+      draw();
+    },
+    'ws-prompt': function (el) {
+      var id = el.getAttribute('data-id');
+      act('preview-' + id, function () { return call('previewFix', { findingId: id, note: state.edits['fixnote-' + id] || '', depth: state.edits['fixdepth-' + id] || null }); }, function (r) {
+        state.edits['fixprompt-' + id] = r.prompt;
+        state.edits['fixdepth-' + id] = r.depth;
+        state.wsPreviewModel = state.wsPreviewModel || {};
+        state.wsPreviewModel[id] = r.model;
+        draw();
+      });
+    },
+    'ws-prompt-close': function (el) { delete state.edits['fixprompt-' + el.getAttribute('data-id')]; draw(); },
+    'ws-reuse-prompt': function (el) {
+      var id = el.getAttribute('data-id');
+      var fix = (state.pr.fixes || []).filter(function (x) { return x.id === el.getAttribute('data-fix'); })[0];
+      if (!fix) return;
+      state.wsCompose = state.wsCompose || {};
+      state.wsCompose[id] = true;
+      state.edits['fixprompt-' + id] = fix.prompt;
+      if (fix.depth) state.edits['fixdepth-' + id] = fix.depth;
+      draw();
+    },
+    'fix-option': function (el) {
+      var fix = (state.pr.fixes || []).filter(function (x) { return x.id === el.getAttribute('data-fix'); })[0];
+      var o = fix && fix.options[Number(el.getAttribute('data-i'))];
+      if (!o) return;
+      startFix(el.getAttribute('data-id'), { note: 'Hacelo por este camino, que es el que elegí: ' + o.title + '\n' + o.plan, depth: fix.depth || null });
+    },
+    'ws-brief-save': function () {
+      act('ws-brief', function () { return call('setWorkshopBrief', prArgs({ text: edit('ws-brief', state.pr.workshop.brief || '') })); }, function () { delete state.edits['ws-brief']; say('Every fix in this PR will keep it in mind.'); load(); });
+    },
+    'ws-default-depth-save': function () {
+      act('ws-default-depth', function () { return call('setFixDepth', prArgs({ depth: edit('ws-default-depth', state.pr.workshop.depth) })); }, function () { delete state.edits['ws-default-depth']; say('Saved for ' + state.pr.repo.name + '.'); load(); });
+    },
+    'ws-presets-open': function () {
+      state.edits['ws-presets'] = ((state.pr.workshop && state.pr.workshop.presets) || []).map(function (p) { return p.label + ' | ' + p.text; }).join('\n');
+      draw();
+    },
+    'ws-presets-close': function () { delete state.edits['ws-presets']; draw(); },
+    'ws-presets-save': function () {
+      var text = String(edit('ws-presets', '')).trim();
+      var list = text ? text.split('\n').map(function (line) { var at = line.indexOf('|'); return at < 0 ? null : { label: line.slice(0, at).trim(), text: line.slice(at + 1).trim() }; }).filter(Boolean) : null;
+      call('setFixPresets', { presets: list }).then(function () { delete state.edits['ws-presets']; say('Saved.'); load(); }, fail);
+    },
+    'ws-task': function (el) {
+      var run = Boolean(el.getAttribute('data-run'));
+      var text = String(edit('ws-task', '')).trim();
+      if (!text) { say('Say what you want done.', true); return; }
+      var where = String(edit('ws-task-file', '')).trim();
+      var m = /^(.*?)(?::(\d+))?$/.exec(where);
+      var depth = state.edits['ws-task-depth'] || null;
+      act('ws-task', function () { return call('addWorkshopTask', prArgs({ text: text, filePath: m ? m[1] : '', lineNo: m && m[2] ? Number(m[2]) : null })); }, function (r) {
+        ['ws-task', 'ws-task-file', 'ws-task-depth'].forEach(function (k) { delete state.edits[k]; });
+        if (run) startFix(r.finding.id, { depth: depth });
+        else { state.wsCompose = state.wsCompose || {}; state.wsCompose[r.finding.id] = true; if (depth) state.edits['fixdepth-' + r.finding.id] = depth; load(); }
+      });
     },
     'address-save': function () {
       var ask = state.needAddress;
@@ -5325,8 +5631,20 @@
     'crossfix-prepare': function (el) {
       var id = el.getAttribute('data-id');
       var index = Number(el.getAttribute('data-index'));
-      act('crossfix-' + id + '-' + index, function () { return call('crossfixPrepare', { fixId: id, index: index }); }, function () { say('Ready in the copy. Look at it, then open the pull request.'); load(); });
+      var item = ((state.pr.crossfixes || {})[id] || [])[index] || {};
+      var job = item.job || {};
+      var option = el.getAttribute('data-option');
+      var o = option != null && job.options ? job.options[Number(option)] : null;
+      var note = o ? 'Hacelo por este camino, que es el que elegí: ' + o.title + '\n' + o.plan : (state.edits['crossnote-' + id + '-' + index] || '');
+      var depth = state.edits['crossdepth-' + id + '-' + index] || null;
+      delete state.edits['crossnote-' + id + '-' + index];
+      var go = function () {
+        act('crossfix-' + id + '-' + index, function () { return call('crossfixPrepare', { fixId: id, index: index, note: note, depth: depth }); }, function () { say('Ready in the copy. Look at it, then push it and open the pull request.'); load(); });
+      };
+      // A prepared copy is replaced: thrown away first, so the new one starts clean.
+      if (job.state === 'PREPARED') call('crossfixDiscard', { fixId: id, index: index }).then(go, fail); else go();
     },
+    'crossfix-redo': function (el) { state.edits['crossnote-' + el.getAttribute('data-id') + '-' + el.getAttribute('data-index')] = ''; draw(); },
     'crossfix-publish': function (el) {
       var id = el.getAttribute('data-id');
       var index = Number(el.getAttribute('data-index'));
@@ -5355,7 +5673,10 @@
       if (push) args.push = true;
       act(prKey('give-back'), function () { return call('giveBack', prArgs(args)); }, function (r) {
         state.wsDiff = null;
-        var left = r.left ? ' ' + r.left + ' still in the workshop.' : '';
+        var left = (r.left ? ' ' + r.left + ' still in the workshop.' : '') +
+          (r.already ? ' ' + r.already + ' already in the branch.' : '') +
+          (r.stuck && r.stuck.length ? ' ' + r.stuck.length + ' no longer fit the new code and ' + (r.redoing ? 'are being written again — follow it in the Workshop tab.' : 'were taken out.') : '');
+        if (!r.count) { say('Nothing to push.' + left, Boolean(r.stuck && r.stuck.length && !r.redoing)); state.workshopError = null; if (r.redoing) state.prTab = 'workshop'; load(); return; }
         if (!r.pushed) say(r.count + ' fix(es) handed back to your clone.' + left);
         else if (r.pushed.ok && r.pushed.direct) say(r.count + ' fix(es) pushed to origin/' + r.branch + ' straight from the workshop, because your clone has that branch checked out. Pull there to have them.' + left);
         else if (r.pushed.ok) say(r.count + ' fix(es) pushed to origin/' + r.branch + '.' + left);

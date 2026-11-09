@@ -377,17 +377,33 @@ test('when the branch moved after the fixes were written, they are replayed on t
   assert.equal(moved.sha, tip, 'and the fix knows it');
 });
 
-test('a fix that does not apply on the moved branch stops the hand-back and changes nothing', { skip }, async () => {
-  const { service, repo, w } = setup([
-    async () => ({ structured: { summary: 's', findings: [finding()] } }),
+/** Until a condition holds, for work the app starts and does not wait for (a fix written again). */
+async function until(check, ms = 5000) {
+  const started = Date.now();
+  while (!check()) {
+    if (Date.now() - started > ms) throw new Error('timed out waiting');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+test('a fix that no longer applies on the moved branch is taken out and written again, and the others still go', { skip }, async () => {
+  const { service, repo, w, claude } = setup([
+    async () => ({ structured: { summary: 's', findings: [finding(), finding({ file: 'b.js', line: 1, title: 'b missing' })] } }),
     async (options) => { fs.writeFileSync(path.join(options.cwd, 'app.js'), 'ours\n'); return { structured: { fixed: true, summary: 'ours' } }; },
+    async (options) => { fs.writeFileSync(path.join(options.cwd, 'b.js'), 'b\n'); return { structured: { fixed: true, summary: 'b' } }; },
+    // The one that no longer fits, written again on the new code — told why.
+    async (options) => {
+      assert.match(options.prompt, /La rama avanzó[\s\S]*ya no aplica encima/);
+      assert.equal(fs.readFileSync(path.join(options.cwd, 'app.js'), 'utf8'), 'theirs\n', 'on the author\'s code');
+      fs.writeFileSync(path.join(options.cwd, 'app.js'), 'theirs, fixed\n');
+      return { structured: { fixed: true, summary: 'again' } };
+    },
   ]);
   await service.call('refreshPrs', { repoId: repo.id });
   await service.call('review', { repoId: repo.id, prId: 7 });
-  const [f] = service.store.findingsForReview(service.store.latestDone(repo.id, 7).id);
-  const fix = (await service.call('fix', { findingId: f.id })).fix;
-  const workshop = service.fixer.dirFor(repo, 7);
-  const before = git(workshop, 'rev-parse', 'HEAD');
+  const [one, two] = service.store.findingsForReview(service.store.latestDone(repo.id, 7).id);
+  const first = (await service.call('fix', { findingId: one.id })).fix;
+  const second = (await service.call('fix', { findingId: two.id })).fix;
 
   git(w.seed, 'pull', '-q', 'origin', 'feature');
   fs.writeFileSync(path.join(w.seed, 'app.js'), 'theirs\n');
@@ -396,12 +412,123 @@ test('a fix that does not apply on the moved branch stops the hand-back and chan
   const theirs = git(w.origin, 'rev-parse', 'refs/heads/feature');
 
   const given = await service.call('giveBack', { repoId: repo.id, prId: 7, push: true });
-  assert.equal(given.ok, false);
-  assert.match(given.error, /does not apply on top of it[\s\S]*Nothing was changed/);
-  assert.equal(git(workshop, 'rev-parse', 'HEAD'), before, 'the workshop is as it was');
-  assert.equal(git(w.origin, 'rev-parse', 'refs/heads/feature'), theirs);
-  assert.equal(service.store.fix(fix.id).sha, fix.sha);
-  assert.equal(service.store.pendingReturn(repo.id, 7).length, 1, 'still waiting');
+  assert.equal(given.ok, true, given.error);
+  assert.equal(given.count, 1, 'the one that applies went');
+  assert.deepEqual(given.stuck.map((fix) => fix.id), [first.id]);
+  assert.equal(given.redoing, 1);
+  assert.equal(git(w.origin, 'rev-parse', 'refs/heads/feature~1'), theirs, 'on top of what the author pushed');
+  assert.equal(git(w.origin, 'show', 'refs/heads/feature:b.js'), 'b');
+  const stuck = service.store.fix(first.id);
+  assert.equal(stuck.state, 'DROPPED');
+  assert.ok(stuck.stuckAt);
+  assert.match(stuck.error, /no longer applies/);
+  assert.ok(service.store.fix(second.id).returnedAt);
+
+  // Written again, on its own, behind the hand-back.
+  await until(() => service.store.fixesForFinding(one.id).some((fix) => fix.state === 'COMMITTED' && !fix.droppedAt));
+  assert.equal(claude.runs.length, 4);
+  assert.equal(service.store.pendingReturn(repo.id, 7).length, 1, 'the new one waits to be handed back');
+});
+
+test('a fix that was a merge is replayed by its first parent, and not at all when the tip already has what it merged', { skip }, async () => {
+  const { service, repo, w } = setup([
+    async () => ({ structured: { summary: 's', findings: [finding()] } }),
+    async (options) => {
+      // The fix merges another branch — which brings that branch's commits with it.
+      git(options.cwd, 'fetch', '-q', 'origin', '+refs/remotes/origin/other:refs/remotes/origin/other');
+      git(options.cwd, 'merge', '--no-ff', '--no-edit', 'origin/other');
+      return { structured: { fixed: true, summary: 'merged other' } };
+    },
+  ]);
+  // Another branch, with a commit of its own.
+  git(w.seed, 'checkout', '-q', '-b', 'other', 'origin/main');
+  fs.writeFileSync(path.join(w.seed, 'other.txt'), 'other\n');
+  git(w.seed, 'add', '-A');
+  git(w.seed, 'commit', '-qm', 'from other');
+  git(w.seed, 'push', '-q', 'origin', 'other');
+  git(w.clone, 'fetch', '-q', 'origin');
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  const [f] = service.store.findingsForReview(service.store.latestDone(repo.id, 7).id);
+  const fix = (await service.call('fix', { findingId: f.id })).fix;
+  assert.equal(fix.state, 'COMMITTED', fix.error);
+
+  // The author merges the same branch themselves, and pushes.
+  git(w.seed, 'checkout', '-q', 'feature');
+  git(w.seed, 'pull', '-q', 'origin', 'feature');
+  git(w.seed, 'merge', '-q', '--no-ff', '--no-edit', 'other');
+  git(w.seed, 'push', '-q', 'origin', 'HEAD:feature');
+  const theirs = git(w.origin, 'rev-parse', 'refs/heads/feature');
+
+  const given = await service.call('giveBack', { repoId: repo.id, prId: 7, push: true });
+  assert.equal(given.ok, true, given.error);
+  assert.equal(given.already, 1, 'the tip has it already');
+  assert.equal(given.count, 0);
+  assert.equal(given.stuck.length, 0, 'never cherry-picked the merged branch\'s commits one by one');
+  assert.equal(git(w.origin, 'rev-parse', 'refs/heads/feature'), theirs, 'nothing to push');
+  assert.ok(service.store.fix(fix.id).returnedAt, 'counted as delivered');
+});
+
+test('a fix runs on the newest tip: the fixes waiting are replayed first, and it is told the head and what else is open', { skip }, async () => {
+  const { service, repo, w, claude } = setup([
+    async () => ({ structured: { summary: 's', findings: [finding(), finding({ file: 'b.js', line: 1, title: 'b missing' })] } }),
+    async (options) => { fs.writeFileSync(path.join(options.cwd, 'b.js'), 'b\n'); return { structured: { fixed: true, summary: 'b' } }; },
+    async (options) => {
+      assert.equal(fs.readFileSync(path.join(options.cwd, 'other.txt'), 'utf8'), 'theirs\n', 'the author\'s new commit is in the workshop');
+      assert.equal(fs.readFileSync(path.join(options.cwd, 'b.js'), 'utf8'), 'b\n', 'and the fix waiting is on top of it');
+      assert.match(options.prompt, /al día con el último commit del PR/);
+      assert.match(options.prompt, /ALCANCE: MEJORA/);
+      assert.match(options.prompt, /INSTRUCCIONES PARA TODOS LOS ARREGLOS DE ESTE PR[\s\S]*usá el lock del tenant/);
+      assert.equal(options.model, 'opus');
+      fs.writeFileSync(path.join(options.cwd, 'app.js'), 'function add(a, b) {\n  return a + b;\n}\n');
+      return { structured: { fixed: true, summary: 'plus', alternatives: 'Could have rewritten add.' } };
+    },
+  ]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  const [one, two] = service.store.findingsForReview(service.store.latestDone(repo.id, 7).id);
+  await service.call('fix', { findingId: two.id });
+
+  git(w.seed, 'pull', '-q', 'origin', 'feature');
+  fs.writeFileSync(path.join(w.seed, 'other.txt'), 'theirs\n');
+  git(w.seed, 'add', '-A');
+  git(w.seed, 'commit', '-qm', 'meanwhile');
+  git(w.seed, 'push', '-q', 'origin', 'HEAD:feature');
+
+  assert.equal((await service.call('setWorkshopBrief', { repoId: repo.id, prId: 7, text: 'usá el lock del tenant' })).ok, true);
+  const preview = await service.call('previewFix', { findingId: one.id, depth: 'IMPROVE' });
+  assert.doesNotMatch(preview.prompt, /b missing/, 'a finding already fixed is not offered as open');
+  assert.match(preview.prompt, /ALCANCE: MEJORA/);
+  const fixed = await service.call('fix', { findingId: one.id, depth: 'IMPROVE' });
+  assert.equal(fixed.ok, true, fixed.error);
+  assert.equal(fixed.fix.depth, 'IMPROVE');
+  assert.equal(fixed.fix.alternatives, 'Could have rewritten add.');
+  assert.ok(fixed.fix.log.some((line) => /Committed/.test(line)), 'what it did is kept');
+  assert.match(fixed.fix.prompt, /ALCANCE: MEJORA/);
+  assert.equal(claude.runs.length, 3);
+});
+
+test('a prompt edited by hand is sent as it is, and a task typed into the workshop is fixed without a word on the PR', { skip }, async () => {
+  const { service, repo, forgeState } = setup([
+    async () => ({ structured: { summary: 's', findings: [] } }),
+    async (options) => {
+      assert.match(options.prompt, /^MI PROPIO PROMPT/);
+      fs.writeFileSync(path.join(options.cwd, 'app.js'), 'by hand\n');
+      return { structured: { fixed: true, summary: 'done by hand' } };
+    },
+  ]);
+  await service.call('refreshPrs', { repoId: repo.id });
+  await service.call('review', { repoId: repo.id, prId: 7 });
+  const posted = forgeState.posted.length;
+  const task = await service.call('addWorkshopTask', { repoId: repo.id, prId: 7, text: 'Renombrá add a sum', filePath: 'app.js' });
+  assert.equal(task.ok, true, task.error);
+  assert.equal(task.finding.askedBy, 'you');
+  const preview = await service.call('previewFix', { findingId: task.finding.id });
+  assert.match(preview.prompt, /LO QUE TE PIDIERON \(lo escribió a mano/);
+  const fixed = await service.call('fix', { findingId: task.finding.id, prompt: 'MI PROPIO PROMPT: hacelo así.' });
+  assert.equal(fixed.ok, true, fixed.error);
+  assert.equal(fixed.fix.state, 'COMMITTED');
+  assert.equal(forgeState.posted.length, posted, 'nothing said on the pull request');
 });
 
 test('handing back refuses when the clone has the branch checked out, and says so', { skip }, async () => {
