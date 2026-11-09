@@ -111,6 +111,12 @@ const FIX_SCHEMA = {
       type: 'array',
       items: { type: 'object', properties: { repo: { type: 'string' }, change: { type: 'string' } }, required: ['repo', 'change'] },
     },
+    alternatives: { type: 'string' },
+    alsoResolves: { type: 'array', items: { type: 'string' } },
+    options: {
+      type: 'array',
+      items: { type: 'object', properties: { title: { type: 'string' }, plan: { type: 'string' } }, required: ['title', 'plan'] },
+    },
   },
   required: ['fixed', 'summary'],
 };
@@ -541,27 +547,30 @@ Breve: 2 a 6 oraciones. Es una respuesta en un hilo, no otra review.
 Tono de par, no de auditor. Nada de condescendencia ni de disculpas de más.`;
 }
 
+/** What each depth asks of a fix, in the words the fix reads. Kept in step with `FIX_DEPTHS`. */
+const FIX_DEPTH_TEXT = Object.fromEntries(Object.entries(require('./review-rules').FIX_DEPTHS).map(([key, depth]) => [key, depth.instructions]));
+
 /**
  * Fixing what another run found. Short, and nearly all limits: the real risk is
  * not that it fails to fix the thing but that it reorders imports and renames on
  * the way, leaving a diff nobody can review at a glance.
  */
-function fixPrompt({ finding, prTitle, branch, language, guidelines = '', bus = '', thread = [], note = '', previous = null, otherRepos = [] }) {
+function fixPrompt({ finding, prTitle, branch, language, guidelines = '', bus = '', thread = [], note = '', previous = null, otherRepos = [], depth = 'FIX', brief = '', others = [], head = null }) {
   const lines = [
     'Sos el mismo revisor que encontró este problema. Ahora te toca arreglarlo.',
     '',
     'CONTEXTO',
     `- PR: ${prTitle}`,
-    `- Rama: ${branch} (ya estás parado en ella, en una copia aparte del repositorio)`,
+    `- Rama: ${branch} (ya estás parado en ella, en una copia aparte del repositorio${head ? `, al día con el último commit del PR: ${String(head).slice(0, 10)}` : ''})`,
     '',
-    'EL HALLAZGO',
+    finding.askedBy === 'you' ? 'LO QUE TE PIDIERON (lo escribió a mano quien revisa el PR)' : 'EL HALLAZGO',
     `- Archivo: ${anchorOf(finding.filePath, finding.lineNo)}`,
     `- Gravedad: ${finding.severity}`,
   ];
   if (finding.category) lines.push(`- Categoría: ${finding.category}`);
   lines.push(`- Título: ${finding.title}`, `- Detalle: ${finding.body}`);
   if (finding.suggestion && finding.suggestion.trim()) lines.push(`- Cómo se propuso resolverlo: ${finding.suggestion}`);
-  if (finding.askedBy) lines.push(`- Lo pidió: ${finding.askedBy}, en un comentario del PR`);
+  if (finding.askedBy && finding.askedBy !== 'you') lines.push(`- Lo pidió: ${finding.askedBy}, en un comentario del PR`);
   /*
    * What was said under the comment.
    *
@@ -577,27 +586,53 @@ function fixPrompt({ finding, prTitle, branch, language, guidelines = '', bus = 
     }
   }
   if (previous) {
-    lines.push('', 'UN INTENTO ANTERIOR', `- Qué hizo: ${String(previous).slice(0, 600)}`, '- No alcanzó. No repitas lo mismo.');
+    lines.push('', 'UN INTENTO ANTERIOR', `- Qué hizo: ${String(previous).slice(0, 600)}`, '- No alcanzó o ya no aplica. No lo repitas a ciegas: partí de lo que hay ahora.');
   }
+  /*
+   * The other findings still open on this PR. One cause often sits under two of
+   * them — two guards that must take the same lock — and fixing them apart is
+   * how you get two patches that do not agree. Named, so it can fix them
+   * together and say which.
+   */
+  if (others.length) {
+    lines.push('', 'OTROS HALLAZGOS ABIERTOS EN ESTE PR (por si comparten la causa)');
+    for (const other of others.slice(0, 15)) lines.push(`- [${other.id}] ${anchorOf(other.filePath, other.lineNo)} — ${String(other.title).slice(0, 160)}`);
+  }
+  if (String(brief ?? '').trim()) {
+    lines.push('', 'INSTRUCCIONES PARA TODOS LOS ARREGLOS DE ESTE PR (las dejó quien revisa; respetalas)', String(brief).trim().slice(0, 4000));
+  }
+  const scope = (FIX_DEPTH_TEXT[depth] ?? FIX_DEPTH_TEXT.FIX);
+  lines.push('', ...scope);
   // Last, so it is the thing closest to the work: it is the reason this run exists.
   if (String(note ?? '').trim()) {
-    lines.push('', 'LO QUE TE PIDIERON ESTA VEZ (mandá sobre todo lo anterior)', String(note).trim().slice(0, 2000));
+    lines.push('', 'LO QUE TE PIDIERON ESTA VEZ (manda sobre todo lo anterior, incluido el alcance)', String(note).trim().slice(0, 4000));
   }
   lines.push(
     '',
-    'QUÉ TENÉS QUE HACER',
-    '1. Leé el archivo y confirmá que el problema está y es el que dice.',
-    '2. Arreglá SÓLO eso, con el cambio más chico que lo resuelva de verdad.',
-    '3. Si el arreglo obliga a tocar otro archivo, tocalo, pero sólo lo necesario.',
+    'CÓMO TRABAJAR',
+    '1. Leé el código y confirmá que el problema está y es el que dice. Mirá también qué cambió',
+    '   en la rama hace poco (`git log`, `git diff`): otro commit puede haberlo tocado o resuelto.',
+    '2. Decidí vos el enfoque. Tenés libertad para elegir cómo resolverlo dentro del alcance de arriba:',
+    '   cambiar código de otros commits u otras personas de este PR si la causa está ahí, agregar tests,',
+    '   mover lógica, agregar un lock o una restricción. "Es código ajeno" no es motivo para no hacerlo.',
+    '3. Si hay varias formas razonables, elegí la mejor, hacela, y contá en `alternatives` cuáles',
+    '   descartaste y por qué, en una o dos líneas cada una.',
+    '4. Si tu cambio también resuelve otro de los hallazgos abiertos de arriba (misma causa), resolvelos',
+    '   juntos y poné sus ids en `alsoResolves`. Sólo si quedan resueltos de verdad.',
+    '5. Si podés compilar o correr los tests relevantes, hacelo para confirmar que lo que escribiste anda.',
     '',
     'LÍMITES',
-    '- No reformatees, no reordenes imports, no renombres nada que no sea parte del arreglo.',
-    '- No agregues dependencias nuevas.',
-    '- No arregles otros problemas que veas de paso: cada hallazgo va en su propio commit.',
+    '- Nada de reformatear, reordenar imports ni renombrar fuera de lo que el arreglo necesita: el diff',
+    '  tiene que poder leerse.',
+    '- Dependencias nuevas sólo si son imprescindibles, y decilo en el resumen.',
+    '- No mergees otras ramas ni traigas commits de otras ramas salvo que el hallazgo sea justamente eso.',
     '- No hagas commit ni push: de eso se encarga la herramienta.',
-    '- Si el problema ya está resuelto, no aplica, o arreglarlo requiere una decisión',
-    '  que no te corresponde, dejá el código como está y contestá con fixed=false y el',
-    '  motivo. Un archivo tocado a medias es peor que uno sin tocar.',
+    '- Si el problema ya está resuelto o no aplica, dejá el código como está: fixed=false y el motivo.',
+    '- Si resolverlo exige una decisión que de verdad no te corresponde (de producto, irreversible,',
+    '  destructiva), no la tomes: dejá el código como está, fixed=false, y en `options` proponé de 2 a 4',
+    '  caminos concretos, cada uno con un título y un plan que alcance para ejecutarlo sin volver a preguntar.',
+    '  Quien revisa elige uno y se te vuelve a pedir con ese plan. Un archivo tocado a medias es peor que',
+    '  uno sin tocar.',
   );
   if (guidelines.trim()) lines.push('', 'CONVENCIONES DEL EQUIPO (el arreglo tiene que respetarlas)', guidelines);
   if (bus.trim()) lines.push('', bus);
@@ -623,8 +658,10 @@ function fixPrompt({ finding, prTitle, branch, language, guidelines = '', bus = 
     '',
     'RESPUESTA',
     'Devolvé el JSON del esquema: `fixed` si tocaste el código, `summary` con qué',
-    `cambiaste y por qué (en ${language}, dos o tres líneas), \`files\` con los archivos`,
-    'que tocaste, `reason` sólo si no arreglaste nada, y `elsewhere` si hace falta un cambio en otro repositorio.',
+    `cambiaste y por qué (en ${language}, de dos a cinco líneas), \`files\` con los archivos`,
+    'que tocaste, `reason` sólo si no arreglaste nada, `elsewhere` si hace falta un cambio en otro repositorio,',
+    '`alternatives` con lo que descartaste, `alsoResolves` con los ids de otros hallazgos que quedaron resueltos,',
+    `y \`options\` sólo cuando la decisión no es tuya. Todo el texto en ${language}.`,
   );
   return lines.join('\n');
 }

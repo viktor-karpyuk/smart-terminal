@@ -226,7 +226,29 @@ const MIGRATIONS = [
    * there and offered as a pull request of its own.
    */
   `ALTER TABLE cr_finding_fix ADD COLUMN elsewhere TEXT`,
+
+  /*
+   * The workshop, worked with rather than only waited on.
+   *
+   * `depth` is how far the fix was asked to go (FIX, IMPROVE, REWRITE); `prompt`
+   * is what was actually sent, edited or not, so how it was resolved can be read
+   * back; `log` is what it did while it ran, kept after the run is over.
+   * `options` are the ways it offered when the choice was not its to make,
+   * `alternatives` the ways it weighed and did not take, and `also_resolves`
+   * the other findings its change settled too. `stuck_at` is a fix whose commit
+   * no longer applied on the moved branch, taken out so the rest could go.
+   */
+  `ALTER TABLE cr_finding_fix ADD COLUMN depth TEXT;
+   ALTER TABLE cr_finding_fix ADD COLUMN prompt TEXT;
+   ALTER TABLE cr_finding_fix ADD COLUMN log TEXT;
+   ALTER TABLE cr_finding_fix ADD COLUMN options TEXT;
+   ALTER TABLE cr_finding_fix ADD COLUMN alternatives TEXT;
+   ALTER TABLE cr_finding_fix ADD COLUMN also_resolves TEXT;
+   ALTER TABLE cr_finding_fix ADD COLUMN stuck_at TEXT`,
 ];
+
+/** Who asked for a task typed into the workshop: the person at the keyboard. */
+const TASK_ASKER = 'you';
 
 const now = () => new Date().toISOString();
 const id = () => randomUUID();
@@ -425,6 +447,15 @@ const prRow = (row) =>
     conflictsAt: row.conflicts_at ?? null,
   };
 
+const jsonList = (text) => {
+  try {
+    const value = text ? JSON.parse(text) : [];
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+};
+
 const fixRow = (row) =>
   row && {
     elsewhere: (() => {
@@ -452,6 +483,13 @@ const fixRow = (row) =>
     returnedAt: row.returned_at,
     droppedAt: row.dropped_at ?? null,
     note: row.note ?? null,
+    depth: row.depth ?? null,
+    prompt: row.prompt ?? null,
+    log: row.log ? String(row.log).split('\n') : [],
+    options: jsonList(row.options),
+    alternatives: row.alternatives ?? null,
+    alsoResolves: jsonList(row.also_resolves),
+    stuckAt: row.stuck_at ?? null,
     check: row.check_state ? { state: row.check_state, output: row.check_output ?? '', seconds: row.check_seconds ?? null } : null,
     replyId: row.reply_id,
     replyUrl: row.reply_url,
@@ -1389,10 +1427,45 @@ class ReviewStore {
     return this.all('SELECT * FROM cr_finding_fix WHERE repo_id = ? AND pr_id = ? ORDER BY created_at DESC', repoId, prId).map(fixRow);
   }
 
-  startFix({ findingId, reviewId, repoId, prId, branch, workspace, note = null }) {
+  startFix({ findingId, reviewId, repoId, prId, branch, workspace, note = null, depth = null, prompt = null }) {
     const fixId = id();
-    this.run("INSERT INTO cr_finding_fix (id, finding_id, review_id, repo_id, pr_id, branch, state, workspace, created_at, note) VALUES (?,?,?,?,?,?,'RUNNING',?,?,?)", fixId, findingId, reviewId, repoId, prId, branch, workspace, now(), nul(note));
+    this.run("INSERT INTO cr_finding_fix (id, finding_id, review_id, repo_id, pr_id, branch, state, workspace, created_at, note, depth, prompt) VALUES (?,?,?,?,?,?,'RUNNING',?,?,?,?,?)", fixId, findingId, reviewId, repoId, prId, branch, workspace, now(), nul(note), nul(depth), nul(prompt));
     return fixId;
+  }
+
+  /** What the fix did while it ran, kept for after. */
+  setFixLog(fixId, lines) {
+    this.run('UPDATE cr_finding_fix SET log = ? WHERE id = ?', (lines ?? []).map(String).join('\n').slice(-60000) || null, fixId);
+  }
+
+  /** The ways it offered, the ways it weighed, and the other findings its change settled. */
+  setFixChoices(fixId, { options = [], alternatives = '', alsoResolves = [] } = {}) {
+    this.run('UPDATE cr_finding_fix SET options = ?, alternatives = ?, also_resolves = ? WHERE id = ?',
+      options.length ? JSON.stringify(options) : null, String(alternatives ?? '').trim() || null, alsoResolves.length ? JSON.stringify(alsoResolves) : null, fixId);
+  }
+
+  /** Its commit no longer applies on the moved branch: out of the workshop, with why. */
+  fixStuck(fixId, message) {
+    this.run("UPDATE cr_finding_fix SET dropped_at = ?, stuck_at = ?, state = 'DROPPED', error = ? WHERE id = ?", now(), now(), String(message ?? '').slice(0, 1000), fixId);
+  }
+
+  /**
+   * Something the person saw by hand and wants the workshop to do. A finding
+   * like any other, so it is fixed, listed and re-fixed the same way — asked by
+   * "you" and never published: it was not said on the pull request.
+   */
+  addTask(repoId, prId, { title, body, filePath = '', lineNo = null }) {
+    const review = this.reviewsFor(repoId, prId)[0];
+    if (!review) throw new Error('Run a review of this pull request first: a task hangs off it.');
+    const findingId = id();
+    const text = String(body ?? '').trim();
+    if (!text) throw new Error('Say what you want done.');
+    const heading = String(title ?? '').trim() || (text.split('\n').find((line) => line.trim()) ?? 'Task').trim();
+    this.run(
+      'INSERT INTO cr_finding (id, review_id, repo_id, pr_id, file_path, line_no, severity, title, body, created_at, asked_by, category) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+      findingId, review.id, repoId, prId, String(filePath ?? '').trim(), lineNo == null || lineNo === '' ? null : Number(lineNo), 'major', heading.slice(0, 120), text.slice(0, 8000), now(), TASK_ASKER, null,
+    );
+    return this.finding(findingId);
   }
 
   /** What the repository's own check said about this commit, in the workshop. */
@@ -1633,4 +1706,4 @@ class ReviewStore {
   }
 }
 
-module.exports = { ReviewStore, MIGRATIONS, cleanFolder, repoRow, reviewRow, findingRow, commentRow, replyRow, prRow, fixRow };
+module.exports = { ReviewStore, TASK_ASKER, MIGRATIONS, cleanFolder, repoRow, reviewRow, findingRow, commentRow, replyRow, prRow, fixRow };

@@ -1913,7 +1913,9 @@ function MonitorRow({ sessionId }: { sessionId: string }) {
 function LauncherButton({ viewId, title, icon }: { viewId: string; title: string; icon: string | null }) {
   // Remote's button says what the panel would: on, failed, or how many sessions phones have open.
   const remote = useStore((s) => (icon === 'remote' ? s.remote : null));
-  const remoteClass = remote ? ` remote-dot${remote.error ? ' is-bad' : remote.running ? ' is-on' : ''}` : '';
+  // The dot is its own element, not `::after`: that pseudo-element is the
+  // `data-tip` tooltip, and sharing it turned the name into a bare red pill.
+  const remoteDot = remote ? (remote.error ? 'bad' : remote.running ? 'ok' : null) : null;
   const remoteTip = remote ? (remote.error ? `${title} — could not start` : remote.viewers.length ? `${title} — ${remote.viewers.length} open on phones` : remote.running ? `${title} — on` : `${title} — off`) : null;
   const showing = useStore((s) => {
     const leaf = s.activeLeafId ? allLeaves(s.layout).find((candidate) => candidate.id === s.activeLeafId) : null;
@@ -1922,13 +1924,14 @@ function LauncherButton({ viewId, title, icon }: { viewId: string; title: string
   });
   return (
     <button
-      className={`activity${showing ? ' is-on' : ''}${remoteClass}`}
+      className={`activity${showing ? ' is-on' : ''}${remote ? ' remote-dot' : ''}`}
       data-tip={remoteTip ?? `${title} — opens in the section in front`}
       aria-label={title}
       aria-pressed={showing}
       onClick={() => useStore.getState().launchExtensionView(viewId)}
     >
       {icon === 'review' ? <ReviewIcon /> : icon === 'teams' ? <TeamsIcon /> : icon === 'send' ? <SendIcon /> : icon === 'jenkins' ? <JenkinsIcon /> : icon === 'remote' ? <RemoteIcon /> : icon === 'timelogbook' ? <TimelogbookIcon /> : icon === 'kubrik' ? <KubrikIcon /> : <ExtensionsIcon />}
+      {remoteDot ? <span className={`activity-dot is-${remoteDot}`} aria-hidden="true" /> : null}
       {remote && remote.viewers.length > 0 && !remote.error ? <span className="remote-count" aria-hidden="true">{remote.viewers.length}</span> : null}
     </button>
   );
@@ -2339,10 +2342,11 @@ function HousekeepingActivity() {
   const status = useStore((s) => s.housekeepingStatus);
   const tip = status === 'limit' ? 'Housekeeping — at a limit (⇧⌘H)' : status === 'attention' ? 'Housekeeping — needs attention (⇧⌘H)' : 'Housekeeping (⇧⌘H)';
   return (
-    <button className={`activity housekeeping-dot is-${status}`} onClick={() => useStore.getState().openHousekeeping()} data-tip={tip} aria-label="Housekeeping">
+    <button className="activity" onClick={() => useStore.getState().openHousekeeping()} data-tip={tip} aria-label="Housekeeping">
       <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <path d="M3.5 5h11M5 5l.9 9.5h6.2L13 5M7.3 5V3.3h3.4V5M7.6 7.5v5M10.4 7.5v5" />
       </svg>
+      {status === 'attention' || status === 'limit' ? <span className={`activity-dot is-${status === 'limit' ? 'bad' : 'warn'}`} aria-hidden="true" /> : null}
     </button>
   );
 }

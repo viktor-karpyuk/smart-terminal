@@ -1810,7 +1810,7 @@ class ReviewService {
       followUp: (args) => e.followUp(findingOf(args).id, args.body),
       /** Your own words, to the thread, the room, the author, or any of the three. */
       /** The change a fix needs in another repository: made in a copy of it, then pushed as a pull request there. */
-      crossfixPrepare: async (args) => ({ ok: true, job: await s.crossfix.prepare(str(args.fixId, 'A fix'), Number(args.index ?? 0)) }),
+      crossfixPrepare: async (args) => ({ ok: true, job: await s.crossfix.prepare(str(args.fixId, 'A fix'), Number(args.index ?? 0), { note: String(args.note ?? '').slice(0, 4000), depth: args.depth ? String(args.depth) : null }) }),
       crossfixPublish: async (args) => s.crossfix.publish(str(args.fixId, 'A fix'), Number(args.index ?? 0)),
       crossfixDiscard: (args) => s.crossfix.discard(str(args.fixId, 'A fix'), Number(args.index ?? 0)),
       /** The pull request's author's Teams address, given by hand when a message to them had nowhere to go. */
@@ -1854,7 +1854,24 @@ class ReviewService {
         e.changed(repoId, prId);
         return { ok: true, finding };
       },
-      fix: async (args) => ({ ok: true, fix: await f.fix(findingOf(args).id, { note: String(args.note ?? '').slice(0, 2000) }) }),
+      fix: async (args) => ({ ok: true, fix: await f.fix(findingOf(args).id, { note: String(args.note ?? '').slice(0, 4000), depth: args.depth ? String(args.depth) : null, prompt: args.prompt ? String(args.prompt).slice(0, 60000) : null }) }),
+      // The workshop, steered: the prompt before it is sent, what every fix of the PR keeps in mind, how deep they go, and tasks typed by hand.
+      previewFix: (args) => ({ ok: true, ...f.previewFix(findingOf(args).id, { note: String(args.note ?? '').slice(0, 4000), depth: args.depth ? String(args.depth) : null }) }),
+      setWorkshopBrief: (args) => {
+        const repoId = str(args.repoId, 'A repository');
+        const prId = num(args.prId);
+        f.setBrief(repoId, prId, args.text);
+        e.changed(repoId, prId);
+        return { ok: true };
+      },
+      setFixDepth: (args) => {
+        const repoId = str(args.repoId, 'A repository');
+        f.setDefaultDepth(repoId, args.depth ? String(args.depth) : null);
+        if (args.prId) e.changed(repoId, num(args.prId));
+        return { ok: true };
+      },
+      setFixPresets: (args) => ({ ok: true, presets: f.setPresets(Array.isArray(args.presets) ? args.presets : null) }),
+      addWorkshopTask: (args) => ({ ok: true, finding: f.addTask(str(args.repoId, 'A repository'), num(args.prId), { text: String(args.text ?? '').slice(0, 8000), title: String(args.title ?? '').slice(0, 120), filePath: String(args.filePath ?? '').slice(0, 500), lineNo: args.lineNo ? Number(args.lineNo) : null }) }),
       /** What one fix changed, or everything waiting to be handed back, as the panel's diff wants it. */
       fixDiff: async (args) => {
         const fix = s.store.fix(str(args.fixId, 'A fix'));

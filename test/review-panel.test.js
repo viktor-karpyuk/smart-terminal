@@ -948,3 +948,62 @@ test('a row in the list offers both ways to tell its author', () => {
   assert.match(known, /Connected: x@example\.com/);
   assert.equal(cell(all, { ...row, pr: { ...row.pr, state: 'MERGED' } }), '');
 });
+
+/*
+ * The Workshop tab, drawn from a pull request with a bit of everything in it:
+ * a fix running, one waiting with its details open and choices left to the
+ * person, one taken out because the branch moved, and a finding being fixed
+ * with the prompt open for editing.
+ */
+test('the Workshop tab draws what is running, what it decided, and the prompt to edit', () => {
+  const names = ['esc', 'edit', 'isOpen', 'fold', 'pendingFix', 'checkChip', 'statusChip', 'findingDone', 'settledByYou',
+    'workshopBody', 'fixRowActions', 'wsDepths', 'depthLabel', 'depthPicker', 'presetChips', 'fixComposer', 'wsRunning', 'fixDetails', 'duration', 'drawWorkshopTab'];
+  const pieces = names.map((name) => {
+    const at = source.search(new RegExp(`\\n  function ${name}\\b`));
+    assert.ok(at >= 0, `the panel no longer defines ${name}`);
+    const rest = source.slice(at + 1);
+    const end = rest.slice(1).search(/\n  (?:function|\/\*\*|\/\*|\/\/ )/);
+    return end < 0 ? rest : rest.slice(0, end + 1);
+  });
+  const fix = (extra) => ({ id: 'x', findingId: 'f1', state: 'COMMITTED', sha: 'abcdef1234', createdAt: '2026-11-09T10:00:00Z', finishedAt: '2026-11-09T10:03:00Z', returnedAt: null, droppedAt: null, check: null, log: [], options: [], alsoResolves: [], ...extra });
+  const pr = {
+    pr: { state: 'OPEN', sourceBranch: 'feature/x', id: 7 },
+    repo: { name: 'erp', fixMode: 'MANUAL', checkCommand: '' },
+    findings: [
+      { id: 'f1', severity: 'major', title: 'last-admin guard races', filePath: 'A.java', lineNo: 3 },
+      { id: 'f2', severity: 'minor', title: 'typed by hand', askedBy: 'you', filePath: '' },
+      { id: 'f3', severity: 'minor', title: 'sibling guard' },
+    ],
+    fixes: [
+      fix({ id: 'a', depth: 'IMPROVE', summary: 'Took the advisory lock.', alternatives: 'A unique index.', alsoResolves: ['f3'], log: ['· Read: A.java', 'Committed abcdef1 in the workshop.'], prompt: 'Sos el mismo revisor <script>', options: [] }),
+      fix({ id: 'b', findingId: 'f2', state: 'NOTHING', sha: null, summary: 'Needs a decision.', options: [{ title: 'Lock per tenant', plan: 'Use pg_advisory_xact_lock.' }] }),
+      fix({ id: 'c', findingId: 'f1', state: 'DROPPED', droppedAt: '2026-11-09T11:00:00Z', stuckAt: '2026-11-09T11:00:00Z', error: 'It no longer applies on feature/x at 1234567: CONFLICT (content)' }),
+    ],
+    running: [{ key: 'fix:f3', kind: 'fix', findingId: 'f3', title: 'sibling guard', depth: 'FIX', model: 'sonnet', startedAt: Date.now(), lines: ['Session 1 · model sonnet', '· Read: B.java', '· Edit: B.java'] }],
+    workshop: { dir: '/w', exists: true, pendingReturn: 1, brief: 'same lock', depth: 'FIX', presets: [{ label: 'Add a test', text: 'Agregá un test.' }],
+      depths: [{ key: 'FIX', label: 'Just the fix', blurb: 'b', model: 'sonnet' }, { key: 'IMPROVE', label: 'Improve', blurb: 'b', model: 'opus' }, { key: 'REWRITE', label: 'Rewrite', blurb: 'b', model: 'opus' }] },
+  };
+  const context = {
+    state: { edits: { 'fixprompt-f1': 'EL PROMPT <b>', 'fixdepth-f1': 'REWRITE' }, folds: { 'ws-fix-a': true, 'ws-fix-b': true, 'ws-fix-c': true }, busy: {}, wsCompose: { f1: true }, wsPreviewModel: { f1: 'opus' }, pr: null },
+    md: (text) => `<p>${String(text).replace(/</g, '&lt;')}</p>`,
+    when: () => 'just now', titleHtml: (t) => String(t).replace(/</g, '&lt;'), anchor: (f, l) => f + (l ? ':' + l : ''), sha7: (s) => String(s || '').slice(0, 7),
+    busyAttr: () => '', prKey: (k) => 'pr:' + k, diffPanel: () => '', RESOLUTION_LABELS: {},
+  };
+  context.state.pr = pr;
+  vm.createContext(context);
+  vm.runInContext(pieces.join('\n'), context);
+  const out = context.drawWorkshopTab(pr);
+  assert.match(out, /Working now[\s\S]*· Edit: B\.java/, 'the steps of the run in progress');
+  assert.match(out, /Took the advisory lock[\s\S]*A unique index[\s\S]*✔ sibling guard/, 'what it did, weighed, and settled too');
+  assert.match(out, /What it did, step by step/);
+  assert.match(out, /The prompt it was given/);
+  assert.match(out, /It left the choice to you[\s\S]*Lock per tenant[\s\S]*data-act="fix-option"/);
+  assert.match(out, /no longer fit the branch[\s\S]*CONFLICT/);
+  assert.match(out, /EL PROMPT &lt;b&gt;/, 'the prompt is shown escaped, ready to edit');
+  assert.match(out, /Fix with this prompt/);
+  assert.match(out, /data-depth="REWRITE"[^>]*title="b · opus"|on primary" data-act="ws-depth" data-key="fixdepth-f1" data-depth="REWRITE"/);
+  assert.match(out, /by hand/);
+  assert.match(out, /For every fix in this PR[\s\S]*same lock/);
+  assert.match(out, /Ask for something by hand/);
+  assert.doesNotMatch(out, /<script>/, 'nothing it wrote becomes markup');
+});

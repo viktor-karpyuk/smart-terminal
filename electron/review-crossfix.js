@@ -86,13 +86,14 @@ class CrossFix {
     throw new Error(`Could not find a branch to start from in ${target.name}.`);
   }
 
-  async prepare(fixId, index) {
+  async prepare(fixId, index, { note = '', depth = null } = {}) {
     const { item, finding, source, pr, target } = this.context(fixId, index);
     const key = this.key(fixId, index);
     const activity = this.engine.activity;
     if (activity.has(key)) throw new Error('That change is already being made.');
     activity.start(key, { kind: 'crossfix', repoId: source.id, prId: pr.id, repoName: source.name, title: `${target.name}: ${finding?.title ?? ''}`.slice(0, 120) });
-    this.save(fixId, index, { state: 'PREPARING', target: target.name }, source.id, pr.id);
+    const asked = rules.fixDepth(depth, this.store.pref(`fix-depth:${target.id}`));
+    this.save(fixId, index, { state: 'PREPARING', target: target.name, note: String(note ?? '').trim() || null, depth: asked }, source.id, pr.id);
     const log = (text) => activity.line(key, text);
     const dir = path.join(this.scratch, `crossfix-${rules.slug(target.name)}-${String(fixId).slice(0, 8)}-${Number(index)}`);
     try {
@@ -114,19 +115,23 @@ class CrossFix {
       const result = await this.claude.run({
         kind: 'fix',
         cwd: dir,
-        prompt: crossFixPrompt({ item, finding, source, pr, target, base, branch, language: this.language() }),
-        model: target.defaultModel || rules.DEPTHS.INTERMEDIATE.model,
+        prompt: crossFixPrompt({ item, finding, source, pr, target, base, branch, language: this.language(), note, depth: asked }),
+        model: asked === 'FIX' ? (target.defaultModel || rules.FIX_DEPTHS.FIX.model) : rules.FIX_DEPTHS[asked].model,
         allowedTools: rules.FIX_TOOLS,
         disallowedTools: rules.FIX_DENIED,
         schema: CROSSFIX_SCHEMA,
-        timeout: RUN_TIMEOUT,
+        timeout: Math.max(RUN_TIMEOUT, rules.FIX_DEPTHS[asked].timeout),
         register: (handle) => activity.patch(key, { handle }),
         onEvent: (event) => log(describeEvent(event)),
       });
       if (!result.ok) throw new Error((result.stderr || 'It finished without a result.').slice(0, 500));
       const outcome = result.structured && typeof result.structured === 'object' ? result.structured : {};
       if (!(await this.git.isDirty(dir))) {
-        throw new Error(`Nothing was changed in ${target.name}: ${String(outcome.reason || outcome.summary || 'no reason given').slice(0, 600)}`);
+        // Not a failure to hide: the ways it offered are what the person picks from to run it again.
+        const options = rules.parseFix(outcome).options;
+        const error = new Error(`Nothing was changed in ${target.name}: ${String(outcome.reason || outcome.summary || 'no reason given').slice(0, 1500)}`);
+        error.options = options;
+        throw error;
       }
       const title = String(outcome.title || `${item.change.split('\n')[0]}`).replace(/\s+/g, ' ').trim().slice(0, 120);
       const sha = await this.git.commitAll(dir, `${title}\n\nFor ${source.name} #${pr.id} (${pr.sourceBranch}).`);
@@ -134,11 +139,11 @@ class CrossFix {
       const check = await this.check(target, dir, log);
       const stat = (await this.git.run(dir, ['diff', '--stat', start, sha])).stdout.trim().slice(0, 4000);
       const diff = (await this.git.run(dir, ['diff', start, sha])).stdout.slice(0, 200000);
-      const job = { state: 'PREPARED', target: target.name, targetId: target.id, base, branch, sha, check, stat, diff, title, summary: String(outcome.summary ?? '').slice(0, 2000), dir };
+      const job = { state: 'PREPARED', target: target.name, targetId: target.id, base, branch, sha, check, stat, diff, title, summary: String(outcome.summary ?? '').slice(0, 2000), alternatives: String(outcome.alternatives ?? '').slice(0, 2000) || null, note: String(note ?? '').trim() || null, depth: asked, dir };
       this.save(fixId, index, job, source.id, pr.id);
       return this.state(fixId, index);
     } catch (error) {
-      this.save(fixId, index, { state: 'FAILED', target: target.name, error: String(error?.message ?? error).slice(0, 800) }, source.id, pr.id);
+      this.save(fixId, index, { state: 'FAILED', target: target.name, error: String(error?.message ?? error).slice(0, 1800), options: error?.options ?? [], note: String(note ?? '').trim() || null, depth: asked }, source.id, pr.id);
       throw error;
     } finally {
       activity.end(key);
@@ -207,12 +212,19 @@ class CrossFix {
 
 const CROSSFIX_SCHEMA = {
   type: 'object',
-  properties: { title: { type: 'string' }, summary: { type: 'string' }, files: { type: 'array', items: { type: 'string' } }, reason: { type: 'string' } },
+  properties: {
+    title: { type: 'string' },
+    summary: { type: 'string' },
+    files: { type: 'array', items: { type: 'string' } },
+    reason: { type: 'string' },
+    alternatives: { type: 'string' },
+    options: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, plan: { type: 'string' } }, required: ['title', 'plan'] } },
+  },
   required: ['title', 'summary'],
 };
 
 /** The other half of a fix, asked of the other repository. */
-function crossFixPrompt({ item, finding, source, pr, target, base, branch, language }) {
+function crossFixPrompt({ item, finding, source, pr, target, base, branch, language, note = '', depth = 'FIX' }) {
   return [
     `Hay que hacer un cambio en ${target.name} para que otro repositorio, ${source.name}, pueda arreglar un problema.`,
     `Estás parado en una rama nueva, ${branch}, que sale de ${base}, en una copia aparte de ${target.name}.`,
@@ -224,19 +236,31 @@ function crossFixPrompt({ item, finding, source, pr, target, base, branch, langu
     `LO QUE HACE FALTA EN ${target.name}`,
     item.change,
     '',
+    ...(rules.FIX_DEPTHS[depth] ?? rules.FIX_DEPTHS.FIX).instructions,
+    '',
+    ...(String(note ?? '').trim() ? ['LO QUE TE PIDIERON ESTA VEZ (manda sobre todo lo anterior)', String(note).trim().slice(0, 4000), ''] : []),
     'QUÉ TENÉS QUE HACER',
-    '1. Encontrá dónde vive eso en este repositorio y hacé el cambio más chico que lo resuelva de verdad.',
+    '1. Encontrá dónde vive eso en este repositorio y hacé el cambio que lo resuelva de verdad.',
     '2. Seguí cómo está hecho lo de alrededor: mismos nombres, mismas capas, mismo estilo.',
-    '3. Si hay tests de lo que tocás y agregar uno es directo, agregalo.',
+    '3. Si hay tests de lo que tocás, agregá o ajustá los que cubren el cambio.',
+    '4. Esto es una rama nueva que nadie mergea sin revisarla: se ve el diff antes de subir nada y',
+    '   se abre como PR aparte. Así que DECIDÍ. Si el pedido deja abierta una elección (un nombre,',
+    '   un formato, un prefijo), tomá la que mejor encaje con las convenciones del repositorio y con',
+    '   lo que propone el pedido, hacela, y explicá en `summary` qué elegiste y por qué, y en',
+    '   `alternatives` qué otras opciones había. Quien revisa puede pedir otra antes de abrir el PR.',
     '',
     'LÍMITES',
-    '- Nada que no haga falta para esto. No reformatees, no renombres, no agregues dependencias.',
+    '- Nada que no haga falta para esto. No reformatees ni renombres fuera del cambio.',
+    '- Dependencias nuevas sólo si son imprescindibles, y decilo.',
     '- No hagas commit ni push: de eso se encarga la herramienta.',
-    '- Si no se puede hacer sin una decisión que no te corresponde, no toques nada y explicalo en reason.',
+    '- Sólo si el cambio sería destructivo o irreversible (borrar datos, romper un contrato público',
+    '  que otros sistemas usan), no toques nada: explicalo en `reason` y proponé en `options` de 2 a',
+    '  4 caminos concretos, cada uno con `title` y un `plan` que alcance para ejecutarlo sin preguntar.',
     '',
     'RESPUESTA',
     `El JSON del esquema: \`title\` (una línea, el título del commit y del PR, en ${language}), \`summary\``,
-    `(qué cambiaste y por qué, dos a cuatro líneas en ${language}), \`files\`, y \`reason\` si no cambiaste nada.`,
+    `(qué cambiaste, qué decidiste y por qué, dos a seis líneas en ${language}), \`files\`, \`alternatives\`,`,
+    'y `reason` + `options` sólo si no cambiaste nada.',
   ].join('\n');
 }
 

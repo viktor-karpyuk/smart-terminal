@@ -197,7 +197,7 @@ const REVIEW_READ = [
   'overview', 'dashboard', 'repos', 'repo', 'prs', 'pr', 'files', 'diff', 'commits', 'commitFiles', 'commitDiff',
   'guidelines', 'usage', 'activity', 'viewed', 'fileText', 'importInspect', 'models', 'depths', 'rerunCheck', 'followUpText', 'brief', 'paths',
   'detectRemote', 'bus',
-  'fixTimes', 'watchBudget', 'migrationClashes',
+  'fixTimes', 'watchBudget', 'migrationClashes', 'previewFix',
 ] as const;
 const REVIEW_WRITE = [
   'pickFolder', 'saveRepo', 'testRepo', 'deleteRepo', 'hideRepo', 'saveSettings', 'saveGuideline', 'deleteGuideline',
@@ -209,6 +209,7 @@ const REVIEW_WRITE = [
   'crossfixPrepare', 'crossfixPublish', 'crossfixDiscard',
   'draftReply', 'draftAll', 'saveReplyDraft', 'publishReply', 'dismissReply', 'dismissAllReplies', 'followUp',
   'adopt', 'closeRequest', 'fix', 'fixAll', 'retryFixReply', 'giveBack', 'discardWorkshop', 'push', 'dropFix',
+  'setWorkshopBrief', 'setFixDepth', 'setFixPresets', 'addWorkshopTask',
   'remind', 'sweepReminders', 'escalateNow', 'speak',
   'approve', 'unapprove', 'requestChanges', 'undoRequestChanges', 'decline', 'merge',
 ] as const;
