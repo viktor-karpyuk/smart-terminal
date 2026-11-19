@@ -11,7 +11,23 @@
   .prtabs { display: flex; align-items: stretch; gap: 1px; padding: 0 8px; border-bottom: 1px solid var(--border); background: var(--bg-panel); overflow-x: auto; scrollbar-width: none; min-width: 0; }
   .prtabs:empty { display: none; }
   .prtabs::-webkit-scrollbar { display: none; }
-  .prtab { display: flex; align-items: center; gap: 6px; flex: 0 1 230px; min-width: 90px; padding: 6px 6px 6px 10px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--text-dim); font: inherit; font-size: 0.958rem; cursor: pointer; border-radius: 0; }
+  /*
+   * A tab is as wide as its title, up to a limit, and never narrower than a
+   * readable piece of it: with more tabs than room the row scrolls (the wheel
+   * scrolls it sideways) instead of squeezing every title down to one letter.
+   */
+  .prtab { position: relative; display: flex; align-items: center; gap: 5px; flex: 0 0 auto; width: max-content; min-width: 140px; max-width: 260px; padding: 6px 4px 6px 10px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--text-dim); font: inherit; font-size: 0.958rem; cursor: pointer; border-radius: 0; }
+  .prtabs.more-left { -webkit-mask-image: linear-gradient(to right, transparent 0, #000 28px); mask-image: linear-gradient(to right, transparent 0, #000 28px); }
+  .prtabs.more-right { -webkit-mask-image: linear-gradient(to left, transparent 0, #000 28px); mask-image: linear-gradient(to left, transparent 0, #000 28px); }
+  .prtabs.more-left.more-right { -webkit-mask-image: linear-gradient(to right, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%); mask-image: linear-gradient(to right, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%); }
+  /* What a pull request tab is about, when the pointer rests on it. */
+  .prtip { position: fixed; z-index: 60; width: 360px; max-width: calc(100vw - 16px); padding: 10px 12px; background: var(--bg-elevated); color: var(--text-dim); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35); font-size: 0.958rem; line-height: 1.45; pointer-events: none; }
+  .prtip[hidden] { display: none; }
+  .prtip .tt { color: var(--text); font-weight: 600; margin-bottom: 4px; overflow-wrap: anywhere; }
+  .prtip .tt .num { color: var(--accent); margin-right: 4px; }
+  .prtip .ln { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .prtip .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+  .prtip .run-strip { margin-top: 6px; }
   .prtab:hover { color: var(--text); background: var(--bg-elevated); }
   .prtab.on { color: var(--text); border-bottom-color: var(--accent); }
   .prtab.home { flex: none; min-width: 0; font-weight: 550; }
@@ -40,9 +56,10 @@
   .top > .crumbs { flex: 1 1 auto; }
   .top .brand { font-weight: 600; margin-right: 6px; }
   /* One row: the pull requests on the left, the controls on the right. */
-  .top.merged { padding-top: 0; padding-bottom: 0; padding-left: 4px; min-height: 2.6rem; align-items: stretch; overflow: visible; }
+  /* Edge to edge, not centred on the reading column like the other bars: the tabs want every pixel, and the right side was left empty. */
+  .top.merged { padding-top: 0; padding-bottom: 0; padding-left: 4px; padding-right: var(--s4, 10px); min-height: 2.6rem; align-items: stretch; overflow: visible; }
   .top.merged > :not(.prtabs) { align-self: center; }
-  .top.merged > .prtabs.inline { flex: 1 1 auto; border-bottom: 0; padding: 0; background: none; }
+  .top.merged > .prtabs.inline { flex: 1 1 0; min-width: 0; border-bottom: 0; padding: 0; background: none; }
   .top.merged > .crumbs { padding-left: 6px; }
   .top.merged > .btn.refresh:last-child { position: static; box-shadow: none; }
   .tab { padding: 4px 10px; border-radius: var(--radius); color: var(--text-dim); cursor: pointer; border: 1px solid transparent; background: none; font: inherit; }
@@ -878,6 +895,25 @@
 
   .conflict-banner { display: block; }
   .renumber { margin-top: 8px; }
+  .renumber.is-loading { opacity: 0.6; }
+  .renumber .num-in { width: 5.5em; padding: 2px 6px; font: inherit; text-align: right; }
+  .renumber .renames.off { opacity: 0.45; }
+  .renumber .renames li { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  /* Migrations: on a pull request's screen and in the list of everything in flight. */
+  .chip.mig { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); color: var(--accent); }
+  .mig-card { margin: 8px 0; }
+  .mig-card.mig-bad { border-color: color-mix(in srgb, var(--danger) 55%, var(--border)); }
+  .mig-card .row { gap: 8px; }
+  .mig-why { margin: 6px 0 2px; color: var(--text-dim); }
+  .mig-table { margin-top: 6px; }
+  .mig-table td { vertical-align: top; }
+  .mig-table tr.clash td { background: color-mix(in srgb, var(--danger) 9%, transparent); }
+  .mig-table tr.group-start td { border-top: 1px solid var(--border); }
+  .mig-page .row { gap: 8px; flex-wrap: wrap; }
+  .mig-search { min-width: 220px; }
+  .mig-repo { margin-top: 18px; }
+  .mig-repo > .row { margin-bottom: 4px; }
+  .mig-folder { margin-top: 10px; }
   .renumber-keep td { padding: 3px 8px 3px 0; }
   .renumber-steps { margin: 4px 0 0; padding-left: 18px; }
   .renumber-steps li { margin: 3px 0; }
@@ -1416,6 +1452,7 @@
     else if (view === 'settings') promise = call('guidelines', { repoId: null }).then(function (r) { state.globalGuidelines = r.guidelines; }).then(loadFixTimes);
     else if (view === 'import') promise = call('importInspect').then(function (r) { state.importInfo = r; });
     else if (view === 'bus') promise = call('bus').then(function (r) { state.bus = r; });
+    else if (view === 'migrations') promise = loadMigrations(false);
     else promise = Promise.resolve();
     return promise.then(draw, function (error) {
       if (view === 'pr') state.prError = error.message; else fail(error);
@@ -1522,7 +1559,7 @@
     var autoText = !state.overview ? '' : !(state.overview.settings && state.overview.settings.autoEnabled)
       ? 'automatic off'
       : auto && auto.running ? 'sweeping…' : auto && auto.lastRunAt ? 'last sweep ' + when(auto.lastRunAt) : 'automatic on';
-    var tabs = [['dashboard', 'Dashboard'], ['repos', 'Repositories'], ['bus', 'Coordination'], ['usage', 'Usage'], ['settings', 'Settings']];
+    var tabs = [['dashboard', 'Dashboard'], ['repos', 'Repositories'], ['migrations', 'Migrations'], ['bus', 'Coordination'], ['usage', 'Usage'], ['settings', 'Settings']];
     var merged = Boolean(state.navInSidebar);
     // With its menu in the app's sidebar, its name and its tabs are already said there; the row holds the pull requests instead.
     var html = merged ? '' : '<span class="brand">Code Reviewer</span>';
@@ -1629,6 +1666,7 @@
       else if (state.view === 'settings') html = drawSettings();
       else if (state.view === 'import') html = drawImport();
       else if (state.view === 'bus') html = drawBus();
+      else if (state.view === 'migrations') html = drawMigrations();
       else html = '';
     } catch (error) {
       html = '<div class="page"><div class="banner bad">This view could not be drawn: ' + esc(error && error.stack || error) + '</div></div>';
@@ -1651,8 +1689,20 @@
     var list = main.querySelector('.split > aside');
     if (list) {
       // The file in front stays in sight as Enter walks down the list; nothing moves if it already is.
+      // Only when the file in front changed: doing it on every redraw (activity, a change
+      // event, a running review's tick) pulled the list back down to the open file the moment
+      // someone scrolled up to look at the others. And by moving the list itself, not with
+      // scrollIntoView, which moves every scrollable thing around it as well.
       var on = list.querySelector('.item.on');
-      if (on) on.scrollIntoView({ block: 'nearest' });
+      var openNow = state.view === 'pr' && state.code ? state.code.file : null;
+      if (on && openNow !== state.asideShown) {
+        var top = on.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
+        if (list.scrollHeight > list.clientHeight) {
+          if (top < list.scrollTop) list.scrollTop = top;
+          else if (top + on.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = top + on.offsetHeight - list.clientHeight;
+        }
+      }
+      state.asideShown = openNow;
     }
     state.drawPending = false;
     if (focus) {
@@ -2066,6 +2116,7 @@
       html += '<tr class="click' + (closed ? ' closed' : '') + '" data-act="open-pr" data-repo="' + esc(row.repoId) + '" data-pr="' + pr.id + '">' +
         '<td class="pick"><input type="checkbox" data-act-change="pick-pr" data-key="' + esc(key) + '"' + (state.chosen && state.chosen[key] ? ' checked' : '') + ' title="Choose this one to review with others"></td>' +
         '<td class="title-cell"><div class="t">#' + pr.id + ' ' + esc(pr.title) + '</div><div class="s">' + (withRepo ? '<span class="chip">' + esc(row.repoName) + '</span> ' : '') + esc(pr.author) + (pr.sourceBranch ? ' · <span class="mono">' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch) + '</span>' : '') +
+        (row.migrations ? ' ' + migChip(row) : '') +
         (row.pendingReturn ? ' · <span class="warn">' + row.pendingReturn + ' fix(es) to hand back</span>' : '') + '</div>' + runStrip(row) + '</td>' +
         '<td class="faint" title="' + esc(pr.createdOn) + '">' + (row.ageDays != null ? row.ageDays + 'd ' : '') + '<span class="' + (row.ageDays >= 14 ? 'bad' : row.ageDays >= 7 ? 'warn' : '') + '">' + ageMark(row.ageDays) + '</span></td>' +
         '<td><div class="row">' + conflictChip(row) + row.flags.map(flagChip).join('') + remindCell(row) + '</div></td>' +
@@ -2192,8 +2243,8 @@
     var rooms = (state.overview && state.overview.settings && state.overview.settings.delivery && state.overview.settings.delivery.channels) || [];
     var reviewerRoom = (state.overview && state.overview.settings && state.overview.settings.announceChannel) || '';
     html += '<div class="section"><h3>Migration numbers</h3>';
-    html += '<div class="field"><label>Migrations folder</label><div>' + input('migrationsPath', 'text', 'src/main/resources/db/migration') +
-      '<div class="help faint">Relative to the repository. Every open pull request is read for the migrations it adds here; two different files with the same number (<span class="mono">V12__…</span> and <span class="mono">V012__…</span> are the same number) are flagged on the board and block the merge gate. A number that is already on the target branch is not merged from here at all. Empty: not watched.</div></div></div>';
+    html += '<div class="field"><label>Migrations folders</label><div><textarea rows="3" class="mono" data-form="migrationsPath" data-edit="form-migrationsPath" placeholder="src/main/resources/db/migration&#10;services/billing/db/migration">' + esc(f.migrationsPath || '') + '</textarea>' +
+      '<div class="help faint">One per line, relative to the repository. Each folder is its own sequence: the same number in two folders is not a clash. Every open pull request is read for the migrations it adds; it shows on the board and in the pull request as soon as one appears, and in the Migrations list. Two different files with the same number (<span class="mono">V12__…</span> and <span class="mono">V012__…</span> are the same number) are flagged on the board and block the merge gate. A number that is already on the target branch is not merged from here at all. Empty: not watched.</div></div></div>';
     html += '<div class="field"><label>Tell the room</label><div><input type="text" list="rooms" data-form="alertChannel" data-edit="form-alertChannel" value="' + esc(f.alertChannel) + '" placeholder="' + esc(reviewerRoom ? reviewerRoom + ' — the reviewer\'s room' : 'a room set up in Teams') + '">' +
       '<datalist id="rooms">' + rooms.map(function (name) { return '<option value="' + esc(name) + '">'; }).join('') + '</datalist>' +
       '<div class="help faint">A room by the name it has in the Teams extension' + (rooms.length ? ' (' + rooms.map(esc).join(', ') + ')' : '') + '. Told once per clash, and again only if another pull request joins it. Empty: ' + (reviewerRoom ? 'the reviewer\'s room, ' + esc(reviewerRoom) : 'nobody is told outside this app') + '.</div></div></div>';
@@ -2329,7 +2380,7 @@
       (pr.url ? '<button class="btn small" data-act="open-url" data-url="' + esc(pr.url) + '" title="Open the pull request on ' + provider + '">' + provider + ' ↗</button>' : '') +
       '<button class="btn small" data-act="shell" data-where="clone" title="A terminal in the local clone">Terminal</button>' +
       '<button class="btn small" data-act="ask" title="A Claude session briefed on this pull request">Ask Claude</button>' +
-      '<button class="btn small" data-act="pr-load"' + busyAttr(prKey('pr-load')) + ' title="Read the pull request, its stances and its thread again">Reload</button></div>' +
+      '<button class="btn small" data-act="pr-load"' + busyAttr(prKey('pr-load')) + ' title="Only this pull request: read it again and fetch its branches, so a push you just made shows in Code and Commits">↻ Refresh</button></div>' +
       '<div class="faint pr-meta">' + esc(pr.author) + (pr.sourceBranch ? ' · <span class="mono">' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch) + '</span>' : '') + (pr.headSha ? ' · head <span class="mono">' + sha7(pr.headSha) + '</span>' : '') +
       (pr.createdOn ? ' · opened ' + esc(when(pr.createdOn)) : '') + (pr.updatedOn ? ' · updated ' + esc(when(pr.updatedOn)) : '') +
       mergeLine(v) + '</div>';
@@ -2395,7 +2446,7 @@
         (pr.url ? '<button class="btn small" data-act="open-url" data-url="' + esc(pr.url) + '" title="Open the pull request on ' + provider + '">' + provider + ' ↗</button>' : '') +
         '<button class="btn small" data-act="shell" data-where="clone" title="A terminal in the local clone">Terminal</button>' +
         '<button class="btn small" data-act="ask" title="A Claude session briefed on this pull request">Ask Claude</button>' +
-        '<button class="btn small" data-act="pr-load"' + busyAttr(prKey('pr-load')) + ' title="Read the pull request, its stances and its thread again">Reload</button>' +
+        '<button class="btn small" data-act="pr-load"' + busyAttr(prKey('pr-load')) + ' title="Only this pull request: read it again and fetch its branches, so a push you just made shows in Code and Commits">↻ Refresh</button>' +
       '</div>' +
       drawNextStep(v, false) +
       remindHtml(v) +
@@ -2585,7 +2636,9 @@
         return '<li class="' + (i.done ? 'done' : '') + '">' + esc(i.label) + (i.detail ? ' <span class="faint">' + esc(i.detail) + '</span>' : '') + ' <span class="faint">· ' + i.weight + '</span></li>';
       }).join('') + '</ul>';
     }
-    if (v.migrationClash) {
+    var migCard = drawPrMigrations(v);
+    if (migCard) html += migCard;
+    else if (v.migrationClash) {
       /*
        * Before the merge conflicts, because git will not report this one: two
        * different files merge cleanly, and the database refuses the second.
@@ -2645,10 +2698,12 @@
    * each of those branches, pushed.
    */
   function drawRenumber(r) {
-    if (r.loading) return '<div class="card renumber"><span class="faint">Reading every open branch for migrations…</span></div>';
+    if (r.loading && !r.plan) return '<div class="card renumber"><span class="faint">Reading every open branch for migrations…</span></div>';
     if (r.error) return '<div class="card renumber"><div class="banner bad">' + esc(r.error) + '</div><button class="btn small" data-act="renumber-close">Close</button></div>';
     var plan = r.plan;
-    var html = '<div class="card renumber"><strong>Resolve the migration numbers</strong>';
+    var multi = plan.folders && plan.folders.length > 1;
+    var html = '<div class="card renumber' + (r.loading ? ' is-loading' : '') + '"><div class="row"><strong>' + (r.keys ? 'Renumber migration ' + esc(r.keys.map(keyLabel).join(', ')) : 'Resolve the migration numbers') + '</strong><span class="spacer"></span>' +
+      (r.keys ? '<button class="link" data-act="renumber-all" title="Every clash in this repository, not only this one">all clashes</button>' : '') + '</div>';
     if (r.result) {
       html += '<ul class="renumber-steps">' + r.result.done.map(function (one) {
         return '<li class="' + (one.ok ? 'ok' : 'bad') + '">#' + one.prId + ' · ' + (one.ok
@@ -2658,42 +2713,202 @@
       return html + '<div class="row"><button class="btn small" data-act="renumber-close">Close</button></div></div>';
     }
     if (!plan.decisions.length) return html + '<div class="faint">No migration number is taken twice any more.</div><button class="btn small" data-act="renumber-close">Close</button></div>';
-    html += '<div class="faint">Who keeps each number. What is already on a target branch keeps it; otherwise the pull request opened first does, unless you choose another.</div>';
+    html += '<div class="faint">1 · Who keeps each number. What is already on a target branch keeps it; otherwise the pull request opened first, unless you pick another.</div>';
     html += '<table class="list renumber-keep">' + plan.decisions.map(function (d) {
+      var key = d.key || d.number;
       var who = d.fixed
         ? '<span>' + esc(d.keeper.branch) + ' <span class="faint">(already merged)</span></span>'
         : d.choices.map(function (prId) {
-            return '<label class="check"><input type="radio" name="keep-' + esc(d.number) + '" data-act-change="renumber-keep" data-number="' + esc(d.number) + '" value="' + prId + '"' + (d.keeper.prId === prId ? ' checked' : '') + '> #' + prId + '</label>';
+            return '<label class="check"><input type="radio" name="keep-' + esc(key) + '" data-act-change="renumber-keep" data-number="' + esc(key) + '" value="' + prId + '"' + (d.keeper.prId === prId ? ' checked' : '') + '> #' + prId + ' keeps it</label>';
           }).join(' ');
-      return '<tr><td class="mono">' + esc(d.number) + '</td><td>' + who + '</td></tr>';
+      return '<tr><td class="mono"><b>' + esc(d.number) + '</b>' + (multi && d.folder ? ' <span class="faint">' + esc(d.folder) + '</span>' : '') + '</td><td>' + who + '</td></tr>';
     }).join('') + '</table>';
     if (plan.steps.length) {
-      html += '<div style="margin-top:8px"><strong>What changes</strong></div><ul class="renumber-steps">' + plan.steps.map(function (step) {
-        return '<li><strong>#' + step.prId + '</strong> <span class="faint">' + esc(step.title) + ' · <span class="mono">' + esc(step.branch) + '</span></span>' +
-          '<ul>' + step.renames.map(function (one) { return '<li class="mono">' + esc(baseName(one.from)) + ' → ' + esc(baseName(one.to)) + '</li>'; }).join('') + '</ul>' +
+      html += '<div class="faint" style="margin-top:10px">2 · What each file becomes. Type another number to choose it yourself; untick a pull request to leave it as it is.</div><ul class="renumber-steps">' + plan.steps.map(function (step) {
+        var on = !r.skip[step.prId];
+        return '<li><label class="check"><input type="checkbox" data-act-change="renumber-only" data-pr="' + step.prId + '"' + (on ? ' checked' : '') + '> <strong>#' + step.prId + '</strong></label> <span class="faint">' + esc(step.title) + ' · <span class="mono">' + esc(step.branch) + '</span></span>' +
+          '<ul class="renames' + (on ? '' : ' off') + '">' + step.renames.map(function (one) {
+            var typed = r.overrides[one.from];
+            return '<li class="mono"><span>' + esc(baseName(one.from)) + '</span> <span class="faint">→</span> ' +
+              '<input class="num-in" type="text" inputmode="numeric" size="5" data-act-change="renumber-num" data-file="' + esc(one.from) + '" value="' + esc(typed != null && typed !== '' ? typed : one.toNumber) + '" title="The number it gets; leave the suggested one or type another free number"' + (on ? '' : ' disabled') + '> ' +
+              '<span class="faint">' + esc(baseName(one.to)) + '</span>' + (one.manual ? ' <span class="chip mine">yours</span>' : '') +
+              (multi && one.folder ? ' <span class="faint">' + esc(one.folder) + '</span>' : '') + '</li>';
+          }).join('') + '</ul>' +
           '<div class="faint">' + esc(step.why.join('; ')) + '</div></li>';
       }).join('') + '</ul>';
     }
     if (plan.problems.length) html += '<div class="banner warn">' + plan.problems.map(esc).join('<br>') + '</div>';
+    var chosen = plan.steps.filter(function (step) { return !r.skip[step.prId]; });
     html += '<label class="check" style="margin-top:6px"><input type="checkbox" data-act-change="renumber-comment"' + (r.comment ? ' checked' : '') + '> Tell each pull request in its thread</label>';
-    html += '<div class="faint" style="margin-top:4px">One commit on each branch above, pushed and never forced. Any references to the old file names in those branches are updated too. If an environment already ran an old number, it will see the renamed file as new.</div>';
-    html += '<div class="row" style="margin-top:8px">' + (plan.steps.length ? '<button class="btn small primary" data-act="renumber-apply"' + busyAttr('renumber-apply') + '>Renumber and push ' + plan.steps.length + ' branch' + (plan.steps.length === 1 ? '' : 'es') + '</button>' : '') +
-      '<button class="btn small" data-act="renumber-close">Cancel</button></div></div>';
-    return html;
+    html += '<div class="faint" style="margin-top:4px">One commit on each ticked branch, pushed and never forced. References to the old file names in those branches are updated too. If an environment already ran an old number, it will see the renamed file as new.</div>';
+    html += '<div class="row" style="margin-top:8px">' + (chosen.length ? '<button class="btn small primary" data-act="renumber-apply"' + busyAttr('renumber-apply') + '>Renumber and push ' + chosen.length + ' branch' + (chosen.length === 1 ? '' : 'es') + '</button>' : '') +
+      '<button class="btn small" data-act="renumber-ask" title="A Claude session briefed on these migrations: you say what you want, it shows you before changing anything">Ask Claude instead…</button>' +
+      '<button class="btn small" data-act="renumber-close">Cancel</button></div>';
+    if (r.asking) {
+      html += '<div class="say-box" style="margin-top:8px"><textarea rows="3" data-edit="renumber-note" placeholder="What you want, e.g. &quot;move V12 of #331 to 15 and leave #333 alone&quot; (optional)">' + esc(state.edits['renumber-note'] || '') + '</textarea>' +
+        '<div class="row"><button class="btn small primary" data-act="renumber-ask-go">Open the Claude session</button><span class="faint">It works in a copy of the branch and asks before committing or pushing.</span></div></div>';
+    }
+    return html + '</div>';
   }
 
   function baseName(file) { return String(file || '').split('/').pop(); }
+  /** `db/a|12` → `12 (db/a)`; a plain number stays as it is. */
+  function keyLabel(key) { var at = String(key).lastIndexOf('|'); return at < 0 ? String(key) : String(key).slice(at + 1) + ' (' + String(key).slice(0, at) + ')'; }
+
+  function renumberArgs(r) {
+    var only = null;
+    if (r.plan && Object.keys(r.skip).some(function (k) { return r.skip[k]; })) {
+      only = r.plan.steps.filter(function (step) { return !r.skip[step.prId]; }).map(function (step) { return step.prId; });
+    }
+    return { repoId: r.repoId, keep: r.keep, overrides: r.overrides, keys: r.keys || undefined, only: only || undefined };
+  }
+
+  /** Into the renumbering card for a repository: every clash, or only the ones named. */
+  function openRenumber(repoId, keys) {
+    state.renumber = { repoId: repoId, keep: {}, overrides: {}, skip: {}, keys: keys && keys.length ? keys : null, comment: true, asking: false };
+    loadRenumber();
+  }
 
   function loadRenumber() {
     var r = state.renumber;
     r.loading = true; r.error = null; draw();
-    call('migrationPlan', { repoId: r.repoId, keep: r.keep }).then(function (res) {
+    var args = renumberArgs(r);
+    delete args.only;
+    call('migrationPlan', args).then(function (res) {
       if (state.renumber !== r) return;
       r.loading = false; r.plan = res.plan;
       // What the plan settled on becomes the starting choice, so the radios show it.
-      res.plan.decisions.forEach(function (d) { if (!d.fixed && d.keeper.prId != null) r.keep[d.number] = d.keeper.prId; });
+      res.plan.decisions.forEach(function (d) { if (!d.fixed && d.keeper.prId != null) r.keep[d.key || d.number] = d.keeper.prId; });
       draw();
     }, function (error) { if (state.renumber !== r) return; r.loading = false; r.error = String(error && error.message || error); draw(); });
+  }
+
+  /*
+   * A pull request's migrations, on its own screen, the moment one appears:
+   * every file it adds in the watched folders, its number, where it sits in
+   * the pull request, and whether anything else has that number. A clash gets
+   * its quick fix on the row it is about.
+   */
+  function drawPrMigrations(v) {
+    var m = v.migrations;
+    if (!m) return '';
+    if (m.pending) return '<div class="card mig-card"><span class="faint">Reading this branch for migrations in ' + esc((m.folders || []).join(', ')) + '…</span></div>';
+    if (!m.files.length) return '';
+    var clash = v.migrationClash;
+    var bad = m.files.filter(function (f) { return f.clashKey || f.onTarget; });
+    var multi = (m.folders || []).length > 1;
+    var html = '<div class="card mig-card' + (bad.length ? ' mig-bad' : '') + '"><div class="row"><strong>' + (bad.length ? '⚠ ' : '') + 'Migrations in this pull request</strong> <span class="count">' + m.files.length + '</span>' +
+      '<span class="faint">' + (m.stale ? 'read before the last push · ' : '') + (m.checkedAt ? 'checked ' + esc(when(m.checkedAt)) : '') + '</span><span class="spacer"></span>' +
+      '<button class="link" data-act="recheck-migrations"' + busyAttr(prKey('recheck-migrations')) + '>check again</button>' +
+      '<button class="btn small" data-act="mig-ask" data-repo="' + esc(v.repo.id) + '" data-pr="' + v.pr.id + '" title="A Claude session briefed on these migrations">Ask Claude</button>' +
+      '<button class="btn small" data-act="nav" data-view="migrations" title="Every migration in every open pull request">All migrations</button></div>';
+    if (clash) {
+      html += '<div class="mig-why">' + (clash.onTarget ? 'A number here is already on <span class="mono">' + esc(v.pr.targetBranch) + '</span>: merging would put it there twice, so it is not merged from here until it is renumbered.' : 'Another pull request takes a number here too. Git merges both without a word; the database refuses the second.') + '</div>';
+    }
+    html += '<table class="list mig-table"><tr><th>#</th><th>Number</th><th>File</th><th>Status</th><th></th></tr>' + m.files.map(function (f) {
+      var status = f.onTarget
+        ? '<span class="chip badc">already on ' + esc(v.pr.targetBranch) + '</span>'
+        : f.clashKey
+          ? f.with.map(function (o) { return '<span class="chip badc" title="' + esc(o.path) + '">' + (o.prId == null ? 'on ' + esc(o.branch) : 'also #' + o.prId + ' · ' + esc(o.name)) + '</span>'; }).join(' ')
+          : '<span class="chip okc">free</span>';
+      var fix = f.clashKey ? '<button class="btn small primary" data-act="mig-fix" data-repo="' + esc(v.repo.id) + '" data-key="' + esc(f.clashKey) + '" title="Choose who keeps the number and what the others become">Renumber…</button>' : '';
+      return '<tr class="' + (f.clashKey || f.onTarget ? 'clash' : '') + '"><td class="faint" title="Its place among this pull request\'s migrations">' + f.position + ' of ' + f.of + '</td>' +
+        '<td class="mono"><b>' + esc(f.number) + '</b></td><td class="mono" title="' + esc(f.path) + '">' + esc(f.name) + (multi ? ' <span class="faint">' + esc(f.folder) + '</span>' : '') + '</td><td>' + status + '</td><td>' + fix + '</td></tr>';
+    }).join('') + '</table></div>';
+    return html;
+  }
+
+  /** On a board row: the migrations a pull request adds, red when one of them clashes. */
+  function migChip(row) {
+    var m = row && row.migrations;
+    if (!m) return '';
+    var nums = m.numbers.slice(0, 4).join(', ') + (m.numbers.length > 4 ? '…' : '');
+    return '<span class="chip ' + (m.clashing ? 'badc' : 'mig') + '" title="' + esc(m.count + ' migration(s) in ' + m.folders.join(', ') + ': ' + m.numbers.join(', ') + (m.clashing ? ' — ' + m.clashing + ' clash' : '')) + '">' + (m.clashing ? '⚠ ' : '') + 'mig ' + esc(nums) + '</span>';
+  }
+
+  // ---- every migration in flight --------------------------------------------
+
+  function loadMigrations(refresh) {
+    return call('migrationInventory', { refresh: Boolean(refresh) }).then(function (r) { state.migrations = { repos: r.repos, at: Date.now() }; });
+  }
+
+  /*
+   * The list: every migration every open pull request adds, by repository and
+   * folder, in number order — so two files with one number sit next to each
+   * other and the eye finds them without reading. A clash is red with its quick
+   * fix on the row; each file says where it sits in its pull request.
+   */
+  function drawMigrations() {
+    var data = state.migrations;
+    var html = '<div class="page mig-page"><div class="row"><h2 style="margin:0">Migrations</h2><span class="spacer"></span>' +
+      '<label class="check"><input type="checkbox" data-act-change="mig-only-clash"' + (state.migOnlyClash ? ' checked' : '') + '> only clashes</label>' +
+      '<input type="search" class="mig-search" data-edit="mig-q" data-bind="mig-q" placeholder="Filter: file, number, #PR, author" value="' + esc(state.edits['mig-q'] || '') + '">' +
+      '<button class="btn small" data-act="mig-refresh"' + busyAttr('mig-refresh') + ' title="Fetch every open branch and read them again">' + (state.busy['mig-refresh'] ? 'Fetching…' : '↻ Fetch and check') + '</button></div>';
+    html += '<p class="dim" style="margin-top:4px">Every migration the open pull requests add, in number order. Two files with the same number in the same folder clash: git merges both and the database refuses the second.</p>';
+    if (!data) return html + '<div class="loading">Reading the open branches…</div></div>';
+    var watched = data.repos;
+    var unwatched = (state.overview && state.overview.repos || []).filter(function (repo) { return !watched.some(function (w) { return w.repoId === repo.id; }); });
+    if (!watched.length) {
+      return html + '<div class="empty"><p>No repository names a migrations folder yet.</p><p class="faint">Open a repository\'s settings and fill in <b>Migrations folders</b> — one per line, relative to the repository.</p>' +
+        unwatched.slice(0, 8).map(function (repo) { return '<button class="btn small" data-act="repo-edit" data-repo="' + esc(repo.id) + '">Set up ' + esc(repo.name) + '</button>'; }).join(' ') + '</div></div>';
+    }
+    var q = String(state.edits['mig-q'] || '').trim().toLowerCase();
+    var total = 0, clashing = 0;
+    watched.forEach(function (repo) {
+      html += '<section class="mig-repo"><div class="row"><h3 style="margin:0">' + esc(repo.repoName) + '</h3>' +
+        repo.folders.map(function (folder) { return '<span class="chip mono">' + esc(folder) + '</span>'; }).join('') +
+        '<span class="faint">' + (repo.checkedAt ? 'checked ' + esc(when(repo.checkedAt)) : 'not read yet') + '</span><span class="spacer"></span>' +
+        (repo.clashes.length ? '<button class="btn small primary" data-act="mig-fix" data-repo="' + esc(repo.repoId) + '" title="Every clash in this repository, in one plan">Resolve all ' + repo.clashes.length + '…</button>' : '') +
+        '<button class="btn small" data-act="mig-ask" data-repo="' + esc(repo.repoId) + '" title="A Claude session briefed on every migration in flight here">Ask Claude</button>' +
+        '<button class="link" data-act="repo-edit" data-repo="' + esc(repo.repoId) + '">folders…</button></div>';
+      if (repo.error) html += '<div class="banner warn">' + esc(repo.error) + '</div>';
+      if (repo.unread.length) html += '<div class="faint">Not read: ' + repo.unread.map(function (id) { return '#' + id; }).join(', ') + ' — their branches are not in the clone. ↻ Fetch and check reads them.</div>';
+      if (state.renumber && state.renumber.repoId === repo.repoId) html += drawRenumber(state.renumber);
+      repo.folders.forEach(function (folder) {
+        var rows = [];
+        repo.prs.filter(function (pr) { return pr.folder === folder; }).forEach(function (pr) {
+          pr.files.forEach(function (f) { rows.push({ pr: pr, f: f }); });
+        });
+        // What the targets already have, for a number some pull request takes: shown in the group it clashes with.
+        var merged = {};
+        rows.forEach(function (one) { one.f.with.forEach(function (o) { if (o.prId == null) merged[o.path] = { pr: null, f: { path: o.path, name: o.name, number: one.f.number, branch: o.branch } }; }); });
+        Object.keys(merged).forEach(function (k) { rows.push(merged[k]); });
+        rows.sort(function (a, b) { return String(a.f.number).localeCompare(String(b.f.number), undefined, { numeric: true }) || (a.pr ? a.pr.prId : -1) - (b.pr ? b.pr.prId : -1); });
+        var count = {};
+        rows.forEach(function (one) { count[one.f.number] = (count[one.f.number] || 0) + 1; });
+        var shown = rows.filter(function (one) {
+          if (state.migOnlyClash && count[one.f.number] < 2) return false;
+          if (!q) return true;
+          var hay = [one.f.name, one.f.number, one.pr ? '#' + one.pr.prId : one.f.branch, one.pr ? one.pr.title : '', one.pr ? one.pr.author : ''].join(' ').toLowerCase();
+          return hay.indexOf(q) >= 0;
+        });
+        total += rows.filter(function (one) { return one.pr; }).length;
+        html += '<div class="mig-folder"><div class="faint mono">' + esc(folder) + ' · ' + rows.filter(function (one) { return one.pr; }).length + ' in flight</div>';
+        if (!shown.length) { html += '<div class="faint" style="padding:6px 0">' + (rows.length ? 'Nothing matches.' : 'No open pull request adds a migration here.') + '</div></div>'; return; }
+        var last = null;
+        var offered = {};
+        html += '<table class="list mig-table"><tr><th>Number</th><th>File</th><th>Pull request</th><th title="Where it sits among its pull request\'s own migrations">In its PR</th><th>Status</th><th></th></tr>';
+        shown.forEach(function (one) {
+          var dup = count[one.f.number] > 1;
+          if (dup && one.pr) clashing += 1;
+          var first = one.f.number !== last;
+          last = one.f.number;
+          var key = one.f.clashKey || (repo.folders.length > 1 ? folder + '|' + one.f.number : String(one.f.number));
+          var pr = one.pr
+            ? '<button class="link" data-act="open-pr" data-repo="' + esc(repo.repoId) + '" data-pr="' + one.pr.prId + '">#' + one.pr.prId + '</button> <span class="dim">' + esc(one.pr.title) + '</span><div class="faint">' + esc(one.pr.author) + ' · <span class="mono">' + esc(one.pr.sourceBranch) + ' → ' + esc(one.pr.targetBranch) + '</span></div>'
+            : '<span class="mono">' + esc(one.f.branch) + '</span> <span class="faint">already merged</span>';
+          var status = !dup ? '<span class="chip okc">free</span>' : one.pr ? (one.f.onTarget ? '<span class="chip badc">already on ' + esc(one.pr.targetBranch) + '</span>' : '<span class="chip badc">taken twice</span>') : '<span class="chip">keeps it</span>';
+          html += '<tr class="' + (dup ? 'clash' : '') + (first ? ' group-start' : '') + '"><td class="mono"><b>' + (first ? esc(one.f.number) : '') + '</b></td>' +
+            '<td class="mono" title="' + esc(one.f.path) + '">' + esc(one.f.name) + '</td><td>' + pr + '</td>' +
+            '<td class="faint">' + (one.pr ? one.f.position + ' of ' + one.f.of : '') + '</td><td>' + status + '</td>' +
+            '<td>' + (dup && one.pr && !offered[one.f.number] && (offered[one.f.number] = true) ? '<button class="btn small primary" data-act="mig-fix" data-repo="' + esc(repo.repoId) + '" data-key="' + esc(key) + '">Renumber…</button>' : '') + '</td></tr>';
+        });
+        html += '</table></div>';
+      });
+      html += '</section>';
+    });
+    if (unwatched.length) html += '<div class="faint" style="margin-top:14px">Not watched: ' + unwatched.map(function (repo) { return '<button class="link" data-act="repo-edit" data-repo="' + esc(repo.id) + '">' + esc(repo.name) + '</button>'; }).join(', ') + '.</div>';
+    return html + '</div>';
   }
 
   /**
@@ -4681,7 +4896,7 @@
       var repo = state.overview && state.overview.repos.filter(function (one) { return one.id === state.home.repoId; })[0];
       return repo ? repo.name : 'Pull requests';
     }
-    return { repos: 'Repositories', bus: 'Coordination', usage: 'Usage', settings: 'Settings' }[view] || 'Dashboard';
+    return { repos: 'Repositories', migrations: 'Migrations', bus: 'Coordination', usage: 'Usage', settings: 'Settings' }[view] || 'Dashboard';
   }
 
   function drawPrTabs() {
@@ -4707,13 +4922,98 @@
     var left = on.offsetLeft - strip.offsetLeft;
     if (left < strip.scrollLeft) strip.scrollLeft = left;
     else if (left + on.offsetWidth > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = left + on.offsetWidth - strip.clientWidth;
+    tabEdges(strip);
+  }
+
+  /** A fade on the side where more tabs are out of sight, so a row that scrolls looks like one. */
+  function tabEdges(strip) {
+    if (!strip) return;
+    var max = strip.scrollWidth - strip.clientWidth;
+    strip.classList.toggle('more-left', strip.scrollLeft > 1);
+    strip.classList.toggle('more-right', max > 1 && strip.scrollLeft < max - 1);
+  }
+
+  /*
+   * What a tab is about, when the pointer rests on it: the same facts as its
+   * row on the board — who, which branches, how old, what it waits for, the
+   * findings — so telling #331 from #333 does not take opening both.
+   */
+  function prTabRow(tab) {
+    var rows = (state.dashboard && state.dashboard.rows || []).concat(state.prList && state.prList.rows || []);
+    for (var i = 0; i < rows.length; i += 1) {
+      if (rows[i].repoId === tab.repoId && rows[i].pr && rows[i].pr.id === tab.prId) return rows[i];
+    }
+    return null;
+  }
+
+  function prTipHtml(tab) {
+    var row = prTabRow(tab);
+    var open = state.view === 'pr' && state.repoId === tab.repoId && state.prId === tab.prId && state.pr && state.pr.pr;
+    var pr = (row && row.pr) || (open ? state.pr.pr : null) || {};
+    var title = pr.title || tab.title || '';
+    var html = '<div class="tt"><span class="num">#' + tab.prId + '</span>' + esc(title) + '</div>';
+    var who = [tab.repoName || (row && row.repoName) || '', pr.author || ''].filter(Boolean);
+    if (row && row.ageDays != null) who.push(row.ageDays + 'd old');
+    else if (pr.createdOn) who.push('opened ' + when(pr.createdOn));
+    if (who.length) html += '<div class="ln">' + esc(who.join(' · ')) + '</div>';
+    if (pr.sourceBranch) html += '<div class="ln mono">' + esc(pr.sourceBranch) + ' → ' + esc(pr.targetBranch || '') + '</div>';
+    if (row) {
+      var f = row.findings || {};
+      var chips = conflictChip(row) + (row.flags || []).map(flagChip).join('');
+      if (f.total) chips += '<span class="chip' + (f.unresolved ? ' mine' : '') + '">' + f.published + '/' + f.total + ' findings' + (f.unresolved ? ' · ' + f.unresolved + ' open' : '') + '</span>';
+      if (row.pendingReturn) chips += '<span class="chip mine">' + row.pendingReturn + ' fix(es) to hand back</span>';
+      chips += migChip(row);
+      if (pr.state && pr.state !== 'OPEN') chips += '<span class="chip">' + esc(String(pr.state).toLowerCase()) + '</span>';
+      if (chips) html += '<div class="chips">' + chips + '</div>';
+      html += runStrip(row);
+    } else if (!open) {
+      html += '<div class="ln faint">Not on the board right now — open it to read it.</div>';
+    }
+    return html;
+  }
+
+  var tipTimer = null;
+  var tipFor = null;
+  function tipEl() {
+    var el = document.getElementById('prtip');
+    if (!el) { el = document.createElement('div'); el.id = 'prtip'; el.className = 'prtip'; el.setAttribute('role', 'tooltip'); el.hidden = true; document.body.appendChild(el); }
+    return el;
+  }
+  function hideTip() {
+    clearTimeout(tipTimer); tipTimer = null; tipFor = null;
+    var el = document.getElementById('prtip');
+    if (el) el.hidden = true;
+  }
+  function showTip(button) {
+    var tab = state.prTabs[Number(button.getAttribute('data-at'))];
+    if (!tab || !button.isConnected) return;
+    var el = tipEl();
+    el.innerHTML = prTipHtml(tab);
+    el.hidden = false;
+    var r = button.getBoundingClientRect();
+    var w = el.offsetWidth;
+    var h = el.offsetHeight;
+    var left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8));
+    var top = r.bottom + 6;
+    if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 6);
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+  }
+  function tipSoon(button, delay) {
+    if (tipFor === button) return;
+    var shown = document.getElementById('prtip');
+    var already = shown && !shown.hidden;
+    clearTimeout(tipTimer);
+    tipFor = button;
+    // Moving along the row while one is showing changes it at once; the first waits a moment, so passing over does not flash it.
+    tipTimer = setTimeout(function () { showTip(button); }, already ? 0 : delay);
   }
 
   function prTabsHtml() {
     var html = '<button class="prtab home' + (state.view !== 'pr' ? ' on' : '') + '" data-act="prtab-home" role="tab" title="Back to ' + esc(homeLabel()) + '"><span class="label">' + esc(homeLabel()) + '</span></button>';
     state.prTabs.forEach(function (tab, at) {
       var on = state.view === 'pr' && state.repoId === tab.repoId && state.prId === tab.prId;
-      html += '<button class="prtab' + (on ? ' on' : '') + '" data-act="prtab" data-at="' + at + '" role="tab" aria-selected="' + on + '" title="' + esc((tab.repoName ? tab.repoName + ' ' : '') + '#' + tab.prId + (tab.title ? ' ' + tab.title : '')) + '">' +
+      html += '<button class="prtab' + (on ? ' on' : '') + '" data-act="prtab" data-at="' + at + '" role="tab" aria-selected="' + on + '" aria-label="' + esc((tab.repoName ? tab.repoName + ' ' : '') + '#' + tab.prId + (tab.title ? ' ' + tab.title : '')) + '">' +
         '<span class="num">#' + tab.prId + '</span><span class="label">' + esc(tab.title || '') + '</span>' +
         '<span class="x" data-act="prtab-close" data-at="' + at + '" title="Close (middle-click)">×</span></button>';
     });
@@ -5186,20 +5486,40 @@
       draw();
       call('saveSettings', { settings: { diffLayout: next } }).catch(function () {});
     },
-    'renumber-open': function () { state.renumber = { repoId: state.repoId, keep: {}, comment: true }; loadRenumber(); },
+    'renumber-open': function () { openRenumber(state.repoId, state.pr && state.pr.migrationClash ? state.pr.migrationClash.keys : null); },
+    'renumber-all': function () { if (state.renumber) openRenumber(state.renumber.repoId, null); },
+    'renumber-ask': function () { if (state.renumber) { state.renumber.asking = !state.renumber.asking; draw(); } },
+    'renumber-ask-go': function () {
+      var r = state.renumber;
+      if (!r) return;
+      var note = String(state.edits['renumber-note'] || '').trim();
+      call('ask', { repoId: r.repoId, prId: state.view === 'pr' ? state.prId : undefined, about: 'migrations', note: note || undefined }).then(function () { say('Opened a Claude session on the migrations.'); }, fail);
+    },
+    'mig-fix': function (el) {
+      var key = el.getAttribute('data-key');
+      openRenumber(el.getAttribute('data-repo'), key ? [key] : null);
+    },
+    'mig-ask': function (el) {
+      var prId = el.getAttribute('data-pr');
+      call('ask', { repoId: el.getAttribute('data-repo'), prId: prId ? Number(prId) : undefined, about: 'migrations' }).then(function () { say('Opened a Claude session on the migrations.'); }, fail);
+    },
+    'mig-refresh': function () { act('mig-refresh', function () { return loadMigrations(true); }, function () { say('Every open branch read again.'); }); },
     'renumber-close': function () { state.renumber = null; draw(); },
     'renumber-apply': function () {
       var r = state.renumber;
       if (!r || !r.plan) return;
-      var summary = r.plan.steps.map(function (step) {
+      var summary = r.plan.steps.filter(function (step) { return !r.skip[step.prId]; }).map(function (step) {
         return '#' + step.prId + ' (' + step.branch + '): ' + step.renames.map(function (one) { return baseName(one.from) + ' → ' + baseName(one.to); }).join(', ');
       });
       act('renumber-apply', function () {
-        return call('renumberMigrations', { repoId: r.repoId, keep: r.keep, comment: r.comment, summary: summary });
+        var args = renumberArgs(r);
+        args.comment = r.comment; args.summary = summary;
+        return call('renumberMigrations', args);
       }, function (res) {
         r.result = res;
         var bad = res.done.filter(function (one) { return !one.ok; }).length;
         say(bad ? bad + ' branch(es) were not renumbered — see the card.' : 'Renumbered and pushed.', bad > 0);
+        if (state.view === 'migrations') loadMigrations(false).then(draw);
       });
     },
     'recheck-migrations': function () {
@@ -5380,7 +5700,15 @@
       if (list.indexOf(s) >= 0) { if (list.length > 1) list.splice(list.indexOf(s), 1); } else list.push(s);
       load();
     },
-    'pr-load': function () { act(prKey('pr-load'), function () { return call('loadPr', prArgs()); }, function (r) { if (r.commentsError) say('The thread could not be read: ' + r.commentsError, true); load(); }); },
+    'pr-load': function () { act(prKey('pr-load'), function () { return call('loadPr', prArgs()); }, function (r) {
+      if (r.commentsError) say('The thread could not be read: ' + r.commentsError, true);
+      else if (r.fetch && !r.fetch.ok) say('Read again, but a branch could not be fetched: ' + (r.fetch.absent || []).join(', '), true);
+      else say('Up to date with the forge and the branches.');
+      // What Code and Commits showed was read from the old branch: read again on the next look.
+      if (state.code) { state.code.files = null; state.code.lines = null; }
+      if (state.commits) state.commits.data = null;
+      load();
+    }); },
     'pr-tab': function (el) {
       state.prTab = el.getAttribute('data-tab');
       remember();
@@ -5930,6 +6258,33 @@
     var open = event.target.closest('[data-act="open-pr"]');
     if (open) { event.preventDefault(); openPr(open.getAttribute('data-repo'), open.getAttribute('data-pr'), true); }
   });
+  // The summary of a tab, on hover or keyboard focus; gone when the pointer leaves, a key is pressed or anything scrolls.
+  document.addEventListener('mouseover', function (event) {
+    var button = event.target.closest && event.target.closest('.prtab[data-act="prtab"]');
+    if (button) tipSoon(button, 350);
+    else if (tipFor) hideTip();
+  });
+  document.documentElement.addEventListener('mouseleave', hideTip);
+  document.addEventListener('focusin', function (event) {
+    var button = event.target.closest && event.target.closest('.prtab[data-act="prtab"]');
+    if (button && event.target.matches(':focus-visible')) tipSoon(button, 0); else if (tipFor) hideTip();
+  });
+  document.addEventListener('mousedown', hideTip, true);
+  // Any key puts it away; moving to another tab with Tab brings that one's back through focusin.
+  document.addEventListener('keydown', function () { if (tipFor) hideTip(); }, true);
+  window.addEventListener('blur', hideTip);
+  document.addEventListener('scroll', function (event) {
+    hideTip();
+    if (event.target.classList && event.target.classList.contains('prtabs')) tabEdges(event.target);
+  }, true);
+  window.addEventListener('resize', function () { tabEdges($('prtabs')); tabEdges($('prtabs-inline')); });
+  // The wheel scrolls the row of tabs sideways: it has no other way to go.
+  document.addEventListener('wheel', function (event) {
+    var strip = event.target.closest && event.target.closest('.prtabs');
+    if (!strip || strip.scrollWidth <= strip.clientWidth || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+    event.preventDefault();
+    strip.scrollLeft += event.deltaY;
+  }, { passive: false });
   // Without this the middle button would also start the browser's autoscroll on a tab.
   document.addEventListener('mousedown', function (event) { if (event.button === 1 && event.target.closest('.prtab, [data-act="open-pr"]')) event.preventDefault(); });
 
@@ -5952,6 +6307,7 @@
   function filterInput(el) {
     if (el.getAttribute('data-bind') === 'dash-text') { state.dashFilter.text = el.value; draw(); }
     if (el.getAttribute('data-bind') === 'code-filter') { state.code.filter = el.value; draw(); }
+    if (el.getAttribute('data-bind') === 'mig-q') draw();
   }
 
   document.addEventListener('focusout', function () {
@@ -5983,6 +6339,17 @@
      * should remember for you.
      */
     // Choosing who keeps a number asks for the plan again: everything after it can move.
+    if (el.getAttribute('data-act-change') === 'renumber-num' && state.renumber) {
+      state.renumber.overrides[el.getAttribute('data-file')] = el.value.trim();
+      loadRenumber();
+      return;
+    }
+    if (el.getAttribute('data-act-change') === 'renumber-only' && state.renumber) {
+      state.renumber.skip[el.getAttribute('data-pr')] = !el.checked;
+      draw();
+      return;
+    }
+    if (el.getAttribute('data-act-change') === 'mig-only-clash') { state.migOnlyClash = el.checked; draw(); return; }
     if (el.getAttribute('data-act-change') === 'renumber-keep' && state.renumber) {
       state.renumber.keep[el.getAttribute('data-number')] = Number(el.value);
       loadRenumber();
@@ -6030,7 +6397,7 @@
     if (event.type === 'changed') {
       if (state.view === 'pr') { if (event.repoId === state.repoId && (event.prId == null || event.prId === state.prId)) scheduleReload(); }
       else if (state.view === 'prs') { if (event.repoId === state.repoId) scheduleReload(); }
-      else if (state.view === 'dashboard' || state.view === 'repos') scheduleReload();
+      else if (state.view === 'dashboard' || state.view === 'repos' || state.view === 'migrations') scheduleReload();
       return;
     }
     if (event.type === 'bus') { if (state.view === 'bus') scheduleReload(); return; }

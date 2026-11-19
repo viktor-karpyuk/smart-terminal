@@ -613,16 +613,20 @@ function Frame({
       }
       // Something that failed in the workshop is worked on there; the reviewer, not the panel, writes what it says.
       const failure = args.failure && typeof args.failure === 'object' ? (args.failure as Record<string, unknown>) : null;
+      // `about` names what the session is briefed on; only the app's own words go in, the panel names the subject and a note.
+      const about = args.about === 'migrations' ? 'migrations' : undefined;
       const brief = await window.api.review.call('brief', {
         ...ids,
         findingId: args.findingId ? String(args.findingId) : undefined,
         failure: failure ? { action: String(failure.action ?? '').slice(0, 200), error: String(failure.error ?? '').slice(0, 4000) } : undefined,
+        about,
+        note: about && typeof args.note === 'string' ? args.note.slice(0, 2000) : undefined,
       });
       if (!brief.ok) return brief;
       const inWorkshop = Boolean(failure) && Boolean(paths.workshop);
       const sessionId = await claudeFor(panelId, {
         cwd: String((inWorkshop ? paths.workshop : paths.clone) ?? ''),
-        title: inWorkshop ? `fix push #${ids.prId ?? ''}` : `ask PR #${ids.prId ?? ''}`,
+        title: inWorkshop ? `fix push #${ids.prId ?? ''}` : about ? `migrations${ids.prId ? ` #${ids.prId}` : ''}` : `ask PR #${ids.prId ?? ''}`,
       });
       if (!sessionId) return { ok: false, error: 'the app could not open a session' };
       store.focusSession(sessionId);

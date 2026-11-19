@@ -1007,3 +1007,51 @@ test('the Workshop tab draws what is running, what it decided, and the prompt to
   assert.match(out, /Ask for something by hand/);
   assert.doesNotMatch(out, /<script>/, 'nothing it wrote becomes markup');
 });
+
+const MG = fromPanel(['esc', 'when', 'parseTime', 'keyLabel', 'migChip', 'drawPrMigrations', 'drawMigrations']);
+MG.busyAttr = () => '';
+MG.prKey = (key) => key;
+MG.state = { edits: {}, busy: {}, migOnlyClash: false, renumber: null, overview: { repos: [{ id: 'r1', name: 'erp' }, { id: 'r2', name: 'web' }] } };
+
+const file = (name, number, position, of, extra = {}) => ({ path: `db/${name}`, name, number, folder: 'db', position, of, clashKey: null, onTarget: false, with: [], ...extra });
+
+test('migrations: every one in flight, duplicates side by side, each with its place in its pull request', () => {
+  MG.state.migrations = { repos: [{
+    repoId: 'r1', repoName: 'erp', folders: ['db'], checkedAt: null, unread: [7], error: null, clashes: [{ key: '12' }],
+    prs: [
+      { prId: 331, title: '<img src=x onerror=1>', author: 'ana', sourceBranch: 'f/a', targetBranch: 'develop', folder: 'db',
+        files: [file('V11__a.sql', '11', 1, 2), file('V12__b.sql', '12', 2, 2, { clashKey: '12', with: [{ prId: 333, name: 'V12__c.sql', path: 'db/V12__c.sql', branch: 'f/c' }] })] },
+      { prId: 333, title: 'other', author: 'bo', sourceBranch: 'f/c', targetBranch: 'develop', folder: 'db',
+        files: [file('V12__c.sql', '12', 1, 1, { clashKey: '12', with: [{ prId: 331, name: 'V12__b.sql', path: 'db/V12__b.sql', branch: 'f/a' }] })] },
+    ],
+  }] };
+  const out = MG.drawMigrations();
+  assert.ok(!/<img/.test(out), 'a title is text');
+  assert.match(out, /2 of 2/);
+  assert.equal((out.match(/data-act="mig-fix" data-repo="r1" data-key="12"/g) || []).length, 1, 'one quick fix per clashing number');
+  assert.match(out, /Resolve all 1/);
+  assert.match(out, /Not read: #7/);
+  assert.match(out, /Not watched: .*web/);
+  assert.ok(out.indexOf('V11__a.sql') < out.indexOf('V12__b.sql') && out.indexOf('V12__b.sql') < out.indexOf('V12__c.sql'), 'in number order');
+  MG.state.migOnlyClash = true;
+  assert.ok(!/V11__a\.sql/.test(MG.drawMigrations()), 'only clashes hides the free ones');
+  MG.state.migOnlyClash = false;
+  MG.state.edits['mig-q'] = '#333';
+  const filtered = MG.drawMigrations();
+  assert.ok(/V12__c\.sql/.test(filtered) && !/V11__a\.sql/.test(filtered));
+  MG.state.edits['mig-q'] = '';
+});
+
+test('a pull request shows its migrations as soon as it has one, and a clash carries its fix', () => {
+  const v = { repo: { id: 'r1' }, pr: { id: 331, targetBranch: 'develop' }, migrationClash: { onTarget: false, keys: ['12'] },
+    migrations: { folders: ['db'], checkedAt: null, files: [file('V11__a.sql', '11', 1, 2), file('V12__b.sql', '12', 2, 2, { clashKey: '12', with: [{ prId: 333, name: 'V12__c.sql', path: 'db/V12__c.sql' }] })] } };
+  const out = MG.drawPrMigrations(v);
+  assert.match(out, /Migrations in this pull request/);
+  assert.match(out, /1 of 2/);
+  assert.match(out, /also #333/);
+  assert.match(out, /data-act="mig-fix" data-repo="r1" data-key="12"/);
+  assert.equal(MG.drawPrMigrations({ ...v, migrations: { folders: ['db'], files: [] } }), '');
+  assert.equal(MG.drawPrMigrations({ ...v, migrations: null }), '');
+  assert.match(MG.migChip({ migrations: { count: 2, numbers: ['11', '12'], clashing: 1, folders: ['db'] } }), /badc.*mig 11, 12/);
+  assert.equal(MG.keyLabel('svc/db|12'), '12 (svc/db)');
+});
