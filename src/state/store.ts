@@ -24,7 +24,7 @@ import type {
   PendingClose,
   SessionGroup,
 } from './types';
-import type { DropSide, LayoutNode, Profile, Session, SessionKind, Settings } from './types';
+import type { DropSide, JenkinsPlace, LayoutNode, Profile, Session, SessionKind, Settings } from './types';
 import type {
   AuthStatus,
   DirEntry,
@@ -122,12 +122,14 @@ const DEFAULT_SETTINGS: Settings = {
   sidebarShowMonitor: true,
   sidebarShowClusters: true,
   sidebarShowReviewer: true,
+  sidebarShowJenkins: true,
   sidebarSessionsCollapsed: false,
   sidebarFoldersCollapsed: false,
   sidebarMonitorCollapsed: false,
   sidebarClustersCollapsed: false,
   sidebarReviewerCollapsed: false,
-  sidebarOrder: ['sessions', 'folders', 'monitor', 'clusters', 'reviewer'],
+  sidebarJenkinsCollapsed: false,
+  sidebarOrder: ['sessions', 'folders', 'monitor', 'clusters', 'reviewer', 'jenkins'],
   sidebarSectionHeights: {},
   sessionAlerts: true,
   sessionSuggestions: true,
@@ -485,8 +487,19 @@ interface State {
    * requests, settings. Opened if it is not, brought forward if it is.
    */
   openReviewerAt(place: ReviewerPlace): void;
+  /** Show the Jenkins panel at a place — a folder, a job, a build, a view — opening it if it is not open. */
+  openJenkinsAt(place: JenkinsPlace): void;
+  /** What CI has said and nobody has looked at, newest first. */
+  ciNotices: CiNotice[];
+  /** Whether the system has refused a notification: the app then explains, once. */
+  osNotificationsBlocked: boolean;
+  pushCiNotice(notice: { title: string; body: string; place?: JenkinsPlace | null; at?: number }): void;
+  readCiNotice(id: string): void;
+  readAllCiNotices(): void;
+  clearCiNotices(): void;
+  setOsNotificationsBlocked(blocked: boolean): void;
   /** The last place the sidebar asked an extension panel to go, for that panel to hear. */
-  extensionNav: { panelId: string; place: ReviewerPlace; seq: number } | null;
+  extensionNav: { panelId: string; place: ReviewerPlace | JenkinsPlace; seq: number } | null;
   /** Ask one cluster whether it is there, whatever it answered last time. */
   probeCluster(context: string): Promise<void>;
   /** A shell aimed at one cluster: `k` means kubectl on that context, and nowhere else. */
@@ -722,7 +735,8 @@ interface State {
   membersOf(groupId: string): string[];
   reconcileGroup(tabId: string): void;
   addToGroup(sessionId: string, groupId: string): void;
-  restoreGroup(groupId: string, arrangement?: GroupArrangement): Promise<number>;
+  /** With `onlyIds`, only those of its history sessions come back; the rest stay closed. */
+  restoreGroup(groupId: string, arrangement?: GroupArrangement, onlyIds?: string[]): Promise<number>;
   setHistoryOpen(open: boolean): void;
   setAppearanceOpen(open: boolean): void;
   setUpdatePanelOpen(open: boolean): void;
@@ -837,7 +851,7 @@ const baseName = (path: string) => path.split('/').filter(Boolean).pop() ?? path
 
 /** Where in the Code Reviewer the sidebar can send somebody. */
 export interface ReviewerPlace {
-  view: 'dashboard' | 'repos' | 'prs' | 'pr' | 'bus' | 'usage' | 'settings';
+  view: 'dashboard' | 'repos' | 'prs' | 'pr' | 'migrations' | 'bus' | 'usage' | 'settings';
   repoId?: string | null;
   /** With `pr`: which pull request, opened in a tab of its own. */
   prId?: number | null;
@@ -845,6 +859,31 @@ export interface ReviewerPlace {
 
 /** The Code Reviewer's panel, by its contributed id. */
 export const REVIEWER_VIEW = 'code-review';
+
+export type { JenkinsPlace } from './types';
+
+/** The Jenkins panel, by its contributed id. */
+export const JENKINS_VIEW = 'jenkins';
+
+/**
+ * Something CI wanted to say — a build ended, a deploy is waiting — kept inside
+ * the app. A notification from the system can be refused (an app without a real
+ * Apple signature is refused every one, silently), so what matters is also
+ * here, where nobody's permission is needed: a toast when it arrives, a number
+ * in the title bar and on the dock until it has been looked at.
+ */
+export interface CiNotice {
+  id: string;
+  title: string;
+  body: string;
+  /** Where clicking it goes, when the service said. */
+  place: JenkinsPlace | null;
+  at: number;
+  read: boolean;
+}
+
+/** More than this and the oldest go: it is a list to glance at, not a log. */
+const CI_NOTICES_MAX = 50;
 
 export const useStore = create<State>((set, get) => ({
   ready: false,
@@ -870,6 +909,8 @@ export const useStore = create<State>((set, get) => ({
   usagePanelOpen: false,
   extensions: { rows: [], previews: [], panels: [] },
   extensionNav: null,
+  ciNotices: [],
+  osNotificationsBlocked: false,
   clusters: { list: [], current: null, reach: {}, probing: false, probedAt: null, loaded: false, error: null },
   analysisBySession: {},
   adviceBySession: {},
@@ -3321,6 +3362,64 @@ export const useStore = create<State>((set, get) => ({
     set({ extensionNav: { panelId: panel.id, place, seq: Date.now() } });
   },
 
+  pushCiNotice(notice) {
+    const at = notice.at ?? Date.now();
+    set((state) => {
+      // The same thing said twice within a moment (a favorite that is also followed) is one line.
+      const twin = state.ciNotices.find((one) => one.title === notice.title && one.body === notice.body && Math.abs(one.at - at) < 4000);
+      if (twin) return state;
+      const next: CiNotice = {
+        id: `ci-${at}-${Math.random().toString(36).slice(2, 7)}`,
+        title: String(notice.title).slice(0, 160),
+        body: String(notice.body).slice(0, 300),
+        place: notice.place ?? null,
+        at,
+        read: false,
+      };
+      return { ciNotices: [next, ...state.ciNotices].slice(0, CI_NOTICES_MAX) };
+    });
+  },
+  readCiNotice(id) {
+    set((state) => ({ ciNotices: state.ciNotices.map((one) => (one.id === id ? { ...one, read: true } : one)) }));
+  },
+  readAllCiNotices() {
+    set((state) => ({ ciNotices: state.ciNotices.map((one) => (one.read ? one : { ...one, read: true })) }));
+  },
+  clearCiNotices() {
+    set({ ciNotices: [] });
+  },
+  setOsNotificationsBlocked(blocked) {
+    set({ osNotificationsBlocked: blocked });
+  },
+
+  openJenkinsAt(requested) {
+    // There is no separate Home: it was the dashboard's smaller twin. Anything that still says 'home' — a saved panel, a notification, an older build — lands on the dashboard.
+    const place: JenkinsPlace = requested.page.type === 'home' ? { ...requested, page: { ...requested.page, type: 'dashboard' } } : requested;
+    const viewId = JENKINS_VIEW;
+    get().launchExtensionView(viewId);
+    const panel = Object.values(get().panels).find((one) => one.kind === 'extension' && one.viewId === viewId && one.root === null);
+    if (!panel) return;
+    // Said twice, like the reviewer's: a running panel hears `navigate`, one still loading reads it in `context`.
+    const was = whereEachPanelWas.get(panel.id);
+    const resume = {
+      ...(was && typeof was === 'object' ? (was as Record<string, unknown>) : {}),
+      ...(place.server ? { server: place.server } : {}),
+      page: place.page,
+    };
+    whereEachPanelWas.set(panel.id, resume);
+    get().rememberPanel(panel.id, resume);
+    // Going to what a notice was about is reading it.
+    const same = (other: JenkinsPlace | null) =>
+      Boolean(other) &&
+      other!.page.type === place.page.type &&
+      (other!.page.path ?? '') === (place.page.path ?? '') &&
+      (other!.page.number ?? 0) === (place.page.number ?? 0);
+    set((state) => ({
+      extensionNav: { panelId: panel.id, place, seq: Date.now() },
+      ciNotices: state.ciNotices.map((one) => (!one.read && same(one.place) ? { ...one, read: true } : one)),
+    }));
+  },
+
   openCluster(context) {
     const view = get().extensions.panels.find((panel) => panel.needs === 'kubernetes');
     if (!view) return;
@@ -3852,14 +3951,16 @@ export const useStore = create<State>((set, get) => ({
    * Sessions still open are left alone and simply re-joined, so restoring twice
    * does not give you two of everything.
    */
-  async restoreGroup(groupId, arrangement) {
+  async restoreGroup(groupId, arrangement, onlyIds) {
     const [record] = (await window.api.history.groups({ limit: 500 })).filter((g) => g.id === groupId);
     const members = await window.api.history.groupMembers(groupId);
     if (!record || !members.length) return 0;
 
     const live = get().sessions;
+    const wanted = onlyIds ? new Set(onlyIds) : null;
     const alreadyOpen = members.filter((member) => live[member.id]);
-    const toOpen = members.filter((member) => !live[member.id]);
+    const toOpen = members.filter((member) => !live[member.id] && (!wanted || wanted.has(member.id)));
+    if (wanted && !toOpen.length) return 0;
 
     // Recreate the group itself first, so each session can join as it opens.
     if (!get().groups.some((group) => group.id === groupId)) {

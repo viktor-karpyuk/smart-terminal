@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { claudeForPanel, streamsFor, whereEachPanelWas } from '../lib/panelHolds';
 import { attachFrame, parkFrame } from '../lib/frameKeeper';
-import { REVIEWER_VIEW, useStore } from '../state/store';
+import { JENKINS_VIEW, REVIEWER_VIEW, useStore } from '../state/store';
 import { leafOfTab, parentOf } from '../state/layout';
 import type { ExtensionPanelView } from '../global';
+import { JenkinsNav, ReviewerNav } from './Sidebar';
+import { startDrag } from '../lib/resize';
 import {
   buildCommand,
   execCommand,
@@ -410,7 +412,8 @@ function Frame({
        * batch are let through for a minute — not for ever, and never for a
        * batch nobody said yes to.
        */
-      const batch = typeof args.batch === 'string' ? args.batch : '';
+      // Not for Jenkins: its `kind` is always empty, so one "yes" to stopping a build would cover any number of other stops, approvals or runs. A batch there is one verb (`runMany`) that asks once, listing every job.
+      const batch = typeof args.batch === 'string' && !name.startsWith('jenkins.') ? args.batch : '';
       const covered = batch ? approvedBatches.current.get(batch) : undefined;
       // Only the rest of what was asked about: the same verb, the same kind, and no more of them than were counted.
       if (question && covered && covered.verb === name && covered.kind === String(args.kind ?? '') && covered.left > 0) {
@@ -470,6 +473,10 @@ function Frame({
           // Nothing of a folder's here either: the subjects are people, and the
           // credentials never leave the main process.
           return reply(true, await window.api.teams.call(name.slice(6), args), undefined);
+        }
+        if (channel === 'jenkins') {
+          // Servers and their tokens are the main process's: nothing here names an address or holds a credential.
+          return reply(true, await window.api.jenkins.call(name.slice(8), args), undefined);
         }
         if (channel === 'kube-stream') {
           return reply(true, await stream(name.slice(5), args), undefined);
@@ -595,9 +602,16 @@ function Frame({
         if (!sessionId) return { ok: false, error: 'the app could not open a terminal' };
         return { ok: true, sessionId };
       }
-      const brief = await window.api.review.call('brief', { ...ids, findingId: args.findingId ? String(args.findingId) : undefined });
+      // `about` names what the session is briefed on; only the app's own words go in, the panel names the subject and a note.
+      const about = args.about === 'migrations' ? 'migrations' : undefined;
+      const brief = await window.api.review.call('brief', {
+        ...ids,
+        findingId: args.findingId ? String(args.findingId) : undefined,
+        about,
+        note: about && typeof args.note === 'string' ? args.note.slice(0, 2000) : undefined,
+      });
       if (!brief.ok) return brief;
-      const sessionId = await claudeFor(panelId, { cwd: String(paths.clone ?? ''), title: `ask PR #${ids.prId ?? ''}` });
+      const sessionId = await claudeFor(panelId, { cwd: String(paths.clone ?? ''), title: about ? `migrations${ids.prId ? ` #${ids.prId}` : ''}` : `ask PR #${ids.prId ?? ''}` });
       if (!sessionId) return { ok: false, error: 'the app could not open a session' };
       store.focusSession(sessionId);
       const handed = await window.api.analysis.handOver(sessionId, String(brief.text ?? ''));
@@ -678,6 +692,17 @@ function Frame({
         const sessionId = await store.openShellNear(panelId, title, line, below(panelId));
         if (!sessionId) return { ok: false, error: 'the app could not open a terminal' };
         return { ok: true, sessionId, command: line };
+      }
+
+      // A build that failed: the app reads the build, what changed and the end of the console, and hands it over.
+      if (name === 'jenkins.ask') {
+        const found = await window.api.jenkins.call('brief', { server: args.server, path: args.path, number: args.number });
+        if (found.ok === false) return found;
+        const sessionId = await claudeFor(panelId, { title: `ask ${String(found.title ?? 'build')}` });
+        if (!sessionId) return { ok: false, error: 'the app could not open a session' };
+        store.focusSession(sessionId);
+        const handed = await window.api.analysis.handOver(sessionId, String(found.text ?? ''));
+        return { ok: true, sessionId, delivered: handed.delivered ?? false };
       }
 
       // Ask Claude. The evidence is gathered by the app, in the app's words.
@@ -878,6 +903,13 @@ function Frame({
     return window.api.teams.onEvent((payload) => tell('teams', payload));
   }, [view.listens]);
 
+  // Jenkins has no push channel, so the app makes one: a build began or ended, a
+  // followed console grew, the server stopped answering. The panel reads again.
+  useEffect(() => {
+    if (!view.listens?.includes('jenkins')) return;
+    return window.api.jenkins.onEvent((payload) => tell('jenkins', payload));
+  }, [view.listens]);
+
   // The working tree moved: the panel is told, and decides for itself what of
   // its picture is now wrong. The app does not guess on its behalf.
   useEffect(() => {
@@ -910,16 +942,14 @@ function Frame({
   }, [showing]);
 
   /*
-   * The Code Reviewer's menu lives in the app's sidebar when that list is
-   * showing, so the panel can leave its own row of tabs out; it puts them
-   * back the moment the list is closed, or there would be no way around it.
+   * The Code Reviewer's and Jenkins' menus are drawn by the app, down the
+   * panel's own left edge, so the panel can leave its row of the same links
+   * out. Folded away, the panel puts them back, or there would be no way around.
    */
-  const navInSidebar = useStore(
-    (s) =>
-      view.id === REVIEWER_VIEW &&
-      s.settings.sidebarShowReviewer &&
-      s.extensions.panels.some((panel) => panel.id === REVIEWER_VIEW && !panel.error),
-  );
+  const hasNav = view.id === REVIEWER_VIEW || view.id === JENKINS_VIEW;
+  const navHidden = useStore((s) => Boolean(s.settings.extensionNavHidden?.[view.id]));
+  const navWidth = useStore((s) => s.settings.extensionNavWidth?.[view.id] ?? 260);
+  const navInSidebar = hasNav && !navHidden;
   const navInSidebarRef = useRef(navInSidebar);
   useEffect(() => {
     navInSidebarRef.current = navInSidebar;
@@ -932,8 +962,58 @@ function Frame({
     if (nav) tell('navigate', nav.place);
   }, [nav?.seq]);
 
+  const setNavHidden = (hidden: boolean) => {
+    const { settings, updateSettings } = useStore.getState();
+    updateSettings({ extensionNavHidden: { ...(settings.extensionNavHidden ?? {}), [view.id]: hidden } });
+  };
+
   return (
-    <div className="extension-view" hidden={!showing}>
+    <div className={`extension-view${hasNav ? ' has-nav' : ''}`} hidden={!showing}>
+      {hasNav && navHidden && (
+        <button
+          className="extnav-rail"
+          title="Show the navigator"
+          aria-label="Show the navigator"
+          onClick={() => setNavHidden(false)}
+        >
+          <NavGlyph />
+        </button>
+      )}
+      {hasNav && !navHidden && (
+        <aside className="extnav" style={{ width: navWidth }}>
+          <button
+            className="extnav-hide"
+            title="Hide the navigator"
+            aria-label="Hide the navigator"
+            onClick={() => setNavHidden(true)}
+          >
+            <NavGlyph />
+          </button>
+          {view.id === JENKINS_VIEW ? <JenkinsNav /> : <ReviewerNav />}
+          <div
+            className="extnav-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize the navigator"
+            onDoubleClick={() => {
+              const { settings, updateSettings } = useStore.getState();
+              const widths = { ...(settings.extensionNavWidth ?? {}) };
+              delete widths[view.id];
+              updateSettings({ extensionNavWidth: widths });
+            }}
+            onPointerDown={(event) => {
+              event.preventDefault();
+              const startX = event.clientX;
+              const start = navWidth;
+              startDrag((move) => {
+                const next = Math.round(Math.min(520, Math.max(180, start + move.clientX - startX)));
+                const { settings, updateSettings } = useStore.getState();
+                updateSettings({ extensionNavWidth: { ...(settings.extensionNavWidth ?? {}), [view.id]: next } });
+              });
+            }}
+          />
+        </aside>
+      )}
       {asking && (
         <div className="modal-backdrop" onMouseDown={() => asking.answer(false)}>
           <div className="confirm" onMouseDown={(event) => event.stopPropagation()}>
@@ -963,5 +1043,15 @@ function Frame({
       )}
       <div className="extension-frame-slot" ref={slot} />
     </div>
+  );
+}
+
+/** A panel with a column down its side: the navigator's own toggle. */
+function NavGlyph() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+      <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" />
+      <path d="M6 2.75v10.5" />
+    </svg>
   );
 }

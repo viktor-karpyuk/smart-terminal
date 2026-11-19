@@ -4,6 +4,7 @@ import { useStore } from '../state/store';
 import { allTabs } from '../state/layout';
 import { SplitRightIcon, SplitDownIcon, EvenSplitsIcon, MaximizeIcon } from './icons';
 import { UsageGauge } from './UsageGauge';
+import { CiBell } from './CiNotices';
 import { legible } from '../lib/looks';
 
 export function TitleBar() {
@@ -85,6 +86,7 @@ export function TitleBar() {
 
       <div className="titlebar-actions">
         <UpdateNotice />
+        <CiBell />
         <button className="icon-btn" title="Split right (⌘D)" aria-label="Split right" onClick={() => splitActive('row')}>
           <SplitRightIcon />
         </button>

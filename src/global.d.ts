@@ -9,6 +9,7 @@ import type {
   SessionAnalysis,
   SessionGroup,
   Settings,
+  JenkinsPlace,
 } from './state/types';
 
 export interface PtyCreateOptions {
@@ -427,6 +428,39 @@ export interface RosterEntry {
   cwd: string;
   kind: 'claude' | 'shell' | 'login';
   groupId: string | null;
+}
+
+export interface SearchOptions {
+  query: string;
+  regex?: boolean;
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+  /** Comma-separated globs: `src/**, *.ts`. */
+  include?: string;
+  exclude?: string;
+}
+
+export interface SearchMatch {
+  line: number;
+  column: number;
+  text: string;
+  ranges: [number, number][];
+  count: number;
+}
+
+export interface SearchResult {
+  ok: boolean;
+  files?: { path: string; relative: string; matches: SearchMatch[]; count: number }[];
+  matches?: number;
+  cut?: boolean;
+  error?: string;
+}
+
+/** What deleting sessions did to the worktrees they worked in. */
+export interface WorktreeCleanup {
+  removed: string[];
+  kept: { path: string; reason: string }[];
+  error?: string;
 }
 
 export interface GroupRecord {
@@ -962,8 +996,9 @@ declare global {
           sessionId: string,
           profileId: string,
         ): Promise<{ claudeSessionId: string | null; cwd: string } | null>;
-        deleteSession(sessionId: string): Promise<boolean>;
-        clearHistory(options?: { before?: number }): Promise<number>;
+        /** Also removes the git worktrees it worked in that nothing else uses and that hold no uncommitted work. */
+        deleteSession(sessionId: string): Promise<{ removed: boolean; worktrees: WorktreeCleanup }>;
+        clearHistory(options?: { before?: number }): Promise<{ removed: number; worktrees: WorktreeCleanup }>;
         groups(options?: { limit?: number }): Promise<GroupRecord[]>;
         recentFolders(limit?: number): Promise<string[]>;
         groupMembers(groupId: string): Promise<HistorySession[]>;
@@ -1063,6 +1098,17 @@ declare global {
         call(name: string, args?: unknown): Promise<{ ok: boolean; error?: string } & Record<string, unknown>>;
         onEvent(handler: (event: { type: string }) => void): () => void;
       };
+      /** Jenkins: every verb through one call, and one event for "something changed, read it again". */
+      jenkins: {
+        call(name: string, args?: unknown): Promise<{ ok?: boolean; error?: string; [key: string]: unknown }>;
+        onEvent(handler: (event: { type: string; [key: string]: unknown }) => void): () => void;
+        /** A Jenkins notification was clicked; where it was about. */
+        onOpen(handler: (place: JenkinsPlace) => void): () => void;
+        /** What a notification would have said, delivered inside the app. */
+        onNotice(handler: (notice: { title: string; body: string; place: JenkinsPlace | null; at: number }) => void): () => void;
+        /** The system refused to show a notification. */
+        onNoticeBlocked(handler: (info: { reason: string }) => void): () => void;
+      };
       review: {
         call(name: string, args?: unknown): Promise<{ ok: boolean; error?: string; [key: string]: unknown }>;
         onEvent(handler: (payload: { type: string; repoId?: string; prId?: number | null; [key: string]: unknown }) => void): () => void;
@@ -1079,6 +1125,14 @@ declare global {
           query: string,
           options?: { hidden?: boolean },
         ): Promise<{ ok: boolean; results?: FoundEntry[]; scanned?: number; cut?: boolean; error?: string }>;
+        /** Text inside the files under `root`: the Search view. */
+        search(root: string, options: SearchOptions): Promise<SearchResult>;
+        /** Replace every match in these files; only files under `root` are touched. */
+        replace(
+          root: string,
+          files: string[],
+          options: SearchOptions & { replacement: string },
+        ): Promise<{ ok: boolean; changed?: string[]; replaced?: number; failed?: { path: string; error: string }[]; error?: string }>;
         read(file: string): Promise<FileRead>;
         write(
           file: string,
@@ -1121,6 +1175,8 @@ declare global {
           data: Uint8Array,
           type: string,
         ): Promise<{ ok: boolean; file?: string; bytes?: number; error?: string }>;
+        /** The dock's number (the taskbar's elsewhere): how much is waiting on you. */
+        setBadge(count: number): Promise<void>;
       };
       onMenuAction(handler: (payload: { id: string }) => void): () => void;
     };

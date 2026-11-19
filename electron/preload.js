@@ -163,6 +163,8 @@ contextBridge.exposeInMainWorld('api', {
     list: (dir) => ipcRenderer.invoke('files:list', dir),
     /** Files and folders whose name matches, under one root. Bounded; may come back cut short. */
     find: (root, query, options) => ipcRenderer.invoke('files:find', { root, query, ...options }),
+    search: (root, options) => ipcRenderer.invoke('files:search', { root, ...options }),
+    replace: (root, files, options) => ipcRenderer.invoke('files:replace', { root, files, ...options }),
     read: (file) => ipcRenderer.invoke('files:read', file),
     // `expectedMtimeMs` is what the editor loaded; the main process refuses the
     // write if disk has moved on, unless `force` says to go over it anyway.
@@ -286,6 +288,18 @@ contextBridge.exposeInMainWorld('api', {
     onEvent: (handler) => on('teams:event', handler),
   },
 
+  /** Jenkins: one door, and one stream of "something changed, read it again". */
+  jenkins: {
+    call: (name, args) => ipcRenderer.invoke('jenkins:call', { name, args }),
+    onEvent: (handler) => on('jenkins:event', handler),
+    // A notification was clicked: show the place it was about.
+    onOpen: (handler) => on('jenkins:open', handler),
+    // Something worth saying, in the app: what a notification would have said.
+    onNotice: (handler) => on('jenkins:notice', handler),
+    // The system refused to show one: the app says why, once.
+    onNoticeBlocked: (handler) => on('jenkins:notice-blocked', handler),
+  },
+
   /** Maven and Gradle: read by the main process, run by a terminal. */
   build: {
     call: (name, args) => ipcRenderer.invoke('build:call', { name, args }),
@@ -305,6 +319,8 @@ contextBridge.exposeInMainWorld('api', {
     saveText: (name, text) => ipcRenderer.invoke('system:save-text', { name, text }),
     // An image on the clipboard, written down so its path can be pasted.
     saveImage: (data, type) => ipcRenderer.invoke('system:save-image', { data, type }),
+    // The dock's number (or the taskbar's): what is waiting on you.
+    setBadge: (count) => ipcRenderer.invoke('app:set-badge', count),
   },
 
   onMenuAction: (handler) => on('menu:action', handler),

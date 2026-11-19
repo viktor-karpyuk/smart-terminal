@@ -259,6 +259,19 @@ interface Props {
   onSelection(from: number, to: number, text: string): void;
 }
 
+/**
+ * A place to show in a file once it is open: a search result clicked, say.
+ *
+ * Held here rather than passed down, because the file may not be loaded yet —
+ * the editor takes it the moment its text has the line.
+ */
+const reveals = new Map<string, { line: number; from: number; to: number }>();
+const revealListeners = new Set<() => void>();
+export function revealInEditor(path: string, line: number, from = 0, to = from) {
+  reveals.set(path, { line, from, to });
+  for (const listener of revealListeners) listener();
+}
+
 /** Marks a change this component made to match the store, rather than a keystroke. */
 const fromStore = Annotation.define<boolean>();
 
@@ -333,7 +346,11 @@ export function Editor({ path, onSave, onSelection }: Props) {
     });
     viewRef.current = view;
     view.focus();
+    const reveal = () => tryReveal(view, path);
+    reveal();
+    revealListeners.add(reveal);
     return () => {
+      revealListeners.delete(reveal);
       view.destroy();
       viewRef.current = null;
     };
@@ -364,8 +381,21 @@ export function Editor({ path, onSave, onSelection }: Props) {
        */
       annotations: [fromStore.of(true), Transaction.addToHistory.of(false)],
     });
+    tryReveal(view, path);
   }, [text]);
 
   void editBuffer;
   return <div className="editor-host" ref={hostRef} />;
+}
+
+/** Select and centre a pending place, once the document is long enough to have it. */
+function tryReveal(view: EditorView, path: string) {
+  const want = reveals.get(path);
+  if (!want || view.state.doc.lines < want.line) return;
+  reveals.delete(path);
+  const line = view.state.doc.line(want.line);
+  const anchor = line.from + Math.min(want.from, line.length);
+  const head = line.from + Math.min(want.to, line.length);
+  view.dispatch({ selection: { anchor, head }, effects: EditorView.scrollIntoView(anchor, { y: 'center' }) });
+  view.focus();
 }

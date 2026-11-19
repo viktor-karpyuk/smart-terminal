@@ -287,6 +287,7 @@ electron/
   extensions.js   what an extension is, and which are installed
   updates.js      which version is published, and replacing this one with it
   kube.js         Kubernetes, through kubectl; helm.js for Helm
+  jenkins-*.js    Jenkins: the client, the poller that tells panels what changed, the servers kept
   spring.js       Spring Boot applications: found, run, debugged, read
   review-*.js     Code Reviewer: GitHub/Bitbucket PRs reviewed with your own Claude Code
                   (rules, prompts, forge, CLI runner, git, store, engine, fixes, sweep, import)

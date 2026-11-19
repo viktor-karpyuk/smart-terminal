@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../state/store';
-import type { GroupRecord, HandoffRecord, HistorySession } from '../global';
+import type { GroupRecord, HandoffRecord, HistorySession, WorktreeCleanup } from '../global';
 import { TranscriptViewer } from './TranscriptViewer';
 import { compactPath, formatBytes } from '../lib/labels';
 import { Popover } from './Popover';
 import { legible } from '../lib/looks';
 import { CaretIcon } from './icons';
+import { canRestore, GroupSessions } from './GroupSessions';
 
 /**
  * Where the list was left, for as long as the app is running.
@@ -56,6 +57,17 @@ export function HistoryPanel() {
   const listRef = useRef<HTMLDivElement | null>(null);
   const placed = useRef(false);
   const placeKey = `${tab}|${query.trim()}`;
+  /*
+   * Stable on purpose. An inline ref callback is a new function every render,
+   * so React called it with null and then the element on every keystroke and
+   * every click — and each of those calls marked the list as "not put back
+   * yet". From then on scrolling was not remembered, and the next reload (a
+   * delete) put the list back at whatever depth was last recorded: the top.
+   */
+  const setListRef = useCallback((el: HTMLDivElement | null) => {
+    if (el && el !== listRef.current) placed.current = false;
+    listRef.current = el;
+  }, []);
   const [groups, setGroups] = useState<GroupRecord[]>([]);
   const [rows, setRows] = useState<HistorySession[]>([]);
   const [handoffs, setHandoffs] = useState<HandoffRecord[]>([]);
@@ -68,6 +80,9 @@ export function HistoryPanel() {
   const [pendingStop, setPendingStop] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [cleared, setCleared] = useState<number | null>(null);
+  /** What the last delete did to the worktrees the sessions were in. */
+  const [treeNote, setTreeNote] = useState<string | null>(null);
+  const noteWorktrees = (result: WorktreeCleanup) => setTreeNote(worktreeNote(result, homedir));
   /*
    * The sessions picked to come back.
    *
@@ -225,9 +240,10 @@ export function HistoryPanel() {
                     setConfirming(true);
                     return;
                   }
-                  const removed = await window.api.history.clearHistory({});
+                  const { removed, worktrees } = await window.api.history.clearHistory({});
                   setConfirming(false);
                   setCleared(removed);
+                  noteWorktrees(worktrees);
                   void load(() => true);
                 }}
               >
@@ -281,16 +297,20 @@ export function HistoryPanel() {
 
             <div
               className="history-list"
-              ref={(el) => {
-                // A new list element is a new mount: it has not been put back yet.
-                if (el !== listRef.current) placed.current = false;
-                listRef.current = el;
-              }}
+              ref={setListRef}
               onScroll={(event) => {
                 if (placed.current) place.scroll.set(placeKey, event.currentTarget.scrollTop);
               }}
             >
               {restoreNote && <p className="usage-note">{restoreNote}</p>}
+              {treeNote && (
+                <p className="usage-note" title={treeNote}>
+                  {treeNote}{' '}
+                  <button className="link-btn" onClick={() => setTreeNote(null)}>
+                    Dismiss
+                  </button>
+                </p>
+              )}
               {cleared !== null && (
                 <p className="usage-note">Removed {cleared} finished session{cleared === 1 ? '' : 's'}.</p>
               )}
@@ -473,7 +493,7 @@ export function HistoryPanel() {
                       className={`row-delete${pendingDelete === row.id ? ' is-armed' : ''}`}
                       title={
                         pendingDelete === row.id
-                          ? 'Click again to delete this session and everything kept for it'
+                          ? 'Click again to delete this session, everything kept for it, and the worktrees it worked in'
                           : 'Delete this session'
                       }
                       onClick={async () => {
@@ -482,8 +502,28 @@ export function HistoryPanel() {
                           return;
                         }
                         setPendingDelete(null);
-                        await window.api.history.deleteSession(row.id);
-                        void load(() => true);
+                        /*
+                         * Taken out of the list where it stands, and the list
+                         * held at the depth it was at: deleting is something
+                         * done down a long list, one after another, and being
+                         * sent back to the top after each one loses the place.
+                         */
+                        const el = listRef.current;
+                        const depth = el?.scrollTop ?? 0;
+                        setRows((was) => was.filter((one) => one.id !== row.id));
+                        setPicked((was) => {
+                          if (!was.has(row.id)) return was;
+                          const next = new Set(was);
+                          next.delete(row.id);
+                          return next;
+                        });
+                        const { worktrees } = await window.api.history.deleteSession(row.id);
+                        noteWorktrees(worktrees);
+                        await load(() => true);
+                        if (listRef.current) {
+                          listRef.current.scrollTop = depth;
+                          place.scroll.set(placeKey, depth);
+                        }
                       }}
                       onBlur={() => setPendingDelete((id) => (id === row.id ? null : id))}
                     >
@@ -642,22 +682,18 @@ function RowAction({
   );
 }
 
-const ARRANGEMENTS = [
-  { id: 'tabs', label: 'as tabs' },
-  { id: 'columns', label: 'side by side' },
-  { id: 'rows', label: 'stacked' },
-  { id: 'grid', label: 'in a grid' },
-] as const;
-
 /**
  * Groups you have worked in, whether or not anything of them is still open.
- * Bringing one back opens every session it had, each continuing its own
- * conversation, laid out the way you ask for.
+ *
+ * Each one unfolds onto its sessions, so you bring back the ones you want
+ * rather than all fourteen. "All" is still there, for the day you do want
+ * the whole set.
  */
 function GroupHistory({ groups, onChanged }: { groups: GroupRecord[]; onChanged(): void }) {
   const restoreGroup = useStore((s) => s.restoreGroup);
   const [busy, setBusy] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [unfolded, setUnfolded] = useState<string | null>(null);
 
   if (!groups.length) {
     return (
@@ -672,82 +708,108 @@ function GroupHistory({ groups, onChanged }: { groups: GroupRecord[]; onChanged(
 
   return (
     <div className="history-list">
-      {groups.map((group) => (
-        <article className="history-row" key={group.id}>
-          <span className="tab-dot" style={{ background: group.color ?? 'var(--text-faint)' }} />
-          <div className="history-main">
-            <div className="history-title">
-              <strong>{group.name}</strong>
-              {group.open > 0 && <em className="badge">{group.open} open</em>}
-              {group.fontSize && <em className="badge">{group.fontSize}px</em>}
-            </div>
-            <div className="history-meta">
-              {group.members} session{group.members === 1 ? '' : 's'} ·{' '}
-              {group.resumable} with a conversation to continue
-            </div>
-          </div>
+      {groups.map((group) => {
+        const isOpen = unfolded === group.id;
+        return (
+          <section className={`history-group${isOpen ? ' is-open' : ''}`} key={group.id}>
+            <article className="history-row">
+              <span className="tab-dot" style={{ background: group.color ?? 'var(--text-faint)' }} />
+              <button
+                className="history-main history-open"
+                aria-expanded={isOpen}
+                title={isOpen ? 'Fold its sessions away' : 'Show its sessions, and pick which to bring back'}
+                onClick={() => setUnfolded(isOpen ? null : group.id)}
+              >
+                <div className="history-title">
+                  <svg
+                    className={`files-chevron${isOpen ? ' is-open' : ''}`}
+                    width="11"
+                    height="11"
+                    viewBox="0 0 12 12"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    aria-hidden="true"
+                  >
+                    <path d="M4.5 2.5L8 6l-3.5 3.5" />
+                  </svg>
+                  <strong>{group.name}</strong>
+                  {group.open > 0 && <em className="badge">{group.open} open</em>}
+                  {group.fontSize && <em className="badge">{group.fontSize}px</em>}
+                </div>
+                <div className="history-meta">
+                  {group.members} session{group.members === 1 ? '' : 's'} ·{' '}
+                  {group.resumable} with a conversation to continue
+                </div>
+              </button>
 
-          <div className="group-restore">
-            <select
-              defaultValue=""
-              aria-label={`How to arrange ${group.name}`}
-              onChange={async (event) => {
-                const arrangement = event.target.value as (typeof ARRANGEMENTS)[number]['id'];
-                setBusy(group.id);
-                try {
-                  await restoreGroup(group.id, arrangement);
-                } finally {
-                  setBusy(null);
-                }
-              }}
-            >
-              <option value="" disabled>
-                Restore…
-              </option>
-              {ARRANGEMENTS.map((option) => (
-                <option key={option.id} value={option.id}>
-                  Restore {option.label}
-                  {group.arrangement === option.id ? ' (as it was)' : ''}
-                </option>
-              ))}
-            </select>
-            <button
-              className="ghost-btn tiny is-primary"
-              disabled={busy === group.id}
-              onClick={async () => {
-                setBusy(group.id);
-                try {
-                  // No arrangement named: it comes back the way it was left.
-                  await restoreGroup(group.id);
-                } finally {
-                  setBusy(null);
-                }
-              }}
-            >
-              {busy === group.id ? 'Opening…' : `Restore all ${group.members}`}
-            </button>
-          </div>
+              <div className="group-restore">
+                <button
+                  className={`ghost-btn tiny${isOpen ? '' : ' is-primary'}`}
+                  onClick={() => setUnfolded(isOpen ? null : group.id)}
+                >
+                  {isOpen ? 'Hide sessions' : 'Choose sessions…'}
+                </button>
+                <button
+                  className="ghost-btn tiny"
+                  disabled={busy === group.id}
+                  title="Bring back every session it had, laid out the way it was"
+                  onClick={async () => {
+                    setBusy(group.id);
+                    try {
+                      await restoreGroup(group.id);
+                    } finally {
+                      setBusy(null);
+                    }
+                  }}
+                >
+                  {busy === group.id ? 'Opening…' : `All ${group.members}`}
+                </button>
+              </div>
 
-          <button
-            className={`row-delete${pendingDelete === group.id ? ' is-armed' : ''}`}
-            title="Forget this group. Its sessions stay in history."
-            onClick={async () => {
-              if (pendingDelete !== group.id) {
-                setPendingDelete(group.id);
-                return;
-              }
-              setPendingDelete(null);
-              await window.api.history.deleteGroup(group.id);
-              onChanged();
-            }}
-            onBlur={() => setPendingDelete((id) => (id === group.id ? null : id))}
-          >
-            {pendingDelete === group.id ? 'Sure?' : '×'}
-          </button>
-        </article>
-      ))}
+              <button
+                className={`row-delete${pendingDelete === group.id ? ' is-armed' : ''}`}
+                title="Forget this group. Its sessions stay in history."
+                onClick={async () => {
+                  if (pendingDelete !== group.id) {
+                    setPendingDelete(group.id);
+                    return;
+                  }
+                  setPendingDelete(null);
+                  await window.api.history.deleteGroup(group.id);
+                  onChanged();
+                }}
+                onBlur={() => setPendingDelete((id) => (id === group.id ? null : id))}
+              >
+                {pendingDelete === group.id ? 'Sure?' : '×'}
+              </button>
+            </article>
+            {isOpen && (
+              <div className="history-group-body">
+                <GroupSessions groupId={group.id} arrangement={group.arrangement} onRestored={onChanged} />
+              </div>
+            )}
+          </section>
+        );
+      })}
     </div>
   );
+}
+
+/** One line on what deleting did to worktrees, or null when there were none. */
+function worktreeNote(result: WorktreeCleanup | undefined, homedir: string) {
+  if (!result) return null;
+  const parts: string[] = [];
+  if (result.removed.length) {
+    parts.push(
+      `Removed ${result.removed.length} worktree${result.removed.length === 1 ? '' : 's'}: ${result.removed
+        .map((dir) => compactPath(dir, homedir))
+        .join(', ')}.`,
+    );
+  }
+  for (const kept of result.kept) parts.push(`Kept ${compactPath(kept.path, homedir)} — ${kept.reason}.`);
+  if (result.error) parts.push(`Worktrees could not be checked: ${result.error}`);
+  return parts.length ? parts.join(' ') : null;
 }
 
 /** Where a session was working, which is not always where it opened. */
@@ -787,24 +849,6 @@ function closedAt(at: number) {
   const today = new Date().toDateString() === date.toDateString();
   const clock = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   return today ? clock : `${date.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${clock}`;
-}
-
-/**
- * Whether a session is one that can be brought back.
- *
- * Anything finished can. Anything running in another window cannot — continuing
- * it here would give you two tabs holding the same conversation, and the useful
- * move is to go to where it already is. Anything running *here* is already on
- * screen, so there is nothing to restore.
- */
-function canRestore(
-  row: { id: string; open: boolean; windowId?: string | null },
-  live: Record<string, unknown>,
-  thisWindow: string,
-) {
-  if (!row.open) return true;
-  if (live[row.id]) return false;
-  return !(row.windowId && row.windowId !== thisWindow);
 }
 
 /**

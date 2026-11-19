@@ -31,6 +31,8 @@ installing it reads this list first, in these words:
 | `review` | Use the Code Reviewer: pull requests, findings, comments, merges |
 | `teams` | Change the Teams connection's settings |
 | `deliver` | Send messages to people in Teams, in its own name |
+| `jenkins.read` | Read your Jenkins servers: jobs, builds, logs, queue and agents |
+| `jenkins.write` | Change what Jenkins does: run and stop builds, and the servers this app knows |
 | `terminal` | Open terminals and Claude sessions about what it shows |
 
 Ask for the fewest that work. A call the extension did not declare is refused
