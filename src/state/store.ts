@@ -899,7 +899,7 @@ const baseName = (path: string) => path.split('/').filter(Boolean).pop() ?? path
 
 /** Where in the Code Reviewer the sidebar can send somebody. */
 export interface ReviewerPlace {
-  view: 'dashboard' | 'repos' | 'prs' | 'pr' | 'bus' | 'usage' | 'settings';
+  view: 'dashboard' | 'repos' | 'prs' | 'pr' | 'migrations' | 'bus' | 'usage' | 'settings';
   repoId?: string | null;
   /** With `pr`: which pull request, opened in a tab of its own. */
   prId?: number | null;

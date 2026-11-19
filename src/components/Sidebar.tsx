@@ -664,7 +664,7 @@ function reviewerHere(resume: unknown): ReviewerPlace | null {
   if (saved.view === 'pr') return { view: 'pr', repoId: saved.repoId ?? null, prId: saved.prId ?? null };
   if (saved.view === 'prs') return { view: 'prs', repoId: saved.repoId ?? null };
   if (saved.view === 'repoForm' || saved.view === 'import') return { view: 'repos' };
-  if (saved.view === 'dashboard' || saved.view === 'repos' || saved.view === 'bus' || saved.view === 'usage' || saved.view === 'settings') {
+  if (saved.view === 'dashboard' || saved.view === 'repos' || saved.view === 'migrations' || saved.view === 'bus' || saved.view === 'usage' || saved.view === 'settings') {
     return { view: saved.view };
   }
   return null;
@@ -740,6 +740,7 @@ function ReviewerList() {
     (repo.prs ?? []).filter((pr) => pr.mine).map((pr) => ({ repo, pr })),
   );
   const pages: { view: ReviewerPlace['view']; label: string }[] = [
+    { view: 'migrations', label: 'Migrations' },
     { view: 'bus', label: 'Coordination' },
     { view: 'usage', label: 'Usage' },
     { view: 'settings', label: 'Settings' },

@@ -268,6 +268,17 @@ function cleanFolder(value) {
   return text;
 }
 
+/** One folder or several, one per line (commas work too): each cleaned like `cleanFolder`, duplicates dropped. */
+function cleanFolders(value) {
+  const out = [];
+  for (const one of String(value ?? '').split(/[\n,;]+/)) {
+    const clean = cleanFolder(one);
+    if (clean && !out.includes(clean)) out.push(clean);
+  }
+  if (out.length > 20) throw new Error('At most 20 migrations folders.');
+  return out.join('\n');
+}
+
 function repoRow(row, decrypt) {
   if (!row) return null;
   let token = null;
@@ -611,7 +622,7 @@ class ReviewStore {
       input.checkCommand === undefined ? (existing?.check_command ?? null) : nul(String(input.checkCommand).trim()),
       // The same for these three: an older caller that does not send them leaves them as they were.
       input.publishMode === undefined ? (existing?.publish_mode ?? 'MANUAL') : input.publishMode || 'MANUAL',
-      input.migrationsPath === undefined ? (existing?.migrations_path ?? null) : nul(cleanFolder(input.migrationsPath)),
+      input.migrationsPath === undefined ? (existing?.migrations_path ?? null) : nul(cleanFolders(input.migrationsPath)),
       input.alertChannel === undefined ? (existing?.alert_channel ?? null) : nul(String(input.alertChannel ?? '').trim()),
     ];
     if (existing) {

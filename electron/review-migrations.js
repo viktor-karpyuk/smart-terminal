@@ -64,6 +64,24 @@ function normalise(version) {
     .join('.');
 }
 
+/**
+ * The folders a repository keeps numbered migrations in. Each is its own
+ * sequence — a service with two databases has `V12` in both and that is not a
+ * clash — so every folder is read, numbered and resolved on its own. Written
+ * one per line (commas work too).
+ */
+function foldersOf(repo) {
+  const out = [];
+  for (const one of String(repo?.migrationsPath ?? '').split(/[\n,;]+/)) {
+    const clean = one.trim().replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/+$/, '');
+    if (clean && !out.includes(clean)) out.push(clean);
+  }
+  return out;
+}
+
+/** What a clash is stored and chosen under: the number, and the folder too when there is more than one. */
+const clashKey = (folder, number, keyed) => (keyed && folder ? `${folder}|${number}` : String(number));
+
 /** Whether a path is inside the migrations folder (at any depth: Flyway reads subfolders too). */
 function inFolder(file, folder) {
   const clean = String(folder ?? '').replace(/\/+$/, '');
@@ -83,7 +101,7 @@ function inFolder(file, folder) {
  * calling that a clash would flag every stacked pull request there is. A clash
  * is two different files claiming one number.
  */
-function findClashes({ prs = [], targets = new Map() }) {
+function findClashes({ prs = [], targets = new Map(), folder = null, keyed = false }) {
   const byNumber = new Map();
   const add = (number, member) => {
     if (!byNumber.has(number)) byNumber.set(number, []);
@@ -110,7 +128,7 @@ function findClashes({ prs = [], targets = new Map() }) {
     const paths = new Set(members.map((member) => member.path));
     if (paths.size < 2) continue;
     const sorted = members.slice().sort((a, b) => (a.prId ?? -1) - (b.prId ?? -1) || a.path.localeCompare(b.path));
-    out.push({ number, members: sorted, signature: signatureOf(sorted) });
+    out.push({ number, folder, key: clashKey(folder, number, keyed), members: sorted, signature: signatureOf(sorted) });
   }
   return out.sort((a, b) => a.number.localeCompare(b.number, undefined, { numeric: true }));
 }
@@ -128,6 +146,8 @@ function clashFor(prId, clashes = []) {
   if (!mine.length) return null;
   return {
     numbers: mine.map((clash) => clash.number),
+    keys: mine.map((clash) => clash.key ?? clash.number),
+    folders: [...new Set(mine.map((clash) => clash.folder).filter(Boolean))],
     // Its own number is on the branch it merges into: merging it *is* the duplicate.
     onTarget: mine.some((clash) => {
       const own = clash.members.filter((member) => member.prId === prId);
@@ -136,7 +156,7 @@ function clashFor(prId, clashes = []) {
     with: mine.flatMap((clash) =>
       clash.members
         .filter((member) => member.prId !== prId)
-        .map((member) => ({ number: clash.number, prId: member.prId, branch: member.branch, path: member.path })),
+        .map((member) => ({ number: clash.number, key: clash.key ?? clash.number, folder: clash.folder ?? null, prId: member.prId, branch: member.branch, path: member.path })),
     ),
   };
 }
@@ -160,7 +180,7 @@ function clashMessage(repo, clash) {
     ? `${who.join(' and ')} ${prs.length === 1 ? 'adds' : 'add'} a migration numbered ${clash.number}, and ${onTarget[0].branch} already has one. Whichever is not on ${onTarget[0].branch} has to be renumbered before it is merged.`
     : `${who.join(' and ')} each add a migration numbered ${clash.number}. Git will merge both without complaint and the database will refuse the second: one of them has to be renumbered before either is merged.`;
   return {
-    title: `${repo.name}: two migrations numbered ${clash.number}`,
+    title: `${repo.name}: two migrations numbered ${clash.number}${clash.folder && clash.key !== clash.number ? ` in ${clash.folder}` : ''}`,
     body,
     facts: clash.members.slice(0, 8).map((member) => ({
       label: member.prId === null ? member.branch : `#${member.prId}`,
@@ -170,10 +190,60 @@ function clashMessage(repo, clash) {
     })),
     links: prs.filter((member) => member.url).slice(0, 5).map((member) => ({ text: `Open #${member.prId}`, url: member.url })),
     // Who is in it, not when: the same clash is said once, somebody new joining it is said again.
-    key: `code-review:migration:${repo.id}:${clash.number}:${createHash('sha1').update(clash.signature).digest('hex').slice(0, 12)}`,
+    key: `code-review:migration:${repo.id}:${clash.key ?? clash.number}:${createHash('sha1').update(clash.signature).digest('hex').slice(0, 12)}`,
     // Somebody may be about to press Merge; this does not wait for the morning.
     level: 'urgent',
   };
+}
+
+/**
+ * Every migration the open pull requests add, whether it clashes or not: what
+ * a person reads to know which numbers are in flight before anything goes
+ * wrong. Each file says where it sits in its own pull request — "V13, 2 of 3"
+ * — because a pull request that adds three migrations is renumbered from the
+ * one that clashed onwards, and seeing the order is seeing what moves.
+ */
+function inventoryOf({ prs = [], targets = new Map(), clashes = [], folder = null }) {
+  const byNumber = new Map(clashes.map((clash) => [clash.number, clash]));
+  return prs.map((pr) => {
+    const files = (pr.added ?? [])
+      .map((file) => ({ path: file, name: path.posix.basename(file), number: migrationNumber(file) }))
+      .filter((one) => one.number !== null)
+      .sort((a, b) => a.number.localeCompare(b.number, undefined, { numeric: true }) || a.path.localeCompare(b.path));
+    const have = targets.get(pr.targetBranch) ?? [];
+    return {
+      prId: pr.prId,
+      title: pr.title ?? '',
+      author: pr.author ?? '',
+      url: pr.url ?? null,
+      sourceBranch: pr.sourceBranch ?? '',
+      targetBranch: pr.targetBranch ?? '',
+      head: pr.head ?? null,
+      folder,
+      files: files.map((one, index) => {
+        const clash = byNumber.get(one.number);
+        const inClash = Boolean(clash && clash.members.some((member) => member.prId === pr.prId && member.path === one.path));
+        return {
+          ...one,
+          folder,
+          position: index + 1,
+          of: files.length,
+          clashKey: inClash ? clash.key ?? clash.number : null,
+          onTarget: have.some((file) => file !== one.path && migrationNumber(file) === one.number),
+          with: inClash ? clash.members.filter((member) => !(member.prId === pr.prId && member.path === one.path))
+            .map((member) => ({ prId: member.prId, branch: member.branch, path: member.path, name: path.posix.basename(member.path) })) : [],
+        };
+      }),
+    };
+  }).filter((pr) => pr.files.length);
+}
+
+/** The highest plain number a folder already uses, on any target or in any open pull request. */
+function highestIn({ prs = [], targets = new Map() }) {
+  let top = 0;
+  for (const pr of prs) for (const file of pr.added ?? []) top = Math.max(top, plain(migrationNumber(file)) ?? 0);
+  for (const files of targets.values()) for (const file of files ?? []) top = Math.max(top, plain(migrationNumber(file)) ?? 0);
+  return top;
 }
 
 // ---------------------------------------------------------------------------
@@ -226,12 +296,20 @@ const plain = (number) => (/^\d+$/.test(String(number ?? '')) ? Number(number) :
  * tie-break; `targets` the same map; `reserved` the highest number the bus has
  * handed out.
  */
-function renumberPlan({ clashes = [], prs = [], targets = new Map(), reserved = 0, keep = {} }) {
+function renumberPlan({ clashes = [], prs = [], targets = new Map(), reserved = 0, keep = {}, overrides = {}, folder = null }) {
   const byId = new Map(prs.map((pr) => [pr.prId, pr]));
-  const used = [reserved];
-  for (const pr of prs) for (const file of pr.added ?? []) used.push(plain(migrationNumber(file)) ?? 0);
-  for (const files of targets.values()) for (const file of files ?? []) used.push(plain(migrationNumber(file)) ?? 0);
-  let next = Math.max(0, ...used.filter(Number.isFinite)) + 1;
+  // Every number the folder uses anywhere: a number typed by hand has to be free of all of them.
+  const taken = new Set();
+  for (const pr of prs) for (const file of pr.added ?? []) { const n = plain(migrationNumber(file)); if (n !== null) taken.add(n); }
+  for (const files of targets.values()) for (const file of files ?? []) { const n = plain(migrationNumber(file)); if (n !== null) taken.add(n); }
+  let next = Math.max(0, reserved, highestIn({ prs, targets })) + 1;
+  const given = new Set();
+  const nextFree = () => {
+    while (taken.has(next) || given.has(next)) next += 1;
+    const out = next;
+    next += 1;
+    return out;
+  };
 
   const decisions = [];
   const problems = [];
@@ -244,14 +322,14 @@ function renumberPlan({ clashes = [], prs = [], targets = new Map(), reserved = 
     let keeper = null;
     if (onTarget) keeper = { prId: null, branch: onTarget.branch, path: onTarget.path };
     else {
-      const asked = keep[clash.number];
+      const asked = keep[clash.key ?? clash.number] ?? keep[clash.number];
       const named = prMembers.find((member) => String(member.prId) === String(asked));
       const first = prMembers.slice().sort((a, b) =>
         String(byId.get(a.prId)?.opened ?? '9999').localeCompare(String(byId.get(b.prId)?.opened ?? '9999')) || a.prId - b.prId)[0];
       const chosen = named ?? first;
       keeper = { prId: chosen.prId, branch: chosen.branch, path: chosen.path };
     }
-    decisions.push({ number: clash.number, keeper, choices: prMembers.map((member) => member.prId), fixed: Boolean(onTarget) });
+    decisions.push({ number: clash.number, key: clash.key ?? clash.number, folder, keeper, choices: prMembers.map((member) => member.prId), fixed: Boolean(onTarget) });
     for (const member of prMembers) {
       if (member.prId === keeper.prId) continue;
       // The same file the keeper has is not a second migration (a stacked pull request carries its parent's).
@@ -278,13 +356,24 @@ function renumberPlan({ clashes = [], prs = [], targets = new Map(), reserved = 
       .sort((a, b) => a.number - b.number || a.file.localeCompare(b.file));
     const renames = [];
     for (const one of files) {
-      const to = renamedTo(one.file, next);
+      // A number typed for this file: used when it is a plain number nobody has, otherwise said and the next free one is used.
+      const wanted = overrides[one.file];
+      let number = null;
+      let manual = false;
+      if (wanted !== undefined && wanted !== null && wanted !== '') {
+        const n = /^\d+$/.test(String(wanted).trim()) ? Number(String(wanted).trim()) : NaN;
+        if (!Number.isSafeInteger(n) || n < 1) problems.push(`${path.posix.basename(one.file)}: "${String(wanted).slice(0, 20)}" is not a number it can be given.`);
+        else if (taken.has(n) || given.has(n)) problems.push(`${path.posix.basename(one.file)}: ${n} is already used${folder ? ` in ${folder}` : ''}; the next free number is used instead.`);
+        else { number = n; manual = true; }
+      }
+      if (number === null) number = nextFree();
+      const to = renamedTo(one.file, number);
       if (!to) {
         problems.push(`${path.posix.basename(one.file)} in #${prId} cannot be renamed automatically.`);
         continue;
       }
-      renames.push({ from: one.file, to, fromNumber: String(one.number), toNumber: String(next) });
-      next += 1;
+      given.add(number);
+      renames.push({ from: one.file, to, fromNumber: String(one.number), toNumber: String(number), manual, folder });
     }
     if (renames.length) steps.push({ prId, title: pr.title ?? '', branch: pr.sourceBranch ?? '', target: pr.targetBranch ?? '', renames, why: because.get(prId) ?? [] });
   }
@@ -332,6 +421,25 @@ class MigrationWatch {
     /** What a target has, by `repo@target:tip`. */
     this.listed = new Map();
     this.running = new Map();
+    /** Every migration the open pull requests add, by repository, as the last check read it. Not kept across restarts: read again. */
+    this.inventories = new Map();
+  }
+
+  /**
+   * What the last check found in a repository: every folder, every open pull
+   * request that adds a migration, and each file with its number, its place
+   * in its pull request and what it clashes with. `null` before the first check.
+   */
+  inventory(repoId) {
+    return this.inventories.get(repoId) ?? null;
+  }
+
+  /** The migrations one pull request adds, across the folders, from the last check. */
+  inventoryFor(repoId, prId) {
+    const all = this.inventories.get(repoId);
+    if (!all) return null;
+    const mine = all.prs.filter((pr) => pr.prId === prId);
+    return { checkedAt: all.checkedAt, folders: all.folders, head: mine[0]?.head ?? null, unread: all.unread.includes(prId), files: mine.flatMap((pr) => pr.files) };
   }
 
   /** One repository, now. A second call while one runs gets the first one's answer. */
@@ -346,39 +454,57 @@ class MigrationWatch {
   async #check(repoId) {
     const repo = this.store.repo(repoId);
     if (!repo) return [];
-    if (!repo.migrationsPath || !repo.localPath) {
+    const folders = foldersOf(repo);
+    if (!folders.length || !repo.localPath) {
       // Switched off: whatever it said before stops being said.
+      this.inventories.delete(repoId);
       if (this.store.migrationClashes(repoId).length) {
         this.store.setMigrationClashes(repoId, []);
         this.emit({ type: 'changed', repoId, prId: null });
       }
       return [];
     }
-    const { prs, targets } = await this.gather(repo);
     const before = new Map(this.store.migrationClashes(repoId).map((clash) => [clash.number, clash.signature]));
-    const clashes = findClashes({ prs, targets });
-    this.store.setMigrationClashes(repoId, clashes);
-    const moved = clashes.length !== before.size || clashes.some((clash) => before.get(clash.number) !== clash.signature);
-    for (const clash of this.store.migrationClashes(repoId)) {
-      if (clash.notifiedSignature !== clash.signature) await this.tell(repo, clash);
+    const clashes = [];
+    const prs = [];
+    const unread = new Set();
+    const keyed = folders.length > 1;
+    for (const folder of folders) {
+      const got = await this.gather(repo, folder);
+      for (const prId of got.unread) unread.add(prId);
+      const found = findClashes({ prs: got.prs, targets: got.targets, folder, keyed });
+      clashes.push(...found);
+      prs.push(...inventoryOf({ prs: got.prs, targets: got.targets, clashes: found, folder }));
     }
-    if (moved) this.emit({ type: 'changed', repoId, prId: null });
+    // Stored under the key, which is the number alone when there is one folder: what earlier versions stored, so nobody is told twice.
+    this.store.setMigrationClashes(repoId, clashes.map((clash) => ({ ...clash, number: clash.key })));
+    const moved = clashes.length !== before.size || clashes.some((clash) => before.get(clash.key) !== clash.signature);
+    for (const stored of this.store.migrationClashes(repoId)) {
+      const clash = clashes.find((one) => one.key === stored.number);
+      if (clash && stored.notifiedSignature !== clash.signature) await this.tell(repo, { ...clash, notifiedSignature: stored.notifiedSignature });
+    }
+    // A pull request that starts adding a migration is shown at once, not only when it clashes.
+    const signature = JSON.stringify(prs.map((pr) => [pr.prId, pr.folder, pr.files.map((file) => file.path + (file.clashKey ? '!' : ''))]));
+    const was = this.inventories.get(repoId);
+    this.inventories.set(repoId, { repoId, checkedAt: new Date().toISOString(), folders, prs, unread: [...unread], signature });
+    if (moved || !was || was.signature !== signature) this.emit({ type: 'changed', repoId, prId: null });
     return clashes;
   }
 
-  /** What every open pull request adds, and what their targets already have — read from the branches. */
-  async gather(repo) {
+  /** What every open pull request adds in one folder, and what their targets already have there — read from the branches. */
+  async gather(repo, folder = foldersOf(repo)[0]) {
     const open = this.store.prs(repo.id, { states: ['OPEN'] }).filter(readable);
     const prs = [];
     const targets = new Map();
+    const unread = [];
     for (const pr of open) {
-      const added = await this.addedBy(repo, pr);
+      const read = await this.addedBy(repo, pr, folder);
       // A branch never fetched into the clone says nothing, rather than "adds nothing".
-      if (added === null) continue;
-      prs.push({ prId: pr.id, title: pr.title, author: pr.author, url: pr.url, sourceBranch: pr.sourceBranch, targetBranch: pr.targetBranch, opened: pr.createdOn || pr.firstSeenAt || '', added });
-      if (!targets.has(pr.targetBranch)) targets.set(pr.targetBranch, (await this.onTarget(repo, pr.targetBranch)) ?? []);
+      if (read === null) { unread.push(pr.id); continue; }
+      prs.push({ prId: pr.id, title: pr.title, author: pr.author, url: pr.url, sourceBranch: pr.sourceBranch, targetBranch: pr.targetBranch, opened: pr.createdOn || pr.firstSeenAt || '', added: read.files, head: read.head });
+      if (!targets.has(pr.targetBranch)) targets.set(pr.targetBranch, (await this.onTarget(repo, pr.targetBranch, folder)) ?? []);
     }
-    return { prs, targets };
+    return { prs, targets, unread };
   }
 
   /** The highest number the bus has reserved in this repository: never handed out twice. */
@@ -393,17 +519,36 @@ class MigrationWatch {
    * a plan made from what the board saw two minutes ago could hand out a
    * number somebody pushed in the meantime.
    */
-  async plan(repoId, { keep = {}, fetch = true } = {}) {
+  async plan(repoId, { keep = {}, overrides = {}, keys = null, fetch = true } = {}) {
     const repo = this.store.repo(repoId);
     if (!repo) throw new Error('That repository is gone.');
-    if (!repo.migrationsPath) throw new Error('This repository does not name a migrations folder.');
+    const folders = foldersOf(repo);
+    if (!folders.length) throw new Error('This repository does not name a migrations folder.');
     if (fetch) {
       const branches = [...new Set(this.store.prs(repoId, { states: ['OPEN'] }).filter(readable).flatMap((pr) => [pr.targetBranch, pr.sourceBranch]))];
       if (branches.length) await this.git.fetch(repo.localPath, ...branches);
     }
-    const { prs, targets } = await this.gather(repo);
-    const clashes = findClashes({ prs, targets });
-    return { clashes, ...renumberPlan({ clashes, prs, targets, reserved: this.reservedFloor(repo), keep }) };
+    const keyed = folders.length > 1;
+    const out = { clashes: [], decisions: [], steps: [], problems: [], folders };
+    const byPr = new Map();
+    for (const [index, folder] of folders.entries()) {
+      const { prs, targets } = await this.gather(repo, folder);
+      const all = findClashes({ prs, targets, folder, keyed });
+      // Only the clashes asked about, when some were named: the quick fix on one number leaves the others as they are.
+      const clashes = keys ? all.filter((clash) => keys.includes(clash.key)) : all;
+      out.clashes.push(...clashes);
+      // The bus hands out numbers for the first folder only; another folder's sequence is its own.
+      const made = renumberPlan({ clashes, prs, targets, reserved: index === 0 ? this.reservedFloor(repo) : 0, keep, overrides, folder });
+      out.decisions.push(...made.decisions);
+      out.problems.push(...made.problems);
+      // One commit per pull request, whatever folders it renumbers in.
+      for (const step of made.steps) {
+        const had = byPr.get(step.prId);
+        if (had) { had.renames.push(...step.renames); had.why.push(...step.why.filter((one) => !had.why.includes(one))); }
+        else { const copy = { ...step, renames: [...step.renames], why: [...step.why] }; byPr.set(step.prId, copy); out.steps.push(copy); }
+      }
+    }
+    return out;
   }
 
   /**
@@ -420,11 +565,11 @@ class MigrationWatch {
    * again, from fresh branches, at the moment it is carried out, and the
    * numbers it hands out are reserved so the bus never gives them to anyone.
    */
-  async renumber(repoId, { keep = {}, comment = true, only = null } = {}) {
+  async renumber(repoId, { keep = {}, overrides = {}, keys = null, comment = true, only = null } = {}) {
     const repo = this.store.repo(repoId);
     if (!repo) throw new Error('That repository is gone.');
     if (!this.scratch) throw new Error('There is nowhere to write a renumbering.');
-    const plan = await this.plan(repoId, { keep });
+    const plan = await this.plan(repoId, { keep, overrides, keys });
     const steps = only ? plan.steps.filter((step) => only.includes(step.prId)) : plan.steps;
     const remote = await this.git.remoteUrl(repo.localPath);
     if (!remote) throw new Error('The clone has no origin to push to.');
@@ -484,7 +629,9 @@ class MigrationWatch {
   /** The numbers a renumbering took, reserved like the bus reserves its own. */
   reserve(repo, step) {
     const now = new Date().toISOString();
+    const first = foldersOf(repo)[0];
     for (const one of step.renames) {
+      if (one.folder && one.folder !== first) continue;
       this.store.run(
         'INSERT OR IGNORE INTO cr_migration_slot (scope, number, token, repo_id, pr_id, label, created_at, code) VALUES (?,?,?,?,?,?,?,?)',
         `r:${repo.id}`, Number(one.toNumber), 'renumber', repo.id, step.prId, `renumber #${step.prId}`, now, path.posix.basename(one.to).split(/__|[_\-.]/)[0],
@@ -492,8 +639,8 @@ class MigrationWatch {
     }
   }
 
-  /** The migrations a pull request's branch adds in the folder, or `null` when git cannot say. */
-  async addedBy(repo, pr) {
+  /** The migrations a pull request's branch adds in a folder, with the head it was read at, or `null` when git cannot say. */
+  async addedBy(repo, pr, folder = foldersOf(repo)[0]) {
     /*
      * Keyed by what the clone's branches point at, not by the head the pull
      * request row remembers: the row can be a list-read behind a fetch, and
@@ -501,25 +648,25 @@ class MigrationWatch {
      */
     const tip = await this.git.revParse(repo.localPath, `origin/${pr.targetBranch}`);
     const head = await this.git.revParse(repo.localPath, `origin/${pr.sourceBranch}`);
-    if (!tip || !head) return null;
-    const key = `${repo.id}#${pr.id}@${head}:${tip}:${repo.migrationsPath}`;
-    if (this.added.has(key)) return this.added.get(key);
-    const result = await this.git.run(repo.localPath, ['diff', '--name-only', '--diff-filter=A', `origin/${pr.targetBranch}...origin/${pr.sourceBranch}`, '--', repo.migrationsPath]);
+    if (!tip || !head || !folder) return null;
+    const key = `${repo.id}#${pr.id}@${head}:${tip}:${folder}`;
+    if (this.added.has(key)) return { files: this.added.get(key), head };
+    const result = await this.git.run(repo.localPath, ['diff', '--name-only', '--diff-filter=A', `origin/${pr.targetBranch}...origin/${pr.sourceBranch}`, '--', folder]);
     if (!result.ok) return null;
-    const files = result.stdout.split('\n').map((line) => line.trim()).filter((file) => inFolder(file, repo.migrationsPath));
+    const files = result.stdout.split('\n').map((line) => line.trim()).filter((file) => inFolder(file, folder));
     this.added.set(key, files);
-    return files;
+    return { files, head };
   }
 
-  /** The migrations a branch already has in the folder, or `null` when git cannot say. */
-  async onTarget(repo, branch) {
+  /** The migrations a branch already has in a folder, or `null` when git cannot say. */
+  async onTarget(repo, branch, folder = foldersOf(repo)[0]) {
     const tip = await this.git.revParse(repo.localPath, `origin/${branch}`);
-    if (!tip) return null;
-    const key = `${repo.id}@${branch}:${tip}:${repo.migrationsPath}`;
+    if (!tip || !folder) return null;
+    const key = `${repo.id}@${branch}:${tip}:${folder}`;
     if (this.listed.has(key)) return this.listed.get(key);
-    const result = await this.git.run(repo.localPath, ['ls-tree', '-r', '--name-only', `origin/${branch}`, '--', repo.migrationsPath]);
+    const result = await this.git.run(repo.localPath, ['ls-tree', '-r', '--name-only', `origin/${branch}`, '--', folder]);
     if (!result.ok) return null;
-    const files = result.stdout.split('\n').map((line) => line.trim()).filter((file) => inFolder(file, repo.migrationsPath));
+    const files = result.stdout.split('\n').map((line) => line.trim()).filter((file) => inFolder(file, folder));
     this.listed.set(key, files);
     return files;
   }
@@ -540,7 +687,7 @@ class MigrationWatch {
       const sent = await Promise.resolve(this.deliver({ ...message, to: { channel } })).catch((error) => ({ ok: false, why: 'failed', detail: String(error?.message ?? error) }));
       result = sent?.ok ? `sent to ${channel}` : `${sent?.why ?? 'failed'}${sent?.detail ? `: ${sent.detail}` : ''}`;
     }
-    this.store.noteMigrationClashTold(repo.id, clash.number, clash.signature, result.slice(0, 300));
+    this.store.noteMigrationClashTold(repo.id, clash.key ?? clash.number, clash.signature, result.slice(0, 300));
     return result;
   }
 
@@ -552,15 +699,19 @@ class MigrationWatch {
    * Returns the sentence that stops it, or `null`.
    */
   async blockMerge(repo, pr) {
-    if (!repo.migrationsPath || !repo.localPath || !readable(pr)) return null;
+    const folders = foldersOf(repo);
+    if (!folders.length || !repo.localPath || !readable(pr)) return null;
     await this.git.fetch(repo.localPath, pr.targetBranch, pr.sourceBranch);
-    const added = await this.addedBy(repo, pr);
-    const have = await this.onTarget(repo, pr.targetBranch);
-    if (!added?.length || !have) return null;
-    const clashes = findClashes({ prs: [{ prId: pr.id, sourceBranch: pr.sourceBranch, targetBranch: pr.targetBranch, added }], targets: new Map([[pr.targetBranch, have]]) });
-    const mine = clashFor(pr.id, clashes);
-    return mine?.onTarget ? clashSentence(mine) : null;
+    for (const folder of folders) {
+      const read = await this.addedBy(repo, pr, folder);
+      const have = await this.onTarget(repo, pr.targetBranch, folder);
+      if (!read?.files.length || !have) continue;
+      const clashes = findClashes({ prs: [{ prId: pr.id, sourceBranch: pr.sourceBranch, targetBranch: pr.targetBranch, added: read.files }], targets: new Map([[pr.targetBranch, have]]), folder, keyed: folders.length > 1 });
+      const mine = clashFor(pr.id, clashes);
+      if (mine?.onTarget) return clashSentence(mine);
+    }
+    return null;
   }
 }
 
-module.exports = { migrationNumber, findClashes, clashFor, clashSentence, clashMessage, inFolder, renamedTo, renumberPlan, renumberMessage, renumberComment, MigrationWatch };
+module.exports = { migrationNumber, foldersOf, clashKey, inventoryOf, findClashes, clashFor, clashSentence, clashMessage, inFolder, renamedTo, renumberPlan, renumberMessage, renumberComment, MigrationWatch };

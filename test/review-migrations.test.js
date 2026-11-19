@@ -16,7 +16,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
-const { migrationNumber, findClashes, clashFor, clashSentence, clashMessage, renamedTo, renumberPlan } = require('../electron/review-migrations');
+const { migrationNumber, findClashes, clashFor, clashSentence, clashMessage, renamedTo, renumberPlan, foldersOf, inventoryOf } = require('../electron/review-migrations');
 
 let sqlite = null;
 try {
@@ -75,7 +75,7 @@ test('a number the target already has is a clash, and merging is the duplicate',
   assert.equal(clashes.length, 1);
   const mine = clashFor(4, clashes);
   assert.equal(mine.onTarget, true);
-  assert.deepEqual(mine.with, [{ number: '12', prId: null, branch: 'develop', path: 'db/V12__merged_last_week.sql' }]);
+  assert.deepEqual(mine.with, [{ number: '12', key: '12', folder: null, prId: null, branch: 'develop', path: 'db/V12__merged_last_week.sql' }]);
   assert.match(clashSentence(mine), /already taken on the target branch/);
   // A pull request into another branch does not meet develop's files.
   assert.deepEqual(findClashes({ prs: [pr(6, ['db/V12__mine.sql'], { targetBranch: 'main' })], targets }), []);
@@ -343,6 +343,48 @@ test('the plan: who keeps a number, and the losing pull request moves from there
 
   // Numbers the bus has reserved are not handed out.
   assert.equal(renumberPlan({ clashes, prs, targets, reserved: 9 }).steps[0].renames[0].to, 'db/V010__invoices.sql');
+});
+
+test('several folders: each is its own sequence, and a clash is keyed by its folder', () => {
+  assert.deepEqual(foldersOf({ migrationsPath: 'db/a\n db/b/ ,db/a\n\n' }), ['db/a', 'db/b']);
+  assert.deepEqual(foldersOf({ migrationsPath: null }), []);
+  const prs = [pr(41, ['db/a/V5__x.sql']), pr(42, ['db/a/V5__y.sql'])];
+  const clashes = findClashes({ prs, folder: 'db/a', keyed: true });
+  assert.deepEqual(clashes.map((clash) => [clash.key, clash.folder, clash.number]), [['db/a|5', 'db/a', '5']]);
+  // One folder: the key is the number alone, as earlier versions stored it.
+  assert.equal(findClashes({ prs, folder: 'db/a', keyed: false })[0].key, '5');
+  assert.deepEqual(clashFor(41, clashes).keys, ['db/a|5']);
+  const plan = renumberPlan({ clashes, prs, folder: 'db/a', keep: { 'db/a|5': 42 } });
+  assert.deepEqual(plan.steps.map((step) => [step.prId, step.renames[0].to, step.renames[0].folder]), [[41, 'db/a/V6__x.sql', 'db/a']]);
+});
+
+test('the inventory: every migration a pull request adds, its place in it, and what it clashes with', () => {
+  const prs = [pr(51, ['db/V8__b.sql', 'db/V7__a.sql', 'db/README.md']), pr(52, ['db/V8__c.sql']), pr(53, [])];
+  const targets = new Map([['develop', ['db/V6__base.sql']]]);
+  const clashes = findClashes({ prs, targets });
+  const inv = inventoryOf({ prs, targets, clashes, folder: 'db' });
+  assert.deepEqual(inv.map((one) => one.prId), [51, 52], 'a pull request adding none is not listed');
+  assert.deepEqual(inv[0].files.map((file) => [file.name, file.position, file.of, file.clashKey]), [['V7__a.sql', 1, 2, null], ['V8__b.sql', 2, 2, '8']]);
+  assert.deepEqual(inv[0].files[1].with.map((one) => [one.prId, one.name]), [[52, 'V8__c.sql']]);
+  assert.equal(inv[1].files[0].onTarget, false);
+  const onTarget = inventoryOf({ prs: [pr(54, ['db/V6__late.sql'])], targets, clashes: findClashes({ prs: [pr(54, ['db/V6__late.sql'])], targets }), folder: 'db' });
+  assert.equal(onTarget[0].files[0].onTarget, true);
+});
+
+test('a number typed by hand is used when it is free, and refused when it is not', () => {
+  const prs = [
+    pr(61, ['db/V3__orders.sql'], { opened: '2026-09-01' }),
+    pr(62, ['db/V003__invoices.sql', 'db/V004__index.sql'], { opened: '2026-09-02' }),
+  ];
+  const targets = new Map([['develop', ['db/V1__init.sql', 'db/V2__more.sql']]]);
+  const clashes = findClashes({ prs, targets });
+  const typed = renumberPlan({ clashes, prs, targets, overrides: { 'db/V003__invoices.sql': '20' } });
+  assert.deepEqual(typed.steps[0].renames.map((one) => [one.to, one.manual]), [['db/V020__invoices.sql', true], ['db/V005__index.sql', false]]);
+  assert.deepEqual(typed.problems, []);
+  const taken = renumberPlan({ clashes, prs, targets, overrides: { 'db/V003__invoices.sql': '2' } });
+  assert.equal(taken.steps[0].renames[0].to, 'db/V005__invoices.sql', 'a number in use falls back to the next free one');
+  assert.match(taken.problems[0], /already used/);
+  assert.match(renumberPlan({ clashes, prs, targets, overrides: { 'db/V003__invoices.sql': 'x1' } }).problems[0], /not a number/);
 });
 
 test('a number already on the target is kept by the target, whatever is chosen', () => {

@@ -195,7 +195,7 @@ const SPRING_VERBS = new Map<string, Channel>([
 const REVIEW_READ = [
   'fixDiff', 'workshopDiff', 'due',
   'overview', 'dashboard', 'repos', 'repo', 'prs', 'pr', 'files', 'diff', 'commits', 'commitFiles', 'commitDiff',
-  'guidelines', 'usage', 'activity', 'viewed', 'fileText', 'importInspect', 'models', 'depths', 'rerunCheck', 'followUpText', 'brief', 'paths',
+  'guidelines', 'usage', 'activity', 'viewed', 'fileText', 'importInspect', 'models', 'depths', 'rerunCheck', 'followUpText', 'brief', 'paths', 'migrationInventory',
   'detectRemote', 'bus',
   'fixTimes', 'watchBudget', 'migrationClashes', 'previewFix',
 ] as const;
