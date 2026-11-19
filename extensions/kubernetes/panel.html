@@ -1961,7 +1961,7 @@
         // Every part guarded: a node has no namespace, and the word "undefined"
         // in the haystack is a search term that matches every row there is.
         return (row.name + ' ' + (row.namespace || '') + ' ' + (row.status || '') + ' ' +
-          (row.message || '')).toLowerCase().indexOf(term) >= 0;
+          (row.message || '') + ' ' + (row.nodegroup || '')).toLowerCase().indexOf(term) >= 0;
       });
     }
     if (state.sort.column) {
@@ -1986,7 +1986,7 @@
     name: 'Name', namespace: 'Namespace', ready: 'Ready', status: 'Status', restarts: 'Restarts',
     node: 'Node', age: 'Age', upToDate: 'Up to date', available: 'Available', type: 'Type',
     clusterIP: 'Cluster IP', external: 'External', ports: 'Ports', class: 'Class', hosts: 'Hosts',
-    address: 'Address', roles: 'Roles', version: 'Version', instance: 'Instance', zone: 'Zone',
+    address: 'Address', roles: 'Roles', version: 'Version', instance: 'Instance', zone: 'Zone', nodegroup: 'Node group',
     capacity: 'Capacity', keys: 'Keys', schedule: 'Schedule', active: 'Active', lastRun: 'Last run',
     duration: 'Duration', message: 'Message', count: 'Count', object: 'Object',
     cpu: 'CPU', memory: 'Memory',

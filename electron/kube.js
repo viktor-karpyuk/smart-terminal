@@ -653,6 +653,29 @@ function ingressRow(item, now) {
   };
 }
 
+/**
+ * The pool a node was made from, by whichever name its maker gave it: an EKS
+ * managed node group, eksctl, Karpenter, GKE, AKS, kops. First one found wins;
+ * a hand-joined node has none.
+ */
+const NODE_GROUP_LABELS = [
+  'eks.amazonaws.com/nodegroup',
+  'alpha.eksctl.io/nodegroup-name',
+  'karpenter.sh/nodepool',
+  'karpenter.sh/provisioner-name',
+  'cloud.google.com/gke-nodepool',
+  'kubernetes.azure.com/agentpool',
+  'agentpool',
+  'kops.k8s.io/instancegroup',
+  'node-pool',
+  'nodegroup',
+];
+
+function nodeGroupOf(labels) {
+  for (const key of NODE_GROUP_LABELS) if (labels[key]) return labels[key];
+  return '';
+}
+
 function nodeRow(item, now) {
   const conditions = item.status?.conditions ?? [];
   const readyCondition = conditions.find((condition) => condition.type === 'Ready');
@@ -675,6 +698,7 @@ function nodeRow(item, now) {
     version: item.status?.nodeInfo?.kubeletVersion ?? '',
     instance: item.metadata?.labels?.['node.kubernetes.io/instance-type'] ?? '',
     zone: item.metadata?.labels?.['topology.kubernetes.io/zone'] ?? '',
+    nodegroup: nodeGroupOf(item.metadata?.labels ?? {}),
     /*
      * Capacity, named as capacity.
      *
@@ -785,7 +809,7 @@ const SHAPES = {
   CronJob: { row: cronJobRow, columns: ['name', 'namespace', 'schedule', 'active', 'lastRun', 'status', 'age'] },
   Service: { row: serviceRow, columns: ['name', 'namespace', 'type', 'clusterIP', 'external', 'ports', 'age'] },
   Ingress: { row: ingressRow, columns: ['name', 'namespace', 'class', 'hosts', 'address', 'age'] },
-  Node: { row: nodeRow, columns: ['name', 'status', 'roles', 'version', 'instance', 'zone', 'age'] },
+  Node: { row: nodeRow, columns: ['name', 'status', 'nodegroup', 'roles', 'version', 'instance', 'zone', 'age'] },
   PersistentVolumeClaim: { row: pvcRow, columns: ['name', 'namespace', 'status', 'capacity', 'class', 'age'] },
   PersistentVolume: { row: pvcRow, columns: ['name', 'status', 'capacity', 'class', 'age'] },
   Namespace: { row: namespaceRow, columns: ['name', 'status', 'age'] },

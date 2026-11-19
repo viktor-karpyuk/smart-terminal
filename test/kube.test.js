@@ -952,3 +952,14 @@ test('a request that could never work is refused before anything runs', async ()
   await assert.rejects(forwards.start('bad', { kind: 'secret', name: 'x', remote: 80, local: 0 }), /cannot be forwarded to/);
   assert.equal(spawned.length, 0);
 });
+
+test('a node row says which node group it came from, whoever made it', () => {
+  const K = require('../electron/kube');
+  const node = (labels) => ({ kind: 'Node', metadata: { name: 'n', labels, creationTimestamp: new Date().toISOString() }, status: { conditions: [{ type: 'Ready', status: 'True' }] } });
+  const shape = (labels) => K.table('Node', { items: [node(labels)] }, Date.now()).rows[0].nodegroup;
+  assert.equal(shape({ 'eks.amazonaws.com/nodegroup': 'general' }), 'general');
+  assert.equal(shape({ 'karpenter.sh/nodepool': 'spot' }), 'spot');
+  assert.equal(shape({ 'cloud.google.com/gke-nodepool': 'default-pool' }), 'default-pool');
+  assert.equal(shape({}), '', 'a hand-joined node has none');
+  assert.ok(K.table('Node', { items: [] }, Date.now()).columns.includes('nodegroup'));
+});
