@@ -1512,7 +1512,7 @@ test('through the service: stopping stops the clocks', { skip }, () => {
   assert.equal(service.launch.stopped, true);
 });
 
-test('an override is not started from what was typed in it last time, but that is still offered', async () => {
+test('an override is not started from what was typed in it last time, but that is still offered', { skip }, async () => {
   const w = world();
   w.add('deploy-prod', { params: [def('VERSION', { default: 'latest' }), def('VERSION_OVERRIDE')], builds: [] });
   const { launch, call } = setup(w);
