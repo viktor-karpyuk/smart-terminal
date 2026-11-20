@@ -80,6 +80,7 @@ const KUBE_READ = [
   'events',
   'top',
   'summary',
+  'topology',
   'brief',
   'prometheus',
   'history',
