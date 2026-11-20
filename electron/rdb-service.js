@@ -8,6 +8,7 @@ const { spawn } = require('node:child_process');
 const { RdbStore } = require('./rdb-store');
 const drivers = require('./rdb-drivers');
 const { Tunnels } = require('./rdb-tunnel');
+const watch = require('./rdb-watch');
 const sql = require('./rdb-sql');
 
 /** PostgreSQL answers in text here, MySQL in numbers: both mean the same. */
@@ -30,6 +31,20 @@ const yes = (value) => value === true || value === 't' || value === 'true' || va
 
 const MAX_SESSIONS = 24;
 const IDLE_MS = 10 * 60_000;
+
+/** What each kind of alert is, in the few words a notification has room for. */
+const ALERT_TITLES = {
+  blocked: 'sessions stuck on a lock',
+  long_query: 'a statement running for a long time',
+  idle_transaction: 'a transaction left open',
+  connections: 'connections running out',
+  wraparound: 'transaction ids running out',
+  dead_rows: 'dead rows piling up',
+  deadlocks: 'deadlocks',
+  cache: 'reading from disk',
+  slower: 'a statement got slower',
+  growth: 'growing fast',
+};
 /** A tab with a transaction open is waited for longer: closing it rolls the work back. */
 const IDLE_IN_TRANSACTION_MS = 60 * 60_000;
 const SWEEP_MS = 60_000;
@@ -112,7 +127,7 @@ class RdbService {
    * @param {Function} [deps.findTool]       (name) => path of pg_dump and friends, or null
    * @param {Function} [deps.runTool]        (file, args, {env, input}) => Promise<string>
    */
-  constructor({ db, secrets, pickFile, saveFile, open, pickSavePath, pickBackup, findTool: find, runTool: run, pickCsv, pickScript, scratch, tunnels }) {
+  constructor({ db, secrets, pickFile, saveFile, open, pickSavePath, pickBackup, findTool: find, runTool: run, pickCsv, pickScript, scratch, tunnels, notify, now }) {
     /** () => Promise<string|null> — a .sql file the person chose to open in an editor. */
     this.pickScript = pickScript ?? (async () => null);
     /** () => Promise<string|null> — a delimited file the person chose to import. */
@@ -132,17 +147,26 @@ class RdbService {
     this.open = open ?? drivers.open;
     /** connection id → the ssh that carries it, for the connections that go through another machine. */
     this.tunnels = tunnels ?? new Tunnels();
+    /** ({ title, body }) => void — told when a watched server has something new wrong with it. */
+    this.notify = notify ?? (() => {});
+    this.now = now ?? (() => Date.now());
+    /** connection id → why its last reading could not be taken */
+    this.watchErrors = new Map();
+    this.watching = new Set();
+    this.lastPrune = 0;
     /** key → { session, opening, tail, used, id } */
     this.sessions = new Map();
     /** connection id → what last went wrong in a query, for a Claude session to be handed */
     this.failures = new Map();
+    /** connection id → the plan last asked for there, for the same purpose */
+    this.plans = new Map();
     this.timer = null;
     this.verbs = this.#verbs();
   }
 
   start() {
     if (this.timer) return;
-    this.timer = setInterval(() => this.#sweep(), SWEEP_MS);
+    this.timer = setInterval(() => { this.#sweep(); this.watchTick().catch(() => {}); }, SWEEP_MS);
     this.timer.unref?.();
   }
 
@@ -263,6 +287,49 @@ class RdbService {
     return this.#locked(entry, work);
   }
 
+  /**
+   * Read the watched servers that are due. Called on the sweep's clock and safe
+   * to call at any time: a server already being read is left alone, and one
+   * that cannot be reached is remembered as such and tried again next time.
+   */
+  async watchTick() {
+    const now = this.now();
+    if (now - this.lastPrune > 6 * 3600_000) {
+      this.lastPrune = now;
+      this.store.pruneReadings(now - watch.WATCH_KEEP_MS);
+    }
+    const due = this.store.watched().filter((id) => {
+      const last = this.store.lastReadingAt(id);
+      return last === null || now - last >= watch.WATCH_EVERY_MS - 5000;
+    });
+    await Promise.allSettled(due.map((id) => this.#read(id)));
+  }
+
+  async #read(id) {
+    if (this.watching.has(id)) return;
+    this.watching.add(id);
+    try {
+      const connection = this.#connection(id);
+      const reading = await this.#browse(id, '', (session) => this.#reading(session, () => watch.collect(connection.engine, session)));
+      if (!reading) return;
+      reading.server.at = this.now();
+      const since = reading.server.at - 26 * 3600_000;
+      const history = this.store.readings(id, since, { statements: true });
+      // What the statements cost since the reading before, kept with this one so a chart need not work it out again.
+      reading.server.interval_ms = watch.statementDeltas(history.at(-1)?.statements, reading.statements).reduce((sum, one) => sum + one.ms, 0);
+      this.store.addReading(id, reading.server, reading.statements);
+      const fresh = this.store.judged(id, watch.judge(history, reading), reading.server.at);
+      this.watchErrors.delete(id);
+      for (const one of fresh) {
+        try { this.notify({ title: `${connection.name}: ${ALERT_TITLES[one.rule] ?? 'something to look at'}`, body: one.message, connection: id }); } catch { /* a notification that cannot be shown is not a reason to stop watching */ }
+      }
+    } catch (error) {
+      this.watchErrors.set(id, this.#words(error, id).error);
+    } finally {
+      this.watching.delete(id);
+    }
+  }
+
   async #makeRoom() {
     if (this.sessions.size < MAX_SESSIONS) return;
     const idle = [...this.sessions.values()]
@@ -327,7 +394,7 @@ class RdbService {
     return {
       overview: () => ({
         ok: true,
-        connections: store.connections().map((connection) => ({ ...connection, open: this.#isOpen(connection.id) })),
+        connections: ((alerts) => store.connections().map((connection) => ({ ...connection, open: this.#isOpen(connection.id), alerts: alerts.get(connection.id) ?? 0 })))(store.openAlerts()),
         saved: store.saved(),
       }),
 
@@ -659,6 +726,55 @@ class RdbService {
         return sample ? { ok: true, supported: true, sample } : { ok: true, supported: false };
       },
 
+      /** Have a server read every few minutes, or stop. Turning it on takes the first reading at once, so the page is not empty. */
+      watch: async (args) => {
+        const connection = this.#connection(args.id);
+        if (connection.engine === 'sqlite') throw new Error('A SQLite file has no server to watch');
+        store.setWatch(connection.id, args.on === true);
+        if (args.on === true) await this.#read(connection.id);
+        else this.watchErrors.delete(connection.id);
+        return { ok: true, watching: args.on === true };
+      },
+
+      /** One more reading now, rather than at the next tick. */
+      readNow: async (args) => {
+        const connection = this.#connection(args.id);
+        if (!connection.watch) throw new Error('This server is not being watched');
+        await this.#read(connection.id);
+        const error = this.watchErrors.get(connection.id);
+        if (error) throw new Error(error);
+        return { ok: true };
+      },
+
+      /** What the readings of a window add up to: the charts, the statements and what was said. */
+      trends: (args) => {
+        const connection = this.#connection(args.id);
+        const hours = Math.min(Math.max(Number(args.hours) || 24, 1), 24 * 7);
+        const until = this.now();
+        const from = until - hours * 3600_000;
+        const readings = store.readings(connection.id, from).map((one) => one.server);
+        return {
+          ok: true,
+          watching: connection.watch,
+          everyMinutes: watch.WATCH_EVERY_MS / 60_000,
+          keptDays: watch.WATCH_KEEP_MS / 86_400_000,
+          hours,
+          error: this.watchErrors.get(connection.id) ?? null,
+          readings: readings.length,
+          lastAt: readings.at(-1)?.at ?? null,
+          tracked: readings.at(-1)?.tracked !== false,
+          points: watch.trend(readings),
+          statements: watch.statementTrends(store.statementReadings(connection.id, from), store.statementTexts(connection.id), from, until).slice(0, 50),
+          alerts: store.alerts(connection.id),
+        };
+      },
+
+      dismissAlert: (args) => {
+        const connection = this.#connection(args.id);
+        store.dismissAlert(connection.id, args.alert);
+        return { ok: true };
+      },
+
       /** A .sql file into an editor. The system's dialog chooses it; the panel is told its name and its text, never where it is. */
       openScript: async () => {
         const file = await this.pickScript();
@@ -732,6 +848,16 @@ class RdbService {
           const result = await session.run(statement.text, [], { maxRows });
           // `at` is where the statement sits in what was sent, so the panel can find the whole of it again (to export it).
           results.push({ ...result, statement: statement.text.slice(0, 400), at: [statement.start, statement.end], kind: kinds[index].kind, verb: kinds[index].verb, ms: Date.now() - began });
+          // A plan that was just looked at is what a Claude session is handed when it is asked about: remembered here, never sent by a panel.
+          if (/^EXPLAIN\b/i.test(statement.bare)) {
+            this.plans.set(connection.id, {
+              database: String(args.database ?? ''),
+              sql: statement.text.replace(/^\s*EXPLAIN\s*((\([^)]*\)|ANALYZE\b|VERBOSE\b|FORMAT\s*=\s*\w+)\s*)*/i, '').slice(0, 8000),
+              analyzed: /^EXPLAIN\s*(\([^)]*\bANALYZE\b[^)]*\)|ANALYZE\b)/i.test(statement.bare),
+              plan: result.rows.map((row) => row[0]).join('\n').slice(0, 30_000),
+              at: Date.now(),
+            });
+          }
         } catch (error) {
           const words = this.#words(error, args.id);
           // Where in the whole script, not where in the one statement: that is the number the editor shows.
@@ -1099,6 +1225,7 @@ class RdbService {
       lines.push('', 'Explain what is wrong with it and write the statement the way it should be. Do not run anything against the database yourself.');
       return { ok: true, title: 'failed query', text: lines.join('\n') };
     }
+    if (args.explained || args.qid) return this.#statementBrief(connection, args, where);
     const schema = this.#schema(connection, args);
     const name = String(args.name ?? '');
     const table = await this.#browse(args.id, args.database, (session) => drivers.catalog(connection.engine).table(session, schema, name));
@@ -1115,6 +1242,51 @@ class RdbService {
     }
     lines.push('', 'Tell me what this is for as far as its definition shows, and anything about its design worth a second look — missing indexes on foreign keys, types that do not fit, constraints that are absent. Do not run anything against the database yourself.');
     return { ok: true, title: name, text: lines.join('\n') };
+  }
+
+  /**
+   * A statement that is slow, with what somebody would need to say why: the
+   * statement, what it has cost, its plan, and the tables it reads with their
+   * indexes. The statement is one the app already knows — the plan last asked
+   * for on this connection, or one the server keeps counters for, named by its
+   * id — so what a session is handed was never written by a panel.
+   */
+  async #statementBrief(connection, args, where) {
+    const engine = connection.engine;
+    const read = (work) => this.#browse(args.id, args.database, (session) => this.#reading(session, () => work(session)));
+    let text = '';
+    let plan = '';
+    let analyzed = false;
+    const facts = [];
+    if (args.explained) {
+      const kept = this.plans.get(connection.id);
+      if (!kept) throw new Error('No plan has been asked for on this connection');
+      ({ sql: text, plan, analyzed } = kept);
+    } else {
+      const qid = String(args.qid ?? '');
+      const found = await read((session) => drivers.catalog(engine).statement?.(session, qid)).catch(() => null);
+      text = found?.text ?? this.store.statementText(connection.id, qid) ?? '';
+      if (!text) throw new Error('The server no longer remembers that statement');
+      if (found) {
+        facts.push(`The server has run it ${found.calls} times for ${Math.round(found.ms)} ms in total: ${found.calls > 0 ? (found.ms / found.calls).toFixed(2) : '?'} ms a call, ${found.calls > 0 ? Math.round(found.rows / found.calls) : '?'} rows a call.`);
+        if (found.more) facts.push(found.more);
+      }
+      const trend = watch.statementTrends(this.store.statementReadings(connection.id, this.now() - 7 * 86_400_000), new Map(), this.now() - 7 * 86_400_000, this.now()).find((one) => one.qid === qid);
+      if (trend?.change) facts.push(`Over the readings this app has kept, it went from ${trend.meanBefore.toFixed(2)} ms a call to ${trend.meanNow.toFixed(2)} ms.`);
+      // Its placeholders stand for values the server did not keep, so the plan asked for is the one for any value.
+      plan = await read((session) => drivers.catalog(engine).genericPlan?.(session, text)).catch(() => '') ?? '';
+    }
+    const lines = [`This statement is slow on ${where}, and I am looking at it in Smart Terminal's Databases panel.`, '', '```sql', text.slice(0, 8000), '```'];
+    if (facts.length) lines.push('', ...facts);
+    if (plan) lines.push('', analyzed ? 'Its plan, as it actually ran:' : 'Its plan, as the planner estimates it (not run):', '', '```', String(plan).slice(0, 20_000), '```');
+    const schema = this.#schema(connection, args);
+    for (const one of sql.tablesIn(text).slice(0, 4)) {
+      const table = await this.#browse(args.id, args.database, (session) => drivers.catalog(engine).table(session, engine === 'postgres' ? (one.schema ?? schema) : schema, one.name)).catch(() => null);
+      if (!table?.ddl) continue;
+      lines.push('', `The table ${one.name}${table.stats?.rows !== null && table.stats?.rows !== undefined ? `, about ${table.stats.rows} rows` : ''}:`, '', '```sql', String(table.ddl).slice(0, 5000), '```');
+    }
+    lines.push('', 'Say why it is slow and what would make it faster — an index, a rewrite, a setting — with the statement for each, and what each would cost. Do not run anything against the database yourself.');
+    return { ok: true, title: 'slow statement', text: lines.join('\n') };
   }
 }
 

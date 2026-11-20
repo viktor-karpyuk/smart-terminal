@@ -47,7 +47,7 @@ const P = fromPanel([
   'guessMapping', 'importProblems', 'shellLabel',
   'ERD', 'erdModel', 'erdSize', 'erdLayout', 'erdRowY', 'erdPath',
   'plainDef', 'retarget', 'snapshotColumnSql', 'schemaDiff',
-  'MORE', 'reportTarget', 'reportStatement', 'settingSql',
+  'MORE', 'reportTarget', 'reportStatement', 'PG_LIST_SETTINGS', 'settingSql',
   'FORMAT_CLAUSES', 'FORMAT_STARTS', 'JOIN_WORDS', 'formatSql', 'flowSql',
   'PRIVILEGES', 'grantKind', 'granteeSql', 'grantSql', 'roleFromRow', 'membershipChange',
   'TYPE_HINTS', 'defaultSql', 'designColumns', 'designProblems', 'columnSql', 'createTableSql', 'alterTableSql', 'designScript',
@@ -794,6 +794,9 @@ test('a setting is changed by the statement its engine takes, and a name that is
   assert.equal(P.settingSql('postgres', 'auto_explain.log_min_duration', "1's"), "ALTER SYSTEM SET auto_explain.log_min_duration = '1''s';\nSELECT pg_reload_conf();");
   // Empty is a value in PostgreSQL: it is how a list is emptied.
   assert.equal(P.settingSql('postgres', 'shared_preload_libraries', ''), "ALTER SYSTEM SET shared_preload_libraries = '';\nSELECT pg_reload_conf();");
+  // A list is given as a list. Quoted whole, the server looks for one library with commas in its name and does not start.
+  assert.equal(P.settingSql('postgres', 'shared_preload_libraries', 'pg_stat_statements, pg_cron'), "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements', 'pg_cron';\nSELECT pg_reload_conf();");
+  assert.equal(P.settingSql('postgres', 'search_path', '"$user", public'), "ALTER SYSTEM SET search_path = '$user', 'public';\nSELECT pg_reload_conf();");
   assert.equal(P.settingSql('postgres', 'work_mem', 'ignored', true), 'ALTER SYSTEM RESET work_mem;\nSELECT pg_reload_conf();');
   assert.equal(P.settingSql('mysql', 'max_connections', '500'), 'SET PERSIST max_connections = 500;');
   assert.equal(P.settingSql('mysql', 'slow_query_log', 'on'), 'SET PERSIST slow_query_log = on;');

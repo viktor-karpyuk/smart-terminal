@@ -128,6 +128,8 @@
   table.list td { padding: 4px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
   table.list td.m { font-family: ui-monospace, Menlo, monospace; font-size: 0.95rem; overflow-wrap: anywhere; }
   table.list td.m.n { white-space: nowrap; overflow-wrap: normal; }
+  .alert { border: 1px solid var(--warn, #d9a441); border-radius: var(--radius); padding: 8px 10px; margin: 6px 0; }
+  .alert .what { margin-bottom: 6px; overflow-wrap: anywhere; }
   table.list td.act { text-align: right; white-space: nowrap; width: 1%; }
   .link { color: var(--accent); cursor: pointer; }
   .link:hover { text-decoration: underline; }
@@ -310,6 +312,11 @@
     }
   };
 
+  /** The PostgreSQL settings whose value is a list of names rather than one string. The server does not say which they are; its source does. */
+  var PG_LIST_SETTINGS = ['shared_preload_libraries', 'session_preload_libraries', 'local_preload_libraries', 'search_path', 'temp_tablespaces', 'log_destination',
+    'datestyle', 'listen_addresses', 'unix_socket_directories', 'synchronous_standby_names', 'wal_consistency_checking', 'debug_io_direct', 'createrole_self_grant',
+    'restrict_nonsystem_relation_kind', 'oauth_validator_libraries'];
+
   /**
    * The statement that changes one setting of the server, or puts it back.
    *
@@ -323,7 +330,14 @@
     var text = String(value === null || value === undefined ? '' : value).trim();
     if (!reset && text === '' && engine !== 'postgres') return null;
     if (engine === 'postgres') {
-      return (reset ? 'ALTER SYSTEM RESET ' + name : 'ALTER SYSTEM SET ' + name + " = '" + text.replace(/'/g, "''") + "'") + ';\nSELECT pg_reload_conf();';
+      var quote = function (one) { return "'" + one.replace(/'/g, "''") + "'"; };
+      var given = quote(text);
+      // A list has to be given as a list: quoted whole, the server keeps it as one name with commas in it — and a library called that does not exist.
+      if (PG_LIST_SETTINGS.indexOf(String(name).toLowerCase()) >= 0) {
+        var parts = text.split(',').map(function (one) { return one.trim().replace(/^(['"])(.*)\1$/, '$2'); }).filter(Boolean);
+        given = parts.length ? parts.map(quote).join(', ') : "''";
+      }
+      return (reset ? 'ALTER SYSTEM RESET ' + name : 'ALTER SYSTEM SET ' + name + ' = ' + given) + ';\nSELECT pg_reload_conf();';
     }
     if (engine !== 'mysql') return null;
     if (reset) return 'RESET PERSIST ' + name + ';';
@@ -1686,7 +1700,7 @@
         title: conn.engine === 'sqlite' ? conn.file : (conn.user ? conn.user + '@' : '') + conn.host + ':' + conn.port + (conn.database ? '/' + conn.database : ''),
         open: isOpen,
         lead: [h('span', { class: 'dot' + (conn.open ? ' live' : ''), 'data-live': conn.id }), h('span', { class: 'eng ' + conn.engine, text: ENGINES[conn.engine].short })],
-        tail: [conn.production ? h('span', { class: 'tag prod', text: 'PROD' }) : null, conn.readOnly ? h('span', { class: 'tag ro', text: 'read-only' }) : null],
+        tail: [conn.alerts ? h('span', { class: 'tag prod', title: 'Something is wrong on this server. Its Trends page says what.', text: conn.alerts + (conn.alerts === 1 ? ' alert' : ' alerts') }) : null, conn.production ? h('span', { class: 'tag prod', text: 'PROD' }) : null, conn.readOnly ? h('span', { class: 'tag ro', text: 'read-only' }) : null],
         onclick: function () { toggle(key); },
         menu: function () { return connMenu(conn); }
       }));
@@ -2140,6 +2154,91 @@
    * a row of facts, or a table — with a box to narrow it when it is long, and
    * rows that open something when the caller says what.
    */
+  /** The charts of a window of readings: what each plots, and under what name. */
+  function trendCharts(engine) {
+    var charts = [
+      { title: 'Sessions, at their most', series: [['sessions', 'Connected'], ['active', 'Running'], ['blocked', 'Waiting on a lock']] },
+      { title: engine === 'mysql' ? 'Statements per second' : 'Transactions per second', series: engine === 'mysql' ? [['commits', 'Statements'], ['rollbacks', 'Rollbacks']] : [['commits', 'Commits'], ['rollbacks', 'Rollbacks']] },
+      { title: 'Statement time, ms per second', series: [['load', 'Spent running statements']] },
+      { title: 'Database size, bytes', series: [['size', 'Size']] }
+    ];
+    if (engine === 'postgres') charts.push({ title: 'Dead rows', series: [['dead', 'Waiting to be cleaned']] });
+    return charts;
+  }
+
+  /** The statements of a window as a table: what each cost, and whether a call costs more than it did. */
+  function trendStatements(statements) {
+    function ms(value) { return value === null || value === undefined ? null : value >= 100 ? String(Math.round(value)) : value.toFixed(2); }
+    return {
+      title: 'What the statements cost in this window',
+      note: 'From the readings kept on this computer, so it is this window and not since the server last reset its counters. The change is a call now against a call in the first half of the window: ×3 is three times slower.',
+      open: true,
+      columns: ['total s', 'calls', 'mean ms', 'before ms', 'now ms', 'change', 'statement', '_qid'].map(function (name) { return { name: name }; }),
+      rows: statements.map(function (one) {
+        return [(one.ms / 1000).toFixed(1), String(one.calls), ms(one.mean), ms(one.meanBefore), ms(one.meanNow), one.change === null ? null : '×' + (one.change >= 10 ? Math.round(one.change) : one.change.toFixed(1)), one.text, one.qid];
+      })
+    };
+  }
+
+  function drawTrends(tab, conn, box, data) {
+    var page = h('div', { class: 'scroll' });
+    box.appendChild(page);
+    function again() { loadServer(tab); refreshOverview(); }
+    var head = h('div', { class: 'sect' });
+    page.appendChild(head);
+    head.appendChild(h('div', { class: 'row', style: 'gap:12px;flex-wrap:wrap' },
+      conn.readOnly && !data.watching ? null : h('label', { class: 'check', style: 'margin:0;flex:1;min-width:280px' }, h('input', { type: 'checkbox', checked: data.watching, onchange: function (event) {
+        var on = event.target.checked;
+        call('watch', { id: conn.id, on: on }).then(function () { say(on ? 'Watching ' + conn.name : 'No longer watching ' + conn.name); again(); }, function (error) { fail(error); again(); });
+      } }), h('span', {}, 'Watch this server', h('small', { text: 'A reading every ' + data.everyMinutes + ' minutes while the app is open, kept ' + data.keptDays + ' days on this computer. It reads ' + (conn.database || 'the default database') + '.' }))),
+      h('span', { class: 'spacer' }),
+      h('div', { class: 'seg' }, [[6, '6 hours'], [24, 'A day'], [168, 'A week']].map(function (one) {
+        return h('button', { class: (tab.hours || 24) === one[0] ? 'on' : '', text: one[1], onclick: function () { tab.hours = one[0]; loadServer(tab); } });
+      })),
+      data.watching ? h('button', { class: 'btn', text: 'Read now', onclick: function () { call('readNow', { id: conn.id }).then(again, function (error) { fail(error); again(); }); } }) : null));
+    if (data.error) head.appendChild(h('div', { class: 'bad', style: 'margin-top:8px', text: 'The last reading could not be taken: ' + data.error }));
+
+    var open = data.alerts.filter(function (alert) { return !alert.closedAt && !alert.dismissed; });
+    var past = data.alerts.filter(function (alert) { return alert.closedAt || alert.dismissed; }).slice(0, 8);
+    if (open.length) {
+      var alerts = h('div', { class: 'sect' }, h('h3', {}, 'Wrong right now · ' + open.length));
+      open.forEach(function (alert) {
+        alerts.appendChild(h('div', { class: 'alert' }, h('div', { class: 'what', text: alert.message }),
+          h('div', { class: 'row' }, h('span', { class: 'faint', text: 'Since ' + new Date(alert.firstAt).toLocaleString() }), h('span', { class: 'spacer' }),
+            alert.rule === 'slower' && alert.subject ? h('button', { class: 'btn quiet', text: 'Ask Claude', onclick: function () { askClaude({ id: conn.id, database: conn.database, qid: alert.subject }); } }) : null,
+            h('button', { class: 'btn quiet', text: 'Dismiss', title: 'It is not said again for a day', onclick: function () { call('dismissAlert', { id: conn.id, alert: alert.id }).then(again, fail); } }))));
+      });
+      page.appendChild(alerts);
+    }
+    if (data.readings < 2) {
+      page.appendChild(h('div', { class: 'empty', style: 'position:static;padding:40px 20px', text: data.watching
+        ? 'One reading so far. A trend needs two: the next is taken in ' + data.everyMinutes + ' minutes, or press Read now.'
+        : 'Nothing is kept about this server yet. Watch it, and this page shows what changed: load over time, the statements that got slower, and what is heading somewhere bad before it gets there.' }));
+    } else {
+      var charts = h('div', { class: 'charts' });
+      trendCharts(conn.engine).forEach(function (chart) {
+        charts.appendChild(lineChart(chart.title, chart.series.map(function (one) { return { name: one[1], values: data.points.map(function (point) { return point[one[0]]; }) }; }), data.points.map(function (point) { return point.at; })));
+      });
+      page.appendChild(charts);
+      if (!data.tracked) page.appendChild(h('div', { class: 'sect faint', text: 'The server keeps no record of what its statements cost, so there are none to compare. On PostgreSQL that is the pg_stat_statements extension; on MySQL, the performance schema.' }));
+      else if (data.statements.length) {
+        var table = reportView({ sections: [trendStatements(data.statements)] }, {
+          onAsk: function (qid) { askClaude({ id: conn.id, database: conn.database, qid: qid }); },
+          onOpen: function (row, columns) { var statement = reportStatement(columns, row); if (statement) openQuery(conn, conn.database, statement); }
+        });
+        table.className = '';
+        page.appendChild(table);
+      }
+    }
+    if (past.length) {
+      var was = h('div', { class: 'sect' }, h('h3', {}, 'Said before'));
+      past.forEach(function (alert) {
+        was.appendChild(h('div', { class: 'faint', style: 'padding:3px 0', text: new Date(alert.firstAt).toLocaleString() + ' — ' + alert.message + (alert.closedAt ? ' (over ' + new Date(alert.closedAt).toLocaleTimeString() + ')' : ' (dismissed)') }));
+      });
+      page.appendChild(was);
+    }
+  }
+
   function reportView(data, opts) {
     var page = h('div', { class: 'scroll' });
     if (data.supported === false) { page.appendChild(h('div', { class: 'empty', text: 'This engine has nothing to say about that.' })); return page; }
@@ -2160,6 +2259,10 @@
         return;
       }
       var body = h('tbody');
+      // A column whose name starts with an underscore is for the page, not for the reader: the id a statement is asked about by.
+      var hidden = section.columns.map(function (column) { return column.name.charAt(0) === '_'; });
+      var qidAt = section.columns.map(function (column) { return column.name; }).indexOf('_qid');
+      var asks = Boolean(opts && opts.onAsk && qidAt >= 0);
       function fill(needle) {
         clear(body);
         var shown = 0;
@@ -2168,13 +2271,17 @@
           shown += 1;
           if (shown > 600) return;
           var tr = h('tr', { class: section.open && opts && opts.onOpen ? 'go' : '', onclick: section.open && opts && opts.onOpen ? function () { opts.onOpen(row, section.columns); } : null });
-          row.forEach(function (value) { tr.appendChild(h('td', { class: 'm' + (value === null ? ' faint' : /^-?[\d.,:]+$/.test(value) ? ' n' : ''), text: value === null ? '—' : value })); });
+          row.forEach(function (value, at) {
+            if (hidden[at]) return;
+            tr.appendChild(h('td', { class: 'm' + (value === null ? ' faint' : /^-?[\d.,:×]+$/.test(value) ? ' n' : ''), text: value === null ? '—' : value }));
+          });
+          if (asks) tr.appendChild(h('td', { class: 'act' }, row[qidAt] ? h('span', { class: 'link', text: 'Ask Claude', onclick: function (event) { event.stopPropagation(); opts.onAsk(row[qidAt]); } }) : null));
           body.appendChild(tr);
         });
-        if (shown > 600) body.appendChild(h('tr', {}, h('td', { class: 'faint', colspan: section.columns.length, text: '… ' + (shown - 600) + ' more. Narrow it down.' })));
+        if (shown > 600) body.appendChild(h('tr', {}, h('td', { class: 'faint', colspan: section.columns.length + 1, text: '… ' + (shown - 600) + ' more. Narrow it down.' })));
       }
       if (section.filter) sect.appendChild(h('input', { class: 'find', type: 'text', placeholder: 'Narrow these ' + section.rows.length, spellcheck: 'false', oninput: function (event) { fill(event.target.value.trim().toLowerCase()); } }));
-      sect.appendChild(h('table', { class: 'list' }, h('thead', {}, h('tr', {}, section.columns.map(function (column) { return h('th', { text: column.name }); }))), body));
+      sect.appendChild(h('table', { class: 'list' }, h('thead', {}, h('tr', {}, section.columns.filter(function (column, at) { return !hidden[at]; }).map(function (column) { return h('th', { text: column.name }); }).concat(asks ? [h('th', {})] : []))), body));
       fill('');
     });
     return page;
@@ -3126,7 +3233,12 @@
     tabs.appendChild(h('button', { class: (tab.shown === 'messages' ? 'on' : '') + (failed ? ' bad' : ''), text: 'Messages', onclick: function () { tab.shown = 'messages'; drawResults(tab); } }));
     box.appendChild(tabs);
 
-    if (tab.shown === 'plan' && tab.plan) { box.appendChild(planView(tab.plan)); return; }
+    if (tab.shown === 'plan' && tab.plan) {
+      box.appendChild(h('div', { class: 'row', style: 'padding:6px 12px 0;justify-content:flex-end' },
+        h('button', { class: 'btn quiet', text: 'Ask Claude why', title: 'Hands a Claude session this statement, its plan and the tables it reads', onclick: function () { askClaude({ id: tab.conn, database: tab.database, explained: true }); } })));
+      box.appendChild(planView(tab.plan));
+      return;
+    }
     if (tab.shown === 'messages') {
       var page = h('div', { class: 'scroll' });
       if (failed) {
@@ -3276,7 +3388,7 @@
 
   function serverSubs(engine) {
     if (engine === 'sqlite') return [['databases', 'Databases']];
-    var subs = [['dashboard', 'Dashboard'], ['activity', 'Activity'], ['locks', 'Locks'], ['performance', 'Performance'], ['databases', 'Databases'], ['roles', engine === 'mysql' ? 'Users' : 'Roles']];
+    var subs = [['dashboard', 'Dashboard'], ['activity', 'Activity'], ['locks', 'Locks'], ['performance', 'Performance'], ['trends', 'Trends'], ['databases', 'Databases'], ['roles', engine === 'mysql' ? 'Users' : 'Roles']];
     if (engine === 'postgres') subs.push(['tablespaces', 'Tablespaces'], ['replication', 'Replication'], ['prepared', 'Prepared']);
     subs.push(['settings', 'Configuration']);
     return subs;
@@ -3297,7 +3409,7 @@
   function loadServer(tab) {
     var sub = tab.sub;
     if (sub === 'dashboard') { sampleServer(tab); return; }
-    var asked = sub === 'databases' ? call('databases', { id: tab.conn }) : SERVER_REPORTS[sub] ? call('report', { id: tab.conn, database: tab.database, kind: sub }) : call(sub, { id: tab.conn, database: tab.database });
+    var asked = sub === 'trends' ? call('trends', { id: tab.conn, hours: tab.hours || 24 }) : sub === 'databases' ? call('databases', { id: tab.conn }) : SERVER_REPORTS[sub] ? call('report', { id: tab.conn, database: tab.database, kind: sub }) : call(sub, { id: tab.conn, database: tab.database });
     asked.then(function (data) { tab.error = null; tab[sub] = data; }, function (error) { tab.error = error.message; }).then(function () {
       if (tab.sub === sub && tab.body) drawServerBody(tab);
       markLive();
@@ -3306,13 +3418,13 @@
 
   function tickServer(tab) {
     clearTimeout(tab.timer);
-    var live = tab.sub === 'dashboard' || (tab.auto && (tab.sub === 'activity' || tab.sub === 'locks'));
+    var live = tab.sub === 'dashboard' || tab.sub === 'trends' || (tab.auto && (tab.sub === 'activity' || tab.sub === 'locks'));
     if (!live) return;
     tab.timer = setTimeout(function () {
       // Nobody is looking: the server is not asked.
       if (state.showing && state.active === tab.id && state.tabs.indexOf(tab) >= 0) loadServer(tab);
       tickServer(tab);
-    }, tab.sub === 'dashboard' ? 3000 : 5000);
+    }, tab.sub === 'dashboard' ? 3000 : tab.sub === 'trends' ? 60000 : 5000);
   }
 
   function drawServerBody(tab) {
@@ -3341,12 +3453,21 @@
       box.appendChild(h('div', { class: 'scroll' }, h('div', { class: 'sect' }, h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Database', 'Owner', 'Encoding', 'Size'].map(function (text) { return h('th', { text: text }); }))), h('tbody', {}, rows)))));
       return;
     }
+    if (tab.sub === 'trends') { drawTrends(tab, conn, box, data); return; }
     if (data.supported === false) { box.appendChild(h('div', { class: 'empty', text: 'SQLite is a file: there is no server to ask about this.' })); return; }
     if (data.sections) {
       box.appendChild(reportView(data, tab.sub === 'settings' && !conn.readOnly ? { onOpen: function (row, columns) {
         var at = columns.map(function (column) { return column.name; }).indexOf('name');
         if (at >= 0 && row[at]) openSetting(conn, tab, String(row[at]));
-      } } : undefined));
+      } } : tab.sub === 'performance' ? {
+        onAsk: function (qid) { askClaude({ id: tab.conn, database: tab.database, qid: qid }); },
+        onOpen: function (row, columns) {
+          var statement = reportStatement(columns, row);
+          if (statement) { openQuery(conn, tab.database, statement); return; }
+          var target = reportTarget(columns, row, null);
+          if (target) openTable(conn, tab.database, conn.engine === 'mysql' ? tab.database : target.schema || 'public', target.table, 'structure');
+        }
+      } : undefined));
       return;
     }
     var keyIndex = data.key ? data.columns.map(function (column) { return column.name; }).indexOf(data.key) : -1;
@@ -4118,7 +4239,7 @@
     var out = h('div', { class: 'view', style: 'position:relative;flex:1' }, h('div', { class: 'empty', text: 'Reading…' }));
     box.appendChild(out);
     call('report', { id: tab.conn, database: tab.database, schema: tab.schema, kind: tab.name }).then(function (data) {
-      clear(out).appendChild(reportView(data, { onOpen: function (row, columns) {
+      clear(out).appendChild(reportView(data, { onAsk: function (qid) { askClaude({ id: tab.conn, database: tab.database, qid: qid }); }, onOpen: function (row, columns) {
         var statement = reportStatement(columns, row);
         if (statement) { openQuery(conn, tab.database, statement); return; }
         var target = reportTarget(columns, row, tab.schema);
