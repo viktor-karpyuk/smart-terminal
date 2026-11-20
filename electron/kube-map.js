@@ -792,7 +792,8 @@ function findingsFrom(nodes, edges) {
       list.push({
         level: 'now',
         title: 'Its autoscaler cannot measure it',
-        text: `${workload.hpa} scales on CPU as a share of what is requested, and ${workload.unrequested.join(', ')} ` +
+        text: `The autoscaler ${workload.hpa} scales on CPU as a share of what is requested, and the ` +
+          `container${workload.unrequested.length === 1 ? '' : 's'} ${workload.unrequested.join(', ')} ` +
           `request${workload.unrequested.length === 1 ? 's' : ''} none. It stays at the number it has; set a CPU request.`,
         source: 'API · autoscaler, container requests',
         ids: [],

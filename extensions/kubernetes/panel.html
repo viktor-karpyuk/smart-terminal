@@ -318,6 +318,11 @@
     position: absolute; top: 2px; right: 3px; min-width: 14px; height: 14px; padding: 0 4px; border-radius: 7px;
     font-size: 9px; line-height: 14px; font-weight: 700; text-align: center; color: #fff; background: var(--danger);
   }
+  .row-warn {
+    margin-left: 6px; padding: 0 5px; border-radius: 7px; font-size: 9.5px; font-weight: 700; line-height: 14px;
+    color: var(--danger); background: color-mix(in srgb, var(--danger) 20%, transparent);
+  }
+  .mwarn.is-inline { position: static; flex: none; }
   .edit-note.is-owned { border-left-color: var(--warn, #e0af68); }
   .btn[data-cannot="1"] { text-decoration: line-through; }
   #sheet { position: fixed; inset: 0; z-index: 12; display: grid; place-items: center; background: rgba(0, 0, 0, 0.45); animation: note-in 0.14s ease-out; }
@@ -814,6 +819,9 @@
   }
   .map-row { display: flex; align-items: center; gap: 8px; padding: 1px 4px; }
   .map-row.in { padding-left: 22px; }
+  .map-row.map-head.in { padding: 5px 0 1px; }
+  .map-row.map-head .map-tick span { font-weight: 600; letter-spacing: 0.08em; }
+  .map-tick.some i { border-color: var(--accent); color: var(--accent); }
   .map-row.map-head { padding: 6px 4px 2px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
   .map-row:first-child { justify-content: space-between; padding: 3px 4px 6px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
   .map-tick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 3px 4px; text-align: left; border-radius: calc(var(--radius) / 2); color: var(--text-dim); font-size: 11.5px; }
@@ -1134,7 +1142,7 @@
    */
   function editsToKeep() {
     var drafts = {};
-    var room = 400000;
+    var room = 200000;
     Object.keys(state.drafts).reverse().forEach(function (uid) {
       var draft = state.drafts[uid];
       var size = draft.text.length + draft.base.length;
@@ -1687,7 +1695,7 @@
       delete mapFetching[key];
       mapKeep(key, result, JSON.stringify([result.nodes, result.edges, result.findings, result.missing]));
       // The form may be waiting to know whether an autoscaler is watching what it edits.
-      if (state.selected && state.detail.tab === 'configure' && !state.editing) drawDetail();
+      if (state.view.type === 'kind' && key === mapKey()) { drawTable(); if (state.selected && !holdingEdit()) drawDetail(); }
     }).catch(function () { delete mapFetching[key]; });
   }
   /** What the map knows about a row of a table, if the map has been read. */
@@ -2644,7 +2652,7 @@
   function cell(row, column) {
     var value = row[column];
     if (column === 'name') {
-      return '<td class="name" title="' + esc(value) + '"><span class="dot ' + esc(row.health || 'idle') + '"></span><span class="label">' + esc(value) + '</span>' + forwardMark(row) + '</td>';
+      return '<td class="name" title="' + esc(value) + '"><span class="dot ' + esc(row.health || 'idle') + '"></span><span class="label">' + esc(value) + '</span>' + forwardMark(row) + warnMark(row) + '</td>';
     }
     if (column === 'status') {
       var klass = row.health === 'bad' ? 'bad-text' : row.health === 'warn' ? 'warn-text' : 'dim';
@@ -2805,7 +2813,7 @@
 
   var KEYS = [
     ['Anywhere', [['/', 'Filter the table'], ['↑ ↓', 'The row above or below'], ['Esc', 'Close what is open'], ['⌘C', 'Copy what is selected'], ['?', 'This list']]],
-    ['In the pane', [['⌘F', 'Find in the tab that is showing'], ['↵ / ⇧↵ or ⌘G / ⇧⌘G', 'Next and previous match'], ['A− A+', 'Smaller or larger text']]],
+    ['In the pane', [['1 – 9', 'The first to the ninth tab'], ['e', 'Edit the manifest'], ['⌘F', 'Find in the tab that is showing'], ['↵ / ⇧↵ or ⌘G / ⇧⌘G', 'Next and previous match'], ['A− A+', 'Smaller or larger text']]],
     ['Editing a manifest', [['⌘S', 'Apply'], ['⌘↵', 'Dry run: ask the server, change nothing'], ['⌘D', 'What you changed'], ['Tab / ⇧Tab', 'Indent or outdent the lines selected'], ['Esc', 'Leave the editor, when nothing was typed']]],
     ['Configure', [['⌘S', 'Apply'], ['⌘↵', 'Dry run']]],
     ['A log', [['↵ / ⇧↵', 'Next and previous match'], ['Esc', 'Let go of the search']]],
@@ -3590,6 +3598,12 @@
     return unit.text;
   }
 
+  /** Whether the cluster has complained lately about a unit or anything of it. */
+  function mapUnitWarned(unit) {
+    if (unit.root.warnings || unit.root.podWarnings) return true;
+    return unit.pods.some(function (pod) { return pod.warnings > 0; });
+  }
+
   function mapUnitBad(unit) {
     if (unit.root.health === 'warn' || unit.root.health === 'bad') return true;
     return unit.pods.some(function (pod) {
@@ -3636,7 +3650,7 @@
     spaces.forEach(function (ns) {
       var mine = (units[ns.name] || []).filter(function (unit) {
         if (text && ns.name.toLowerCase().indexOf(text) < 0 && mapUnitText(unit).indexOf(text) < 0) return false;
-        if (ui.bad && !mapUnitBad(unit)) return false;
+        if (ui.bad && !mapUnitBad(unit) && !mapUnitWarned(unit)) return false;
         return true;
       });
       if (!mine.length) return;
@@ -3644,10 +3658,12 @@
       var open = text || ui.bad ? true : ui.open[ns.name] != null ? ui.open[ns.name] : small && !ns.system;
       var pods = 0;
       var troubled = 0;
+      var warnedHere = 0;
       var techs = {};
       mine.forEach(function (unit) {
         pods += unit.pods.length;
         if (mapUnitBad(unit)) troubled += 1;
+        if (mapUnitWarned(unit)) warnedHere += 1;
         if (unit.root.tech) techs[unit.root.tech] = true;
       });
       var top = y;
@@ -3655,7 +3671,8 @@
         '<span class="twist">' + (open ? '▾' : '▸') + '</span><b>' + esc(ns.name) + '</b>' +
         '<span>' + mapPlural(mine.length, 'workload') + ' · ' + mapPlural(pods, 'pod') + '</span>' +
         Object.keys(techs).map(function (tech) { return '<span class="mtag inf">' + esc(tech) + '</span>'; }).join('') +
-        (troubled ? '<span class="mtag bad">' + troubled + ' not well</span>' : '') + '</button>';
+        (troubled ? '<span class="mtag bad">' + troubled + ' not well</span>' : '') +
+        (warnedHere ? '<span class="mtag warn" title="Workloads the cluster has raised warnings about lately">' + warnedHere + ' with warnings</span>' : '') + '</button>';
       y += 32;
 
       if (open) {
@@ -3874,13 +3891,14 @@
   function mapTile(pod, ui, text) {
     var claims = mapTo(pod.id, 'mounts');
     var off = (text && (pod.name + ' ' + pod.namespace + ' ' + pod.owner).toLowerCase().indexOf(text) < 0) ||
-      (ui.bad && pod.health !== 'warn' && pod.health !== 'bad');
+      (ui.bad && pod.health !== 'warn' && pod.health !== 'bad' && !pod.warnings);
     var size = [mapCpu(pod.cpuReq), mapMem(pod.memReq)].filter(Boolean).join(' · ');
     return '<button class="mtile h-' + pod.health + (ui.hl && pod.owner === ui.hl ? ' hl' : '') + (ui.sel === pod.id ? ' sel' : '') +
       (off ? ' off' : '') + '" data-map-id="' + esc(pod.id) + '" title="' + esc(mapTip(pod)) + '">' +
       '<i class="mdot"></i><span class="mtext"><b>' + esc(pod.name) + '</b><small>' +
       esc(pod.health === 'ok' ? pod.namespace + (size ? ' · ' + size : '') : pod.status + (pod.restarts ? ' · ' + mapPlural(pod.restarts, 'restart') : '')) +
-      '</small></span>' + (claims.length ? '<i class="mplug" title="Mounts ' + esc(claims.map(function (c) { return c.name; }).join(', ')) + '"></i>' : '') +
+      '</small></span>' + (pod.warnings ? '<span class="mwarn is-inline" title="' + esc(pod.warning || '') + '">' + (pod.warnings > 99 ? '99+' : pod.warnings) + '</span>' : '') +
+      (claims.length ? '<i class="mplug" title="Mounts ' + esc(claims.map(function (c) { return c.name; }).join(', ')) + '"></i>' : '') +
       '</button>';
   }
 
@@ -4043,6 +4061,7 @@
           esc([node.status, node.instance, byZone ? node.pool : node.zone].filter(Boolean).join(' · ')) + '</small>' +
           '<span class="mnode-tags">' + (node.capacity === 'spot' ? '<span class="mtag warn" title="A spot machine: the cloud can take it back at short notice">spot</span>' : '') +
           (node.taintList && node.taintList.length ? '<span class="mtag" title="' + esc(node.taintList.join('\n')) + '">' + mapPlural(node.taintList.length, 'taint') + '</span>' : '') +
+          (node.warnings ? '<span class="mtag bad" title="' + esc(node.warning || '') + '">' + mapPlural(node.warnings, 'warning') + '</span>' : '') +
           '<span class="mtag" title="Pods running on it">' + pods.length + '</span></span></span>' +
           '<span class="mbars" title="' + esc(askedWhy + '\nCPU: ' + cpuSays + '\nMemory: ' + memSays) + '"><span>' + asked + 'CPU ' + cpu.pct + '%</span><span>' + asked + 'memory ' + mem.pct + '%</span>' +
           cpu.html + mem.html + used + '</span></button><div class="mtiles">' +
@@ -4250,7 +4269,17 @@
       if (text && (root.name + ' ' + root.namespace + ' ' + (root.tech || '')).toLowerCase().indexOf(text) < 0) return;
       if (root.namespace !== last) {
         last = root.namespace;
-        html += '<div class="map-row map-head">' + esc(root.namespace) + '</div>';
+        /*
+         * A namespace is ticked as one: its heading is a tick for everything
+         * under it, half-filled when only some are in. Forty names in `prod`
+         * were forty clicks.
+         */
+        var inNs = roots.filter(function (other) { return other.namespace === root.namespace; });
+        var ticked = inNs.filter(function (other) { return chosen[other.id]; }).length;
+        html += '<div class="map-row map-head in"><button class="map-tick' + (ticked === inNs.length ? ' on' : ticked ? ' some' : '') + '" data-map-pick-ns="' + esc(root.namespace) + '" ' +
+          'title="' + (ticked === inNs.length ? 'Take all of ' : 'Tick all of ') + esc(root.namespace) + '">' +
+          '<i>' + (ticked === inNs.length ? '✓' : ticked ? '–' : '') + '</i><span>' + esc(root.namespace) + '</span><small>' + ticked + '/' + inNs.length + '</small></button>' +
+          '<button class="link" data-map-pick-ns-only="' + esc(root.namespace) + '" title="Draw this namespace alone">only</button></div>';
       }
       html += '<div class="map-row in"><button class="map-tick' + (chosen[root.id] ? ' on' : '') + '" data-map-pick="' + esc(root.id) + '" title="' + esc(root.name) + '">' +
         '<i>' + (chosen[root.id] ? '✓' : '') + '</i><span>' + esc(root.name) + '</span><small>' + esc(root.tech || root.kind) + '</small></button>' +
@@ -4629,8 +4658,58 @@
     }).join('');
   }
 
+  /** In a table: the same count the map puts on a card, for the same reason. */
+  function warnMark(row) {
+    if (!row || !row.kind || row.kind === 'Event') return '';
+    var node = mapKnown(row);
+    var count = node ? (node.warnings || 0) + (node.podWarnings || 0) : 0;
+    return count ? '<span class="row-warn" title="' + esc(node.warning || '') + '">' + (count > 99 ? '99+' : count) + '</span>' : '';
+  }
+
+  function mapWarned(node) {
+    var count = (node.warnings || 0) + (node.podWarnings || 0);
+    if (!count) return '';
+    return block('Warnings', '<div class="events"><div class="event is-warn"><div class="event-head"><span class="dot bad"></span><b>' +
+      count + ' lately</b><span class="spacer"></span>' +
+      '<button class="btn" data-tab="events">Open Events</button></div><div class="event-text">' + esc(node.warning || '') + '</div></div></div>');
+  }
+
+  /**
+   * What the map knows about a row of a table.
+   *
+   * The map is read behind everything now, so a Deployment opened from its
+   * table need not be less well known than one opened from a card: what it is
+   * complaining about, what is fragile about it, what scales it. Said in
+   * words only — the cards and lines are the map's, one click away.
+   */
+  function mapBrief(row) {
+    var node = mapKnown(row);
+    if (!node) return '';
+    var kept = state.map && state.mapFor === mapKey() ? state.map : (mapCache[mapKey()] || mapCache[(state.context || '') + '/'] || {}).result;
+    var findings = ((kept && kept.findings) || {})[node.id] || [];
+    var tags = { now: ['bad', 'now'], spof: ['warn', 'single point of failure'], risk: ['', 'risk'] };
+    var html = mapWarned(node);
+    if (findings.length) {
+      html += block('Risks', findings.map(function (finding) {
+        var tag = tags[finding.level] || tags.risk;
+        return '<div class="mrisk"><span class="mtag ' + tag[0] + '">' + tag[1] + '</span> <b>' + esc(finding.title) + '</b><p>' + esc(finding.text) + '</p></div>';
+      }).join(''));
+    }
+    var facts = [];
+    if (node.hpa) facts.push(['Autoscaler', node.hpa + ' · ' + node.hpaRange + ' replicas' + ((node.hpaOn || []).length ? ', on ' + node.hpaOn.join(' and ') : '')]);
+    if (node.pdb) facts.push(['Disruption budget', node.pdb + (node.pdbAllowed != null ? ' · ' + node.pdbAllowed + ' may go right now' : '')]);
+    if (node.tech) facts.push(['Runs', node.tech + (node.techVersion ? ' ' + node.techVersion : '') + ' (by its image)']);
+    if (node.helm) facts.push(['Installed by', node.helm]);
+    if (node.kind === 'Pod' && node.node) facts.push(['On', node.node]);
+    if (facts.length) {
+      html += block('From the map', '<dl class="facts">' + facts.map(function (fact) { return '<dt>' + esc(fact[0]) + '</dt><dd>' + esc(fact[1]) + '</dd>'; }).join('') + '</dl>');
+    }
+    return html;
+  }
+
   function mapInfo(row) {
-    if (state.view.type !== 'map' || !state.mapIndex) return '';
+    if (state.view.type !== 'map') return mapBrief(row);
+    if (!state.mapIndex) return '';
     var node = state.mapIndex.byId[mapUi().sel];
     if (!node || node.name !== row.name || (node.namespace || '') !== (row.namespace || '')) return '';
     var ix = state.mapIndex;
@@ -4660,6 +4739,8 @@
           (node.custom ? 'Made by an operator from a ' + esc(node.kind) + '; known here through its pods. ' : '') +
           'Roles and replication are the database’s own business: they show only where a pod’s labels say so.</p>';
       }
+      // What it is complaining about now comes before what might go wrong one day.
+      html += mapWarned(node);
       var findings = (state.map.findings || {})[node.id] || [];
       if (findings.length) {
         var tags = { now: ['bad', 'now'], spof: ['warn', 'single point of failure'], risk: ['', 'risk'] };
@@ -4696,14 +4777,9 @@
           (users.length ? '<h5 class="msub">Used by <span class="mtag inf">inferred</span></h5><div class="mgos">' + users.map(function (user) { return mapGo(user.node, user.via); }).join('') + '</div>' : '') +
           (needs.length ? '<h5 class="msub">Uses <span class="mtag inf">inferred</span></h5><div class="mgos">' + needs.map(function (need) { return mapGo(need.node, need.via); }).join('') + '</div>' : ''));
       }
-      if (node.warnings || node.podWarnings) {
-        html += block('Warnings', '<div class="events"><div class="event is-warn"><div class="event-head"><span class="dot bad"></span><b>' +
-          ((node.warnings || 0) + (node.podWarnings || 0)) + ' lately</b><span class="spacer"></span>' +
-          '<button class="btn" data-tab="events">Open Events</button></div><div class="event-text">' + esc(node.warning || '') + '</div></div></div>');
-      }
       html += block('Placement', '<dl class="facts">' +
         (node.hpa ? '<dt>Autoscaler</dt><dd>' + esc(node.hpa + ' · ' + node.hpaRange + ' replicas' + ((node.hpaOn || []).length ? ', on ' + node.hpaOn.join(' and ') : '')) +
-          ((node.hpaOn || []).indexOf('cpu') >= 0 && (node.unrequested || []).length ? ' <span class="bad-text">· cannot measure: ' + esc(node.unrequested.join(', ')) + ' requests no CPU</span>' : '') + '</dd>' : '') +
+          ((node.hpaOn || []).indexOf('cpu') >= 0 && (node.unrequested || []).length ? ' <span class="bad-text">· cannot measure: container ' + esc(node.unrequested.join(', ')) + ' requests no CPU</span>' : '') + '</dd>' : '') +
         '<dt>Kept apart</dt><dd>' +
         esc(node.spread ? node.spread.mode + (node.spread.key ? ', by ' + node.spread.key : '') : 'nothing keeps replicas on different nodes') + '</dd>' +
         '<dt>Disruption budget</dt><dd>' + esc(node.pdb ? node.pdb + (node.pdbAllowed != null ? ' · ' + node.pdbAllowed + ' may go right now' : '') : 'none') + '</dd>' +
@@ -5079,7 +5155,26 @@
   var mapDescribed = {};
   var mapCacheFor = '';
 
+  /**
+   * Draw the map, and leave an open list where the reader had it.
+   *
+   * A tick in the list of workloads or of nodes redraws the map, and the list
+   * is part of what is redrawn — so it came back at its top, and ticking the
+   * fortieth name meant scrolling to it again after every tick. Its scroll is
+   * read before and put back after, and it does not drop in a second time.
+   */
   function drawMap() {
+    var open = document.querySelector('#table .map-menu');
+    var at = open ? { top: open.scrollTop, right: open.classList.contains('right') } : null;
+    drawMapNow();
+    var again = at ? document.querySelector('#table .map-menu') : null;
+    if (again && again.classList.contains('right') === at.right) {
+      again.style.animation = 'none';
+      again.scrollTop = at.top;
+    }
+  }
+
+  function drawMapNow() {
     var box = $('table');
     if (state.error && !state.map) {
       box.innerHTML = '<div class="note error">' + esc(state.error) + '</div>' + advice(state.error);
@@ -5319,7 +5414,7 @@
   $('table').addEventListener('click', function (event) {
     if (state.view.type !== 'map') return;
     var ui = mapUi();
-    var el = event.target.closest('[data-map-by], [data-map-act], [data-map-plan], [data-map-pick], [data-map-pick-only], [data-map-pick-all], [data-map-pool], [data-map-menu], [data-map-off], [data-map-only], [data-map-all], [data-map-mode], [data-map-toggle], [data-map-fold], [data-map-zoom], [data-map-ns], [data-map-more], [data-map-sys], [data-map-sim], [data-map-focus-on], [data-map-id]');
+    var el = event.target.closest('[data-map-by], [data-map-act], [data-map-plan], [data-map-pick-ns], [data-map-pick-ns-only], [data-map-pick], [data-map-pick-only], [data-map-pick-all], [data-map-pool], [data-map-menu], [data-map-off], [data-map-only], [data-map-all], [data-map-mode], [data-map-toggle], [data-map-fold], [data-map-zoom], [data-map-ns], [data-map-more], [data-map-sys], [data-map-sim], [data-map-focus-on], [data-map-id]');
     // The list of nodes shuts when the click was anywhere but in it.
     if (mapMenuOpen && !event.target.closest('.map-drop')) {
       mapMenuOpen = false;
@@ -5350,10 +5445,22 @@
       else mapOpenForm(set.mapPlan);
       return;
     }
-    if (set.mapPick || set.mapPickOnly || set.mapPickAll) {
+    if (set.mapPick || set.mapPickOnly || set.mapPickAll || set.mapPickNs || set.mapPickNsOnly) {
       var ids = mapFocuses().map(function (entry) { return entry.id; });
+      var everyRoot = mapRoots();
+      var ofNs = everyRoot.filter(function (root) { return root.namespace === (set.mapPickNs || set.mapPickNsOnly); }).map(function (root) { return root.id; });
       if (set.mapPickAll) ids = '*';
       else if (set.mapPickOnly) ids = set.mapPickOnly;
+      else if (set.mapPickNsOnly) ids = ofNs.length === 1 ? ofNs[0] : ofNs;
+      else if (set.mapPickNs) {
+        var allIn = ofNs.every(function (id) { return ids.indexOf(id) >= 0; });
+        if (allIn) {
+          var rest = ids.filter(function (id) { return ofNs.indexOf(id) < 0; });
+          // The last ones stay: a picture of nothing's dependencies is not a picture.
+          if (rest.length) ids = rest;
+        } else ofNs.forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
+        ids = ids.length === 1 ? ids[0] : ids.length === everyRoot.length ? '*' : ids;
+      }
       else {
         var at = ids.indexOf(set.mapPick);
         // The last one stays ticked: a picture of nothing's dependencies is not a picture.
@@ -5404,6 +5511,11 @@
       // What was picked comes along: its namespace is unfolded, and the page is brought to it.
       var held = state.mapIndex.byId[ui.sel];
       if (held && held.namespace && set.mapMode === 'topology') ui.open[held.namespace] = true;
+      // Going to Dependencies with a workload in hand is asking what that one stands on, not the one looked at last week.
+      if (set.mapMode === 'graph' && held) {
+        var rootOf = mapIsWorkload(held) ? held : held.kind === 'Pod' ? state.mapIndex.byId[held.owner] : null;
+        if (rootOf && mapRoots().some(function (root) { return root.id === rootOf.id; })) state.view.focus = rootOf.id;
+      }
       mapBring = true;
     } else if (set.mapToggle) {
       if (set.mapToggle === 'hl') ui.hl = null;
@@ -7339,8 +7451,9 @@
     if (row.kind === 'Event') return eventPane(row);
     var known = mapInfo(row);
     // With the map's own account of it above, the cluster's long description is one click away rather than in the way.
-    return chartsFor(row) + known + factsBlock(row, Boolean(known)) + containersBlock(row) + labelsBlock(row) +
-      (known ? '<details class="pane-fold" data-pane-fold="describe"' + (state.describeOpen ? ' open' : '') + '><summary>Described by the cluster</summary>' + describeBlock() + '</details>' : describeBlock());
+    var drawn = Boolean(known) && state.view.type === 'map';
+    return chartsFor(row) + known + factsBlock(row, drawn) + containersBlock(row) + labelsBlock(row) +
+      (drawn ? '<details class="pane-fold" data-pane-fold="describe"' + (state.describeOpen ? ' open' : '') + '><summary>Described by the cluster</summary>' + describeBlock() + '</details>' : describeBlock());
   }
 
   /** A named section with its own Copy — nobody wants the whole drawer. */
@@ -7609,8 +7722,9 @@
           '<div class="event-head"><span class="dot ' + (group.warn ? 'bad' : 'idle') + '"></span><b>' + esc(group.event.status) + '</b>' +
             (group.count > 1 ? '<span class="event-count">×' + group.count + '</span>' : '') +
             (withObject ? '<span class="dim event-about">' + esc(group.event.object) + '</span>' : '') +
-            '<span class="spacer"></span><span class="dim">' + (going ? 'still going · ' : 'stopped ' + esc(ageText(group.last)) + ' ago · ') + 'began ' + esc(ageText(group.first)) + ' ago</span></div>' +
+            '<span class="spacer"></span>' + (going ? '<span class="mtag bad">still going</span>' : '') + '</div>' +
           '<div class="timeline-track"><i class="' + (going ? 'is-going' : '') + '" style="left:' + left.toFixed(2) + '%;width:' + Math.min(100 - left, width).toFixed(2) + '%"></i></div>' +
+          '<div class="event-meta dim">began ' + esc(ageText(group.first)) + ' ago' + (going ? '' : ' · last said ' + esc(ageText(group.last)) + ' ago') + '</div>' +
           '<div class="event-text">' + esc(group.event.message) + '</div></div>';
       }).join('') + '</div>';
   }
@@ -10042,6 +10156,23 @@
       return;
     }
     if (event.key === '?') { event.preventDefault(); showKeys(); return; }
+    if (state.selected && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      var paneTabs = document.querySelectorAll('aside .tabs [data-tab]');
+      if (/^[1-9]$/.test(event.key) && paneTabs[Number(event.key) - 1]) { event.preventDefault(); paneTabs[Number(event.key) - 1].click(); return; }
+      if (event.key === 'e' && document.querySelector('aside .tabs [data-tab="yaml"]')) {
+        event.preventDefault();
+        if (state.detail.tab !== 'yaml') document.querySelector('aside .tabs [data-tab="yaml"]').click();
+        // The manifest may still be on its way: the editor opens when it is here.
+        var tries = 0;
+        var openEditor = function () {
+          var edit = document.querySelector('[data-do="yaml-edit"]');
+          if (edit && !edit.disabled && state.detailData.yaml != null) { act('yaml-edit'); return; }
+          if (!state.editingYaml && (tries += 1) < 40) setTimeout(openEditor, 100);
+        };
+        openEditor();
+        return;
+      }
+    }
     if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && state.table) {
       var rows = visible();
       if (!rows.length) return;
