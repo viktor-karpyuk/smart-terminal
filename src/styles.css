@@ -4458,7 +4458,8 @@ button.ci-toast-main { cursor: pointer; }
 .group-session:hover { background: var(--bg-hover); }
 .group-session.is-picked { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .group-session.is-open { color: var(--text-dim); }
-.group-session input { margin: 0; flex: 0 0 auto; }
+/* The global `input { width: 100% }` made each box the whole row and the name nothing. */
+.group-session input, .group-sessions-all input { width: auto; margin: 0; padding: 0; flex: 0 0 auto; }
 .group-session-gap { width: 13px; flex: 0 0 auto; }
 .group-session-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .group-session-when { flex: 0 0 auto; color: var(--text-faint); font-size: var(--fs-xs, 10.5px); font-variant-numeric: tabular-nums; }
