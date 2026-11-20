@@ -369,9 +369,31 @@ const PG_REPORTS = {
   settings: () => [
     {
       title: 'Configuration',
+      note: 'Click a setting to change it. What is written goes to postgresql.auto.conf with ALTER SYSTEM, which only a superuser may do.',
       filter: true,
+      open: true,
       sql: `SELECT name, setting AS value, coalesce(unit, '') AS unit, category, source, pending_restart AS "needs restart", short_desc AS what
               FROM pg_catalog.pg_settings ORDER BY name`,
+    },
+  ],
+  /** One setting, with what a person needs to know before changing it: what it accepts and when a change is felt. */
+  setting: ({ name }) => [
+    {
+      title: name,
+      vertical: true,
+      sql: `SELECT s.setting AS "value now", coalesce(s.unit, '') AS unit, s.vartype AS kind,
+                   CASE s.context WHEN 'internal' THEN 'never: it is fixed when the server is built or initialised'
+                                  WHEN 'postmaster' THEN 'when the server restarts'
+                                  WHEN 'sighup' THEN 'at once, on reload'
+                                  WHEN 'superuser-backend' THEN 'in sessions opened after the reload'
+                                  WHEN 'backend' THEN 'in sessions opened after the reload'
+                                  ELSE 'on reload, in sessions that have not set their own' END AS "a change takes effect",
+                   s.min_val AS "at least", s.max_val AS "at most", array_to_string(s.enumvals, ', ') AS "one of",
+                   s.boot_val AS "built-in default", s.reset_val AS "value after a reload", s.source AS "set by",
+                   s.sourcefile AS "in file", s.pending_restart AS "waiting for a restart",
+                   s.short_desc || coalesce(' ' || s.extra_desc, '') AS what
+              FROM pg_catalog.pg_settings s WHERE s.name = $1`,
+      params: [name],
     },
   ],
 
@@ -1333,7 +1355,27 @@ const MYSQL_REPORTS = {
     },
   ],
   settings: () => [
-    { title: 'Configuration', filter: true, sql: 'SELECT VARIABLE_NAME AS name, VARIABLE_VALUE AS value FROM performance_schema.global_variables ORDER BY 1' },
+    {
+      title: 'Configuration',
+      note: 'Click a setting to change it. What is written is kept with SET PERSIST, so it is still there after a restart.',
+      filter: true,
+      open: true,
+      sql: 'SELECT VARIABLE_NAME AS name, VARIABLE_VALUE AS value FROM performance_schema.global_variables ORDER BY 1',
+    },
+  ],
+  setting: ({ name }) => [
+    {
+      title: name,
+      vertical: true,
+      sql: `SELECT g.VARIABLE_VALUE AS \`value now\`, i.VARIABLE_SOURCE AS \`set by\`, NULLIF(i.VARIABLE_PATH, '') AS \`in file\`,
+                   i.MIN_VALUE AS \`at least\`, i.MAX_VALUE AS \`at most\`, p.VARIABLE_VALUE AS \`persisted as\`,
+                   i.SET_TIME AS \`last set\`, NULLIF(i.SET_USER, '') AS \`by\`
+              FROM performance_schema.global_variables g
+              LEFT JOIN performance_schema.variables_info i ON i.VARIABLE_NAME = g.VARIABLE_NAME
+              LEFT JOIN performance_schema.persisted_variables p ON p.VARIABLE_NAME = g.VARIABLE_NAME
+             WHERE g.VARIABLE_NAME = ?`,
+      params: [name],
+    },
   ],
   /** Why it is slow, asked of the server itself — see the note on the PostgreSQL one. */
   performance: ({ schema }) => [

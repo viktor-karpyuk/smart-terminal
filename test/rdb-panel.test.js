@@ -47,7 +47,7 @@ const P = fromPanel([
   'guessMapping', 'importProblems', 'shellLabel',
   'ERD', 'erdModel', 'erdSize', 'erdLayout', 'erdRowY', 'erdPath',
   'plainDef', 'retarget', 'snapshotColumnSql', 'schemaDiff',
-  'MORE', 'reportTarget',
+  'MORE', 'reportTarget', 'reportStatement', 'settingSql',
   'FORMAT_CLAUSES', 'FORMAT_STARTS', 'JOIN_WORDS', 'formatSql', 'flowSql',
   'PRIVILEGES', 'grantKind', 'granteeSql', 'grantSql', 'roleFromRow', 'membershipChange',
   'TYPE_HINTS', 'defaultSql', 'designColumns', 'designProblems', 'columnSql', 'createTableSql', 'alterTableSql', 'designScript',
@@ -787,4 +787,24 @@ test('what is dropped goes in an order the server will take', () => {
   // The table that is referred to waits for the one that refers to it.
   assert.ok(at('DROP TABLE "staging"."orders"') < at('DROP TABLE "staging"."customer"'));
   assert.ok(at('DROP TABLE "staging"."customer"') < at('DROP SEQUENCE IF EXISTS "staging"."orders_id_seq"'));
+});
+
+test('a setting is changed by the statement its engine takes, and a name that is not one writes nothing', () => {
+  assert.equal(P.settingSql('postgres', 'work_mem', '64MB'), "ALTER SYSTEM SET work_mem = '64MB';\nSELECT pg_reload_conf();");
+  assert.equal(P.settingSql('postgres', 'auto_explain.log_min_duration', "1's"), "ALTER SYSTEM SET auto_explain.log_min_duration = '1''s';\nSELECT pg_reload_conf();");
+  // Empty is a value in PostgreSQL: it is how a list is emptied.
+  assert.equal(P.settingSql('postgres', 'shared_preload_libraries', ''), "ALTER SYSTEM SET shared_preload_libraries = '';\nSELECT pg_reload_conf();");
+  assert.equal(P.settingSql('postgres', 'work_mem', 'ignored', true), 'ALTER SYSTEM RESET work_mem;\nSELECT pg_reload_conf();');
+  assert.equal(P.settingSql('mysql', 'max_connections', '500'), 'SET PERSIST max_connections = 500;');
+  assert.equal(P.settingSql('mysql', 'slow_query_log', 'on'), 'SET PERSIST slow_query_log = on;');
+  assert.equal(P.settingSql('mysql', 'sql_mode', "A'B\\"), "SET PERSIST sql_mode = 'A''B\\\\';");
+  assert.equal(P.settingSql('mysql', 'max_connections', '', true), 'RESET PERSIST max_connections;');
+  assert.equal(P.settingSql('mysql', 'max_connections', ''), null);
+  for (const name of ['', 'x; DROP TABLE t', 'a b', 'x = 1, y', '1abc', 'a.b.c', 'work_mem --']) {
+    assert.equal(P.settingSql('postgres', name, '1'), null, name);
+    assert.equal(P.settingSql('mysql', name, '1'), null, name);
+  }
+  assert.equal(P.settingSql('sqlite', 'x', '1'), null);
+  assert.equal(P.reportStatement([{ name: 'calls' }, { name: 'statement' }], ['3', 'SELECT 1']), 'SELECT 1');
+  assert.equal(P.reportStatement([{ name: 'table' }], ['t']), null);
 });

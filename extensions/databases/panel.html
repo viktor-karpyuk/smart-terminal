@@ -310,6 +310,27 @@
     }
   };
 
+  /**
+   * The statement that changes one setting of the server, or puts it back.
+   *
+   * PostgreSQL writes it to its own file and has to be told to read it again;
+   * MySQL changes the running value and remembers it in one go. A name that is
+   * not a setting's name writes nothing — it goes into the statement unquoted,
+   * because that is the only way either server takes it.
+   */
+  function settingSql(engine, name, value, reset) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/.test(String(name || ''))) return null;
+    var text = String(value === null || value === undefined ? '' : value).trim();
+    if (!reset && text === '' && engine !== 'postgres') return null;
+    if (engine === 'postgres') {
+      return (reset ? 'ALTER SYSTEM RESET ' + name : 'ALTER SYSTEM SET ' + name + " = '" + text.replace(/'/g, "''") + "'") + ';\nSELECT pg_reload_conf();';
+    }
+    if (engine !== 'mysql') return null;
+    if (reset) return 'RESET PERSIST ' + name + ';';
+    var bare = /^-?\d+(\.\d+)?$/.test(text) || /^(ON|OFF|TRUE|FALSE|DEFAULT)$/i.test(text);
+    return 'SET PERSIST ' + name + ' = ' + (bare ? text : "'" + text.replace(/\\/g, '\\\\').replace(/'/g, "''") + "'") + ';';
+  }
+
   /** A row that is a statement the server remembers leads to that statement, in a query tab, to be read and explained. */
   function reportStatement(columns, row) {
     var at = columns.map(function (column) { return column.name; }).indexOf('statement');
@@ -3320,7 +3341,13 @@
       return;
     }
     if (data.supported === false) { box.appendChild(h('div', { class: 'empty', text: 'SQLite is a file: there is no server to ask about this.' })); return; }
-    if (data.sections) { box.appendChild(reportView(data)); return; }
+    if (data.sections) {
+      box.appendChild(reportView(data, tab.sub === 'settings' && !conn.readOnly ? { onOpen: function (row, columns) {
+        var at = columns.map(function (column) { return column.name; }).indexOf('name');
+        if (at >= 0 && row[at]) openSetting(conn, tab, String(row[at]));
+      } } : undefined));
+      return;
+    }
     var keyIndex = data.key ? data.columns.map(function (column) { return column.name; }).indexOf(data.key) : -1;
     var keep = tab.pickedPid;
     var cancelBtn = h('button', { class: 'btn', text: 'Cancel its query', disabled: !keep, onclick: function () { kill(false); } });
@@ -3631,6 +3658,63 @@
   // ───────────────────────────────────────────────────────── roles and grants ──
 
   /** A role or a user, made or changed. The app writes the statements — the password is typed here and never drawn again. */
+  /** One setting: what the server says about it, a new value, and the statement that will be sent — read before it goes. */
+  function openSetting(conn, tab, name) {
+    var veil = h('div', { id: 'veil', onmousedown: function (event) { if (event.target === veil) veil.remove(); } });
+    var preview = h('pre', { class: 'code', style: 'padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);white-space:pre-wrap;overflow-wrap:anywhere' });
+    var result = h('div', { class: 'result bad', style: 'white-space:pre-wrap' });
+    var about = h('div', {}, h('div', { class: 'faint', text: 'Reading…' }));
+    var input = h('input', { type: 'text', spellcheck: 'false', placeholder: 'New value', oninput: function () { paint(); } });
+    var reset = false;
+    // What the server has now. Until that is known, and unless what is typed differs from it, there is nothing to send.
+    var current = null;
+    function paint() {
+      var changed = reset || (current !== null && input.value.trim() !== current);
+      var sql = changed ? settingSql(conn.engine, name, input.value, reset) : null;
+      paintSql(preview, sql || '-- Nothing to change yet.');
+      apply.disabled = !sql;
+    }
+    function send() {
+      var sql = settingSql(conn.engine, name, input.value, reset);
+      if (!sql) return;
+      apply.disabled = true;
+      result.textContent = '';
+      call('query', Object.assign(where(conn, tab.database), { tab: 'tree', sql: sql })).then(function (data) {
+        var failed = data.results.filter(function (one) { return one.error; })[0];
+        if (failed) { result.textContent = failed.error.error; apply.disabled = false; return; }
+        veil.remove();
+        say(reset ? name + ' put back' : name + ' saved');
+        loadServer(tab);
+      }, function (error) { result.textContent = error.message; apply.disabled = false; });
+    }
+    var apply = h('button', { class: 'btn primary', text: 'Apply', disabled: true, onclick: send });
+    var box = h('div', { class: 'form' },
+      h('h2', { text: name }),
+      h('div', { class: 'dim', text: 'On ' + conn.name }),
+      about,
+      h('label', { class: 'field' }, h('span', { text: 'New value' }), input),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', onchange: function (event) { reset = event.target.checked; input.disabled = reset; paint(); } }),
+        h('span', {}, 'Put it back instead', h('small', { text: conn.engine === 'mysql' ? 'Forgets what was persisted. The running value stays until the server restarts.' : 'Removes it from postgresql.auto.conf, so the configuration file or the default decides again.' }))),
+      h('label', { class: 'field' }, h('span', { text: 'What will be sent' }), preview), result,
+      h('div', { class: 'foot' }, h('span', { class: 'spacer' }), h('button', { class: 'btn quiet', text: 'Cancel', onclick: function () { veil.remove(); } }), apply));
+    veil.appendChild(box);
+    document.body.appendChild(veil);
+    paint();
+    input.focus();
+    call('report', { id: conn.id, database: tab.database, kind: 'setting', name: name }).then(function (data) {
+      clear(about);
+      var view = reportView(data);
+      view.className = '';
+      about.appendChild(view);
+      var section = (data.sections || [])[0];
+      if (section && section.rows && section.rows[0]) {
+        current = section.rows[0][0] === null ? '' : String(section.rows[0][0]);
+        if (!input.value) { input.value = current; input.select(); }
+        paint();
+      }
+    }, function (error) { clear(about).appendChild(h('div', { class: 'bad', text: error.message })); });
+  }
+
   function openRoleForm(conn, existing, others) {
     var engine = conn.engine;
     var form = existing || (engine === 'mysql'
