@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const { fileURLToPath, pathToFileURL } = require('node:url');
 const os = require('node:os');
 const path = require('node:path');
-const { app, BrowserWindow, ipcMain, dialog, protocol, session, shell, net, Notification, safeStorage, clipboard, ClipboardItem } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol, session, shell, net, Notification, safeStorage, clipboard, ClipboardItem, powerMonitor } = require('electron');
 const { DatabaseSync } = require('node:sqlite');
 const { createHash, randomUUID } = require('node:crypto');
 
@@ -82,6 +82,7 @@ const { ReviewService } = require('./review-service');
 const { TeamsService } = require('./teams-service');
 const { JenkinsService } = require('./jenkins-service');
 const { RdbService } = require('./rdb-service');
+const { PfService } = require('./pf-service');
 const { JenkinsMcp } = require('./jenkins-mcp');
 const { TimelogbookService } = require('./timelogbook-service');
 const { KubrikService } = require('./kubrik-service');
@@ -259,6 +260,7 @@ const recentOutput = new RecentOutput();
 let jenkinsService = null;
 /** The Databases extension: saved connections, and the live ones behind its panels. */
 let rdbService = null;
+let pfService = null;
 /** What Claude sessions may ask of it: read-only, and a dialog for anything that starts a build. */
 let jenkinsMcp = null;
 let forgeMcp = null;
@@ -499,6 +501,38 @@ const JENKINS_NOTES_MAX = 50;
 function windowForNotice() {
   const all = [...windows.values()].filter((one) => !one.isDestroyed());
   return all.find((one) => one.isFocused()) ?? all[0] ?? null;
+}
+
+/**
+ * Port Forward. What it needs of the app: the database handle for its own
+ * tables, the browser for a forward that is up, and the system's dialog for a
+ * file of forwards to bring in. Credentials are kubeconfig's and never here.
+ */
+function createPfService() {
+  try {
+    return new PfService({
+      db: db.db,
+      emit: (event) => send('pf:event', event),
+      // A forward that was up and is not any more, said even with its panel closed.
+      notify: (title, body) => {
+        if (Notification.isSupported()) new Notification({ title, body }).show();
+      },
+      openUrl: (url) => shell.openExternal(url),
+      pickFile: async () => {
+        const owner = BrowserWindow.getFocusedWindow() ?? undefined;
+        const picked = await dialog.showOpenDialog(owner, {
+          title: 'Import forwards',
+          properties: ['openFile'],
+          filters: [{ name: 'Forwards', extensions: ['json'] }, { name: 'All files', extensions: ['*'] }],
+        });
+        return picked.canceled ? null : picked.filePaths[0] ?? null;
+      },
+    });
+  } catch (error) {
+    // Nothing else depends on it; an extension that cannot start says so and stays out of the way.
+    console.error('[port-forward] could not start:', error);
+    return null;
+  }
 }
 
 /**
@@ -2782,6 +2816,12 @@ function registerIpc() {
     return rdbService.call(String(name ?? ''), args ?? {});
   });
 
+  /** Port Forward: saved forwards the app keeps running. The same one door. */
+  ipcMain.handle('pf:call', async (_e, { name, args } = {}) => {
+    if (!pfService) return { ok: false, error: 'Port Forward is not running.' };
+    return pfService.call(String(name ?? ''), args ?? {});
+  });
+
   ipcMain.handle('review:call', async (_e, { name, args } = {}) => {
     if (!reviewService) return { ok: false, error: 'The Code Reviewer is not running.' };
     return reviewService.call(String(name ?? ''), args ?? {});
@@ -3211,6 +3251,11 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   // Connections that nobody is using are let go on a clock of its own.
   rdbService = createRdbService();
   rdbService?.start();
+  // Saved forwards marked to start with the app.
+  pfService = createPfService();
+  pfService?.start();
+  // A laptop that slept comes back to dead connections: the forwards waiting to try again try now, not in a minute.
+  powerMonitor.on('resume', () => pfService?.wake());
   reviewService = createReviewService();
   if (teamsService && reviewService) {
     teamsBot = new TeamsBot({
@@ -4171,6 +4216,8 @@ app.on('will-quit', () => {
   remoteServer?.stop('Smart Terminal quit on the computer.');
   kubeStreams.stopAll();
   kubeForwards.stopAll();
+  // A saved forward left running would be an open port into a cluster with no app to show it.
+  pfService?.stop();
   // A `claude -p` nobody can see would go on spending on the person's account.
   reviewService?.stop();
   jenkinsService?.stop();

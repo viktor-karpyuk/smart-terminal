@@ -493,6 +493,10 @@ function Frame({
           // Connections and their passwords are the main process's: a panel names one by id and is answered with rows.
           return reply(true, await window.api.rdb.call(name.slice(3), args), undefined);
         }
+        if (channel === 'pf') {
+          // A forward is named by id; the kubectl line is written on the other side.
+          return reply(true, await window.api.pf.call(name.slice(3), args), undefined);
+        }
         if (channel === 'kube-stream') {
           return reply(true, await stream(name.slice(5), args), undefined);
         }
@@ -767,6 +771,15 @@ function Frame({
         return { ok: true, sessionId };
       }
 
+      // A cloud sign-in that ran out. The main process reads kubeconfig and writes the line; the panel names a forward.
+      if (name === 'pf.signIn') {
+        const found = await window.api.pf.call('signInCommand', { id: args.id });
+        if (found.ok === false) return found;
+        const sessionId = await store.openShellNear(panelId, String(found.title ?? 'sign in').slice(0, 28), String(found.command ?? ''), below(panelId));
+        if (!sessionId) return { ok: false, error: 'the app could not open a terminal' };
+        return { ok: true, sessionId };
+      }
+
       // A table, or the statement that just failed: the app reads the definition or remembers the failure, and writes the words.
       if (name === 'db.ask') {
         const found = await window.api.rdb.call('brief', {
@@ -1008,6 +1021,12 @@ function Frame({
   useEffect(() => {
     if (!view.listens?.includes('remote')) return;
     return window.api.remote.onEvent((payload) => tell('remote', payload));
+  }, [view.listens]);
+
+  // Saved forwards are the app's, not a panel's: one that came up, dropped or was changed in another window is news here too.
+  useEffect(() => {
+    if (!view.listens?.includes('pf')) return;
+    return window.api.pf.onEvent((payload) => tell('pf', payload));
   }, [view.listens]);
 
   // The working tree moved: the panel is told, and decides for itself what of

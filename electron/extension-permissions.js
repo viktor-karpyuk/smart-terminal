@@ -32,6 +32,8 @@ const PERMISSIONS = {
   'kubrik.write': 'Change the Kubrik OS connection, and run tools that change things in Kubrik OS (each one asks you first)',
   'db.read': 'Read the databases you connected: their tables, rows and structure',
   'db.write': 'Run SQL on your databases, change rows, and change the connections this app knows',
+  'pf.read': 'See the port forwards you saved, and which are running',
+  'pf.write': 'Start, stop, add and remove port forwards into your clusters',
   terminal: 'Open terminals and Claude sessions about what it shows',
 };
 

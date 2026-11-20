@@ -1,0 +1,24 @@
+{
+  "id": "port-forward",
+  "name": "Port Forward",
+  "version": "0.2.0",
+  "author": "Smart Terminal",
+  "summary": "The port forwards you need every day, saved once and switched on and off from one list.",
+  "description": "The ritual of `kubectl port-forward` in a row of throwaway terminal tabs, replaced by a list. A forward is defined once — which cluster, which namespace, a pod, a service or a workload, and one or several ports of it on one connection — and from then on it is a switch. Forwards sit in groups that start and stop together, and a profile is a named set of them: switching to one starts what is in it and stops what is not, which is the difference between working on one project and working on the other. They are the app's rather than this panel's, so closing the tab leaves them running, and quitting the app stops them all; one marked to start with the app is up before you look. A forward that drops — the pod was replaced, the laptop slept, the VPN blinked — is started again on the same local port, so whatever was pointed at it keeps working; one whose cloud sign-in has run out says so once and tells you what to run, instead of retrying into it. Each one keeps what kubectl said, counts the connections that went through it, and can be told to stop by itself after a time, which is what you want of a door into production. A port that is up opens in the browser with a click, and Ports lists who is listening on what on this computer, so a clash is a name rather than a guess. The form fills itself in from the cluster — its namespaces, the things in them, and the ports they declare — and Pick from a cluster goes the other way: tick the ports of the services and pods you want and each becomes a forward, with local ports chosen so none clash. A forward whose cloud sign-in ran out gets a Sign in button that opens a terminal with that cloud's own command in it, and Try again starts everything that was waiting. A `kubectl port-forward` line you already have — in a README, in your shell history — can be pasted into the form, which reads it into its fields. With no network at all a forward is waited out rather than given up on, tried again every minute and at once when the computer wakes. The address of one that is up is a click to copy — as a mongodb:// or postgresql:// URL where the port says what it is — and a forward that was up and is not any more says so in a notification even with this panel closed. Everything saved in the K8S Port Forward desktop app — forwards, groups and profiles — is brought in with one button, and the whole list goes out to a file and comes back from one. It runs the same kubectl you would type, with the context named on every call, so nothing here changes what your own shell is pointed at, and it never holds a credential: those are kubeconfig's.",
+  "contributes": {
+    "panels": [
+      {
+        "id": "port-forward",
+        "title": "Port Forward",
+        "summary": "Saved port forwards into your clusters, in groups and profiles.",
+        "needs": null,
+        "launcher": true,
+        "icon": "forward",
+        "listens": [
+          "pf"
+        ],
+        "render": "panel.html"
+      }
+    ]
+  }
+}
