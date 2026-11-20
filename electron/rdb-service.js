@@ -9,6 +9,7 @@ const { RdbStore } = require('./rdb-store');
 const drivers = require('./rdb-drivers');
 const { Tunnels } = require('./rdb-tunnel');
 const watch = require('./rdb-watch');
+const debug = require('./rdb-debug');
 const sql = require('./rdb-sql');
 
 /** PostgreSQL answers in text here, MySQL in numbers: both mean the same. */
@@ -31,6 +32,9 @@ const yes = (value) => value === true || value === 't' || value === 'true' || va
 
 const MAX_SESSIONS = 24;
 const IDLE_MS = 10 * 60_000;
+/** How many routines may be stepped through at once, and how long one may sit untouched. Each holds two connections. */
+const MAX_DEBUGS = 4;
+const DEBUG_IDLE_MS = 20 * 60_000;
 
 /** What each kind of alert is, in the few words a notification has room for. */
 const ALERT_TITLES = {
@@ -158,6 +162,8 @@ class RdbService {
     this.sessions = new Map();
     /** connection id → what last went wrong in a query, for a Claude session to be handed */
     this.failures = new Map();
+    /** token → a routine being stepped through, with the two connections that is */
+    this.debugs = new Map();
     /** connection id → the plan last asked for there, for the same purpose */
     this.plans = new Map();
     this.timer = null;
@@ -179,6 +185,9 @@ class RdbService {
     const all = [...this.sessions.values()];
     this.sessions.clear();
     await Promise.allSettled(all.map((entry) => entry.session?.close()));
+    const runs = [...this.debugs.values()];
+    this.debugs.clear();
+    await Promise.allSettled(runs.map((held) => held.run.stop()));
     this.tunnels.closeAll();
   }
 
@@ -287,6 +296,25 @@ class RdbService {
     return this.#locked(entry, work);
   }
 
+  /** One more thing asked of a run. When it has ended, its connections are let go and the answer says how it ended. */
+  async #debugging(args, work) {
+    const token = String(args.token ?? '');
+    const held = this.debugs.get(token);
+    if (!held || held.id !== String(args.id)) throw new Error('That run is over');
+    try {
+      const state = await work(held.run);
+      if (state.done) {
+        this.debugs.delete(token);
+        await held.run.stop();
+      }
+      return { ok: true, token: state.done ? null : token, ...state };
+    } catch (error) {
+      this.debugs.delete(token);
+      await held.run.stop();
+      throw error;
+    }
+  }
+
   /**
    * Read the watched servers that are due. Called on the sweep's clock and safe
    * to call at any time: a server already being read is left alone, and one
@@ -350,8 +378,15 @@ class RdbService {
         entry.session.close().catch(() => {});
       }
     }
+    // A routine somebody stopped stepping through and walked away from is holding a connection frozen on a line.
+    for (const [token, held] of this.debugs) {
+      if (now - held.run.used > DEBUG_IDLE_MS) {
+        this.debugs.delete(token);
+        held.run.stop().catch(() => {});
+      }
+    }
     // A tunnel outlives its last connection by the same patience, and no longer.
-    const inUse = new Set([...this.sessions.values()].map((entry) => entry.id));
+    const inUse = new Set([...this.sessions.values()].map((entry) => entry.id).concat([...this.debugs.values()].map((held) => held.id)));
     for (const key of this.tunnels.keys()) {
       if (!inUse.has(key) && this.tunnels.idle(key, IDLE_MS)) this.tunnels.close(key);
     }
@@ -361,6 +396,11 @@ class RdbService {
     const mine = [...this.sessions.values()].filter((entry) => entry.id === String(id));
     for (const entry of mine) this.sessions.delete(entry.key);
     await Promise.allSettled(mine.map((entry) => entry.session?.close()));
+    for (const [token, held] of this.debugs) {
+      if (held.id !== String(id)) continue;
+      this.debugs.delete(token);
+      await held.run.stop();
+    }
     this.tunnels.close(String(id));
   }
 
@@ -724,6 +764,54 @@ class RdbService {
         const connection = this.#connection(args.id);
         const sample = await this.#browse(args.id, args.database, (session) => drivers.catalog(connection.engine).metrics(session));
         return sample ? { ok: true, supported: true, sample } : { ok: true, supported: false };
+      },
+
+      /** Whether a routine can be stepped through, and what it takes. */
+      debugInfo: async (args) => {
+        const connection = this.#connection(args.id);
+        if (connection.engine !== 'postgres') return { ok: true, cannot: 'Only PostgreSQL has a debugger for its procedures.' };
+        const info = await this.#browse(args.id, args.database, (session) => this.#reading(session, () => debug.describe(session, args.routine)));
+        return { ok: true, ...info, api: undefined, cannot: info.cannot || (connection.readOnly ? 'This connection is read-only, and stepping through a routine runs it.' : '') };
+      },
+
+      /**
+       * Run a routine and stop on its first line. Two connections of its own:
+       * one that makes the call and waits, one that steps it.
+       */
+      debugStart: async (args) => {
+        const connection = this.#connection(args.id);
+        if (connection.engine !== 'postgres') throw new Error('Only PostgreSQL has a debugger for its procedures');
+        if (connection.readOnly) throw new Error('This connection is read-only, and stepping through a routine runs it');
+        if (this.debugs.size >= MAX_DEBUGS) throw new Error('Too many routines are being stepped through already. Stop one.');
+        const info = await this.#browse(args.id, args.database, (session) => this.#reading(session, () => debug.describe(session, args.routine)));
+        if (info.cannot) throw new Error(info.cannot);
+        const config = await this.#reach(args.id, args.database);
+        const target = await this.#opened(config);
+        let control;
+        try { control = await this.#opened(config); } catch (error) { await target.close(); throw error; }
+        const run = new debug.DebugRun({ target, control, info });
+        const token = crypto.randomUUID();
+        try {
+          const state = await run.start(Array.isArray(args.args) ? args.args.map((one) => (one === null || one === undefined ? null : String(one))) : []);
+          if (state.done) { await run.stop(); return { ok: true, token: null, ...state }; }
+          this.debugs.set(token, { run, id: connection.id });
+          return { ok: true, token, ...state };
+        } catch (error) {
+          await run.stop();
+          throw error;
+        }
+      },
+
+      debugStep: async (args) => this.#debugging(args, (run) => run.step(String(args.action ?? ''))),
+      debugBreak: async (args) => this.#debugging(args, (run) => run.breakpoint(args.func, args.line, args.on === true)),
+
+      debugStop: async (args) => {
+        const held = this.debugs.get(String(args.token ?? ''));
+        if (held && held.id === String(args.id)) {
+          this.debugs.delete(String(args.token));
+          await held.run.stop();
+        }
+        return { ok: true };
       },
 
       /** One pgAgent job, or the lists a form for a new one offers. Read in the database pgAgent lives in, which is the one asked about. */

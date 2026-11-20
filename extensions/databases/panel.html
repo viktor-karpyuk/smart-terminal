@@ -128,6 +128,17 @@
   table.list td { padding: 4px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
   table.list td.m { font-family: ui-monospace, Menlo, monospace; font-size: 0.95rem; overflow-wrap: anywhere; }
   table.list td.m.n { white-space: nowrap; overflow-wrap: normal; }
+  /* ── the debugger ── */
+  .dbg { display: flex; height: 100%; }
+  .dbg-code { font-family: ui-monospace, Menlo, monospace; font-size: 0.95rem; padding: 6px 0; }
+  .dbg-line { display: flex; white-space: pre; }
+  .dbg-line.now { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+  .dbg-gutter { flex: 0 0 44px; text-align: right; padding-right: 10px; color: var(--text-faint); cursor: pointer; user-select: none; }
+  .dbg-gutter.on { color: var(--danger, #e5484d); }
+  .dbg-text { flex: 1; }
+  .dbg-side { flex: 0 0 320px; border-left: 1px solid var(--border); padding: 10px 12px; overflow: auto; }
+  .dbg-side h3 { margin: 0 0 6px; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); }
+  tr.dbg-changed td { background: color-mix(in srgb, var(--warn, #d9a441) 18%, transparent); }
   .jobpart { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; margin: 6px 0; }
   .alert { border: 1px solid var(--warn, #d9a441); border-radius: var(--radius); padding: 8px 10px; margin: 6px 0; }
   .alert .what { margin-bottom: 6px; overflow-wrap: anywhere; }
@@ -2237,6 +2248,7 @@
         else if (tab.kind === 'diff') drawDiff(tab);
         else if (tab.kind === 'erd') drawErd(tab);
         else if (tab.kind === 'report') drawReport(tab);
+        else if (tab.kind === 'debug') drawDebug(tab);
         else drawHome(tab);
       }
     });
@@ -2258,6 +2270,8 @@
       if (tab.txn === 'open' && !quiet) say('The transaction that tab had open was rolled back.', true);
       host.call('db.closeTab', { id: tab.conn, database: tab.database, tab: tab.id }).then(function () {}, function () {});
     }
+    // A routine frozen on a line is holding two connections on the server: closing the tab lets it go.
+    if (tab.kind === 'debug' && tab.token) host.call('db.debugStop', { id: tab.conn, token: tab.token }).then(function () {}, function () {});
     clearTimeout(tab.timer);
     if (tab.el) tab.el.remove();
     var index = state.tabs.indexOf(tab);
@@ -3528,11 +3542,163 @@
     call('routine', { id: tab.conn, database: tab.database, schema: tab.schema, routine: tab.routine }).then(function (data) {
       clear(box);
       box.appendChild(h('div', { class: 'bar' }, h('div', { class: 'crumbs' }, h('span', { text: conn.name }), '›', h('b', { text: tab.name })), h('span', { class: 'spacer' }),
+        conn.engine === 'postgres' && !conn.readOnly ? h('button', { class: 'btn', text: 'Debug…', title: 'Step through it a line at a time', onclick: function () { openDebug(conn, tab.database, tab.schema, tab.routine, tab.name); } }) : null,
         h('button', { class: 'btn', text: 'Edit in a query', onclick: function () { openQuery(conn, tab.database, data.ddl); } }), h('button', { class: 'btn', text: 'Copy', onclick: function () { copy(data.ddl); } })));
       box.appendChild(h('div', { class: 'scroll' }, codeBlock(data.ddl || '-- The server did not give its definition.')));
     }, function (error) {
       clear(box).appendChild(h('div', { class: 'banner', text: error.message }));
     });
+  }
+
+  // ─────────────────────────────────────────────────────────── the debugger ──
+
+  function openDebug(conn, database, schema, routine, name) {
+    var key = 'dbg:' + conn.id + '/' + database + '/' + routine;
+    var found = null;
+    state.tabs.forEach(function (tab) { if (tab.key === key) found = tab; });
+    if (found) { show(found.id); return; }
+    addTab({ kind: 'debug', key: key, title: 'Debug ' + name, conn: conn.id, database: database, schema: schema, name: name, routine: String(routine) });
+  }
+
+  /** What somebody typed for an argument, as what is sent: nothing typed is NULL, or the default where there is one; two quotes are an empty string. */
+  function debugArg(text) {
+    var typed = String(text === null || text === undefined ? '' : text);
+    if (typed === '') return null;
+    if (typed === "''") return '';
+    return typed;
+  }
+
+  /** The variables of a step, with the ones whose value is not what it was a step ago marked. */
+  function debugChanged(before, now) {
+    var was = {};
+    (before || []).forEach(function (one) { was[one.kind + ':' + one.name] = one.value; });
+    return (now || []).map(function (one) {
+      var key = one.kind + ':' + one.name;
+      return { name: one.name, kind: one.kind, type: one.type, value: one.value, changed: Boolean(before) && Object.prototype.hasOwnProperty.call(was, key) && was[key] !== one.value };
+    });
+  }
+
+  /**
+   * A PL/pgSQL routine run a line at a time. The routine really runs, on the
+   * server, with what was typed for its arguments — which is why it is started
+   * with a button and never by opening the tab.
+   */
+  function drawDebug(tab) {
+    var conn = connOf(tab.conn);
+    var box = clear(tab.el);
+    if (!conn) { box.appendChild(h('div', { class: 'empty', text: 'This connection is not there any more.' })); return; }
+    var running = Boolean(tab.token);
+    function act(action) {
+      if (tab.busy || !tab.token) return;
+      tab.busy = true;
+      drawDebug(tab);
+      call('debugStep', { id: conn.id, token: tab.token, action: action }).then(took, failed);
+    }
+    function took(state) {
+      tab.busy = false;
+      tab.before = tab.state && !tab.state.done ? tab.state.variables : null;
+      tab.state = state;
+      tab.token = state.token || null;
+      tab.error = null;
+      drawDebug(tab);
+    }
+    function failed(error) { tab.busy = false; tab.token = null; tab.error = error.message; drawDebug(tab); }
+    function start() {
+      if (tab.busy) return;
+      tab.busy = true;
+      tab.state = null;
+      tab.before = null;
+      tab.error = null;
+      drawDebug(tab);
+      call('debugStart', Object.assign(where(conn, tab.database), { routine: tab.routine, name: tab.name, args: (tab.args || []).map(debugArg) })).then(took, failed);
+    }
+    function stop() {
+      var token = tab.token;
+      tab.token = null;
+      tab.state = null;
+      if (token) call('debugStop', { id: conn.id, token: token }).then(function () {}, function () {});
+      drawDebug(tab);
+    }
+    box.appendChild(h('div', { class: 'bar' },
+      h('div', { class: 'crumbs' }, h('span', { text: conn.name }), '›', h('span', { text: tab.database }), '›', h('b', { text: tab.name })),
+      h('span', { class: 'spacer' }),
+      running ? [
+        h('button', { class: 'btn', text: 'Step into', title: 'Run this line, going into a function it calls', disabled: tab.busy, onclick: function () { act('into'); } }),
+        h('button', { class: 'btn', text: 'Step over', title: 'Run this line and stop on the next', disabled: tab.busy, onclick: function () { act('over'); } }),
+        h('button', { class: 'btn primary', text: 'Continue', title: 'Run to the next breakpoint, or to the end', disabled: tab.busy, onclick: function () { act('continue'); } }),
+        h('button', { class: 'btn danger', text: 'Stop', onclick: stop })
+      ] : null));
+    var body = h('div', { class: 'view', style: 'position:relative;flex:1' });
+    box.appendChild(body);
+
+    if (!tab.info) {
+      body.appendChild(h('div', { class: 'empty', text: 'Reading ' + tab.name + '…' }));
+      if (!tab.asked) {
+        tab.asked = true;
+        call('debugInfo', { id: conn.id, database: tab.database, routine: tab.routine }).then(function (info) { tab.info = info; drawDebug(tab); }, function (error) { tab.info = { cannot: error.message, args: [] }; drawDebug(tab); });
+      }
+      return;
+    }
+    if (tab.info.cannot) { body.appendChild(h('div', { class: 'empty', text: tab.info.cannot })); return; }
+
+    if (running && tab.state && !tab.state.done) {
+      var state = tab.state;
+      var marks = {};
+      state.breakpoints.forEach(function (one) { if (one.func === state.func) marks[one.line] = true; });
+      var code = h('div', { class: 'dbg-code' });
+      String(state.source).split('\n').forEach(function (text, index) {
+        var line = index + 1;
+        var row = h('div', { class: 'dbg-line' + (line === state.line ? ' now' : '') },
+          h('span', { class: 'dbg-gutter' + (marks[line] ? ' on' : ''), title: marks[line] ? 'Remove the breakpoint' : 'Stop here', onclick: function () {
+            if (tab.busy) return;
+            call('debugBreak', { id: conn.id, token: tab.token, func: state.func, line: line, on: !marks[line] }).then(function (next) { tab.state = next; tab.token = next.token || null; drawDebug(tab); }, function (error) { say(error.message, true); });
+          } }, marks[line] ? '●' : String(line)),
+          h('span', { class: 'dbg-text' }));
+        paintSql(row.lastChild, text || ' ');
+        code.appendChild(row);
+      });
+      var vars = debugChanged(tab.before, state.variables);
+      var side = h('div', { class: 'dbg-side' },
+        h('h3', { text: 'Variables' }),
+        vars.length ? h('table', { class: 'list' }, h('tbody', {}, vars.map(function (one) {
+          return h('tr', { class: one.changed ? 'dbg-changed' : '' }, h('td', { class: 'm' }, one.name, h('div', { class: 'faint', text: one.type + (one.kind === 'argument' ? ' · argument' : '') })),
+            h('td', { class: 'm' + (one.value === null ? ' faint' : ''), text: one.value === null ? 'NULL' : one.value }));
+        }))) : h('div', { class: 'faint', text: 'None.' }),
+        h('h3', { text: 'Where it is', style: 'margin-top:14px' }),
+        state.stack.map(function (frame) { return h('div', { class: 'm' + (frame.level === 0 ? '' : ' faint'), style: 'padding:2px 0', text: frame.name + ' · line ' + frame.line }); }));
+      body.appendChild(h('div', { class: 'dbg' }, h('div', { class: 'scroll', style: 'position:static;flex:1;min-width:0' }, code), side));
+      var current = code.querySelector('.now');
+      if (current && current.scrollIntoView) current.scrollIntoView({ block: 'nearest' });
+      return;
+    }
+
+    // Not running: what it takes, and how the last run ended.
+    var page = h('div', { class: 'scroll' });
+    body.appendChild(page);
+    var inputs = (tab.info.args || []).filter(function (arg) { return arg.mode === 'i' || arg.mode === 'b' || arg.mode === 'v'; });
+    if (!tab.args) tab.args = inputs.map(function () { return ''; });
+    var form = h('div', { class: 'sect' }, h('h3', { text: 'Step through ' + tab.info.schema + '.' + tab.info.name }),
+      h('div', { class: 'note', text: 'It really runs, on ' + conn.name + ', with these values, and stops on its first line. What it changes is changed' + (tab.info.kind === 'function' ? '.' : ', and a procedure may commit along the way.') }));
+    inputs.forEach(function (arg, index) {
+      form.appendChild(h('label', { class: 'field', style: 'max-width:520px' }, h('span', { text: arg.name + ' · ' + arg.type }),
+        h('input', { type: 'text', spellcheck: 'false', value: tab.args[index], placeholder: arg.optional ? 'its default' : 'NULL', oninput: function (event) { tab.args[index] = event.target.value; } })));
+    });
+    if (inputs.length) form.appendChild(h('div', { class: 'faint', style: 'margin:2px 0 8px', text: "Left empty, an argument is NULL, or its default where it has one. Two quotes — '' — are an empty string." }));
+    form.appendChild(h('button', { class: 'btn primary', text: tab.busy ? 'Starting…' : tab.state ? 'Run it again' : 'Start', disabled: tab.busy, onclick: start }));
+    page.appendChild(form);
+    if (tab.error) page.appendChild(h('div', { class: 'sect' }, h('div', { class: 'bad', style: 'white-space:pre-wrap', text: tab.error })));
+    if (tab.state && tab.state.done) {
+      if (tab.state.error) {
+        page.appendChild(h('div', { class: 'sect' }, h('h3', { text: 'It failed' }), h('div', { class: 'bad', style: 'white-space:pre-wrap', text: tab.state.error + (tab.state.detail ? '\n' + tab.state.detail : '') })));
+      } else {
+        var answer = reportView({ sections: [{ title: 'What it returned', columns: tab.state.result.columns || [], rows: tab.state.result.rows || [], truncated: tab.state.result.truncated }] });
+        answer.className = '';
+        page.appendChild(answer);
+      }
+      if ((tab.state.notices || []).filter(function (one) { return !/^PLDBGBREAK/.test(one); }).length) {
+        page.appendChild(h('div', { class: 'sect' }, h('h3', { text: 'What it said' }), tab.state.notices.filter(function (one) { return !/^PLDBGBREAK/.test(one); }).map(function (one) { return h('div', { class: 'm', text: one }); })));
+      }
+    }
   }
 
   // ──────────────────────────────────────────────────────────── the server ──

@@ -48,7 +48,7 @@ const P = fromPanel([
   'ERD', 'erdModel', 'erdSize', 'erdLayout', 'erdRowY', 'erdPath',
   'plainDef', 'retarget', 'snapshotColumnSql', 'schemaDiff',
   'MORE', 'reportTarget', 'reportStatement', 'PG_LIST_SETTINGS', 'settingSql',
-  'JOB_PARTS', 'scheduleBits', 'scheduleText', 'jobForm', 'jobSql', 'trendCharts', 'trendStatements',
+  'debugArg', 'debugChanged', 'JOB_PARTS', 'scheduleBits', 'scheduleText', 'jobForm', 'jobSql', 'trendCharts', 'trendStatements',
   'FORMAT_CLAUSES', 'FORMAT_STARTS', 'JOIN_WORDS', 'formatSql', 'flowSql',
   'PRIVILEGES', 'grantKind', 'granteeSql', 'grantSql', 'roleFromRow', 'membershipChange',
   'TYPE_HINTS', 'defaultSql', 'designColumns', 'designProblems', 'columnSql', 'createTableSql', 'alterTableSql', 'designScript',
@@ -917,4 +917,28 @@ test('the panel is a script the browser can read from end to end', () => {
   const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
   assert.ok(scripts.length >= 1);
   for (const script of scripts) assert.doesNotThrow(() => new vm.Script(script));
+});
+
+test('an argument left empty is NULL or the default, and what changed in a step is marked', () => {
+  assert.equal(P.debugArg(''), null);
+  assert.equal(P.debugArg("''"), '');
+  assert.equal(P.debugArg(' 5 '), ' 5 ');
+  assert.equal(P.debugArg(null), null);
+  const before = [{ name: 'v', kind: 'local', type: 'numeric', value: '0' }, { name: 'p', kind: 'argument', type: 'integer', value: '5' }];
+  const now = [{ name: 'v', kind: 'local', type: 'numeric', value: '4' }, { name: 'p', kind: 'argument', type: 'integer', value: '5' }, { name: 'fresh', kind: 'local', type: 'text', value: null }];
+  assert.deepEqual(plain(P.debugChanged(before, now)).map((one) => [one.name, one.changed]), [['v', true], ['p', false], ['fresh', false]]);
+  // The first stop has nothing before it: nothing is marked.
+  assert.deepEqual(plain(P.debugChanged(null, now)).map((one) => one.changed), [false, false, false]);
+});
+
+test('the charts and the table of a watched window say what they plot', () => {
+  const titles = (engine) => plain(P.trendCharts(engine)).map((chart) => chart.title);
+  assert.ok(titles('postgres').includes('Dead rows'));
+  assert.equal(titles('mysql').includes('Dead rows'), false);
+  assert.ok(titles('mysql').includes('Statements per second'));
+  for (const chart of plain(P.trendCharts('postgres'))) assert.ok(chart.series.length >= 1 && chart.series.length <= 3, chart.title);
+  const table = plain(P.trendStatements([{ qid: 'a', text: 'SELECT 1', calls: 1200, ms: 6000, mean: 5, meanBefore: 2, meanNow: 8, change: 4 }, { qid: 'b', text: 'SELECT 2', calls: 3, ms: 900, mean: 300, meanBefore: null, meanNow: null, change: null }]));
+  assert.deepEqual(table.rows[0], ['6.0', '1200', '5.00', '2.00', '8.00', '×4.0', 'SELECT 1', 'a']);
+  assert.deepEqual(table.rows[1], ['0.9', '3', '300', null, null, null, 'SELECT 2', 'b']);
+  assert.equal(table.columns.at(-1).name, '_qid');
 });

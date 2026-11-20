@@ -351,6 +351,8 @@ const DB_READ = [
   'trends',
   // One scheduled job, as a form needs it.
   'job',
+  // Whether a routine can be stepped through, and what it takes.
+  'debugInfo',
 ] as const;
 const DB_WRITE = [
   'saveConnection', 'testConnection', 'deleteConnection', 'disconnect', 'pickFile',
@@ -366,6 +368,8 @@ const DB_WRITE = [
   'role',
   // Having a server read every few minutes, and what is done about what that finds.
   'watch', 'readNow', 'dismissAlert',
+  // Stepping through a PL/pgSQL routine, which runs it.
+  'debugStart', 'debugStep', 'debugBreak', 'debugStop',
 ] as const;
 /** A Claude session handed a table's definition, or the statement that just failed. The app gathers both. */
 /** And a real terminal running the database's own client — psql, mysql, sqlite3 — already connected. The app writes the command line. */
@@ -825,6 +829,10 @@ function dbConsent(name: string, args: Record<string, unknown>): string | null {
     }
     if (production) return `${args.action === 'create' ? 'Create' : 'Change'} the role ${who} on ${connection}?${marked}`;
     return null;
+  }
+  // Stepping through a routine runs it, and a routine can do anything.
+  if (name === 'db.debugStart' && production) {
+    return `Run ${shown(args.name ?? 'this routine', 80)} on ${connection}${database}, a line at a time?\n\nIt really runs, with the values you typed: what it changes is changed.${marked}`;
   }
   if (name === 'db.importRun' && production) {
     return `Import rows into ${shown(args.name ?? 'this table', 80)} on ${connection}${database}?${marked}`;
