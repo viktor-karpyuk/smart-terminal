@@ -74,9 +74,11 @@ test('a workload\'s events include those of what it made, and say they were foun
     { uid: '4', objectKind: 'Deployment', objectName: 'web-admin' },
     { uid: '5', objectKind: 'ReplicaSet', objectName: 'web-7d9f' },
     { uid: '6', objectKind: 'Node', objectName: 'web-node' },
+    { uid: '7', objectKind: 'HorizontalPodAutoscaler', objectName: 'web' },
+    { uid: '8', objectKind: 'HorizontalPodAutoscaler', objectName: 'web-admin' },
   ];
   const about = eventsAbout(rows, 'Deployment', 'web');
-  assert.deepEqual(about.map((row) => row.uid), ['1', '2', '5']);
+  assert.deepEqual(about.map((row) => row.uid), ['1', '2', '5', '7']);
   assert.equal(about[0].related, undefined);
   assert.equal(about[1].related, true);
 });

@@ -314,6 +314,16 @@
   .edit-note-tools .btn { white-space: nowrap; }
   @keyframes note-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 
+  .pane-find { display: flex; align-items: center; gap: 4px; margin-top: 7px; }
+  .pane-find input {
+    flex: 1; min-width: 0; font: inherit; font-size: 11px; color: var(--text); background: var(--bg-input);
+    border: 1px solid var(--accent); border-radius: var(--radius); padding: 3px 7px;
+  }
+  .pane-find input:focus { outline: none; }
+  .pane-find .dim { font-size: 10.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  ::highlight(pane-find) { background-color: color-mix(in srgb, var(--warn, #e0af68) 38%, transparent); }
+  ::highlight(pane-find-at) { background-color: var(--warn, #e0af68); color: #111; }
+  .pending-edits { color: var(--warn, #e0af68); }
   .tab-unsaved { color: var(--warn, #e0af68); font-size: 8px; margin-left: 4px; vertical-align: 2px; }
   .tab-count {
     margin-left: 5px; padding: 0 5px; border-radius: 8px; font-size: 9.5px; font-weight: 600;
@@ -1002,6 +1012,8 @@
     editing: false,
     /** Edits not applied yet, each kept against the object it is of: uid → { text, base, name }. */
     drafts: {}, configs: {},
+    /** Looking for a word in what the pane is showing. */
+    find: { open: false, text: '', at: 0 },
     /** What an apply is doing, what the server last said about one, and whether the edit or its changes are showing. */
     applying: null, editNote: null, yamlView: 'edit', revertArmed: 0, eventsOnly: false, eventsWide: true,
     /** Whether this cluster has releases, asked once rather than on a timer. */
@@ -1477,6 +1489,8 @@
     $('search').value = '';
     state.sort = extras.sort || { column: null, dir: 1 };
     state.wanted = extras.wanted || null;
+    state.wantedTab = extras.wantedTab || null;
+    state.wantedNamespace = extras.wantedNamespace || null;
     remember();
     drawNav();
     load();
@@ -1651,9 +1665,16 @@
         if (again && !state.selected) mapSelect(again, state.detail.tab);
       }
       else if (state.wanted && state.table) {
-        var found = state.table.rows.filter(function (row) { return row.name === state.wanted; })[0];
+        var inNamespace = state.wantedNamespace;
+        var found = state.table.rows.filter(function (row) { return row.name === state.wanted && (!inNamespace || row.namespace === inNamespace); })[0];
+        var onTab = state.wantedTab;
         state.wanted = null;
-        if (found) select(found.uid);
+        state.wantedTab = null;
+        state.wantedNamespace = null;
+        if (found) {
+          select(found.uid);
+          if (onTab) { var goTo = document.querySelector('.tabs [data-tab="' + onTab + '"]'); if (goTo) goTo.click(); }
+        }
       }
       if (state.view.name === 'pods' || state.view.name === 'nodes') withMetrics(mine, state.view.name);
       if (state.view.type === 'kind') startWatch(state.view.name);
@@ -2328,6 +2349,16 @@
       bits.push('<button class="link" data-do="show-all" title="Show all of them again">' +
         'only the ones that are failing ✕</button>');
     }
+    /*
+     * Edits are kept against their objects, which is only a kindness if they
+     * can be found again: the ones not applied are counted here, wherever the
+     * panel is, and the count is the way back to each.
+     */
+    var pending = pendingEdits();
+    if (pending.length) {
+      bits.push('<button class="link pending-edits" data-pending="1" title="Edits that have not been applied to the cluster">' +
+        '<span class="tab-unsaved">●</span> ' + pending.length + ' edit' + (pending.length === 1 ? '' : 's') + ' not applied ▾</button>');
+    }
     if (state.loading) bits.push('<span class="spin">◐</span>');
     $('crumb').innerHTML =
       bits.join('<span class="dim"> · </span>') +
@@ -2586,6 +2617,60 @@
     state.revertArmed = 0;
   }
 
+  /** Every edit that is waiting, in YAML or in the form, with enough to get back to it. */
+  function pendingEdits() {
+    var out = [];
+    Object.keys(state.drafts).forEach(function (uid) {
+      var draft = state.drafts[uid];
+      out.push({ tab: 'yaml', name: draft.name, kind: draft.kind, namespace: draft.namespace, uid: uid });
+    });
+    Object.keys(state.configs).forEach(function (key) {
+      var config = state.configs[key];
+      if (!configChanges(config).length) return;
+      var parts = key.split('/');
+      out.push({ tab: 'configure', kind: parts[0], namespace: parts[1], name: parts.slice(2).join('/'), key: key });
+    });
+    return out;
+  }
+
+  /** Back to an edit: the table it is in, the object, and the tab the edit is on. */
+  function openPending(edit) {
+    var here = state.selected;
+    if (here && here.name === edit.name && here.kind === edit.kind && (here.namespace || '') === (edit.namespace || '')) {
+      var tab = document.querySelector('.tabs [data-tab="' + edit.tab + '"]');
+      if (tab) tab.click();
+      return;
+    }
+    var nav = navFor(edit.kind);
+    if (!nav) { say('There is no table of ' + edit.kind + ' to open it from.', true); return; }
+    if (edit.namespace && state.namespace && state.namespace !== edit.namespace) {
+      state.namespace = edit.namespace;
+      var pick = document.getElementById('namespace');
+      if (pick) pick.value = state.namespace;
+    }
+    show({ type: 'kind', name: nav }, { wanted: edit.name, wantedTab: edit.tab, wantedNamespace: edit.namespace });
+  }
+
+  document.addEventListener('click', function (event) {
+    var button = event.target.closest && event.target.closest('[data-pending]');
+    if (!button) return;
+    var edits = pendingEdits();
+    var at = button.getBoundingClientRect();
+    var items = edits.map(function (edit) {
+      return { label: edit.name, hint: edit.kind + (edit.namespace ? ' · ' + edit.namespace : '') + ' · ' + (edit.tab === 'yaml' ? 'YAML' : 'Configure'), run: function () { openPending(edit); } };
+    });
+    items.push('-');
+    items.push({ label: 'Discard all of them', run: function () {
+      state.drafts = {};
+      state.configs = {};
+      if (state.selected) { stopEditing(); state.config = null; drawDetail(true); loadDetail(); }
+      drawCrumb();
+      say(edits.length === 1 ? 'The edit was dropped.' : 'All ' + edits.length + ' edits were dropped.');
+    } });
+    event.stopPropagation();
+    menuAt(items, { clientX: at.left, clientY: at.bottom + 2 });
+  });
+
   /** Said once, on the way out of an object with an edit left on it. */
   function sayKept(next) {
     var row = state.selected;
@@ -2716,6 +2801,131 @@
     if (diff.removed) parts.push('−' + diff.removed);
     return parts.length ? parts.join(' ') + (diff.added + diff.removed === 1 ? ' line' : ' lines') : 'no lines changed';
   }
+
+  /**
+   * Find, in whatever the pane is showing.
+   *
+   * A description is two hundred lines and a manifest is more, and the browser's
+   * own find does not exist in a frame inside an app. The matches are marked
+   * with the highlight API rather than by rewriting the text, so nothing that
+   * is drawn — the colours of a manifest, a link, a selection — is disturbed;
+   * in the editor, where text cannot be marked, the match is selected instead.
+   */
+  var findRanges = [];
+  function findApply(move) {
+    var marks = window.CSS && CSS.highlights;
+    if (marks) { marks.delete('pane-find'); marks.delete('pane-find-at'); }
+    findRanges = [];
+    var body = document.getElementById('detail-body');
+    var count = document.getElementById('pane-find-count');
+    var term = state.find.open ? state.find.text.toLowerCase() : '';
+    if (!term || !body) { if (count) count.textContent = ''; return; }
+    var box = document.getElementById('yaml-edit');
+    var total = 0;
+    if (box) {
+      var hay = box.value.toLowerCase();
+      var hits = [];
+      for (var from = hay.indexOf(term); from >= 0 && hits.length < 5000; from = hay.indexOf(term, from + term.length)) hits.push(from);
+      total = hits.length;
+      state.find.at = total ? ((state.find.at % total) + total) % total : 0;
+      if (total && move) {
+        var hit = hits[state.find.at];
+        box.focus();
+        box.setSelectionRange(hit, hit + term.length);
+        var high = parseFloat(getComputedStyle(box).lineHeight) || 18;
+        box.scrollTop = Math.max(0, (box.value.slice(0, hit).split('\n').length - 1) * high - box.clientHeight / 3);
+        yamlWhere();
+      }
+    } else {
+      var walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+      var node;
+      while ((node = walker.nextNode()) && findRanges.length < 5000) {
+        if (node.parentElement.closest('button, .yaml-tools, .block-head')) continue;
+        var text = node.nodeValue.toLowerCase();
+        for (var at = text.indexOf(term); at >= 0; at = text.indexOf(term, at + term.length)) {
+          var range = document.createRange();
+          range.setStart(node, at);
+          range.setEnd(node, at + term.length);
+          findRanges.push(range);
+        }
+      }
+      total = findRanges.length;
+      state.find.at = total ? ((state.find.at % total) + total) % total : 0;
+      if (total && marks && window.Highlight) {
+        marks.set('pane-find', new Highlight(...findRanges));
+        marks.set('pane-find-at', new Highlight(findRanges[state.find.at]));
+      }
+      if (total && move) {
+        var holder = findRanges[state.find.at].startContainer.parentElement;
+        // Folded away is not found: what holds the match is opened first.
+        var fold = holder.closest('details:not([open])');
+        if (fold) fold.open = true;
+        var where = findRanges[state.find.at].getBoundingClientRect();
+        var frame = body.getBoundingClientRect();
+        if (where.top < frame.top + 40 || where.bottom > frame.bottom - 20) body.scrollTop += where.top - frame.top - body.clientHeight / 3;
+        var wide = holder.closest('pre');
+        if (wide && (where.left < frame.left || where.right > frame.right)) wide.scrollLeft += where.left - frame.left - 60;
+      }
+    }
+    if (count) count.textContent = total ? (state.find.at + 1) + ' of ' + total : 'none';
+    if (count) count.classList.toggle('bad-text', !total);
+  }
+
+  function findOpen() {
+    if (!state.selected) return;
+    var picked = String(window.getSelection() || '');
+    var was = state.find.open;
+    state.find.open = true;
+    // A word that is selected is the word being looked for.
+    if (picked && picked.length < 80 && picked.indexOf('\n') < 0) { state.find.text = picked; state.find.at = 0; }
+    if (!was) redrawEditor();
+    var field = document.getElementById('pane-find');
+    if (field) { field.value = state.find.text; field.focus(); field.select(); }
+    findApply(false);
+  }
+
+  function findClose() {
+    state.find.open = false;
+    redrawEditor();
+    var box = document.getElementById('yaml-edit');
+    if (box) box.focus();
+  }
+
+  document.addEventListener('input', function (event) {
+    if (event.target.id !== 'pane-find') return;
+    state.find.text = event.target.value;
+    state.find.at = 0;
+    findApply(false);
+  });
+
+  document.addEventListener('keydown', function (event) {
+    var command = event.metaKey || event.ctrlKey;
+    if (command && event.key === 'f' && state.selected && !document.getElementById('prompt')) {
+      // Not from the log's own search or the table's filter: those are finds of their own.
+      if (event.target && (event.target.id === 'log-search' || event.target.closest('.dock'))) return;
+      event.preventDefault();
+      findOpen();
+      return;
+    }
+    if (command && event.key === 'g' && state.find.open && state.find.text) {
+      event.preventDefault();
+      state.find.at += event.shiftKey ? -1 : 1;
+      findApply(true);
+      return;
+    }
+    if (event.target.id !== 'pane-find') return;
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      state.find.at += event.shiftKey ? -1 : 1;
+      findApply(true);
+      // The editor takes the caret to show its match; in what is only read, the box keeps it and Enter walks on.
+      if (!document.getElementById('yaml-edit')) event.target.focus();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      findClose();
+    }
+  }, true);
 
   /** Put the caret on a line of the editor, with the line showing. */
   function yamlGoTo(line) {
@@ -5814,6 +6024,8 @@
      * and the cursor, gone while it was being written. Kept for the same
      * object only; a question about another pod is not this one's.
      */
+    var finding = document.getElementById('pane-find');
+    var findKept = finding && document.activeElement === finding ? { from: finding.selectionStart, to: finding.selectionEnd } : null;
     var asking = document.getElementById('question');
     var kept = asking && state.questionFor === chosen.uid
       ? { text: asking.value, focused: document.activeElement === asking, from: asking.selectionStart, to: asking.selectionEnd }
@@ -5847,6 +6059,13 @@
           (chosen.namespace ? '<span>' + esc(chosen.namespace) + '</span>' : '') + '<span>' + ageHtml(chosen) + ' old</span></small>' +
         '<div class="detail-actions">' + actionsFor(chosen) + mapPaneLinks(chosen) + '</div>' +
         detailForwards(chosen) +
+        (state.find.open
+          ? '<div class="pane-find"><input id="pane-find" placeholder="Find in this tab" spellcheck="false" value="' + esc(state.find.text) + '" />' +
+            '<span class="dim" id="pane-find-count"></span>' +
+            '<button class="pane-tool" data-do="find-prev" title="Previous (⇧↵)" aria-label="Previous">↑</button>' +
+            '<button class="pane-tool" data-do="find-next" title="Next (↵)" aria-label="Next">↓</button>' +
+            '<button class="pane-tool" data-do="find-close" title="Close (Esc)" aria-label="Close find">×</button></div>'
+          : '') +
         '<div class="ask">' +
           '<input id="question" placeholder="' + (chosen.kind === 'Event' ? 'Ask Claude why this happened' : 'Ask Claude something about this') + '" />' +
           '<button class="btn go" data-do="ask">Ask</button>' +
@@ -5873,9 +6092,20 @@
     // The row of tabs scrolls when the pane is narrow: the one that is open is never the one out of sight.
     var lit = aside.querySelector('.tabs button.on');
     var strip = aside.querySelector('.tabs');
-    if (lit && strip && (lit.offsetLeft < strip.scrollLeft || lit.offsetLeft + lit.offsetWidth > strip.scrollLeft + strip.clientWidth - 60)) {
-      strip.scrollLeft = Math.max(0, lit.offsetLeft - 40);
+    if (lit && strip) {
+      // Measured against the strip itself: offsetLeft is from whatever ancestor is positioned, which is not it.
+      var at = lit.getBoundingClientRect().left - strip.getBoundingClientRect().left + strip.scrollLeft;
+      if (at < strip.scrollLeft || at + lit.offsetWidth > strip.scrollLeft + strip.clientWidth - 60) strip.scrollLeft = Math.max(0, at - 40);
     }
+
+    // An image is read from its end: the tag is what changes, and a long registry pushed it out of the field.
+    var images = aside.querySelectorAll('[data-config="image"]');
+    for (var im = 0; im < images.length; im += 1) images[im].scrollLeft = images[im].scrollWidth;
+    if (findKept) {
+      var findAgain = document.getElementById('pane-find');
+      if (findAgain) { findAgain.focus(); try { findAgain.setSelectionRange(findKept.from, findKept.to); } catch (error) { /* nothing to place */ } }
+    }
+    findApply(false);
 
     if (kept && kept.text) {
       var again = document.getElementById('question');
@@ -6478,6 +6708,7 @@
     });
     var revert = document.querySelector('[data-do="config-revert"]');
     if (revert) { revert.disabled = !changes.length; revert.textContent = revertLabel(); revert.dataset.armed = state.revertArmed ? 1 : 0; }
+    drawCrumb();
     var dot = document.querySelector('.tabs [data-tab="configure"] .tab-unsaved');
     var tab = document.querySelector('.tabs [data-tab="configure"]');
     if (tab && changes.length && !dot) tab.insertAdjacentHTML('beforeend', '<span class="tab-unsaved" title="Edited, not applied">●</span>');
@@ -6517,8 +6748,10 @@
       return call('kube.configure', at).then(function (done) {
         say(done.text || 'Changed.');
         delete state.configs[config.key];
+        drawCrumb();
         if (!mine()) return null;
         state.applying = null;
+        state.editNote = { text: 'Applied. ' + (done.text || '') };
         state.editing = false;
         state.config = null;
         state.detailData.object = null;
@@ -6769,7 +7002,7 @@
     if (row.kind === 'Event') return eventPane(row);
     var known = mapInfo(row);
     // With the map's own account of it above, the cluster's long description is one click away rather than in the way.
-    return chartsFor(row) + known + factsBlock(row) + containersBlock(row) + labelsBlock(row) +
+    return chartsFor(row) + known + factsBlock(row, Boolean(known)) + containersBlock(row) + labelsBlock(row) +
       (known ? '<details class="pane-fold" data-pane-fold="describe"' + (state.describeOpen ? ' open' : '') + '><summary>Described by the cluster</summary>' + describeBlock() + '</details>' : describeBlock());
   }
 
@@ -6780,16 +7013,19 @@
       '<button class="btn" data-copy-block="' + esc(title) + '">Copy</button></h4>' + inner + '</section>';
   }
 
-  function factsBlock(row) {
+  function factsBlock(row, known) {
     /*
       * The flags that say what the buttons above may do are not facts about the
       * object; they are already on screen, as buttons. So are the three that say
       * what state those buttons are in — a Deployment with a Pause button over it
       * does not also need a line reading "paused false".
       */
-    var skip = ['uid', 'labels', 'containers', 'forwardable', 'health', 'scalable', 'restartable', 'createdAt',
+    // Nor is what the top of the pane already says — its name, where it is, how old, how it is — said again under it;
+    // and what the map has drawn above as a machine is not listed a second time as a row of facts.
+    var skip = ['name', 'namespace', 'age', 'status'].concat(known && row.kind === 'Node' ? ['version', 'instance', 'zone', 'nodeGroup', 'pool'] : [])
+      .concat(['uid', 'labels', 'containers', 'forwardable', 'health', 'scalable', 'restartable', 'createdAt',
       'kind', 'selector', 'revisioned', 'pausable', 'suspendable', 'triggerable', 'ownsJobs', 'owner',
-      'configurable', 'paused', 'suspended', 'schedulable', 'forwardKind', 'forwardPorts'];
+      'configurable', 'paused', 'suspended', 'schedulable', 'forwardKind', 'forwardPorts', 'reading']);
     var facts = Object.keys(row).filter(function (key) {
       // The flags that say what the buttons above may do are not facts about the
       // object; they are already on screen, as buttons.
@@ -7229,6 +7465,9 @@
     if (row.namespace) at.namespace = row.namespace;
 
     if (state.detail.tab === 'overview') loadCharts(row);
+    // A workload's warnings are mostly about what it made, which its description does not list:
+    // read behind the overview, so the Events tab can say there is something in it.
+    if (state.detail.tab === 'overview' && makesThings(row) && !state.detailData.events && !state.detailData.eventsAt) loadEvents(true);
     if (state.detail.tab === 'overview' && state.detailData.describe == null) {
       call('kube.describe', at).then(function (result) {
         if (state.view.type === 'map') mapDescribed[row.uid] = result.text || '';
@@ -8285,6 +8524,9 @@
       return;
     }
 
+    if (what === 'find-next' || what === 'find-prev') { state.find.at += what === 'find-next' ? 1 : -1; findApply(true); return; }
+    if (what === 'find-close') { findClose(); return; }
+
     if (what === 'show-all') {
       state.only = null;
       remember();
@@ -8668,7 +8910,7 @@
     var text = box.value;
     if (text === base) delete state.drafts[row.uid];
     else {
-      state.drafts[row.uid] = { text: text, base: base, name: row.name };
+      state.drafts[row.uid] = { text: text, base: base, name: row.name, kind: row.kind, namespace: row.namespace || '' };
       // Not every object ever touched: the oldest go first.
       var held = Object.keys(state.drafts);
       if (held.length > 20) delete state.drafts[held[0]];
@@ -8696,6 +8938,7 @@
     set('yaml-diff', !changed);
     var revert = set('yaml-revert', Boolean(state.applying));
     if (revert) { revert.textContent = changed ? revertLabel() : 'Done'; revert.title = changed ? 'Throw the edit away' : 'Leave the editor (Esc)'; revert.dataset.armed = state.revertArmed ? 1 : 0; }
+    drawCrumb();
     var tab = document.querySelector('.tabs [data-tab="yaml"]');
     var dot = tab && tab.querySelector('.tab-unsaved');
     if (tab && changed && !dot) tab.insertAdjacentHTML('beforeend', '<span class="tab-unsaved" title="Edited, not applied">●</span>');
@@ -8850,6 +9093,9 @@
           say(done.text || 'Applied.');
           if (!mine()) return null;
           stopEditing();
+          // Said where the edit was, and left there: a toast is gone by the time the eye is back from the button.
+          state.editNote = { text: 'Applied. ' + (done.text || '') };
+          drawCrumb();
           state.detailData.yaml = null;
           state.detailData.editable = null;
           state.detailData.theirs = null;

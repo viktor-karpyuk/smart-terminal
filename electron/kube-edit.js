@@ -91,6 +91,14 @@ function skipBlock(lines, from, indent) {
 const NAMED_AFTER = ['Pod', 'ReplicaSet', 'Job', 'ControllerRevision', 'PersistentVolumeClaim'];
 
 /**
+ * Kinds that are put beside a workload under its own name. On a real cluster
+ * the warnings about a Deployment turned out to be its autoscaler's — "missing
+ * request for cpu", 2400 times — and an Events tab that left them out was
+ * saying nothing was wrong.
+ */
+const NAMED_THE_SAME = ['HorizontalPodAutoscaler', 'PodDisruptionBudget', 'Service', 'Ingress'];
+
+/**
  * The events about an object, and about what it made.
  *
  * A Deployment's own events say "scaled up replica set"; the ones that say why
@@ -104,7 +112,10 @@ function eventsAbout(rows, kind, name) {
   const out = [];
   for (const row of rows ?? []) {
     if (row.objectKind === kind && row.objectName === name) out.push(row);
-    else if (NAMED_AFTER.includes(row.objectKind) && String(row.objectName).startsWith(prefix)) {
+    else if (
+      (NAMED_AFTER.includes(row.objectKind) && String(row.objectName).startsWith(prefix)) ||
+      (NAMED_THE_SAME.includes(row.objectKind) && row.objectKind !== kind && row.objectName === name)
+    ) {
       out.push({ ...row, related: true });
     }
   }
