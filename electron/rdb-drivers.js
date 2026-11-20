@@ -2,7 +2,8 @@
 
 const fs = require('node:fs');
 const net = require('node:net');
-const { quoteIdent, qualified } = require('./rdb-sql');
+const sql = require('./rdb-sql');
+const { quoteIdent, qualified } = sql;
 
 /**
  * The Databases extension: the three engines, each behind the same few calls.
@@ -622,9 +623,10 @@ const PG_REPORTS = {
   jobs: () => [
     {
       title: 'pgAgent: jobs',
+      open: true,
       requires: 'pgagent.pga_job',
       absent: 'pgAgent is not installed in this database. It keeps its tables in the one it was set up in, usually postgres.',
-      note: 'What pgAgent has been told to run, when it last did and when it will next.',
+      note: 'Click a job to change it. What pgAgent has been told to run, when it last did and when it will next.',
       sql: `SELECT j.jobid AS id, j.jobname AS job, j.jobenabled AS enabled, c.jclname AS class,
                    coalesce(date_trunc('second', j.joblastrun)::text, 'never') AS "last run",
                    (SELECT CASE l.jlgstatus WHEN 's' THEN 'succeeded' WHEN 'f' THEN 'failed' WHEN 'r' THEN 'running' WHEN 'i' THEN 'no steps' WHEN 'd' THEN 'aborted' ELSE l.jlgstatus::text END
@@ -702,7 +704,7 @@ const PG_REPORTS = {
       sql: `SELECT round(s.total_exec_time::numeric / 1000, 1) AS "total s", s.calls, round(s.mean_exec_time::numeric, 2) AS "mean ms",
                    round(s.max_exec_time::numeric, 1) AS "max ms", s.rows,
                    round((100 * s.total_exec_time / nullif(sum(s.total_exec_time) OVER (), 0))::numeric, 1) AS "% of all",
-                   s.shared_blks_read AS "blocks from disk", s.temp_blks_written AS "temp blocks", left(s.query, 600) AS statement
+                   s.shared_blks_read AS "blocks from disk", s.temp_blks_written AS "temp blocks", left(s.query, 600) AS statement, s.queryid::text AS _qid
               FROM pg_stat_statements s
              WHERE s.dbid = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database()) AND s.query NOT LIKE '%pg\\_catalog.%' AND s.query !~* '^\\s*(BEGIN|COMMIT|ROLLBACK|START TRANSACTION|SET|SHOW|RESET)\\M'
              ORDER BY s.total_exec_time DESC LIMIT 25`,
@@ -714,7 +716,7 @@ const PG_REPORTS = {
       note: 'The slowest on average, among those run more than five times. These are the ones an index or a rewrite helps most: run one under Explain.',
       open: true,
       sql: `SELECT round(s.mean_exec_time::numeric, 1) AS "mean ms", round(s.stddev_exec_time::numeric, 1) AS "± ms", s.calls,
-                   round((s.rows::numeric / nullif(s.calls, 0)), 1) AS "rows per call", left(s.query, 600) AS statement
+                   round((s.rows::numeric / nullif(s.calls, 0)), 1) AS "rows per call", left(s.query, 600) AS statement, s.queryid::text AS _qid
               FROM pg_stat_statements s
              WHERE s.dbid = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database()) AND s.calls > 5 AND s.query NOT LIKE '%pg\\_catalog.%' AND s.query !~* '^\\s*(BEGIN|COMMIT|ROLLBACK|START TRANSACTION|SET|SHOW|RESET)\\M'
              ORDER BY s.mean_exec_time DESC LIMIT 25`,
@@ -1201,6 +1203,72 @@ const postgres = {
     return row ?? {};
   },
 
+  /**
+   * One pgAgent job as a form needs it: the job, its steps and its schedules,
+   * with the classes and databases a form offers. A step that connects with a
+   * connection string of its own is said to be remote and the string stays
+   * here — it may hold a password, and a panel is never handed one.
+   */
+  async job(session, jobId) {
+    const there = (await session.all("SELECT pg_catalog.to_regclass('pgagent.pga_job') IS NOT NULL AS there"))[0]?.there;
+    if (!yes(there)) return { installed: false };
+    const classes = await session.all('SELECT jclid AS id, jclname AS name FROM pgagent.pga_jobclass ORDER BY jclname');
+    const databases = await session.all('SELECT datname AS name FROM pg_catalog.pg_database WHERE NOT datistemplate AND datallowconn ORDER BY 1');
+    const out = { installed: true, classes: classes.map((row) => ({ id: Number(row.id), name: row.name })), databases: databases.map((row) => row.name), job: null, steps: [], schedules: [] };
+    if (jobId === null || jobId === undefined || jobId === '') return out;
+    const id = Number(jobId);
+    if (!Number.isInteger(id)) return out;
+    const job = (await session.all('SELECT jobid AS id, jobjclid AS class, jobname AS name, jobdesc AS description, jobhostagent AS host, jobenabled AS enabled FROM pgagent.pga_job WHERE jobid = $1', [id]))[0];
+    if (!job) throw new RdbError('That job is not there any more');
+    out.job = { id: Number(job.id), classId: Number(job.class), name: job.name, description: job.description ?? '', host: job.host ?? '', enabled: yes(job.enabled) };
+    const steps = await session.all(
+      `SELECT jstid AS id, jstname AS name, jstdesc AS description, jstenabled AS enabled, jstkind AS kind, jstcode AS code, jstconnstr <> '' AS remote, jstdbname AS database, jstonerror AS onerror
+         FROM pgagent.pga_jobstep WHERE jstjobid = $1 ORDER BY jstname, jstid`,
+      [id],
+    );
+    out.steps = steps.map((row) => ({ id: Number(row.id), name: row.name, description: row.description ?? '', enabled: yes(row.enabled), kind: row.kind, code: row.code ?? '', remote: yes(row.remote), database: row.database ?? '', onerror: row.onerror }));
+    const schedules = await session.all(
+      `SELECT jscid AS id, jscname AS name, jscdesc AS description, jscenabled AS enabled, to_char(jscstart, 'YYYY-MM-DD HH24:MI') AS start, coalesce(to_char(jscend, 'YYYY-MM-DD HH24:MI'), '') AS "end",
+              array_to_json(jscminutes) AS minutes, array_to_json(jschours) AS hours, array_to_json(jscweekdays) AS weekdays, array_to_json(jscmonthdays) AS monthdays, array_to_json(jscmonths) AS months
+         FROM pgagent.pga_schedule WHERE jscjobid = $1 ORDER BY jscname, jscid`,
+      [id],
+    );
+    const bits = (value) => (typeof value === 'string' ? JSON.parse(value) : value ?? []).map((one) => one === true);
+    out.schedules = schedules.map((row) => ({
+      id: Number(row.id), name: row.name, description: row.description ?? '', enabled: yes(row.enabled), start: row.start, end: row.end,
+      minutes: bits(row.minutes), hours: bits(row.hours), weekdays: bits(row.weekdays), monthdays: bits(row.monthdays), months: bits(row.months),
+    }));
+    return out;
+  },
+
+  /** One statement the server keeps counters for, by the id it gives it. */
+  async statement(session, qid) {
+    if (!/^-?\d+$/.test(String(qid))) return null;
+    const row = (await session.all(
+      `SELECT max(s.query) AS text, sum(s.calls) AS calls, sum(s.total_exec_time) AS ms, sum(s.rows) AS rows, sum(s.shared_blks_read) AS disk, sum(s.temp_blks_written) AS temp
+         FROM pg_stat_statements s
+        WHERE s.queryid = $1::bigint AND s.dbid = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database())`,
+      [String(qid)],
+    ))[0];
+    if (!row?.text) return null;
+    const more = [];
+    if (Number(row.disk) > 0) more.push(`${row.disk} blocks came from disk rather than memory`);
+    if (Number(row.temp) > 0) more.push(`${row.temp} blocks were written to temporary files, which is a sort or a hash that did not fit in work_mem`);
+    return { text: String(row.text), calls: Number(row.calls) || 0, ms: Number(row.ms) || 0, rows: Number(row.rows) || 0, more: more.length ? `In all that, ${more.join(', and ')}.` : '' };
+  },
+
+  /**
+   * The plan of a statement whose values the server did not keep. Planned, not
+   * run: an EXPLAIN without ANALYZE executes nothing, and only one statement of
+   * a kind that has a plan is ever handed to it.
+   */
+  async genericPlan(session, text) {
+    const statements = sql.scan(text, 'postgres');
+    if (statements.length !== 1 || !/^(SELECT|WITH|INSERT|UPDATE|DELETE|MERGE|VALUES)\b/i.test(statements[0].bare)) return '';
+    const rows = await session.all(`EXPLAIN ${/\$\d+/.test(text) ? '(GENERIC_PLAN) ' : ''}${statements[0].text}`);
+    return rows.map((row) => Object.values(row)[0]).join('\n');
+  },
+
   async kill(session, pid, hard) {
     const id = Number(pid);
     if (!Number.isInteger(id)) throw new RdbError('That is not a session id');
@@ -1463,9 +1531,9 @@ const MYSQL_REPORTS = {
       note: 'From the performance schema, since the server started or its summaries were truncated. A statement is here because it is slow, or because it is run very often — the calls column says which. Empty when performance_schema is off.',
       open: true,
       sql: `SELECT ROUND(SUM_TIMER_WAIT / 1e12, 1) AS \`total s\`, COUNT_STAR AS calls, ROUND(AVG_TIMER_WAIT / 1e9, 2) AS \`mean ms\`, ROUND(MAX_TIMER_WAIT / 1e9, 1) AS \`max ms\`,
-                   SUM_ROWS_EXAMINED AS \`rows read\`, SUM_ROWS_SENT AS \`rows sent\`, SUM_CREATED_TMP_DISK_TABLES AS \`temp tables on disk\`, LEFT(DIGEST_TEXT, 600) AS statement
+                   SUM_ROWS_EXAMINED AS \`rows read\`, SUM_ROWS_SENT AS \`rows sent\`, SUM_CREATED_TMP_DISK_TABLES AS \`temp tables on disk\`, LEFT(DIGEST_TEXT, 600) AS statement, DIGEST AS _qid
               FROM performance_schema.events_statements_summary_by_digest
-             WHERE SCHEMA_NAME = ? AND DIGEST_TEXT NOT REGEXP '^(BEGIN|COMMIT|ROLLBACK|START TRANSACTION|SET|SHOW)( |$)'
+             WHERE SCHEMA_NAME = ? AND DIGEST_TEXT NOT REGEXP '^(BEGIN|COMMIT|ROLLBACK|START TRANSACTION|SET|SHOW)( |$)' AND DIGEST_TEXT NOT LIKE '%performance\\_schema%' AND DIGEST_TEXT NOT LIKE '%information\\_schema%'
              ORDER BY SUM_TIMER_WAIT DESC LIMIT 25`,
       params: [schema],
     },
@@ -1474,7 +1542,7 @@ const MYSQL_REPORTS = {
       note: 'Run without an index, or reading more than a hundred rows for each one sent back. These are the ones an index helps most: run one under Explain.',
       open: true,
       sql: `SELECT COUNT_STAR AS calls, SUM_NO_INDEX_USED AS \`without an index\`, ROUND(SUM_ROWS_EXAMINED / NULLIF(COUNT_STAR, 0)) AS \`rows read per call\`,
-                   ROUND(SUM_ROWS_SENT / NULLIF(COUNT_STAR, 0), 1) AS \`rows sent per call\`, ROUND(AVG_TIMER_WAIT / 1e9, 2) AS \`mean ms\`, LEFT(DIGEST_TEXT, 600) AS statement
+                   ROUND(SUM_ROWS_SENT / NULLIF(COUNT_STAR, 0), 1) AS \`rows sent per call\`, ROUND(AVG_TIMER_WAIT / 1e9, 2) AS \`mean ms\`, LEFT(DIGEST_TEXT, 600) AS statement, DIGEST AS _qid
               FROM performance_schema.events_statements_summary_by_digest
              WHERE SCHEMA_NAME = ? AND (SUM_NO_INDEX_USED > 0 OR SUM_ROWS_EXAMINED > 100 * GREATEST(SUM_ROWS_SENT, 1)) AND SUM_ROWS_EXAMINED > 1000
              ORDER BY SUM_ROWS_EXAMINED DESC LIMIT 25`,
@@ -1865,6 +1933,29 @@ const mysql = {
               (SELECT COUNT(*) FROM information_schema.PROCESSLIST) AS connections`,
     );
     return row ?? {};
+  },
+
+  async statement(session, qid) {
+    const row = (await session.all(
+      `SELECT DIGEST_TEXT AS text, COUNT_STAR AS calls, SUM_TIMER_WAIT / 1e9 AS ms, SUM_ROWS_SENT AS \`rows\`, SUM_ROWS_EXAMINED AS examined, SUM_NO_INDEX_USED AS unindexed, SUM_CREATED_TMP_DISK_TABLES AS disk_tmp
+         FROM performance_schema.events_statements_summary_by_digest WHERE DIGEST = ? AND SCHEMA_NAME = DATABASE()`,
+      [String(qid)],
+    ))[0];
+    if (!row?.text) return null;
+    const calls = Number(row.calls) || 0;
+    const more = [];
+    if (calls > 0) more.push(`it reads ${Math.round(Number(row.examined) / calls)} rows a call`);
+    if (Number(row.unindexed) > 0) more.push(`${row.unindexed} of its runs used no index`);
+    if (Number(row.disk_tmp) > 0) more.push(`${row.disk_tmp} temporary tables went to disk`);
+    return { text: String(row.text), calls, ms: Number(row.ms) || 0, rows: Number(row.rows) || 0, more: more.length ? `In all that, ${more.join(', and ')}.` : '' };
+  },
+
+  /** MySQL keeps a statement with its values replaced by question marks, and cannot plan one of those: only a statement with none is explained. */
+  async genericPlan(session, text) {
+    const statements = sql.scan(text, 'mysql');
+    if (statements.length !== 1 || /\?/.test(text) || !/^(SELECT|WITH|INSERT|UPDATE|DELETE|REPLACE)\b/i.test(statements[0].bare)) return '';
+    const rows = await session.all(`EXPLAIN FORMAT=TREE ${statements[0].text}`);
+    return rows.map((row) => Object.values(row)[0]).join('\n');
   },
 
   async kill(session, pid, hard) {

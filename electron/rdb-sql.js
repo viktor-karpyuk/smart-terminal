@@ -597,7 +597,32 @@ function parseUrl(text) {
   };
 }
 
+/**
+ * The tables a statement names, as far as its words show: what follows FROM,
+ * JOIN, UPDATE and INTO. Good enough to fetch their definitions for somebody
+ * reading the statement; never used to decide what a statement may do.
+ */
+function tablesIn(text) {
+  const found = [];
+  const seen = new Set();
+  const flat = String(text ?? '').replace(/'(?:[^']|'')*'/g, "''");
+  const pattern = /\b(?:FROM|JOIN|UPDATE|INTO)\s+(?:ONLY\s+)?((?:[`"]?[A-Za-z_][\w$]*[`"]?\s*\.\s*)?[`"]?[A-Za-z_][\w$]*[`"]?)/gi;
+  let match;
+  while ((match = pattern.exec(flat))) {
+    const parts = match[1].split('.').map((part) => part.trim().replace(/^[`"]|[`"]$/g, ''));
+    const name = parts.pop();
+    const schema = parts.pop() ?? null;
+    if (/^(SELECT|LATERAL|UNNEST|GENERATE_SERIES|VALUES|SET)$/i.test(name)) continue;
+    const key = `${schema ?? ''}.${name}`.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    found.push({ schema, name });
+  }
+  return found;
+}
+
 module.exports = {
+  tablesIn,
   ENGINES,
   PAGE_MAX,
   PAGE_DEFAULT,

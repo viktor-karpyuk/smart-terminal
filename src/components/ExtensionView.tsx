@@ -775,6 +775,9 @@ function Frame({
           schema: args.schema,
           name: args.name,
           failed: args.failed === true,
+          // A slow statement: the plan last asked for, or one the server keeps counters for, named by its id. Never its text.
+          explained: args.explained === true,
+          qid: typeof args.qid === 'string' ? args.qid : undefined,
         });
         if (found.ok === false) return found;
         const sessionId = await claudeFor(panelId, { title: `ask ${String(found.title ?? 'database')}`.slice(0, 28) });

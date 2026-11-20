@@ -54,6 +54,39 @@ const MIGRATIONS = [
    ALTER TABLE rdb_connection ADD COLUMN ssh_port INTEGER;
    ALTER TABLE rdb_connection ADD COLUMN ssh_user TEXT NOT NULL DEFAULT '';
    ALTER TABLE rdb_connection ADD COLUMN ssh_key TEXT NOT NULL DEFAULT '';`,
+  // Watching a server over time: its readings, what its statements cost at each, and what was said about them.
+  `ALTER TABLE rdb_connection ADD COLUMN watch INTEGER NOT NULL DEFAULT 0;
+   CREATE TABLE IF NOT EXISTS rdb_sample (
+     connection TEXT NOT NULL,
+     at INTEGER NOT NULL,
+     data TEXT NOT NULL,
+     PRIMARY KEY (connection, at)
+   );
+   CREATE TABLE IF NOT EXISTS rdb_statement (
+     connection TEXT NOT NULL,
+     qid TEXT NOT NULL,
+     text TEXT NOT NULL,
+     PRIMARY KEY (connection, qid)
+   );
+   CREATE TABLE IF NOT EXISTS rdb_statement_sample (
+     connection TEXT NOT NULL,
+     at INTEGER NOT NULL,
+     qid TEXT NOT NULL,
+     calls INTEGER NOT NULL,
+     ms REAL NOT NULL,
+     PRIMARY KEY (connection, at, qid)
+   );
+   CREATE TABLE IF NOT EXISTS rdb_alert (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     connection TEXT NOT NULL,
+     rule TEXT NOT NULL,
+     subject TEXT NOT NULL DEFAULT '',
+     message TEXT NOT NULL,
+     first_at INTEGER NOT NULL,
+     last_at INTEGER NOT NULL,
+     closed_at INTEGER,
+     dismissed INTEGER NOT NULL DEFAULT 0
+   );`,
 ];
 
 const MAX_CONNECTIONS = 200;
@@ -94,6 +127,7 @@ class RdbStore {
       sshPort: row.ssh_port ?? null,
       sshUser: row.ssh_user ?? '',
       sshKey: row.ssh_key ?? '',
+      watch: row.watch === 1,
       hasPassword: Boolean(row.password),
     };
   }
@@ -210,7 +244,119 @@ class RdbStore {
     const key = String(id ?? '');
     this.db.prepare('DELETE FROM rdb_connection WHERE id = ?').run(key);
     this.db.prepare('DELETE FROM rdb_history WHERE connection = ?').run(key);
+    for (const table of ['rdb_sample', 'rdb_statement', 'rdb_statement_sample', 'rdb_alert']) this.db.prepare(`DELETE FROM ${table} WHERE connection = ?`).run(key);
     this.db.prepare("UPDATE rdb_saved SET connection = '' WHERE connection = ?").run(key);
+  }
+
+  // ─────────────────────────────────────────────────────────────── watching ──
+
+  setWatch(id, on) {
+    this.db.prepare('UPDATE rdb_connection SET watch = ? WHERE id = ?').run(on ? 1 : 0, String(id ?? ''));
+  }
+
+  watched() {
+    return this.db.prepare('SELECT id FROM rdb_connection WHERE watch = 1').all().map((row) => row.id);
+  }
+
+  /** One reading, with what each statement had cost by then. All of it or none: half a reading would read as a server that stopped. */
+  addReading(connection, server, statements) {
+    const id = String(connection);
+    this.db.exec('BEGIN');
+    try {
+      this.db.prepare('INSERT OR REPLACE INTO rdb_sample (connection, at, data) VALUES (?, ?, ?)').run(id, server.at, JSON.stringify(server));
+      const text = this.db.prepare('INSERT INTO rdb_statement (connection, qid, text) VALUES (?, ?, ?) ON CONFLICT (connection, qid) DO UPDATE SET text = excluded.text');
+      const cost = this.db.prepare('INSERT OR REPLACE INTO rdb_statement_sample (connection, at, qid, calls, ms) VALUES (?, ?, ?, ?, ?)');
+      for (const one of statements) {
+        text.run(id, one.qid, String(one.text).slice(0, 2000));
+        cost.run(id, server.at, one.qid, Math.round(one.calls), one.ms);
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
+  /** Readings since a moment, oldest first, each with its statements when asked for. */
+  readings(connection, since, { statements = false } = {}) {
+    const id = String(connection);
+    const rows = this.db.prepare('SELECT at, data FROM rdb_sample WHERE connection = ? AND at >= ? ORDER BY at').all(id, since);
+    const out = rows.map((row) => ({ server: JSON.parse(row.data), statements: [] }));
+    if (statements && out.length) {
+      const byAt = new Map(out.map((one) => [one.server.at, one]));
+      const texts = this.statementTexts(id);
+      for (const row of this.statementReadings(id, since)) byAt.get(row.at)?.statements.push({ qid: row.qid, calls: row.calls, ms: row.ms, text: texts.get(row.qid) ?? '' });
+    }
+    return out;
+  }
+
+  lastReadingAt(connection) {
+    return this.db.prepare('SELECT max(at) AS at FROM rdb_sample WHERE connection = ?').get(String(connection))?.at ?? null;
+  }
+
+  statementReadings(connection, since) {
+    return this.db.prepare('SELECT at, qid, calls, ms FROM rdb_statement_sample WHERE connection = ? AND at >= ? ORDER BY at').all(String(connection), since);
+  }
+
+  statementTexts(connection) {
+    return new Map(this.db.prepare('SELECT qid, text FROM rdb_statement WHERE connection = ?').all(String(connection)).map((row) => [row.qid, row.text]));
+  }
+
+  statementText(connection, qid) {
+    return this.db.prepare('SELECT text FROM rdb_statement WHERE connection = ? AND qid = ?').get(String(connection), String(qid))?.text ?? null;
+  }
+
+  /**
+   * What a reading found. Something still wrong is the same alert, seen again;
+   * something no longer found is closed. The answer is the ones that are new,
+   * which are the only ones worth interrupting anybody for.
+   */
+  judged(connection, found, at) {
+    const id = String(connection);
+    const open = this.db.prepare('SELECT * FROM rdb_alert WHERE connection = ? AND closed_at IS NULL').all(id);
+    const key = (one) => `${one.rule}\u0000${one.subject ?? ''}`;
+    const still = new Map(found.map((one) => [key(one), one]));
+    const fresh = [];
+    for (const row of open) {
+      const again = still.get(key(row));
+      if (again) {
+        this.db.prepare('UPDATE rdb_alert SET last_at = ?, message = ? WHERE id = ?').run(at, again.message, row.id);
+        still.delete(key(row));
+      } else {
+        this.db.prepare('UPDATE rdb_alert SET closed_at = ? WHERE id = ?').run(at, row.id);
+      }
+    }
+    for (const one of still.values()) {
+      // Told once and dismissed, it is not said again for a day however often it is found.
+      const quiet = this.db.prepare('SELECT 1 FROM rdb_alert WHERE connection = ? AND rule = ? AND subject = ? AND dismissed = 1 AND last_at > ?').get(id, one.rule, one.subject ?? '', at - 86_400_000);
+      const made = this.db.prepare('INSERT INTO rdb_alert (connection, rule, subject, message, first_at, last_at, dismissed) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(id, one.rule, one.subject ?? '', one.message, at, at, quiet ? 1 : 0);
+      if (!quiet) fresh.push({ id: Number(made.lastInsertRowid), ...one });
+    }
+    return fresh;
+  }
+
+  alerts(connection, { limit = 40 } = {}) {
+    return this.db
+      .prepare('SELECT id, rule, subject, message, first_at, last_at, closed_at, dismissed FROM rdb_alert WHERE connection = ? ORDER BY (closed_at IS NULL) DESC, last_at DESC LIMIT ?')
+      .all(String(connection), limit)
+      .map((row) => ({ id: row.id, rule: row.rule, subject: row.subject, message: row.message, firstAt: row.first_at, lastAt: row.last_at, closedAt: row.closed_at, dismissed: row.dismissed === 1 }));
+  }
+
+  /** How many things are wrong on each connection right now and have not been waved away. */
+  openAlerts() {
+    return new Map(this.db.prepare('SELECT connection, count(*) AS n FROM rdb_alert WHERE closed_at IS NULL AND dismissed = 0 GROUP BY connection').all().map((row) => [row.connection, row.n]));
+  }
+
+  dismissAlert(connection, id) {
+    this.db.prepare('UPDATE rdb_alert SET dismissed = 1 WHERE connection = ? AND id = ?').run(String(connection), Number(id));
+  }
+
+  pruneReadings(before) {
+    this.db.prepare('DELETE FROM rdb_sample WHERE at < ?').run(before);
+    this.db.prepare('DELETE FROM rdb_statement_sample WHERE at < ?').run(before);
+    this.db.prepare('DELETE FROM rdb_alert WHERE closed_at IS NOT NULL AND closed_at < ?').run(before);
+    this.db.prepare('DELETE FROM rdb_statement WHERE NOT EXISTS (SELECT 1 FROM rdb_statement_sample s WHERE s.connection = rdb_statement.connection AND s.qid = rdb_statement.qid)').run();
   }
 
   remember({ connection, database, sql, ms, ok, note }) {

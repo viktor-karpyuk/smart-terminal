@@ -187,7 +187,7 @@ test('a database from before tunnels existed gains the columns and keeps its con
   const first = new RdbStore(db, secrets);
   const kept = first.save({ engine: 'postgres', name: 'old', host: 'db', user: 'u', password: 'p' });
   // As it was one version ago: without the columns, and saying so.
-  for (const column of ['ssh_host', 'ssh_port', 'ssh_user', 'ssh_key']) db.exec(`ALTER TABLE rdb_connection DROP COLUMN ${column}`);
+  for (const column of ['ssh_host', 'ssh_port', 'ssh_user', 'ssh_key', 'watch']) db.exec(`ALTER TABLE rdb_connection DROP COLUMN ${column}`);
   db.exec("UPDATE rdb_meta SET v = '1' WHERE k = 'version'");
   const again = new RdbStore(db, secrets);
   const found = again.connection(kept.id);
