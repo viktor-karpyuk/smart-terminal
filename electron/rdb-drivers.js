@@ -614,6 +614,78 @@ const PG_REPORTS = {
   ],
 
   /**
+   * What the server runs by itself. PostgreSQL has no scheduler of its own, so
+   * this reads the two that people install — pgAgent and pg_cron — and says which
+   * of them is not here. Only read: a job is
+   * made and changed with the functions its scheduler gives, in a query tab.
+   */
+  jobs: () => [
+    {
+      title: 'pgAgent: jobs',
+      requires: 'pgagent.pga_job',
+      absent: 'pgAgent is not installed in this database. It keeps its tables in the one it was set up in, usually postgres.',
+      note: 'What pgAgent has been told to run, when it last did and when it will next.',
+      sql: `SELECT j.jobid AS id, j.jobname AS job, j.jobenabled AS enabled, c.jclname AS class,
+                   coalesce(date_trunc('second', j.joblastrun)::text, 'never') AS "last run",
+                   (SELECT CASE l.jlgstatus WHEN 's' THEN 'succeeded' WHEN 'f' THEN 'failed' WHEN 'r' THEN 'running' WHEN 'i' THEN 'no steps' WHEN 'd' THEN 'aborted' ELSE l.jlgstatus::text END
+                      FROM pgagent.pga_joblog l WHERE l.jlgjobid = j.jobid ORDER BY l.jlgstart DESC LIMIT 1) AS "how it went",
+                   coalesce(date_trunc('second', j.jobnextrun)::text, '') AS "next run", nullif(j.jobhostagent, '') AS "only on host", j.jobdesc AS what
+              FROM pgagent.pga_job j LEFT JOIN pgagent.pga_jobclass c ON c.jclid = j.jobjclid
+             ORDER BY j.jobname`,
+    },
+    {
+      title: 'pgAgent: steps',
+      requires: 'pgagent.pga_job',
+      absent: 'pgAgent is not installed in this database. It keeps its tables in the one it was set up in, usually postgres.',
+      note: 'What each job does, in the order it does it.',
+      sql: `SELECT j.jobname AS job, s.jstname AS step, s.jstenabled AS enabled, CASE s.jstkind WHEN 's' THEN 'SQL' WHEN 'b' THEN 'shell' ELSE s.jstkind::text END AS kind,
+                   nullif(s.jstdbname, '') AS database, CASE s.jstonerror WHEN 'f' THEN 'fail the job' WHEN 's' THEN 'count as success' WHEN 'i' THEN 'carry on' ELSE s.jstonerror::text END AS "on error",
+                   left(s.jstcode, 600) AS statement
+              FROM pgagent.pga_jobstep s JOIN pgagent.pga_job j ON j.jobid = s.jstjobid
+             ORDER BY j.jobname, s.jstname`,
+      open: true,
+    },
+    {
+      title: 'pgAgent: schedules',
+      requires: 'pgagent.pga_job',
+      absent: 'pgAgent is not installed in this database. It keeps its tables in the one it was set up in, usually postgres.',
+      sql: `SELECT j.jobname AS job, s.jscname AS schedule, s.jscenabled AS enabled, date_trunc('second', s.jscstart)::text AS "from",
+                   coalesce(date_trunc('second', s.jscend)::text, '') AS until, s.jscdesc AS what
+              FROM pgagent.pga_schedule s JOIN pgagent.pga_job j ON j.jobid = s.jscjobid
+             ORDER BY j.jobname, s.jscname`,
+    },
+    {
+      title: 'pgAgent: the last runs',
+      requires: 'pgagent.pga_job',
+      absent: 'pgAgent is not installed in this database. It keeps its tables in the one it was set up in, usually postgres.',
+      note: 'The last hundred, newest first.',
+      sql: `SELECT j.jobname AS job, date_trunc('second', l.jlgstart)::text AS started, date_trunc('second', l.jlgduration)::text AS took,
+                   CASE l.jlgstatus WHEN 's' THEN 'succeeded' WHEN 'f' THEN 'failed' WHEN 'r' THEN 'running' WHEN 'i' THEN 'no steps' WHEN 'd' THEN 'aborted' ELSE l.jlgstatus::text END AS "how it went",
+                   (SELECT left(string_agg(nullif(sl.jsloutput, ''), ' | '), 400) FROM pgagent.pga_jobsteplog sl WHERE sl.jsljlgid = l.jlgid) AS output
+              FROM pgagent.pga_joblog l JOIN pgagent.pga_job j ON j.jobid = l.jlgjobid
+             ORDER BY l.jlgstart DESC LIMIT 100`,
+    },
+    {
+      title: 'pg_cron: jobs',
+      requires: 'cron.job',
+      absent: 'pg_cron is not installed in this database.',
+      note: 'What pg_cron runs and on what schedule.',
+      sql: `SELECT j.jobid AS id, j.jobname AS job, j.schedule, j.active, j.database, j.username AS "as", left(j.command, 600) AS statement
+              FROM cron.job j ORDER BY j.jobid`,
+      open: true,
+    },
+    {
+      title: 'pg_cron: the last runs',
+      requires: 'cron.job',
+      absent: 'pg_cron is not installed in this database.',
+      note: 'The last hundred, newest first.',
+      sql: `SELECT r.jobid AS id, date_trunc('second', r.start_time)::text AS started, date_trunc('second', r.end_time - r.start_time)::text AS took, r.status AS "how it went",
+                   left(r.return_message, 400) AS output
+              FROM cron.job_run_details r ORDER BY r.start_time DESC NULLS LAST LIMIT 100`,
+    },
+  ],
+
+  /**
    * Why it is slow, asked of the server itself. Every section is one question a
    * person would otherwise have to know the catalog to ask, and each note says
    * what the answer is good for — a list of numbers nobody can act on is not a
@@ -623,7 +695,9 @@ const PG_REPORTS = {
   performance: () => [
     {
       title: 'Statements that cost the most time in total',
-      note: 'From pg_stat_statements, since its counters were last reset. A statement is here because it is slow, or because it is run very often — the calls column says which. What reads the catalog, the questions on this page among them, is left out. If this section is an error, the extension is not installed: add pg_stat_statements to shared_preload_libraries, restart, and CREATE EXTENSION pg_stat_statements.',
+      requires: 'pg_stat_statements',
+      absent: 'The pg_stat_statements extension is not installed here, so the server keeps no record of what its statements cost. Add pg_stat_statements to shared_preload_libraries, restart, and run CREATE EXTENSION pg_stat_statements in this database.',
+      note: 'From pg_stat_statements, since its counters were last reset. A statement is here because it is slow, or because it is run very often — the calls column says which. What reads the catalog, the questions on this page among them, is left out.',
       open: true,
       sql: `SELECT round(s.total_exec_time::numeric / 1000, 1) AS "total s", s.calls, round(s.mean_exec_time::numeric, 2) AS "mean ms",
                    round(s.max_exec_time::numeric, 1) AS "max ms", s.rows,
@@ -635,6 +709,8 @@ const PG_REPORTS = {
     },
     {
       title: 'Statements that are slow every time',
+      requires: 'pg_stat_statements',
+      absent: 'The pg_stat_statements extension is not installed here, so the server keeps no record of what its statements cost. Add pg_stat_statements to shared_preload_libraries, restart, and run CREATE EXTENSION pg_stat_statements in this database.',
       note: 'The slowest on average, among those run more than five times. These are the ones an index or a rewrite helps most: run one under Explain.',
       open: true,
       sql: `SELECT round(s.mean_exec_time::numeric, 1) AS "mean ms", round(s.stddev_exec_time::numeric, 1) AS "± ms", s.calls,

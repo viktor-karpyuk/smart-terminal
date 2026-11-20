@@ -10,6 +10,9 @@ const drivers = require('./rdb-drivers');
 const { Tunnels } = require('./rdb-tunnel');
 const sql = require('./rdb-sql');
 
+/** PostgreSQL answers in text here, MySQL in numbers: both mean the same. */
+const yes = (value) => value === true || value === 't' || value === 'true' || value === 1 || value === '1';
+
 /**
  * The Databases extension, on the app's side of the door.
  *
@@ -624,6 +627,14 @@ class RdbService {
         for (const section of sections) {
           const head = { title: section.title, note: section.note ?? '', vertical: section.vertical === true, filter: section.filter === true, open: section.open === true };
           try {
+            // A section about something that may not be installed asks first, and says so in words instead of failing in the server's.
+            if (section.requires && connection.engine === 'postgres') {
+              const there = await this.#browse(args.id, args.database, (session) => this.#reading(session, () => session.all('SELECT pg_catalog.to_regclass($1) IS NOT NULL AS there', [section.requires])));
+              if (!yes(there[0]?.there)) {
+                out.push({ ...head, absent: section.absent ?? 'Not installed in this database.', columns: [], rows: [] });
+                continue;
+              }
+            }
             const result = await this.#browse(args.id, args.database, (session) => this.#reading(session, () => session.run(section.sql, section.params ?? [], { maxRows: REPORT_ROWS_MAX })));
             out.push({ ...head, columns: result.columns, rows: result.rows, truncated: result.truncated });
           } catch (error) {

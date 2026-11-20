@@ -306,7 +306,7 @@
       sqlite: [['indexes', 'Indexes'], ['triggers', 'Triggers']]
     },
     database: {
-      postgres: [['extensions', 'Extensions'], ['foreign', 'Foreign data'], ['publications', 'Publications and subscriptions'], ['eventTriggers', 'Event triggers'], ['languages', 'Languages and casts']]
+      postgres: [['extensions', 'Extensions'], ['foreign', 'Foreign data'], ['publications', 'Publications and subscriptions'], ['eventTriggers', 'Event triggers'], ['languages', 'Languages and casts'], ['jobs', 'Scheduled jobs']]
     }
   };
 
@@ -2144,10 +2144,11 @@
     var page = h('div', { class: 'scroll' });
     if (data.supported === false) { page.appendChild(h('div', { class: 'empty', text: 'This engine has nothing to say about that.' })); return page; }
     (data.sections || []).forEach(function (section) {
-      var sect = h('div', { class: 'sect' }, h('h3', {}, section.title + (section.rows && !section.vertical ? ' · ' + section.rows.length + (section.truncated ? '+' : '') : '')));
+      var sect = h('div', { class: 'sect' }, h('h3', {}, section.title + (section.rows && !section.vertical && !section.absent ? ' · ' + section.rows.length + (section.truncated ? '+' : '') : '')));
       if (section.note) sect.appendChild(h('div', { class: 'note', text: section.note }));
       page.appendChild(sect);
       if (section.error) { sect.appendChild(h('div', { class: 'bad', text: section.error })); return; }
+      if (section.absent) { sect.appendChild(h('div', { class: 'faint', text: section.absent })); return; }
       if (!section.rows.length) { sect.appendChild(h('div', { class: 'faint', text: 'Nothing.' })); return; }
       if (section.vertical) {
         var facts = h('div', { class: 'facts tight' });
