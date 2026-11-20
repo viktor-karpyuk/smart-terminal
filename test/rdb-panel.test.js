@@ -48,6 +48,7 @@ const P = fromPanel([
   'ERD', 'erdModel', 'erdSize', 'erdLayout', 'erdRowY', 'erdPath',
   'plainDef', 'retarget', 'snapshotColumnSql', 'schemaDiff',
   'MORE', 'reportTarget', 'reportStatement', 'PG_LIST_SETTINGS', 'settingSql',
+  'JOB_PARTS', 'scheduleBits', 'scheduleText', 'jobForm', 'jobSql', 'trendCharts', 'trendStatements',
   'FORMAT_CLAUSES', 'FORMAT_STARTS', 'JOIN_WORDS', 'formatSql', 'flowSql',
   'PRIVILEGES', 'grantKind', 'granteeSql', 'grantSql', 'roleFromRow', 'membershipChange',
   'TYPE_HINTS', 'defaultSql', 'designColumns', 'designProblems', 'columnSql', 'createTableSql', 'alterTableSql', 'designScript',
@@ -810,4 +811,110 @@ test('a setting is changed by the statement its engine takes, and a name that is
   assert.equal(P.settingSql('sqlite', 'x', '1'), null);
   assert.equal(P.reportStatement([{ name: 'calls' }, { name: 'statement' }], ['3', 'SELECT 1']), 'SELECT 1');
   assert.equal(P.reportStatement([{ name: 'table' }], ['t']), null);
+});
+
+// --- scheduled jobs ----------------------------------------------------------
+
+test('a schedule is typed the way cron is and kept the way pgAgent keeps it', () => {
+  const part = (key) => plain(P.JOB_PARTS).find((one) => one.key === key);
+  const on = (text, key) => { const parsed = plain(P.scheduleBits(text, part(key))); return parsed.error ?? parsed.bits.map((bit, at) => (bit ? at : -1)).filter((at) => at >= 0); };
+  assert.deepEqual(on('*', 'minutes'), []);
+  assert.deepEqual(on('', 'hours'), []);
+  assert.deepEqual(on('0,30', 'minutes'), [0, 30]);
+  assert.deepEqual(on('9-12', 'hours'), [9, 10, 11, 12]);
+  assert.deepEqual(on('*/15', 'minutes'), [0, 15, 30, 45]);
+  assert.deepEqual(on('1-5', 'weekdays'), [1, 2, 3, 4, 5]);
+  // Days and months are counted from one; the last place of the days is "the last day".
+  assert.deepEqual(on('1,15,L', 'monthdays'), [0, 14, 31]);
+  assert.deepEqual(on('12', 'months'), [11]);
+  // Every one ticked is every one, which pgAgent writes as none.
+  assert.deepEqual(on('0-6', 'weekdays'), []);
+  assert.match(on('60', 'minutes'), /Minutes go from 0 to 59/);
+  assert.match(on('0', 'months'), /Months go from 1 to 12/);
+  assert.match(on('32', 'monthdays'), /Days go from 1 to 31/);
+  assert.match(on('mon', 'weekdays'), /"mon" is not a number/);
+  assert.match(on('*/0', 'minutes'), /step of 0/);
+
+  for (const [key, text] of [['minutes', '0,30'], ['hours', '9-12'], ['weekdays', '1-5'], ['monthdays', '1,15,L'], ['months', '3,4,12'], ['hours', '*'], ['minutes', '0,1']]) {
+    assert.equal(P.scheduleText(plain(P.scheduleBits(text, part(key))).bits, part(key)), text, `${key} ${text}`);
+  }
+});
+
+test('a new job is inserted whole, in one transaction, and says what is missing before anything is sent', () => {
+  const form = plain(P.jobForm({ classes: [{ id: 1, name: 'Routine Maintenance' }], job: null }));
+  assert.equal(P.jobSql(null, null, form).problem, 'The job needs a name.');
+  form.job.name = " night's work ";
+  form.steps.push({ name: 'vacuum', kind: 's', database: '', code: 'VACUUM orders', onerror: 'f', enabled: true });
+  assert.match(P.jobSql(null, null, form).problem, /Step 1 needs a database/);
+  form.steps[0].database = 'shop';
+  form.schedules.push({ name: 'nightly', enabled: true, start: '2026-01-31', end: '', minutes: '0', hours: '3', weekdays: '*', monthdays: '*', months: '13' });
+  assert.match(P.jobSql(null, null, form).problem, /Schedule 1 — Months go from 1 to 12/);
+  form.schedules[0].months = '*';
+  form.schedules[0].start = 'tomorrow';
+  assert.match(P.jobSql(null, null, form).problem, /starts on a date/);
+  form.schedules[0].start = '2026-01-31 08:00';
+
+  const sql = P.jobSql(null, null, form).sql;
+  const lines = sql.split(';\n');
+  assert.equal(lines[0], 'BEGIN');
+  assert.match(sql, /COMMIT;$/);
+  assert.match(sql, /INSERT INTO pgagent\.pga_job \(jobjclid, jobname, jobdesc, jobhostagent, jobenabled\)\n {2}VALUES \(1, 'night''s work', '', '', true\);/);
+  assert.match(sql, /INSERT INTO pgagent\.pga_jobstep .*\n {2}VALUES \(currval\('pgagent\.pga_job_jobid_seq'\), 'vacuum', true, 's', 'VACUUM orders', 'shop', 'f'\);/);
+  assert.match(sql, /INSERT INTO pgagent\.pga_schedule .*\n {2}VALUES \(currval\('pgagent\.pga_job_jobid_seq'\), 'nightly', true, '2026-01-31 08:00', NULL, '\{t,f,f/);
+  // A shell script runs in no database, whatever the form still held.
+  form.steps[0].kind = 'b';
+  assert.match(P.jobSql(null, null, form).sql, /'vacuum', true, 'b', 'VACUUM orders', '', 'f'\)/);
+});
+
+test('a changed job has only what changed sent, by id, and what was removed deleted', () => {
+  const all = (size, on = []) => Array.from({ length: size }, (_, at) => on.includes(at));
+  const data = {
+    classes: [{ id: 1, name: 'Routine Maintenance' }, { id: 5, name: 'Miscellaneous' }],
+    job: { id: 7, classId: 1, name: 'nightly', description: '', host: '', enabled: true },
+    steps: [
+      { id: 11, name: 'a', kind: 's', database: 'shop', code: 'SELECT 1', onerror: 'f', enabled: true, remote: false },
+      { id: 12, name: 'b', kind: 's', database: '', code: 'SELECT 2', onerror: 'f', enabled: true, remote: true },
+    ],
+    schedules: [{ id: 21, name: 'daily', enabled: true, start: '2026-01-01 00:00', end: '', minutes: all(60, [0]), hours: all(24, [3]), weekdays: all(7), monthdays: all(32), months: all(12) }],
+  };
+  const before = plain(P.jobForm(data));
+  const same = plain(P.jobForm(data));
+  assert.deepEqual(plain(P.jobSql(7, before, same)), { sql: '' });
+  assert.equal(same.schedules[0].minutes, '0');
+  // Typed another way and meaning the same is not a change.
+  same.schedules[0].weekdays = '0-6';
+  assert.equal(P.jobSql(7, before, same).sql, '');
+
+  const form = plain(P.jobForm(data));
+  form.job.enabled = false;
+  form.job.classId = 5;
+  form.steps[0].code = 'SELECT 3';
+  // A step with its own connection string keeps it: changing its text touches nothing else.
+  form.steps[1].code = 'SELECT 4';
+  form.steps[1].kind = 'b';
+  form.schedules[0].hours = '3,15';
+  form.schedules.push({ name: 'weekly', enabled: true, start: '2026-02-01', end: '2026-12-31', minutes: '0', hours: '0', weekdays: '0', monthdays: '*', months: '*' });
+  const sql = P.jobSql(7, before, form).sql;
+  assert.match(sql, /UPDATE pgagent\.pga_job SET jobjclid = 5, jobenabled = false WHERE jobid = 7;/);
+  assert.match(sql, /UPDATE pgagent\.pga_jobstep SET jstcode = 'SELECT 3' WHERE jstid = 11 AND jstjobid = 7;/);
+  assert.match(sql, /UPDATE pgagent\.pga_jobstep SET jstcode = 'SELECT 4' WHERE jstid = 12 AND jstjobid = 7;/);
+  assert.match(sql, /UPDATE pgagent\.pga_schedule SET jschours = '\{f,f,f,t,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f,f,f,f,f,f\}' WHERE jscid = 21 AND jscjobid = 7;/);
+  assert.match(sql, /INSERT INTO pgagent\.pga_schedule .*\n {2}VALUES \(7, 'weekly', true, '2026-02-01', '2026-12-31',/);
+  assert.equal(/currval/.test(sql), false);
+
+  const cut = plain(P.jobForm(data));
+  cut.steps.splice(0, 1);
+  cut.schedules = [];
+  const gone = P.jobSql(7, before, cut).sql;
+  assert.match(gone, /DELETE FROM pgagent\.pga_jobstep WHERE jstid = 11 AND jstjobid = 7;/);
+  assert.match(gone, /DELETE FROM pgagent\.pga_schedule WHERE jscid = 21 AND jscjobid = 7;/);
+  assert.equal(/jstid = 12/.test(gone), false);
+});
+
+test('the panel is a script the browser can read from end to end', () => {
+  // The other tests lift functions out one at a time and would never notice a comment that ended early.
+  const html = fs.readFileSync(path.join(__dirname, '..', 'extensions', 'databases', 'panel.html'), 'utf8');
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
+  assert.ok(scripts.length >= 1);
+  for (const script of scripts) assert.doesNotThrow(() => new vm.Script(script));
 });

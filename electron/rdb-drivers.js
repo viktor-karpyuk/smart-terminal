@@ -623,9 +623,10 @@ const PG_REPORTS = {
   jobs: () => [
     {
       title: 'pgAgent: jobs',
+      open: true,
       requires: 'pgagent.pga_job',
       absent: 'pgAgent is not installed in this database. It keeps its tables in the one it was set up in, usually postgres.',
-      note: 'What pgAgent has been told to run, when it last did and when it will next.',
+      note: 'Click a job to change it. What pgAgent has been told to run, when it last did and when it will next.',
       sql: `SELECT j.jobid AS id, j.jobname AS job, j.jobenabled AS enabled, c.jclname AS class,
                    coalesce(date_trunc('second', j.joblastrun)::text, 'never') AS "last run",
                    (SELECT CASE l.jlgstatus WHEN 's' THEN 'succeeded' WHEN 'f' THEN 'failed' WHEN 'r' THEN 'running' WHEN 'i' THEN 'no steps' WHEN 'd' THEN 'aborted' ELSE l.jlgstatus::text END
@@ -1200,6 +1201,44 @@ const postgres = {
               (SELECT count(*) FROM pg_catalog.pg_stat_activity) AS connections`,
     );
     return row ?? {};
+  },
+
+  /**
+   * One pgAgent job as a form needs it: the job, its steps and its schedules,
+   * with the classes and databases a form offers. A step that connects with a
+   * connection string of its own is said to be remote and the string stays
+   * here — it may hold a password, and a panel is never handed one.
+   */
+  async job(session, jobId) {
+    const there = (await session.all("SELECT pg_catalog.to_regclass('pgagent.pga_job') IS NOT NULL AS there"))[0]?.there;
+    if (!yes(there)) return { installed: false };
+    const classes = await session.all('SELECT jclid AS id, jclname AS name FROM pgagent.pga_jobclass ORDER BY jclname');
+    const databases = await session.all('SELECT datname AS name FROM pg_catalog.pg_database WHERE NOT datistemplate AND datallowconn ORDER BY 1');
+    const out = { installed: true, classes: classes.map((row) => ({ id: Number(row.id), name: row.name })), databases: databases.map((row) => row.name), job: null, steps: [], schedules: [] };
+    if (jobId === null || jobId === undefined || jobId === '') return out;
+    const id = Number(jobId);
+    if (!Number.isInteger(id)) return out;
+    const job = (await session.all('SELECT jobid AS id, jobjclid AS class, jobname AS name, jobdesc AS description, jobhostagent AS host, jobenabled AS enabled FROM pgagent.pga_job WHERE jobid = $1', [id]))[0];
+    if (!job) throw new RdbError('That job is not there any more');
+    out.job = { id: Number(job.id), classId: Number(job.class), name: job.name, description: job.description ?? '', host: job.host ?? '', enabled: yes(job.enabled) };
+    const steps = await session.all(
+      `SELECT jstid AS id, jstname AS name, jstdesc AS description, jstenabled AS enabled, jstkind AS kind, jstcode AS code, jstconnstr <> '' AS remote, jstdbname AS database, jstonerror AS onerror
+         FROM pgagent.pga_jobstep WHERE jstjobid = $1 ORDER BY jstname, jstid`,
+      [id],
+    );
+    out.steps = steps.map((row) => ({ id: Number(row.id), name: row.name, description: row.description ?? '', enabled: yes(row.enabled), kind: row.kind, code: row.code ?? '', remote: yes(row.remote), database: row.database ?? '', onerror: row.onerror }));
+    const schedules = await session.all(
+      `SELECT jscid AS id, jscname AS name, jscdesc AS description, jscenabled AS enabled, to_char(jscstart, 'YYYY-MM-DD HH24:MI') AS start, coalesce(to_char(jscend, 'YYYY-MM-DD HH24:MI'), '') AS "end",
+              array_to_json(jscminutes) AS minutes, array_to_json(jschours) AS hours, array_to_json(jscweekdays) AS weekdays, array_to_json(jscmonthdays) AS monthdays, array_to_json(jscmonths) AS months
+         FROM pgagent.pga_schedule WHERE jscjobid = $1 ORDER BY jscname, jscid`,
+      [id],
+    );
+    const bits = (value) => (typeof value === 'string' ? JSON.parse(value) : value ?? []).map((one) => one === true);
+    out.schedules = schedules.map((row) => ({
+      id: Number(row.id), name: row.name, description: row.description ?? '', enabled: yes(row.enabled), start: row.start, end: row.end,
+      minutes: bits(row.minutes), hours: bits(row.hours), weekdays: bits(row.weekdays), monthdays: bits(row.monthdays), months: bits(row.months),
+    }));
+    return out;
   },
 
   /** One statement the server keeps counters for, by the id it gives it. */

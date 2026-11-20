@@ -349,6 +349,8 @@ const DB_READ = [
   'snapshot',
   // What the readings of a watched server add up to. Read from this computer, not from the server.
   'trends',
+  // One scheduled job, as a form needs it.
+  'job',
 ] as const;
 const DB_WRITE = [
   'saveConnection', 'testConnection', 'deleteConnection', 'disconnect', 'pickFile',

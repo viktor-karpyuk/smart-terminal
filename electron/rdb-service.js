@@ -726,6 +726,14 @@ class RdbService {
         return sample ? { ok: true, supported: true, sample } : { ok: true, supported: false };
       },
 
+      /** One pgAgent job, or the lists a form for a new one offers. Read in the database pgAgent lives in, which is the one asked about. */
+      job: async (args) => {
+        const connection = this.#connection(args.id);
+        if (connection.engine !== 'postgres') return { ok: true, installed: false };
+        const found = await this.#browse(args.id, args.database, (session) => this.#reading(session, () => drivers.catalog('postgres').job(session, args.job ?? null)));
+        return { ok: true, ...found };
+      },
+
       /** Have a server read every few minutes, or stop. Turning it on takes the first reading at once, so the page is not empty. */
       watch: async (args) => {
         const connection = this.#connection(args.id);

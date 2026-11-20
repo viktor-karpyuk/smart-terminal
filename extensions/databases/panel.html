@@ -128,6 +128,7 @@
   table.list td { padding: 4px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
   table.list td.m { font-family: ui-monospace, Menlo, monospace; font-size: 0.95rem; overflow-wrap: anywhere; }
   table.list td.m.n { white-space: nowrap; overflow-wrap: normal; }
+  .jobpart { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; margin: 6px 0; }
   .alert { border: 1px solid var(--warn, #d9a441); border-radius: var(--radius); padding: 8px 10px; margin: 6px 0; }
   .alert .what { margin-bottom: 6px; overflow-wrap: anywhere; }
   table.list td.act { text-align: right; white-space: nowrap; width: 1%; }
@@ -311,6 +312,195 @@
       postgres: [['extensions', 'Extensions'], ['foreign', 'Foreign data'], ['publications', 'Publications and subscriptions'], ['eventTriggers', 'Event triggers'], ['languages', 'Languages and casts'], ['jobs', 'Scheduled jobs']]
     }
   };
+
+  // ───────────────────────────────────────────────────────── scheduled jobs ──
+
+  /** The five parts of a pgAgent schedule: how many places each has, what number the first stands for, and whether it has a "last day". */
+  var JOB_PARTS = [
+    { key: 'minutes', label: 'Minutes', size: 60, first: 0, hint: '0–59' },
+    { key: 'hours', label: 'Hours', size: 24, first: 0, hint: '0–23' },
+    { key: 'weekdays', label: 'Weekdays', size: 7, first: 0, hint: '0–6, 0 is Sunday' },
+    { key: 'monthdays', label: 'Days', size: 32, first: 1, last: true, hint: '1–31, L is the last' },
+    { key: 'months', label: 'Months', size: 12, first: 1, hint: '1–12' }
+  ];
+
+  /**
+   * What somebody typed for one part of a schedule, as the row of yes and no
+   * pgAgent keeps. `*` is every one, which pgAgent writes as none ticked; then
+   * lists, ranges and steps, as cron has them: `0,30`, `9-17`, and a star, a
+   * slash and a number for every so many.
+   */
+  function scheduleBits(text, part) {
+    var bits = [];
+    for (var i = 0; i < part.size; i += 1) bits.push(false);
+    var typed = String(text === null || text === undefined ? '' : text).trim();
+    if (typed === '' || typed === '*') return { bits: bits };
+    var top = part.first + part.size - 1 - (part.last ? 1 : 0);
+    var pieces = typed.split(',');
+    for (var p = 0; p < pieces.length; p += 1) {
+      var piece = pieces[p].trim();
+      if (part.last && /^l$/i.test(piece)) { bits[part.size - 1] = true; continue; }
+      var match = /^(\*|\d+)(?:-(\d+))?(?:\/(\d+))?$/.exec(piece);
+      if (!match) return { error: part.label + ': "' + piece + '" is not a number, a range or a step' };
+      var from = match[1] === '*' ? part.first : Number(match[1]);
+      var to = match[1] === '*' ? top : match[2] === undefined ? (match[3] === undefined ? from : top) : Number(match[2]);
+      var step = match[3] === undefined ? 1 : Number(match[3]);
+      if (step < 1) return { error: part.label + ': a step of 0 never arrives' };
+      if (from < part.first || to > top || from > to) return { error: part.label + ' go from ' + part.first + ' to ' + top };
+      for (var n = from; n <= to; n += step) bits[n - part.first] = true;
+    }
+    // Every one ticked is every one, which is none ticked.
+    if (bits.every(function (bit) { return bit; })) return { bits: bits.map(function () { return false; }) };
+    return { bits: bits };
+  }
+
+  /** The row pgAgent keeps, as somebody would type it. */
+  function scheduleText(bits, part) {
+    var list = bits || [];
+    if (!list.some(function (bit) { return bit; })) return '*';
+    var out = [];
+    var places = part.size - (part.last ? 1 : 0);
+    for (var i = 0; i < places; i += 1) {
+      if (!list[i]) continue;
+      var end = i;
+      while (end + 1 < places && list[end + 1]) end += 1;
+      out.push(end === i ? String(i + part.first) : end === i + 1 ? (i + part.first) + ',' + (end + part.first) : (i + part.first) + '-' + (end + part.first));
+      i = end;
+    }
+    if (part.last && list[part.size - 1]) out.push('L');
+    return out.join(',');
+  }
+
+  /** A job as the form holds it, from what the server said: schedules as text, and nothing a form does not edit. */
+  function jobForm(data) {
+    return {
+      job: data.job ? { name: data.job.name, classId: data.job.classId, enabled: data.job.enabled, description: data.job.description, host: data.job.host }
+        : { name: '', classId: ((data.classes || []).filter(function (one) { return /^misc/i.test(one.name); })[0] || (data.classes || [])[0] || { id: 1 }).id, enabled: true, description: '', host: '' },
+      steps: (data.steps || []).map(function (step) {
+        return { id: step.id, name: step.name, kind: step.kind, database: step.database, code: step.code, onerror: step.onerror, enabled: step.enabled, remote: step.remote };
+      }),
+      schedules: (data.schedules || []).map(function (one) {
+        var out = { id: one.id, name: one.name, enabled: one.enabled, start: one.start, end: one.end };
+        JOB_PARTS.forEach(function (part) { out[part.key] = scheduleText(one[part.key], part); });
+        return out;
+      })
+    };
+  }
+
+  /**
+   * The statements that make a job what the form says, and nothing else: a new
+   * job is inserted with its steps and schedules, a changed one has only what
+   * changed updated, and what was removed is deleted by its id. One
+   * transaction, so a job is never left with half its steps.
+   *
+   * `before` is `jobForm` of what the server said, or null for a new job.
+   */
+  function jobSql(jobId, before, form) {
+    var lit = function (value) { return "'" + String(value === null || value === undefined ? '' : value).replace(/'/g, "''") + "'"; };
+    var bool = function (value) { return value ? 'true' : 'false'; };
+    var when = /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}(:\d{2})?)?$/;
+    var job = form.job;
+    if (!String(job.name || '').trim()) return { problem: 'The job needs a name.' };
+    if (!Number.isInteger(Number(job.classId))) return { problem: 'Choose what kind of job it is.' };
+    var ref = jobId === null || jobId === undefined ? "currval('pgagent.pga_job_jobid_seq')" : String(Number(jobId));
+    var out = [];
+    var problem = null;
+
+    if (jobId === null || jobId === undefined) {
+      out.push('INSERT INTO pgagent.pga_job (jobjclid, jobname, jobdesc, jobhostagent, jobenabled)\n  VALUES (' + [Number(job.classId), lit(job.name.trim()), lit(job.description), lit(job.host), bool(job.enabled)].join(', ') + ')');
+    } else {
+      var was = before.job;
+      var set = [];
+      if (was.name !== job.name.trim()) set.push('jobname = ' + lit(job.name.trim()));
+      if (Number(was.classId) !== Number(job.classId)) set.push('jobjclid = ' + Number(job.classId));
+      if ((was.description || '') !== (job.description || '')) set.push('jobdesc = ' + lit(job.description));
+      if ((was.host || '') !== (job.host || '')) set.push('jobhostagent = ' + lit(job.host));
+      if (Boolean(was.enabled) !== Boolean(job.enabled)) set.push('jobenabled = ' + bool(job.enabled));
+      if (set.length) out.push('UPDATE pgagent.pga_job SET ' + set.join(', ') + ' WHERE jobid = ' + ref);
+    }
+
+    var stepsBefore = {};
+    ((before && before.steps) || []).forEach(function (step) { stepsBefore[step.id] = step; });
+    var keptSteps = {};
+    form.steps.forEach(function (step, index) {
+      if (problem) return;
+      var label = 'Step ' + (index + 1);
+      if (!String(step.name || '').trim()) { problem = label + ' needs a name.'; return; }
+      if (!String(step.code || '').trim()) { problem = label + ' has nothing to run.'; return; }
+      if (step.kind !== 's' && step.kind !== 'b') { problem = label + ' is SQL or a shell script.'; return; }
+      // pgAgent's own rule: SQL runs in a database, a script in none.
+      var database = step.kind === 'b' ? '' : String(step.database || '').trim();
+      if (step.kind === 's' && !step.remote && !database) { problem = label + ' needs a database to run in.'; return; }
+      var onerror = ['f', 's', 'i'].indexOf(step.onerror) >= 0 ? step.onerror : 'f';
+      var old = step.id !== undefined && step.id !== null ? stepsBefore[step.id] : null;
+      if (!old) {
+        out.push('INSERT INTO pgagent.pga_jobstep (jstjobid, jstname, jstenabled, jstkind, jstcode, jstdbname, jstonerror)\n  VALUES (' + [ref, lit(step.name.trim()), bool(step.enabled), lit(step.kind), lit(step.code), lit(database), lit(onerror)].join(', ') + ')');
+        return;
+      }
+      keptSteps[step.id] = true;
+      var changed = [];
+      if (old.name !== step.name.trim()) changed.push('jstname = ' + lit(step.name.trim()));
+      if (Boolean(old.enabled) !== Boolean(step.enabled)) changed.push('jstenabled = ' + bool(step.enabled));
+      if (old.code !== step.code) changed.push('jstcode = ' + lit(step.code));
+      if (old.onerror !== onerror) changed.push('jstonerror = ' + lit(onerror));
+      // A step that connects with its own string keeps it, and its kind with it: neither is the form's to rewrite.
+      if (!step.remote) {
+        if (old.kind !== step.kind) changed.push('jstkind = ' + lit(step.kind));
+        if ((old.database || '') !== database) changed.push('jstdbname = ' + lit(database));
+      }
+      if (changed.length) out.push('UPDATE pgagent.pga_jobstep SET ' + changed.join(', ') + ' WHERE jstid = ' + Number(step.id) + ' AND jstjobid = ' + ref);
+    });
+    if (problem) return { problem: problem };
+    Object.keys(stepsBefore).forEach(function (id) {
+      if (!keptSteps[id]) out.push('DELETE FROM pgagent.pga_jobstep WHERE jstid = ' + Number(id) + ' AND jstjobid = ' + ref);
+    });
+
+    var schedulesBefore = {};
+    ((before && before.schedules) || []).forEach(function (one) { schedulesBefore[one.id] = one; });
+    var keptSchedules = {};
+    form.schedules.forEach(function (one, index) {
+      if (problem) return;
+      var label = 'Schedule ' + (index + 1);
+      if (!String(one.name || '').trim()) { problem = label + ' needs a name.'; return; }
+      if (!when.test(String(one.start || '').trim())) { problem = label + ' starts on a date: 2026-01-31, or 2026-01-31 08:00.'; return; }
+      if (String(one.end || '').trim() && !when.test(String(one.end).trim())) { problem = label + ' ends on a date, or not at all.'; return; }
+      var arrays = {};
+      JOB_PARTS.forEach(function (part) {
+        if (problem) return;
+        var parsed = scheduleBits(one[part.key], part);
+        if (parsed.error) { problem = label + ' — ' + parsed.error + '.'; return; }
+        arrays[part.key] = "'{" + parsed.bits.map(function (bit) { return bit ? 't' : 'f'; }).join(',') + "}'";
+      });
+      if (problem) return;
+      var end = String(one.end || '').trim() ? lit(one.end.trim()) : 'NULL';
+      var old = one.id !== undefined && one.id !== null ? schedulesBefore[one.id] : null;
+      if (!old) {
+        out.push('INSERT INTO pgagent.pga_schedule (jscjobid, jscname, jscenabled, jscstart, jscend, jscminutes, jschours, jscweekdays, jscmonthdays, jscmonths)\n  VALUES ('
+          + [ref, lit(one.name.trim()), bool(one.enabled), lit(one.start.trim()), end, arrays.minutes, arrays.hours, arrays.weekdays, arrays.monthdays, arrays.months].join(', ') + ')');
+        return;
+      }
+      keptSchedules[one.id] = true;
+      var changed = [];
+      if (old.name !== one.name.trim()) changed.push('jscname = ' + lit(one.name.trim()));
+      if (Boolean(old.enabled) !== Boolean(one.enabled)) changed.push('jscenabled = ' + bool(one.enabled));
+      if ((old.start || '') !== one.start.trim()) changed.push('jscstart = ' + lit(one.start.trim()));
+      if ((old.end || '') !== String(one.end || '').trim()) changed.push('jscend = ' + end);
+      JOB_PARTS.forEach(function (part) {
+        // Compared as the server would keep them, so `*` and `0-59` are the same schedule.
+        var prior = scheduleBits(old[part.key], part);
+        var priorText = "'{" + (prior.bits || []).map(function (bit) { return bit ? 't' : 'f'; }).join(',') + "}'";
+        if (priorText !== arrays[part.key]) changed.push('jsc' + part.key + ' = ' + arrays[part.key]);
+      });
+      if (changed.length) out.push('UPDATE pgagent.pga_schedule SET ' + changed.join(', ') + ' WHERE jscid = ' + Number(one.id) + ' AND jscjobid = ' + ref);
+    });
+    if (problem) return { problem: problem };
+    Object.keys(schedulesBefore).forEach(function (id) {
+      if (!keptSchedules[id]) out.push('DELETE FROM pgagent.pga_schedule WHERE jscid = ' + Number(id) + ' AND jscjobid = ' + ref);
+    });
+
+    if (!out.length) return { sql: '' };
+    return { sql: ['BEGIN'].concat(out, ['COMMIT']).map(function (one) { return one + ';'; }).join('\n') };
+  }
 
   /** The PostgreSQL settings whose value is a list of names rather than one string. The server does not say which they are; its source does. */
   var PG_LIST_SETTINGS = ['shared_preload_libraries', 'session_preload_libraries', 'local_preload_libraries', 'search_path', 'temp_tablespaces', 'log_destination',
@@ -3780,6 +3970,136 @@
   // ───────────────────────────────────────────────────────── roles and grants ──
 
   /** A role or a user, made or changed. The app writes the statements — the password is typed here and never drawn again. */
+  /**
+   * A pgAgent job, made or changed from a form. What will be sent is on screen
+   * the whole time and goes as one transaction; nothing here writes a statement
+   * the person has not been shown.
+   */
+  function openJobForm(conn, database, jobId, done) {
+    var veil = h('div', { id: 'veil', onmousedown: function (event) { if (event.target === veil) veil.remove(); } });
+    var box = h('div', { class: 'form', style: 'width:min(860px, 94vw)' }, h('h2', { text: jobId === null ? 'New pgAgent job' : 'pgAgent job' }), h('div', { class: 'faint', text: 'Reading…' }));
+    veil.appendChild(box);
+    document.body.appendChild(veil);
+    call('job', { id: conn.id, database: database, job: jobId }).then(function (data) {
+      if (!data.installed) { clear(box).appendChild(h('div', { class: 'bad', text: 'pgAgent is not installed in ' + database + '.' })); return; }
+      var before = jobId === null ? null : jobForm(data);
+      var form = jobForm(data);
+      var busy = false;
+      var preview = h('pre', { class: 'code', style: 'padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto' });
+      var problemEl = h('div', { class: 'result bad', style: 'white-space:pre-wrap' });
+      var save = h('button', { class: 'btn primary', text: jobId === null ? 'Create' : 'Save', onclick: function () { send(jobSql(jobId, before, form).sql, jobId === null ? 'Created ' + form.job.name : 'Saved ' + form.job.name); } });
+
+      function refresh() {
+        var now = jobSql(jobId, before, form);
+        paintSql(preview, now.sql || (now.problem ? '' : '-- Nothing to change yet.'));
+        problemEl.textContent = now.problem || '';
+        save.disabled = busy || Boolean(now.problem) || !now.sql;
+      }
+      function send(sql, said) {
+        if (!sql || busy) return;
+        busy = true;
+        refresh();
+        var session = 'job-form';
+        call('query', Object.assign(where(conn, database), { tab: session, sql: sql })).then(function (result) {
+          var failed = result.results[result.results.length - 1];
+          if (failed && failed.error) {
+            // Whatever the transaction had done is taken back; the form stays as it was typed.
+            if (result.txn !== 'idle') call('query', Object.assign(where(conn, database), { tab: session, sql: 'ROLLBACK' })).then(function () {}, function () {});
+            busy = false;
+            refresh();
+            problemEl.textContent = failed.error.error + (failed.error.detail ? '\n' + failed.error.detail : '') + '\nNothing was changed.';
+            return;
+          }
+          host.call('db.closeTab', { id: conn.id, database: database, tab: session });
+          veil.remove();
+          say(said);
+          if (done) done();
+        }, function (error) { busy = false; refresh(); problemEl.textContent = error.message; });
+      }
+      function field(label, value, set, attrs) {
+        return h('label', { class: 'field' }, h('span', { text: label }), h('input', Object.assign({ type: 'text', value: value === null || value === undefined ? '' : value, spellcheck: 'false', oninput: function (event) { set(event.target.value); refresh(); } }, attrs || {})));
+      }
+      function pick(label, value, options, set, style) {
+        return h('label', { class: 'field', style: style || '' }, h('span', { text: label }), h('select', { onchange: function (event) { set(event.target.value); refresh(); } },
+          options.map(function (one) { return h('option', { value: String(one[0]), text: one[1], selected: String(one[0]) === String(value) }); })));
+      }
+      function tick(label, value, set) {
+        return h('label', { class: 'check', style: 'margin:0;align-self:flex-end;padding-bottom:6px' }, h('input', { type: 'checkbox', checked: value, onchange: function (event) { set(event.target.checked); refresh(); } }), h('span', { text: label }));
+      }
+      var stepsEl = h('div');
+      var schedulesEl = h('div');
+      function drawSteps() {
+        clear(stepsEl);
+        if (!form.steps.length) stepsEl.appendChild(h('div', { class: 'faint', text: 'No steps: a job with none runs nothing.' }));
+        form.steps.forEach(function (step, index) {
+          var databaseChoices = (data.databases.indexOf(step.database) >= 0 || !step.database ? data.databases : data.databases.concat([step.database])).map(function (name) { return [name, name]; });
+          stepsEl.appendChild(h('div', { class: 'jobpart' },
+            h('div', { class: 'two', style: 'align-items:flex-end' },
+              field('Step', step.name, function (value) { step.name = value; }, { placeholder: 'What it does' }),
+              step.remote ? null : pick('Runs', step.kind, [['s', 'SQL'], ['b', 'A shell script, on the agent\'s machine']], function (value) { step.kind = value; drawSteps(); }, 'flex:0 0 190px'),
+              step.remote || step.kind === 'b' ? null : pick('In database', step.database, [['', '— choose —']].concat(databaseChoices), function (value) { step.database = value; }, 'flex:0 0 150px'),
+              pick('If it fails', step.onerror, [['f', 'The job fails'], ['s', 'Count it as done'], ['i', 'Carry on']], function (value) { step.onerror = value; }, 'flex:0 0 140px'),
+              tick('Enabled', step.enabled, function (value) { step.enabled = value; }),
+              h('button', { class: 'btn quiet', text: 'Remove', style: 'align-self:flex-end', onclick: function () { form.steps.splice(index, 1); drawSteps(); refresh(); } })),
+            step.remote ? h('div', { class: 'faint', text: 'This step connects with a connection string of its own, which is kept as it is and not shown here.' }) : null,
+            h('textarea', { class: 'mono', rows: 4, spellcheck: 'false', placeholder: step.kind === 'b' ? '#!/bin/sh' : 'VACUUM ANALYZE orders;', style: 'width:100%;box-sizing:border-box;margin-top:4px', value: step.code, oninput: function (event) { step.code = event.target.value; refresh(); } })));
+        });
+      }
+      function drawSchedules() {
+        clear(schedulesEl);
+        if (!form.schedules.length) schedulesEl.appendChild(h('div', { class: 'faint', text: 'No schedule: the job only runs when it is told to.' }));
+        form.schedules.forEach(function (one, index) {
+          schedulesEl.appendChild(h('div', { class: 'jobpart' },
+            h('div', { class: 'two', style: 'align-items:flex-end' },
+              field('Schedule', one.name, function (value) { one.name = value; }, { placeholder: 'every night' }),
+              h('div', { style: 'flex:0 0 150px' }, field('From', one.start, function (value) { one.start = value; }, { placeholder: '2026-01-31 08:00' })),
+              h('div', { style: 'flex:0 0 150px' }, field('Until', one.end, function (value) { one.end = value; }, { placeholder: 'for good' })),
+              tick('Enabled', one.enabled, function (value) { one.enabled = value; }),
+              h('button', { class: 'btn quiet', text: 'Remove', style: 'align-self:flex-end', onclick: function () { form.schedules.splice(index, 1); drawSchedules(); refresh(); } })),
+            h('div', { class: 'two' }, JOB_PARTS.map(function (part) {
+              return field(part.label, one[part.key], function (value) { one[part.key] = value; }, { placeholder: '*', title: part.hint });
+            }))));
+        });
+      }
+      var today = new Date();
+      var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+      clear(box);
+      box.appendChild(h('h2', { text: jobId === null ? 'New pgAgent job' : 'pgAgent job ' + data.job.name }));
+      box.appendChild(h('div', { class: 'dim', text: 'On ' + conn.name + ', kept in ' + database }));
+      box.appendChild(h('div', { class: 'two', style: 'align-items:flex-end' },
+        field('Name', form.job.name, function (value) { form.job.name = value; }),
+        pick('Kind', form.job.classId, data.classes.map(function (one) { return [one.id, one.name]; }), function (value) { form.job.classId = Number(value); }, 'flex:0 0 200px'),
+        tick('Enabled', form.job.enabled, function (value) { form.job.enabled = value; })));
+      box.appendChild(h('div', { class: 'two' }, field('What it is for', form.job.description, function (value) { form.job.description = value; }),
+        h('div', { style: 'flex:0 0 220px' }, field('Only on the agent at', form.job.host, function (value) { form.job.host = value; }, { placeholder: 'any agent' }))));
+      box.appendChild(h('div', { class: 'row', style: 'margin-top:10px' }, h('b', { text: 'Steps' }), h('span', { class: 'faint', text: 'run in order of their names' }), h('span', { class: 'spacer' }),
+        h('button', { class: 'btn quiet', text: '+ Step', onclick: function () { form.steps.push({ name: '', kind: 's', database: database, code: '', onerror: 'f', enabled: true, remote: false }); drawSteps(); refresh(); } })));
+      box.appendChild(stepsEl);
+      box.appendChild(h('div', { class: 'row', style: 'margin-top:10px' }, h('b', { text: 'Schedules' }), h('span', { class: 'spacer' }),
+        h('button', { class: 'btn quiet', text: '+ Schedule', onclick: function () {
+          form.schedules.push({ name: '', enabled: true, start: today.getFullYear() + '-' + pad(today.getMonth() + 1) + '-' + pad(today.getDate()), end: '', minutes: '0', hours: '3', weekdays: '*', monthdays: '*', months: '*' });
+          drawSchedules(); refresh();
+        } })));
+      box.appendChild(schedulesEl);
+      box.appendChild(h('div', { class: 'faint', style: 'margin:4px 0 8px', text: '* is every one. Lists, ranges and steps work as in cron: 0,30 · 9-17 · */15. Weekdays count from 0, Sunday; L is the last day of the month. Times are the server\'s.' }));
+      box.appendChild(h('label', { class: 'field' }, h('span', { text: 'What will be sent' }), preview));
+      box.appendChild(problemEl);
+      var sure = false;
+      var remove = jobId === null || conn.readOnly ? null : h('button', { class: 'btn danger', text: 'Delete…', onclick: function () {
+        if (!sure) { sure = true; remove.textContent = 'Really delete it, with its history'; return; }
+        send('DELETE FROM pgagent.pga_job WHERE jobid = ' + Number(jobId) + ';', 'Deleted ' + data.job.name);
+      } });
+      box.appendChild(h('div', { class: 'foot' }, remove,
+        jobId === null ? null : h('button', { class: 'btn', text: 'Run it now', title: 'Tells pgAgent it is due. It runs when the agent next looks, if one is running.', onclick: function () {
+          send('UPDATE pgagent.pga_job SET jobnextrun = now() WHERE jobid = ' + Number(jobId) + ';', data.job.name + ' is due now');
+        } }),
+        h('span', { class: 'spacer' }), h('button', { class: 'btn quiet', text: 'Cancel', onclick: function () { veil.remove(); } }), save));
+      drawSteps();
+      drawSchedules();
+      refresh();
+    }, function (error) { clear(box).appendChild(h('div', { class: 'bad', text: error.message })); });
+  }
+
   /** One setting: what the server says about it, a new value, and the statement that will be sent — read before it goes. */
   function openSetting(conn, tab, name) {
     var veil = h('div', { id: 'veil', onmousedown: function (event) { if (event.target === veil) veil.remove(); } });
@@ -4234,12 +4554,19 @@
     var box = clear(tab.el);
     if (!conn) { box.appendChild(h('div', { class: 'empty', text: 'This connection is not there any more.' })); return; }
     box.appendChild(h('div', { class: 'bar' }, h('div', { class: 'crumbs' }, h('span', { text: conn.name }), '›', h('span', { text: tab.database }), '›', h('b', { text: tab.title })), h('span', { class: 'spacer' }),
+      tab.name === 'jobs' && !conn.readOnly ? h('button', { class: 'btn', text: 'New pgAgent job…', onclick: function () { openJobForm(conn, tab.database, null, function () { drawReport(tab); }); } }) : null,
       tab.name === 'extensions' && !conn.readOnly ? h('button', { class: 'btn', text: 'Install one…', onclick: function () { openQuery(conn, tab.database, 'CREATE EXTENSION IF NOT EXISTS extension_name;'); } }) : null,
       h('button', { class: 'btn quiet', text: '↻', title: 'Read again', onclick: function () { drawReport(tab); } })));
     var out = h('div', { class: 'view', style: 'position:relative;flex:1' }, h('div', { class: 'empty', text: 'Reading…' }));
     box.appendChild(out);
     call('report', { id: tab.conn, database: tab.database, schema: tab.schema, kind: tab.name }).then(function (data) {
       clear(out).appendChild(reportView(data, { onAsk: function (qid) { askClaude({ id: tab.conn, database: tab.database, qid: qid }); }, onOpen: function (row, columns) {
+        var names = columns.map(function (column) { return column.name; });
+        // A pgAgent job opens as a form; its steps and pg_cron's jobs open as the statement they run.
+        if (tab.name === 'jobs' && names.indexOf('class') >= 0 && names.indexOf('id') >= 0) {
+          if (!conn.readOnly) openJobForm(conn, tab.database, Number(row[names.indexOf('id')]), function () { drawReport(tab); });
+          return;
+        }
         var statement = reportStatement(columns, row);
         if (statement) { openQuery(conn, tab.database, statement); return; }
         var target = reportTarget(columns, row, tab.schema);
