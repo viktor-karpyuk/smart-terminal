@@ -1548,6 +1548,18 @@ class Database {
     };
   }
 
+  /** Every folder the sessions in history worked in, but these: what a worktree is still used by. */
+  sessionCwds(exceptIds = []) {
+    const skip = new Set(exceptIds);
+    const dirs = [];
+    for (const row of this.db.prepare('SELECT id, start_cwd, last_cwd FROM sessions').all()) {
+      if (skip.has(row.id)) continue;
+      if (row.start_cwd) dirs.push(row.start_cwd);
+      if (row.last_cwd) dirs.push(row.last_cwd);
+    }
+    return dirs;
+  }
+
   /**
    * Remove one session and everything attached to it. A running session is refused:
    * its row is the live record of a tab that is still on screen.
@@ -1568,6 +1580,14 @@ class Database {
    * record of what is on screen. Returns the ids removed so their saved
    * conversations can be cleaned up too.
    */
+  /** The sessions `clearHistory` with the same options would erase. */
+  finishedSessionIds({ before = null } = {}) {
+    return this.db
+      .prepare(`SELECT id FROM sessions WHERE ended_at IS NOT NULL ${before ? 'AND started_at < ?' : ''}`)
+      .all(...(before ? [before] : []))
+      .map((row) => row.id);
+  }
+
   clearHistory({ before = null } = {}) {
     const doomed = this.db
       .prepare(

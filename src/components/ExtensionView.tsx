@@ -4,6 +4,8 @@ import { attachFrame, parkFrame } from '../lib/frameKeeper';
 import { JENKINS_VIEW, REVIEWER_VIEW, useStore } from '../state/store';
 import { leafOfTab, parentOf } from '../state/layout';
 import type { ExtensionPanelView } from '../global';
+import { JenkinsNav, ReviewerNav } from './Sidebar';
+import { startDrag } from '../lib/resize';
 import {
   buildCommand,
   execCommand,
@@ -1037,20 +1039,14 @@ function Frame({
   }, [showing]);
 
   /*
-   * The Code Reviewer's menu lives in the app's sidebar when that list is
-   * showing, so the panel can leave its own row of tabs out; it puts them
-   * back the moment the list is closed, or there would be no way around it.
+   * The Code Reviewer's and Jenkins' menus are drawn by the app, down the
+   * panel's own left edge, so the panel can leave its row of the same links
+   * out. Folded away, the panel puts them back, or there would be no way around.
    */
-  const navInSidebar = useStore(
-    (s) =>
-      (view.id === REVIEWER_VIEW &&
-        s.settings.sidebarShowReviewer &&
-        s.extensions.panels.some((panel) => panel.id === REVIEWER_VIEW && !panel.error)) ||
-      // Jenkins' tree and views, the same way: the sidebar shows them, the panel keeps the room.
-      (view.id === JENKINS_VIEW &&
-        s.settings.sidebarShowJenkins &&
-        s.extensions.panels.some((panel) => panel.id === JENKINS_VIEW && !panel.error)),
-  );
+  const hasNav = view.id === REVIEWER_VIEW || view.id === JENKINS_VIEW;
+  const navHidden = useStore((s) => Boolean(s.settings.extensionNavHidden?.[view.id]));
+  const navWidth = useStore((s) => s.settings.extensionNavWidth?.[view.id] ?? 260);
+  const navInSidebar = hasNav && !navHidden;
   const navInSidebarRef = useRef(navInSidebar);
   useEffect(() => {
     navInSidebarRef.current = navInSidebar;
@@ -1063,8 +1059,58 @@ function Frame({
     if (nav) tell('navigate', nav.place);
   }, [nav?.seq]);
 
+  const setNavHidden = (hidden: boolean) => {
+    const { settings, updateSettings } = useStore.getState();
+    updateSettings({ extensionNavHidden: { ...(settings.extensionNavHidden ?? {}), [view.id]: hidden } });
+  };
+
   return (
-    <div className="extension-view" hidden={!showing}>
+    <div className={`extension-view${hasNav ? ' has-nav' : ''}`} hidden={!showing}>
+      {hasNav && navHidden && (
+        <button
+          className="extnav-rail"
+          title="Show the navigator"
+          aria-label="Show the navigator"
+          onClick={() => setNavHidden(false)}
+        >
+          <NavGlyph />
+        </button>
+      )}
+      {hasNav && !navHidden && (
+        <aside className="extnav" style={{ width: navWidth }}>
+          <button
+            className="extnav-hide"
+            title="Hide the navigator"
+            aria-label="Hide the navigator"
+            onClick={() => setNavHidden(true)}
+          >
+            <NavGlyph />
+          </button>
+          {view.id === JENKINS_VIEW ? <JenkinsNav /> : <ReviewerNav />}
+          <div
+            className="extnav-resizer"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize the navigator"
+            onDoubleClick={() => {
+              const { settings, updateSettings } = useStore.getState();
+              const widths = { ...(settings.extensionNavWidth ?? {}) };
+              delete widths[view.id];
+              updateSettings({ extensionNavWidth: widths });
+            }}
+            onPointerDown={(event) => {
+              event.preventDefault();
+              const startX = event.clientX;
+              const start = navWidth;
+              startDrag((move) => {
+                const next = Math.round(Math.min(520, Math.max(180, start + move.clientX - startX)));
+                const { settings, updateSettings } = useStore.getState();
+                updateSettings({ extensionNavWidth: { ...(settings.extensionNavWidth ?? {}), [view.id]: next } });
+              });
+            }}
+          />
+        </aside>
+      )}
       {asking && (
         <div className="modal-backdrop" onMouseDown={() => asking.answer(false)}>
           <div className="confirm" onMouseDown={(event) => event.stopPropagation()}>
@@ -1094,5 +1140,15 @@ function Frame({
       )}
       <div className="extension-frame-slot" ref={slot} />
     </div>
+  );
+}
+
+/** A panel with a column down its side: the navigator's own toggle. */
+function NavGlyph() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+      <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5" />
+      <path d="M6 2.75v10.5" />
+    </svg>
   );
 }

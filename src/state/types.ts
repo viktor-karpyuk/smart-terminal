@@ -213,6 +213,10 @@ export interface FilePanel {
    * everything back exactly as it was.
    */
   find?: string;
+  /** Which view the side column shows: the folder's files, or a search inside them. */
+  sideView?: 'explorer' | 'search';
+  /** The folder itself folded away in the explorer, the way an editor's root section folds. */
+  rootCollapsed?: boolean;
   /** Folders opened in the tree, so it keeps its shape across a restart. */
   expanded: string[];
   /** How wide the tree is. Per panel, because two folders are not equally deep. */
@@ -558,6 +562,10 @@ export interface Settings {
   sidebarReviewerOpen?: Record<string, boolean>;
   /** Which lines of Jenkins' tree are unfolded: `t:<folder path>`, `j:<job path>`, `v:<view path>`, `g:smart`, `g:views`. */
   sidebarJenkinsOpen?: Record<string, boolean>;
+  /** Per panel kind (the view id): whether its own navigator is folded away. */
+  extensionNavHidden?: Record<string, boolean>;
+  /** Per panel kind (the view id): how wide its navigator was dragged. */
+  extensionNavWidth?: Record<string, number>;
   /** Folders and jobs, or views — the switch at the top of the Jenkins list. */
   sidebarJenkinsMode?: 'tree' | 'views';
   /** Which Jenkins server the list shows, when more than one is set up. */
