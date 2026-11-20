@@ -242,6 +242,12 @@ function graphFrom(lists, helpers, now = Date.now()) {
       instance: labels['node.kubernetes.io/instance-type'] ?? '',
       version: item.status?.nodeInfo?.kubeletVersion ?? '',
       taints: (item.spec?.taints ?? []).length,
+      // What a replacement has to repeat to be scheduled onto the same way. A cordon's own taint is not one of them.
+      taintList: (item.spec?.taints ?? [])
+        .filter((taint) => taint.key !== 'node.kubernetes.io/unschedulable')
+        .map((taint) => `${taint.key}${taint.value ? `=${taint.value}` : ''}:${taint.effect}`),
+      capacity: String(labels['eks.amazonaws.com/capacityType'] ?? labels['karpenter.sh/capacity-type'] ??
+        (labels['cloud.google.com/gke-spot'] === 'true' ? 'spot' : '')).toLowerCase().replace('_', '-'),
       cpuAlloc: millicores(item.status?.allocatable?.cpu),
       memAlloc: quantity(item.status?.allocatable?.memory),
       cpuReq: 0,
@@ -318,6 +324,8 @@ function graphFrom(lists, helpers, now = Date.now()) {
       memLim: limits.memory,
       spread: spreadOf(template),
       pdb: pdb?.metadata?.name ?? '',
+      // How many of its pods may be taken away right now. Zero is a drain that waits.
+      pdbAllowed: pdb ? pdb.status?.disruptionsAllowed ?? null : null,
       helm: labels['app.kubernetes.io/managed-by'] === 'Helm' ? labels['helm.sh/chart'] ?? 'Helm' : '',
       claimTemplates: (item.spec?.volumeClaimTemplates ?? []).map((claim) => claim.metadata?.name ?? ''),
       // Read off the image. Kubernetes has no kind called "MongoDB".
@@ -333,6 +341,55 @@ function graphFrom(lists, helpers, now = Date.now()) {
     if (parent) join(idOf(parent.kind, parent.metadata?.namespace, parent.metadata?.name), node.id, 'owns');
   }
 
+  /*
+   * What an operator owns.
+   *
+   * Half the databases in a real cluster are not StatefulSets: they are pods
+   * owned by a `Cluster`, a `RedisFailover`, a `Rollout` — a custom resource
+   * whose controller makes the pods itself. Those kinds are not in any list
+   * read here, so their pods used to look like pods nobody owned, three
+   * strangers instead of one database, and a plan to drain their node warned
+   * that they would never come back. The owner reference names the thing, so
+   * it is drawn from that: a workload by another name, marked as one this map
+   * knows only through its pods.
+   */
+  const customs = new Map();
+  const customOwner = (pod) => {
+    const ref = controllerOf(pod);
+    if (!ref?.kind || !ref.name || byUid.has(ref.uid) || ref.kind === 'Node') return '';
+    const namespace = pod.metadata?.namespace ?? '';
+    const id = idOf(ref.kind, namespace, ref.name);
+    if (!customs.has(id)) {
+      if (byId.has(id)) return id;
+      const group = String(ref.apiVersion ?? '').includes('/') ? String(ref.apiVersion).split('/')[0] : '';
+      const fake = { spec: pod.spec ?? {} };
+      const requests = podRequests(fake, 'requests');
+      const limits = podRequests(fake, 'limits');
+      const images = (pod.spec?.containers ?? []).map((container) => container.image ?? '');
+      const found = images.map(techOf).find(Boolean) ?? null;
+      const labels = pod.metadata?.labels ?? {};
+      const pdb = pdbs.find((entry) => entry.metadata?.namespace === namespace && matches(entry.spec?.selector?.matchLabels, labels));
+      const node = {
+        id, kind: ref.kind, name: ref.name, namespace,
+        uid: ref.uid ?? id, createdAt: null,
+        custom: true,
+        // What kubectl calls it: the kind with its API group, which is the spelling that cannot collide.
+        resource: group ? `${ref.kind.toLowerCase()}.${group}` : ref.kind.toLowerCase(),
+        desired: 0, ready: 0, status: '', health: 'ok',
+        images, cpuReq: requests.cpu, memReq: requests.memory, cpuLim: limits.cpu, memLim: limits.memory,
+        spread: spreadOf({ spec: pod.spec }),
+        pdb: pdb?.metadata?.name ?? '', pdbAllowed: pdb ? pdb.status?.disruptionsAllowed ?? null : null,
+        helm: '', claimTemplates: [],
+        tech: found?.tech ?? '', techVersion: found?.version ?? '',
+        exporter: [...(pod.spec?.initContainers ?? []), ...(pod.spec?.containers ?? [])].some((container) => /exporter/.test(imageParts(container.image).base)),
+      };
+      byId.set(id, node);
+      nodes.push(node);
+      customs.set(id, node);
+    }
+    return id;
+  };
+
   /* ---- pods ------------------------------------------------------------ */
   const podsByNamespace = new Map();
   for (const pod of podItems) {
@@ -340,7 +397,9 @@ function graphFrom(lists, helpers, now = Date.now()) {
     const statuses = pod.status?.containerStatuses ?? [];
     const status = podStatus(pod);
     const owner = topOwner(pod);
-    const ownerId = owner ? idOf(owner.kind, owner.metadata?.namespace, owner.metadata?.name) : '';
+    const ownerId = owner ? idOf(owner.kind, owner.metadata?.namespace, owner.metadata?.name) : customOwner(pod);
+    // A static pod is the kubelet's own, written on the node's disk: it belongs to the machine, not to anything that could move it.
+    const mirror = controllerOf(pod)?.kind === 'Node';
     const requests = podRequests(pod, 'requests');
     const limits = podRequests(pod, 'limits');
     const used = usage.pods?.[`${namespace}/${name}`];
@@ -371,7 +430,13 @@ function graphFrom(lists, helpers, now = Date.now()) {
       memUsed: used ? quantity(used.memory) : null,
       role,
       finished,
+      mirror,
     });
+    const custom = customs.get(node.owner);
+    if (custom && !finished) {
+      custom.desired += 1;
+      if (node.ready) custom.ready += 1;
+    }
     if (node.owner) join(node.owner, node.id, 'owns');
     const machine = byId.get(idOf('Node', '', node.node));
     if (machine) {
@@ -384,6 +449,11 @@ function graphFrom(lists, helpers, now = Date.now()) {
     }
     if (!podsByNamespace.has(namespace)) podsByNamespace.set(namespace, []);
     podsByNamespace.get(namespace).push({ pod, node });
+  }
+
+  for (const custom of customs.values()) {
+    custom.status = `${custom.ready}/${custom.desired} ready`;
+    custom.health = custom.desired === 0 ? 'idle' : custom.ready === 0 ? 'bad' : custom.ready < custom.desired ? 'warn' : 'ok';
   }
 
   /* ---- storage --------------------------------------------------------- */
@@ -583,7 +653,7 @@ function findingsFrom(nodes, edges) {
   const findings = {};
 
   for (const workload of nodes) {
-    if (workload.kind !== 'Deployment' && workload.kind !== 'StatefulSet') continue;
+    if (workload.kind !== 'Deployment' && workload.kind !== 'StatefulSet' && !workload.custom) continue;
     const list = [];
     const pods = to(workload.id, 'owns').filter((node) => node.kind === 'Pod');
     for (const pod of pods) {
@@ -666,6 +736,15 @@ function findingsFrom(nodes, edges) {
         ids: [],
       });
     }
+    if (workload.pdb && workload.pdbAllowed === 0 && workload.desired > 0) {
+      list.push({
+        level: 'risk',
+        title: 'Its PodDisruptionBudget allows no disruption right now',
+        text: `${workload.pdb} will not let a single pod go: draining any node it runs on waits until that changes.`,
+        source: 'API · PDB status',
+        ids: [],
+      });
+    }
     for (const volume of volumes.filter((entry) => entry.local)) {
       list.push({
         level: 'risk',
@@ -733,7 +812,7 @@ function poolFacts(graph, pool) {
   const loose = [];
   for (const pod of here) {
     const owner = byId.get(pod.owner);
-    if (!owner) { loose.push(pod); continue; }
+    if (!owner) { if (!pod.mirror) loose.push(pod); continue; }
     if (owner.kind === 'DaemonSet') continue;
     if (!groups.has(owner.id)) groups.set(owner.id, { owner, here: [], volumes: [] });
     groups.get(owner.id).here.push(pod);
@@ -869,8 +948,10 @@ function planFrom(graph, request = {}, context = '') {
   if (facts) {
     say('', `### Node pool \`${pool}\``, '');
     for (const node of facts.machines) {
-      say(`- ${node.name} — ${[node.instance, node.zone, node.status].filter(Boolean).join(', ')}; requested ${share(node.cpuReq, node.cpuAlloc)} CPU, ${share(node.memReq, node.memAlloc)} memory`);
+      say(`- ${node.name} — ${[node.instance, node.capacity, node.zone, node.status].filter(Boolean).join(', ')}; requested ${share(node.cpuReq, node.cpuAlloc)} CPU, ${share(node.memReq, node.memAlloc)} memory`);
     }
+    const taints = [...new Set(facts.machines.flatMap((node) => node.taintList ?? []))];
+    if (taints.length) say('', `Taints on it: ${taints.map((taint) => `\`${taint}\``).join(', ')}. Whatever replaces these nodes needs the same, or pods that were kept off will arrive and pods that tolerate them will have nowhere to go.`);
     say('', `Its pods ask for ${cores(facts.cpu)} and ${gigs(facts.memory)} in total, DaemonSets aside: that is the room a replacement needs.`);
     if (facts.zones.length) say(`Zones: ${facts.zones.join(', ')}. Cloud block volumes cannot leave their zone, so nodes that take over a pod with a volume must be in the same one.`);
 
@@ -882,7 +963,9 @@ function planFrom(graph, request = {}, context = '') {
       if (entry.total === 1) flags.push('**single replica: it is down while its pod moves**');
       else if (entry.elsewhere === 0) flags.push('**every replica is on this pool**');
       if (entry.total > 1 && !owner.pdb) flags.push('no PodDisruptionBudget');
-      if (owner.pdb) flags.push(`PDB \`${owner.pdb}\``);
+      if (owner.pdb && owner.pdbAllowed === 0) flags.push(`**PDB \`${owner.pdb}\` allows no disruption right now: a drain will wait on it**`);
+      else if (owner.pdb) flags.push(`PDB \`${owner.pdb}\``);
+      if (owner.custom) flags.push(`made by an operator, from a ${owner.kind}: change it through that resource, not through its pods`);
       const disks = entry.volumes;
       if (disks.length) flags.push(`${disks.length} volume${disks.length === 1 ? '' : 's'} (${[...new Set(disks.map((disk) => disk.className || 'no class'))].join(', ')})`);
       if (disks.some((disk) => disk.local)) flags.push('**local volume: its data stays on the node**');
@@ -893,7 +976,7 @@ function planFrom(graph, request = {}, context = '') {
 
   if (op === 'review' || (op === 'ask' && !pool)) {
     const wanted = Array.isArray(request.workloads) ? new Set(request.workloads.map(String)) : null;
-    const chosen = graph.nodes.filter((node) => wanted?.has(node.id) && (node.kind === 'Deployment' || node.kind === 'StatefulSet' || node.kind === 'DaemonSet'));
+    const chosen = graph.nodes.filter((node) => wanted?.has(node.id) && (node.kind === 'Deployment' || node.kind === 'StatefulSet' || node.kind === 'DaemonSet' || node.custom));
     if (chosen.length) {
       say('', '### The workloads in question', '');
       for (const workload of chosen.slice(0, 40)) {
@@ -902,6 +985,11 @@ function planFrom(graph, request = {}, context = '') {
       }
       if (chosen.length > 40) say(`- and ${chosen.length - 40} more`);
     }
+  }
+
+  const waiting = graph.nodes.filter((node) => node.kind === 'Pod' && !node.node && !node.finished);
+  if (waiting.length) {
+    say('', `${waiting.length} pod${waiting.length === 1 ? ' is' : 's are'} not scheduled right now: ${waiting.slice(0, 5).map((pod) => `${pod.namespace}/${pod.name}`).join(', ')}${waiting.length > 5 ? ' and more' : ''}. Find out why before taking room away.`);
   }
 
   say('', '### The node pools', '');

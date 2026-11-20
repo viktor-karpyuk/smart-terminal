@@ -244,3 +244,47 @@ test('a pool that is not there is refused, and the cloud CLI is only used when c
   // Asking changes nothing, and says so.
   assert.match(planFrom(graph, { op: 'ask', question: 'why?' }).text, /Read first; change nothing/);
 });
+
+/*
+ * A database run by an operator is pods owned by a custom resource, which is
+ * in none of the lists read here. Its pods are one workload all the same.
+ */
+test('pods an operator made are one workload, known by what owns them', () => {
+  const lists = cluster();
+  const member = (name, nodeName, role) => ({
+    kind: 'Pod',
+    metadata: {
+      name, namespace: 'pg', labels: { 'cnpg.io/cluster': 'main', 'cnpg.io/instanceRole': role },
+      ownerReferences: [{ apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', name: 'main', uid: 'cnpg-1', controller: true }],
+    },
+    spec: { nodeName, containers: [{ name: 'postgres', image: 'ghcr.io/cloudnative-pg/postgresql:16.2' }] },
+    status: { phase: 'Running', containerStatuses: [{ name: 'postgres', ready: true, restartCount: 0, state: { running: {} } }] },
+  });
+  lists.pods.push(member('main-1', 'node-1', 'primary'), member('main-2', 'node-2', 'replica'));
+  lists.pods.push({
+    kind: 'Pod',
+    metadata: { name: 'kube-proxy-node-1', namespace: 'kube-system', ownerReferences: [{ kind: 'Node', name: 'node-1', uid: 'n1', controller: true }] },
+    spec: { nodeName: 'node-1', containers: [{ name: 'proxy', image: 'kube-proxy:1' }] },
+    status: { phase: 'Running', containerStatuses: [{ name: 'proxy', ready: true, restartCount: 0, state: { running: {} } }] },
+  });
+  lists.pdbs = [{ metadata: { name: 'main', namespace: 'pg' }, spec: { selector: { matchLabels: { 'cnpg.io/cluster': 'main' } } }, status: { disruptionsAllowed: 0 } }];
+  const graph = kube.graphFrom(lists, helpers);
+
+  const owner = graph.nodes.find((n) => n.id === 'Cluster/pg/main');
+  assert.equal(owner.custom, true);
+  assert.equal(owner.resource, 'cluster.postgresql.cnpg.io');
+  assert.equal(owner.status, '2/2 ready');
+  assert.equal(owner.tech, 'PostgreSQL');
+  assert.ok(edge(graph, 'Cluster/pg/main', 'Pod/pg/main-1', 'owns'));
+  assert.equal(graph.nodes.find((n) => n.id === 'Pod/pg/main-1').role, 'primary');
+  // A static pod is its node's own, and is neither a workload nor a stray.
+  assert.equal(graph.nodes.find((n) => n.id === 'Pod/kube-system/kube-proxy-node-1').mirror, true);
+  assert.equal(graph.nodes.some((n) => n.kind === 'Node' && n.custom), false);
+
+  // Its budget lets nothing go, and that is said — on the map and in a plan to empty its pool.
+  const titles = graph.findings['Cluster/pg/main'].map((f) => f.title);
+  assert.ok(titles.includes('Its PodDisruptionBudget allows no disruption right now'));
+  const plan = planFrom(graph, { op: 'remove', pool: 'pool-db' });
+  assert.match(plan.text, /pg\/main \(Cluster, PostgreSQL\) — 2 of 2 pods here.*\*\*PDB `main` allows no disruption right now: a drain will wait on it\*\*.*made by an operator, from a Cluster/);
+  assert.equal(plan.text.includes('kube-proxy-node-1'), false);
+});

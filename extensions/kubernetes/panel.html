@@ -739,6 +739,33 @@
   .mband-h { position: absolute; left: 14px; height: 22px; display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-dim); white-space: nowrap; }
   .mband-h b { color: var(--text); font-weight: 600; }
   .mband-h:hover b { color: var(--accent); }
+  .mcard, .mtile, .mnode, .mpool { transition: border-color 0.12s, background-color 0.12s, opacity 0.15s, transform 0.12s; }
+  .mcard:hover, .mtile:hover { transform: translateY(-1px); }
+  .medge { transition: stroke 0.12s, stroke-width 0.12s, opacity 0.15s; }
+  .medge.hov { stroke: var(--accent); stroke-width: 2.2; opacity: 1; }
+  .map-view.hovering .medge:not(.hov):not(.on) { opacity: 0.22; }
+  /* What was inferred, and whatever is pointed at, visibly goes somewhere. */
+  .medge.uses, .medge.hov { stroke-dasharray: 6 4; animation: map-flow 0.9s linear infinite; }
+  @keyframes map-flow { to { stroke-dashoffset: -20; } }
+  /* The thing that is failing is the thing the eye should land on. */
+  .h-bad > .mdot, .h-bad > .mnode-h .mdot { animation: map-pulse 1.6s ease-out infinite; }
+  @keyframes map-pulse {
+    0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 70%, transparent); }
+    100% { box-shadow: 0 0 0 7px transparent; }
+  }
+  .map-inner.map-fresh { animation: map-in 0.2s ease-out; }
+  @keyframes map-in { from { opacity: 0; } to { opacity: 1; } }
+  .map-menu, .map-form-card { animation: map-drop 0.12s ease-out; }
+  @keyframes map-drop { from { opacity: 0; translate: 0 -4px; } to { opacity: 1; translate: 0 0; } }
+  .mnode.cordoned { background-image: repeating-linear-gradient(135deg, transparent 0 10px, color-mix(in srgb, var(--warn) 9%, transparent) 10px 20px); }
+  .mnode-t b { white-space: nowrap; }
+  .map-zoom { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .mnode-tags { margin-left: auto; display: inline-flex; gap: 4px; flex: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .mcard, .mtile, .mnode, .mpool, .medge { transition: none; }
+    .medge.uses, .medge.hov, .h-bad > .mdot, .h-bad > .mnode-h .mdot, .map-inner.map-fresh, .map-menu, .map-form-card { animation: none; }
+    .mcard:hover, .mtile:hover { transform: none; }
+  }
   .mfold { position: absolute; padding: 0 2px; font-size: 10px; color: var(--text-dim); white-space: nowrap; }
   .mfold:hover { color: var(--accent); }
 
@@ -749,8 +776,8 @@
   .mpool.warn { border-color: var(--warn); }
   .mpool.sel { border: 1px solid var(--accent); outline: 2px solid var(--accent); outline-offset: 1px; background: var(--accent-soft); }
   .mpool.sel > h5 { color: var(--accent); }
-  .mpool.dim { opacity: 0.45; }
-  .mpool.dim:hover { opacity: 0.8; }
+  .mpool.quiet { opacity: 0.45; }
+  .mpool.quiet:hover { opacity: 0.8; }
   .mpool-h { cursor: pointer; user-select: none; -webkit-user-select: none; }
   .mpool-h:hover { color: var(--text); }
   .mlane { border: 1px solid color-mix(in srgb, var(--violet) 60%, transparent); background: color-mix(in srgb, var(--violet) 7%, transparent); }
@@ -2096,7 +2123,16 @@
     } else if (state.view.type === 'overview') bits.push('<strong>Overview</strong>');
     else if (state.view.type === 'map') {
       bits.push('<strong>Map</strong>');
-      if (state.map) bits.push((state.map.nodes || []).length + ' resources');
+      if (state.map && state.mapFor === mapKey()) {
+        var tally = { Node: 0, Pod: 0, bad: 0 };
+        (state.map.nodes || []).forEach(function (node) {
+          if (tally[node.kind] != null) tally[node.kind] += 1;
+          if (node.kind === 'Pod' && node.health === 'bad') tally.bad += 1;
+        });
+        bits.push(tally.Node + ' nodes');
+        bits.push(tally.Pod + ' pods');
+        if (tally.bad) bits.push('<span class="bad-text">' + tally.bad + ' failing</span>');
+      }
     }
     else if (state.view.type === 'helm') bits.push('<strong>Helm releases</strong>');
     else bits.push('<strong>' + esc(LABELS[state.view.name] || titleOf(state.view.name)) + '</strong>');
@@ -2578,6 +2614,8 @@
     Node: 'nd', Pool: 'nd', Zone: 'nd',
   };
   var MAP_WORKLOADS = ['Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Job', 'CronJob'];
+  /** A workload by any name: the six kinds, or whatever custom resource an operator makes pods from. */
+  function mapIsWorkload(node) { return Boolean(node) && (MAP_WORKLOADS.indexOf(node.kind) >= 0 || node.custom === true); }
   var MAP_CW = 170;
   var MAP_CH = 40;
   var MAP_ROW = 48;
@@ -2668,13 +2706,33 @@
     if (node.kind === 'Pod') {
       return node.status + (node.restarts ? ' · ↻' + node.restarts : '') + (node.node ? ' · ' + mapShort(node.node) : '');
     }
-    if (MAP_WORKLOADS.indexOf(node.kind) >= 0) return node.kind + (node.status ? ' · ' + node.status : '');
+    if (mapIsWorkload(node)) return node.kind + (node.status ? ' · ' + node.status : '');
     if (node.kind === 'PersistentVolumeClaim') return node.status + (node.capacity ? ' · ' + node.capacity : '');
     if (node.kind === 'PersistentVolume') {
       return (node.capacity || node.status) + (node.attachedTo ? ' · on ' + mapShort(node.attachedTo) : node.local ? ' · local' : '');
     }
     if (node.kind === 'Node') return node.status + (node.instance ? ' · ' + node.instance : '');
     return node.status || node.kind;
+  }
+
+  /** What hovering says: the whole name, and the few facts the card had no room for. */
+  function mapTip(node) {
+    var lines = [node.kind + ' · ' + (node.namespace ? node.namespace + '/' : '') + node.name];
+    if (node.status) lines.push(node.status);
+    if (node.kind === 'Pod' || mapIsWorkload(node)) {
+      var asks = [mapCpu(node.cpuReq), mapMem(node.memReq)].filter(Boolean).join(' · ');
+      var caps = [mapCpu(node.cpuLim), mapMem(node.memLim)].filter(Boolean).join(' · ');
+      if (asks) lines.push('requests ' + asks + (node.kind === 'Pod' ? '' : ' per pod'));
+      if (caps) lines.push('limits ' + caps + (node.kind === 'Pod' ? '' : ' per pod'));
+      if (node.cpuUsed != null) lines.push('in use ' + [mapCpu(node.cpuUsed), mapMem(node.memUsed)].filter(Boolean).join(' · '));
+      if (node.node) lines.push('on ' + node.node);
+      if (node.images && node.images[0]) lines.push(node.images[0] + (node.images.length > 1 ? ' +' + (node.images.length - 1) : ''));
+      if (node.custom) lines.push('made by an operator; known here through its pods');
+    }
+    if (node.kind === 'PersistentVolume') lines.push([node.capacity, node.modes, node.className, node.reclaim].filter(Boolean).join(' · '));
+    if (node.kind === 'StorageClass') lines.push([node.provisioner, node.reclaim, node.binding].filter(Boolean).join(' · '));
+    if (node.kind === 'Ingress' && node.hosts) lines.push(node.hosts.join(', '));
+    return lines.join('\n');
   }
 
   function mapCard(node, x, y, o) {
@@ -2685,7 +2743,7 @@
     return '<button class="' + cls + '" style="left:' + x + 'px;top:' + y + 'px' +
       (o.w ? ';width:' + o.w + 'px' : '') + (o.h ? ';height:' + o.h + 'px' : '') + '"' +
       (o.more ? ' data-map-more="' + esc(o.more) + '"' : ' data-map-id="' + esc(node.id) + '"') +
-      ' title="' + esc(o.title || (node.kind + ' · ' + (node.namespace ? node.namespace + '/' : '') + node.name)) + '">' +
+      ' title="' + esc(o.title || mapTip(node)) + '">' +
       '<i class="mdot"></i><span class="mtext"><b>' + esc(o.name || node.name) + '</b><small>' +
       (o.html || esc(o.line != null ? o.line : mapLine(node))) + '</small></span></button>';
   }
@@ -2699,7 +2757,8 @@
 
   function mapPath(d, cls, a, b) {
     var sel = mapUi().sel;
-    return '<path class="medge' + (cls ? ' ' + cls : '') + (sel && (a === sel || b === sel) ? ' on' : '') + '" d="' + d + '"/>';
+    return '<path class="medge' + (cls ? ' ' + cls : '') + (sel && (a === sel || b === sel) ? ' on' : '') + '"' +
+      (a ? ' data-a="' + esc(a) + '"' : '') + (b ? ' data-b="' + esc(b) + '"' : '') + ' d="' + d + '"/>';
   }
 
   /**
@@ -2716,14 +2775,14 @@
     var units = {};
     var put = function (ns, unit) { (units[ns] || (units[ns] = [])).push(unit); };
     state.map.nodes.forEach(function (node) {
-      if (MAP_WORKLOADS.indexOf(node.kind) >= 0) {
+      if (mapIsWorkload(node)) {
         if (mapFrom(node.id, 'owns').length) return;
         put(node.namespace, {
           root: node,
           pods: mapPodsOf(node.id).filter(function (pod) { return !pod.finished; }),
           services: mapFrom(node.id, 'routes'),
         });
-      } else if (node.kind === 'Pod' && !node.owner && !node.finished) {
+      } else if (node.kind === 'Pod' && !node.owner && !node.finished && !node.mirror) {
         put(node.namespace, { root: node, bare: true, pods: [node], services: mapFrom(node.id, 'routes') });
       }
     });
@@ -2806,7 +2865,7 @@
         if (unit.root.tech) techs[unit.root.tech] = true;
       });
       var top = y;
-      html += '<button class="mband-h" data-map-ns="' + esc(ns.name) + '" style="top:' + (y + 5) + 'px">' +
+      html += '<button class="mband-h" aria-expanded="' + (open ? 'true' : 'false') + '" data-map-ns="' + esc(ns.name) + '" style="top:' + (y + 5) + 'px">' +
         '<span class="twist">' + (open ? '▾' : '▸') + '</span><b>' + esc(ns.name) + '</b>' +
         '<span>' + mapPlural(mine.length, 'workload') + ' · ' + mapPlural(pods, 'pod') + '</span>' +
         Object.keys(techs).map(function (tech) { return '<span class="mtag inf">' + esc(tech) + '</span>'; }).join('') +
@@ -2841,12 +2900,14 @@
           var rootY = y;
           if (!unit.bare) {
             html += mapCard(root, rootX, rootY, root.tech ? {
-              html: esc(root.status) + ' · <span class="mtag inf" title="Read off the image name">' +
+              html: esc(String(root.status).replace(' ready', '')) + ' · <span class="mtag inf" title="Read off the image name">' +
                 esc(root.tech + (root.techVersion ? ' ' + root.techVersion : '')) + '</span>',
             } : null);
             where[root.id] = { x: rootX, y: rootY };
           }
 
+          var firstRow = {};
+          rows.forEach(function (row, at) { if (row.pod) firstRow[row.pod.id] = at; });
           rows.forEach(function (row, at) {
             var ry = y + at * MAP_ROW;
             var cy = ry + mid;
@@ -2889,7 +2950,7 @@
             if (row.claim && ui.storage !== false) {
               html += mapCard(row.claim, MAP_COLS.claim, ry);
               // A second claim hangs off the pod's own row, which is `at` rows up.
-              var fromY = y + rows.indexOf(rows.filter(function (other) { return other.pod === row.from; })[0]) * MAP_ROW + mid;
+              var fromY = y + firstRow[row.from.id] * MAP_ROW + mid;
               edges += mapPath(mapElbow(podX + right, fromY, MAP_COLS.claim, cy), '', row.from.id, row.claim.id);
               var volume = mapTo(row.claim.id, 'binds')[0];
               if (volume) {
@@ -3023,7 +3084,7 @@
       (ui.bad && pod.health !== 'warn' && pod.health !== 'bad');
     var size = [mapCpu(pod.cpuReq), mapMem(pod.memReq)].filter(Boolean).join(' · ');
     return '<button class="mtile h-' + pod.health + (ui.hl && pod.owner === ui.hl ? ' hl' : '') + (ui.sel === pod.id ? ' sel' : '') +
-      (off ? ' off' : '') + '" data-map-id="' + esc(pod.id) + '" title="' + esc(pod.namespace + '/' + pod.name + ' · ' + pod.status) + '">' +
+      (off ? ' off' : '') + '" data-map-id="' + esc(pod.id) + '" title="' + esc(mapTip(pod)) + '">' +
       '<i class="mdot"></i><span class="mtext"><b>' + esc(pod.name) + '</b><small>' +
       esc(pod.health === 'ok' ? pod.namespace + (size ? ' · ' + size : '') : pod.status + (pod.restarts ? ' · ' + mapPlural(pod.restarts, 'restart') : '')) +
       '</small></span>' + (claims.length ? '<i class="mplug" title="Mounts ' + esc(claims.map(function (c) { return c.name; }).join(', ')) + '"></i>' : '') +
@@ -3108,8 +3169,13 @@
     var chosen = {};
     machines.forEach(function (node) { chosen[node.name] = true; });
     var narrowed = Object.keys(ui.off || {}).length > 0;
+    // The same machines, shelved by who makes them or by where they are: the second is the question a zone outage asks.
+    var byZone = ui.by === 'zone';
     var pools = {};
-    machines.forEach(function (node) { (pools[node.pool || ''] || (pools[node.pool || ''] = [])).push(node); });
+    machines.forEach(function (node) {
+      var key = byZone ? node.zone || '' : node.pool || '';
+      (pools[key] || (pools[key] = [])).push(node);
+    });
 
     // With one namespace picked, only its pods were read: the bars are its share of the node, not the node's load.
     var asked = data.scoped ? 'Here: ' : 'Requested: ';
@@ -3124,10 +3190,12 @@
     }
     Object.keys(pools).sort().forEach(function (pool) {
       var zones = {};
-      pools[pool].forEach(function (node) { if (node.zone) zones[node.zone] = true; });
+      pools[pool].forEach(function (node) { var other = byZone ? node.pool : node.zone; if (other) zones[other] = true; });
       // A pool can be picked like anything else on the page: the frame around it lights up, and stays lit.
-      html += '<section class="mpool' + (lit['p:' + pool] ? ' sel' : anyLit ? ' dim' : '') + '"><h5 class="mpool-h" data-map-pool="p:' + esc(pool) +
-        '" title="Highlight this node pool">' + (pool ? 'Node pool · ' + esc(pool) : 'Nodes without a pool') +
+      html += (byZone
+        ? '<section class="mpool"><h5>' + (pool ? 'Zone · ' + esc(pool) : 'Nodes without a zone')
+        : '<section class="mpool' + (lit['p:' + pool] ? ' sel' : anyLit ? ' quiet' : '') + '"><h5 class="mpool-h" data-map-pool="p:' + esc(pool) +
+          '" title="Light this node pool, and see what can be done to it">' + (pool ? 'Node pool · ' + esc(pool) : 'Nodes without a pool')) +
         '<span>' + mapPlural(pools[pool].length, 'node') + '</span>' +
         Object.keys(zones).sort().map(function (zone) { return '<span class="mtag">' + esc(zone) + '</span>'; }).join('') +
         '</h5><div class="mnodes">';
@@ -3137,7 +3205,7 @@
         var own = [];
         pods.forEach(function (pod) {
           var owner = ix.byId[pod.owner];
-          if (ix.system[pod.namespace] || (owner && owner.kind === 'DaemonSet')) furniture.push(pod);
+          if (ix.system[pod.namespace] || pod.mirror || (owner && owner.kind === 'DaemonSet')) furniture.push(pod);
           else own.push(pod);
         });
         // The ones with a disk go last, so their lines leave from the bottom of the box.
@@ -3151,10 +3219,14 @@
         var used = node.cpuUsed != null
           ? '<span>in use ' + mapBar(node.cpuUsed, node.cpuAlloc).pct + '%</span><span>in use ' + mapBar(node.memUsed, node.memAlloc).pct + '%</span>'
           : '';
-        html += '<div class="mnode h-' + node.health + '">' +
+        var cordoned = /cordoned/.test(node.status);
+        html += '<div class="mnode h-' + node.health + (cordoned ? ' cordoned' : '') + '">' +
           '<button class="mnode-h' + (ui.sel === node.id ? ' sel' : '') + '" data-map-id="' + esc(node.id) + '" title="' + esc(node.name) + '">' +
           '<span class="mnode-t"><i class="mdot"></i><b>' + esc(mapShort(node.name)) + '</b><small>' +
-          esc([node.status, node.instance, node.zone].filter(Boolean).join(' · ')) + '</small></span>' +
+          esc([node.status, node.instance, byZone ? node.pool : node.zone].filter(Boolean).join(' · ')) + '</small>' +
+          '<span class="mnode-tags">' + (node.capacity === 'spot' ? '<span class="mtag warn" title="A spot machine: the cloud can take it back at short notice">spot</span>' : '') +
+          (node.taintList && node.taintList.length ? '<span class="mtag" title="' + esc(node.taintList.join('\n')) + '">' + mapPlural(node.taintList.length, 'taint') + '</span>' : '') +
+          '<span class="mtag" title="Pods running on it">' + pods.length + '</span></span></span>' +
           '<span class="mbars" title="' + askedWhy + '"><span>' + asked + 'CPU ' + cpu.pct + '%</span><span>' + asked + 'memory ' + mem.pct + '%</span>' +
           cpu.html + mem.html + used + '</span></button><div class="mtiles">' +
           (ui.sys ? furniture : []).concat(own).map(function (pod) { return mapTile(pod, ui, text); }).join('') +
@@ -3259,7 +3331,7 @@
 
   /** What can be the centre of the picture: anything with pods of its own. */
   function mapFocusable(node) {
-    return node && (MAP_WORKLOADS.indexOf(node.kind) >= 0 || (node.kind === 'Pod' && !node.owner));
+    return Boolean(node) && (mapIsWorkload(node) || (node.kind === 'Pod' && !node.owner && !node.mirror));
   }
 
   function mapFocus() {
@@ -3354,9 +3426,10 @@
     var lostNodes = {};
     var lostPods = {};
     var lostVolumes = [];
-    if (kind === 'Node' || kind === 'Zone') {
+    if (kind === 'Node' || kind === 'Zone' || kind === 'Pool') {
       data.nodes.forEach(function (node) {
-        if (node.kind === 'Node' && (kind === 'Node' ? node.name === name : node.zone === name)) lostNodes[node.name] = true;
+        if (node.kind !== 'Node') return;
+        if (kind === 'Node' ? node.name === name : kind === 'Zone' ? node.zone === name : (node.pool || '(no pool)') === name) lostNodes[node.name] = true;
       });
       data.nodes.forEach(function (node) {
         if (node.kind === 'Pod' && lostNodes[node.node] && !node.finished) lostPods[node.id] = node;
@@ -3490,6 +3563,7 @@
       if (node.id === ui.sim) return true;
       if (node.kind === 'Pod') return Boolean(sim.pods[node.id]);
       if (node.kind === 'Node') return Boolean(sim.nodes[node.name]);
+      if (node.kind === 'Pool') return ui.sim === node.id;
       if (node.kind === 'PersistentVolume') return ui.sim === 'StorageClass//' + node.className || Boolean(sim.nodes[node.attachedTo]);
       return false;
     };
@@ -3641,6 +3715,7 @@
         ' Nothing here asks for database credentials.</p></div>' : '') + '</div>';
 
     var targets = machines.map(function (node) { return [node.id, mapShort(node.name)]; }).slice(0, 8)
+      .concat(pools.map(function (pool) { return [pool.id, pool.name]; }))
       .concat(zones.map(function (zone) { return [zone.id, zone.name]; }))
       .concat(classes.map(function (klass) { return [klass.id, klass.name]; }));
     html += '<div class="mbox" style="left:' + (16 + boxW + 16) + 'px;top:' + bottom + 'px;width:' + (X[7] + W - boxW - 32) + 'px">' +
@@ -3651,7 +3726,7 @@
       }).join('') : '<span class="dim">Its pods are not on any node yet.</span>') + '</div>' +
       (sim ? '<div class="msim"><div><small>' + esc(many ? 'These workloads' : focus.name) + '</small>' + esc(sim.own) + '</div><div><small>Other workloads</small>' +
         esc(sim.others) + '</div><div><small>Data</small>' + esc(sim.disks) + '</div></div>'
-        : (targets.length ? '<p class="dim">Pick a node, a zone or a storage class.</p>' : '')) + '</div>';
+        : (targets.length ? '<p class="dim">Pick a node, a pool, a zone or a storage class.</p>' : '')) + '</div>';
 
     return { w: X[7] + W + 24, h: bottom + 40, html: html, edges: edges, tall: true };
   }
@@ -3688,10 +3763,16 @@
     var one = lit.names.length === 1;
     var types = {};
     var shut = 0;
-    lit.nodes.forEach(function (node) { if (node.instance) types[node.instance] = true; if (/cordoned/.test(node.status)) shut += 1; });
+    var room = { cpu: 0, cpuAll: 0, mem: 0, memAll: 0, pods: 0 };
+    lit.nodes.forEach(function (node) {
+      if (node.instance) types[node.instance] = true;
+      if (/cordoned/.test(node.status)) shut += 1;
+      room.cpu += node.cpuReq; room.cpuAll += node.cpuAlloc; room.mem += node.memReq; room.memAll += node.memAlloc; room.pods += node.pods;
+    });
     var only = one ? '' : ' disabled title="Light one pool only for this"';
     return '<div class="map-acts"><b>' + esc(lit.names.map(function (name) { return name || 'no pool'; }).join(', ')) + '</b>' +
       '<span class="dim">' + mapPlural(lit.nodes.length, 'node') + (Object.keys(types).length ? ' · ' + esc(Object.keys(types).join(', ')) : '') +
+      (state.map.scoped ? '' : ' · ' + mapPlural(room.pods, 'pod') + ' · CPU ' + mapBar(room.cpu, room.cpuAll).pct + '% · memory ' + mapBar(room.mem, room.memAll).pct + '% requested') +
       (shut ? ' · ' + shut + ' cordoned' : '') + '</span><span class="sep"></span>' +
       '<button class="btn" data-map-act="cordon" title="Stop new pods landing on these nodes. What runs there keeps running.">Cordon</button>' +
       '<button class="btn" data-map-act="uncordon" title="Let pods be scheduled on these nodes again">Uncordon</button>' +
@@ -3887,6 +3968,8 @@
 
   var mapScroll = {};
   var mapZoomNow = 1;
+  var mapShown = '';
+  var mapBring = false;
   var mapWheel = 0;
   var mapWheelFrame = 0;
   /** Rows and descriptions already read from the map, by card: what a second click shows without waiting. */
@@ -3924,7 +4007,7 @@
     var zoom = (ui.z || {})[mode] || 1;
     var picked = state.mapIndex.byId[ui.sel];
     var toggle = function (key, on, label, title) {
-      return '<button class="btn' + (on ? ' on' : '') + '" data-map-toggle="' + key + '"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + label + '</button>';
+      return '<button class="btn' + (on ? ' on' : '') + '" aria-pressed="' + (on ? 'true' : 'false') + '" data-map-toggle="' + key + '"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + label + '</button>';
     };
     var bar = '<span class="map-seg" role="group" aria-label="How to draw it">' + MAP_MODES.map(function (entry) {
       return '<button class="' + (mode === entry[0] ? 'on' : '') + '" data-map-mode="' + entry[0] + '">' + entry[1] + '</button>';
@@ -3935,6 +4018,8 @@
         '<button class="btn" data-map-fold="open">Unfold all</button><button class="btn" data-map-fold="shut">Fold all</button>';
     } else if (mode === 'physical') {
       bar += '<button class="btn" data-map-plan="new" title="Describe a new node group and have Claude add it">+ Node group…</button>' +
+        '<span class="map-seg" role="group" aria-label="Shelve the nodes by"><button class="' + (ui.by !== 'zone' ? 'on' : '') + '" data-map-by="pool">By pool</button>' +
+        '<button class="' + (ui.by === 'zone' ? 'on' : '') + '" data-map-by="zone">By zone</button></span>' +
         mapNodesMenu() + toggle('empty', mapShowsEmpty(), 'Empty nodes', 'Nodes with none of these pods on them') +
         toggle('sys', ui.sys, 'System pods', 'DaemonSets and system namespaces') + toggle('bad', ui.bad, 'Only problems') +
         (Object.keys(ui.pools || {}).length
@@ -3955,9 +4040,9 @@
       '<span class="mtag" title="Stated by the Kubernetes API">API</span>' +
       '<span class="mtag inf" title="Worked out: from an image name, or a service named in a pod template">inferred</span>' +
       (state.map.metrics ? '<span class="mtag" title="Usage comes from metrics-server">metrics</span>' : '') +
-      '<span class="sep"></span><button class="btn icon" data-map-zoom="out" aria-label="Zoom out">−</button>' +
+      '<span class="sep"></span><span class="map-zoom"><button class="btn icon" data-map-zoom="out" aria-label="Zoom out">−</button>' +
       '<span class="dim" id="map-zoom" style="min-width:34px;text-align:center">' + Math.round(zoom * 100) + '%</span>' +
-      '<button class="btn icon" data-map-zoom="in" aria-label="Zoom in">+</button><button class="btn" data-map-zoom="fit">Fit</button>';
+      '<button class="btn icon" data-map-zoom="in" aria-label="Zoom in">+</button><button class="btn" data-map-zoom="fit">Fit</button></span>';
 
     var missing = (state.map.missing || []).map(function (gap) { return gap.what; });
     var inner = scene.flow
@@ -3967,7 +4052,7 @@
 
     box.innerHTML = '<div class="map"><div class="map-bar">' + bar + '</div>' +
       '<div>' + (missing.length ? '<div class="map-note">Not drawn, because the cluster would not list them: ' + esc(missing.join('; ')) + '.</div>' : '') +
-      (mode === 'physical' ? mapPoolBar() : '') + '</div>' +
+      (mode === 'physical' && ui.by !== 'zone' ? mapPoolBar() : '') + '</div>' +
       '<div class="map-view" id="map-view" data-mode="' + mode + '"><div class="map-size" id="map-size">' + inner + '</div></div></div>';
 
     var view = document.getElementById('map-view');
@@ -3997,6 +4082,14 @@
     view.dataset.drawn = drawn;
     var kept = mapScroll[mode];
     if (kept) { view.scrollLeft = kept.x; view.scrollTop = kept.y; }
+    // A view arriving is shown arriving; a refresh of the one already there is not.
+    if (mapShown !== mode) canvas.classList.add('map-fresh');
+    mapShown = mode;
+    if (mapBring) {
+      mapBring = false;
+      var chosen = ui.sel && view.querySelector('[data-map-id="' + CSS.escape(ui.sel) + '"]');
+      if (chosen) chosen.scrollIntoView({ block: 'center', inline: 'center' });
+    }
   }
 
   /**
@@ -4011,8 +4104,8 @@
     var ui = mapUi();
     ui.sel = id;
     if (node && node.kind === 'Pod' && node.owner) ui.hl = node.owner;
-    else if (node && MAP_WORKLOADS.indexOf(node.kind) >= 0) ui.hl = node.id;
-    var resource = node && MAP_RESOURCE[node.kind];
+    else if (mapIsWorkload(node)) ui.hl = node.id;
+    var resource = node && (MAP_RESOURCE[node.kind] || node.resource);
     if (!resource) { remember(); draw(); return; }
 
     /*
@@ -4031,6 +4124,8 @@
       status: node.status, health: node.health, createdAt: node.createdAt, age: '', labels: {},
     };
     mapRows[id] = row;
+    // A long afternoon of clicking is not a reason to hold every row that was ever opened.
+    if (Object.keys(mapRows).length > 300) { mapRows = {}; mapRows[id] = row; mapDescribed = {}; }
     stopEditing();
     state.selected = row;
     state.editing = false;
@@ -4102,7 +4197,7 @@
   $('table').addEventListener('click', function (event) {
     if (state.view.type !== 'map') return;
     var ui = mapUi();
-    var el = event.target.closest('[data-map-act], [data-map-plan], [data-map-pick], [data-map-pick-only], [data-map-pick-all], [data-map-pool], [data-map-menu], [data-map-off], [data-map-only], [data-map-all], [data-map-mode], [data-map-toggle], [data-map-fold], [data-map-zoom], [data-map-ns], [data-map-more], [data-map-sys], [data-map-sim], [data-map-focus-on], [data-map-id]');
+    var el = event.target.closest('[data-map-by], [data-map-act], [data-map-plan], [data-map-pick], [data-map-pick-only], [data-map-pick-all], [data-map-pool], [data-map-menu], [data-map-off], [data-map-only], [data-map-all], [data-map-mode], [data-map-toggle], [data-map-fold], [data-map-zoom], [data-map-ns], [data-map-more], [data-map-sys], [data-map-sim], [data-map-focus-on], [data-map-id]');
     // The list of nodes shuts when the click was anywhere but in it.
     if (mapMenuOpen && !event.target.closest('.map-drop')) {
       mapMenuOpen = false;
@@ -4111,6 +4206,22 @@
     if (!el) return;
     var set = el.dataset;
     if (set.mapAct) { mapAct(set.mapAct); return; }
+    if (set.mapBy) {
+      ui.by = set.mapBy;
+      remember();
+      draw();
+      return;
+    }
+    // A pool in the dependency picture is a place: clicking it goes to where the machines are, with that pool lit.
+    if (set.mapId && set.mapId.slice(0, 6) === 'Pool//') {
+      state.view = assign(assign({}, state.view), { mode: 'physical' });
+      ui.by = 'pool';
+      ui.pools = {};
+      ui.pools['p:' + (set.mapId.slice(6) === '(no pool)' ? '' : set.mapId.slice(6))] = true;
+      remember();
+      draw();
+      return;
+    }
     if (set.mapPlan) {
       // A review has nothing to fill in: the workloads on the page are the whole of the question.
       if (set.mapPlan === 'review') mapSendPlan('review');
@@ -4168,6 +4279,10 @@
       }
     } else if (set.mapMode) {
       state.view = assign(assign({}, state.view), { mode: set.mapMode });
+      // What was picked comes along: its namespace is unfolded, and the page is brought to it.
+      var held = state.mapIndex.byId[ui.sel];
+      if (held && held.namespace && set.mapMode === 'topology') ui.open[held.namespace] = true;
+      mapBring = true;
     } else if (set.mapToggle) {
       if (set.mapToggle === 'hl') ui.hl = null;
       else if (set.mapToggle === 'pools') ui.pools = {};
@@ -4204,6 +4319,50 @@
     }
     remember();
     draw();
+  });
+
+  /*
+   * Pointing at a card lights its lines and lets the others fade.
+   *
+   * On a busy page the question is always "which of these go to this one", and
+   * following a grey line through thirty others with the eye is how it used to
+   * be answered. Done on the lines already drawn, so it costs nothing to move
+   * across the page.
+   */
+  var mapHovered = null;
+  $('table').addEventListener('mouseover', function (event) {
+    if (state.view.type !== 'map') return;
+    var card = event.target.closest('#map-view [data-map-id]');
+    var id = card ? card.dataset.mapId : null;
+    if (id === mapHovered) return;
+    mapHovered = id;
+    var view = document.getElementById('map-view');
+    if (!view) return;
+    var lit = view.querySelectorAll('.medge.hov');
+    for (var i = 0; i < lit.length; i += 1) lit[i].classList.remove('hov');
+    var found = id ? view.querySelectorAll('.medge[data-a="' + CSS.escape(id) + '"], .medge[data-b="' + CSS.escape(id) + '"]') : [];
+    for (var j = 0; j < found.length; j += 1) found[j].classList.add('hov');
+    view.classList.toggle('hovering', found.length > 0);
+  });
+  $('table').addEventListener('mouseleave', function () {
+    mapHovered = null;
+    var view = document.getElementById('map-view');
+    if (!view) return;
+    var lit = view.querySelectorAll('.medge.hov');
+    for (var i = 0; i < lit.length; i += 1) lit[i].classList.remove('hov');
+    view.classList.remove('hovering');
+  });
+
+  // An open list shuts on Escape, and on a click anywhere outside the map: it is in the way of everything else.
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && mapMenuOpen && !document.getElementById('map-form')) { mapMenuOpen = false; mapRedraw(); }
+    if (event.key === 'Enter' && event.target.closest && event.target.closest('#map-form') && event.target.tagName !== 'TEXTAREA') {
+      event.preventDefault();
+      mapSendPlan(document.getElementById('map-form').dataset.op);
+    }
+  });
+  document.addEventListener('click', function (event) {
+    if (mapMenuOpen && !event.target.closest('#table')) { mapMenuOpen = false; mapRedraw(); }
   });
 
   // ⌘ or Ctrl with the wheel zooms, as it does on every other canvas.
