@@ -69,6 +69,7 @@ const WRITE_VERBS = [
  * prefixed.
  */
 const KUBE_READ = [
+  'can',
   'contexts',
   'reachable',
   'resources',
@@ -706,6 +707,12 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
         ? `\n\nHelm installed this, as part of the release "${owner[1]}". ` +
           'The next upgrade of that release will put it back the way the chart says.'
         : '';
+      // Argo CD does the same on its own clock, and sooner: it puts back what Git says, often within minutes.
+      const argo = /argocd\.argoproj\.io\/(?:instance|tracking-id):\s*["']?([^"'\s:]+)/.exec(String(args.yaml ?? ''));
+      const synced = argo
+        ? `\n\nArgo CD manages this, as part of the application "${argo[1]}". ` +
+          'If it syncs by itself it will put this back the way Git says; change it there to keep it.'
+        : '';
       /*
        * What is about to be different, in the two numbers the panel counted,
        * and the one mistake an editor makes easy: a name changed in the text is
@@ -725,7 +732,7 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
         ? `\n\nThis text is ${kindNow ?? String(args.kind)} ${named ?? String(args.name)}, not ${what}. ` +
           `Applying it makes or changes that one and leaves ${String(args.name)} as it is.`
         : '';
-      return `Apply this manifest${where}?${size}${other}${managed}`;
+      return `Apply this manifest${where}?${size}${other}${managed}${synced}`;
     }
     /*
      * Changing a few fields, and the question says which.

@@ -2378,6 +2378,7 @@ function registerIpc() {
     top: (args) => kube.top(args),
     summary: (args) => kube.summary(args),
     topology: (args) => kube.topology(args),
+    can: (args) => kube.can(args),
     plan: (args) => kube.plan(args),
     brief: (args) => kube.brief(args),
     prometheus: (args) => kube.prometheus(args),

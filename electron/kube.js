@@ -1675,7 +1675,9 @@ const MAP_GROUPS = [
   { key: 'nodes', kind: 'nodes', cluster: true, what: 'nodes' },
   { key: 'pods', kind: 'pods', what: 'pods' },
   { key: 'workloads', kind: 'deployments,statefulsets,daemonsets,replicasets,jobs,cronjobs', what: 'workloads' },
-  { key: 'network', kind: 'services,ingresses,networkpolicies,poddisruptionbudgets', what: 'services, ingresses and policies' },
+  { key: 'network', kind: 'services,ingresses,networkpolicies,poddisruptionbudgets,horizontalpodautoscalers', what: 'services, ingresses, policies and autoscalers' },
+  // Only what went wrong: a card that says "3 warnings" is a reason to open it, and nothing else about events belongs on a map.
+  { key: 'warnings', kind: 'events', fieldSelector: 'type=Warning', what: 'warning events' },
   { key: 'claims', kind: 'persistentvolumeclaims', what: 'volume claims' },
   { key: 'storage', kind: 'persistentvolumes,storageclasses,csidrivers,volumeattachments', cluster: true, what: 'volumes and storage classes' },
 ];
@@ -1685,7 +1687,7 @@ async function topology({ context, namespace } = {}) {
     const where = namespace ? { context, namespace } : { context, allNamespaces: true };
     const [answers, nodeUsage, podUsage] = await Promise.all([
       Promise.all(MAP_GROUPS.map((group) =>
-        listRaw({ kind: group.kind, ...(group.cluster ? { context } : where) })
+        listRaw({ kind: group.kind, fieldSelector: group.fieldSelector, ...(group.cluster ? { context } : where) })
           .catch((error) => ({ ok: false, error: String(error?.message ?? error) })))),
       top({ what: 'nodes', context }),
       top({ what: 'pods', ...where }),
@@ -1710,6 +1712,8 @@ async function topology({ context, namespace } = {}) {
       ingresses: ofKind(items.network, 'Ingress'),
       policies: ofKind(items.network, 'NetworkPolicy'),
       pdbs: ofKind(items.network, 'PodDisruptionBudget'),
+      hpas: ofKind(items.network, 'HorizontalPodAutoscaler'),
+      warnings: items.warnings,
       claims: items.claims,
       volumes: ofKind(items.storage, 'PersistentVolume'),
       classes: ofKind(items.storage, 'StorageClass'),
@@ -1733,6 +1737,29 @@ async function plan({ context, ...request } = {}) {
   const graph = await topology({ context });
   if (!graph.ok) return graph;
   return planFrom(graph, request, context ?? '');
+}
+
+/**
+ * Whether this account may change or delete a kind of thing, asked before the click.
+ *
+ * `kubectl auth can-i` is the cluster's own answer. It exits 1 for "no", which
+ * is an answer and not a failure; anything else — no connection, an API that
+ * does not do access reviews — is "not known", and what is not known is not
+ * held against the button.
+ */
+async function can({ kind, context, namespace } = {}) {
+  const what = safeArg(String(kind ?? '').toLowerCase(), 'the resource kind');
+  return memo(`can:${context ?? ''}:${namespace ?? ''}:${what}`, 5 * 60 * 1000, async () => {
+    const ask = async (verb) => {
+      const result = await run([...scope({ context, namespace }), 'auth', 'can-i', verb, what], { timeout: 8000 });
+      const said = String(result.stdout || '').trim().split('\n')[0];
+      if (said === 'yes') return true;
+      if (said === 'no') return false;
+      return null;
+    };
+    const [patch, remove] = await Promise.all([ask('patch'), ask('delete')]);
+    return { ok: true, patch, delete: remove };
+  });
 }
 
 /**
@@ -1858,8 +1885,9 @@ function nodePressure(nodes) {
 }
 
 /** A list as the API server sent it, for the sums that need what is inside. */
-async function listRaw({ kind, ...rest }) {
+async function listRaw({ kind, fieldSelector, ...rest }) {
   const args = [...scope(rest), 'get', safeArg(kind, 'the resource kind'), ...everywhere(rest), '-o', 'json'];
+  if (fieldSelector) args.push('--field-selector', safeArg(fieldSelector, 'the field selector'));
   return runJson(args);
 }
 
@@ -2601,6 +2629,8 @@ async function history({ kind, name, ...rest }) {
         images: containers.map((container) => container.image).filter(Boolean),
         replicas: item.spec?.replicas ?? null,
         cause: annotations['kubernetes.io/change-cause'] ?? '',
+        // What it would run, to be held against what runs now before anybody goes back to it.
+        spec: JSON.stringify(template.spec ?? {}, null, 2),
       };
     })
     .sort((a, b) => b.revision - a.revision);
@@ -2689,6 +2719,7 @@ module.exports = {
   top,
   summary,
   topology,
+  can,
   graphFrom,
   plan,
   planFrom,

@@ -288,3 +288,33 @@ test('pods an operator made are one workload, known by what owns them', () => {
   assert.match(plan.text, /pg\/main \(Cluster, PostgreSQL\) — 2 of 2 pods here.*\*\*PDB `main` allows no disruption right now: a drain will wait on it\*\*.*made by an operator, from a Cluster/);
   assert.equal(plan.text.includes('kube-proxy-node-1'), false);
 });
+
+test('an autoscaler that cannot measure its workload is a finding, and warnings land on what they are about', () => {
+  const deployment = (name, cpu) => ({
+    kind: 'Deployment', metadata: { name, namespace: 'shop', uid: `d-${name}` },
+    spec: { replicas: 1, selector: { matchLabels: { app: name } }, template: { metadata: { labels: { app: name } },
+      spec: { containers: [{ name: 'main', image: 'x:1', resources: cpu ? { requests: { cpu } } : {} }] } } },
+    status: { replicas: 1, readyReplicas: 1 },
+  });
+  const hpa = (name) => ({ kind: 'HorizontalPodAutoscaler', metadata: { name: `${name}-hpa`, namespace: 'shop' },
+    spec: { scaleTargetRef: { kind: 'Deployment', name }, minReplicas: 1, maxReplicas: 4,
+      metrics: [{ type: 'Resource', resource: { name: 'cpu' } }] } });
+  const graph = kube.graphFrom({
+    workloads: [deployment('web', null), deployment('api', '100m')],
+    hpas: [hpa('web'), hpa('api')],
+    warnings: [
+      { reason: 'FailedGetResourceMetric', message: 'missing request for cpu', lastTimestamp: '2026-11-20T10:00:00Z',
+        involvedObject: { kind: 'HorizontalPodAutoscaler', name: 'web-hpa', namespace: 'shop' } },
+      { reason: 'Unrelated', message: 'x', involvedObject: { kind: 'Pod', name: 'gone', namespace: 'shop' } },
+    ],
+  }, helpers);
+  const web = graph.nodes.find((node) => node.name === 'web');
+  const api = graph.nodes.find((node) => node.name === 'api');
+  assert.equal(web.hpa, 'web-hpa');
+  assert.deepEqual(web.unrequested, ['main']);
+  assert.equal(web.warnings, 1);
+  assert.match(web.warning, /FailedGetResourceMetric: missing request for cpu/);
+  assert.equal(api.warnings, undefined);
+  assert.ok((graph.findings[web.id] ?? []).some((finding) => /autoscaler cannot measure/.test(finding.title)));
+  assert.ok(!(graph.findings[api.id] ?? []).some((finding) => /autoscaler cannot measure/.test(finding.title)));
+});

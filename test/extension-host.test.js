@@ -104,6 +104,11 @@ test('the questions asked before changing a cluster name where, not just what', 
   });
   assert.match(renamed, /This text is Deployment web2, not Deployment web/);
   assert.match(renamed, /leaves web as it is/);
+  // Argo CD puts things back too, and sooner than Helm does.
+  const synced = H.needsConsent('kube.apply', { yaml: 'metadata:\n  labels:\n    argocd.argoproj.io/instance: shop-app\n' });
+  assert.match(synced, /Argo CD manages this, as part of the application "shop-app"/);
+  // Asking what the account may do changes nothing and is never a question.
+  assert.equal(H.needsConsent('kube.can', { kind: 'deployments' }), null);
   /*
    * A patch says what it will change, because it can. "Apply this manifest?" is
    * a question nobody can answer without reading the manifest; a list of four

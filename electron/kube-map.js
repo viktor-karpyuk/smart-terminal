@@ -286,6 +286,13 @@ function graphFrom(lists, helpers, now = Date.now()) {
   }
 
   const pdbs = all('pdbs');
+  const hpas = all('hpas');
+  /** What an autoscaler measures: v2 lists its metrics, v1 only ever meant CPU. */
+  const measuredBy = (hpa) => {
+    const listed = (hpa?.spec?.metrics ?? []).filter((metric) => metric.type === 'Resource').map((metric) => metric.resource?.name).filter(Boolean);
+    if (listed.length) return listed;
+    return hpa?.spec?.targetCPUUtilizationPercentage != null ? ['cpu'] : [];
+  };
   const workloadNodes = [];
   for (const item of workloadItems) {
     const { name, namespace } = meta(item);
@@ -311,6 +318,9 @@ function graphFrom(lists, helpers, now = Date.now()) {
     const limits = podRequests(fake, 'limits');
     const pdb = pdbs.find((entry) =>
       entry.metadata?.namespace === namespace && matches(entry.spec?.selector?.matchLabels, templateLabels));
+    // The autoscaler names what it scales, so this is stated and not worked out.
+    const hpa = hpas.find((entry) => entry.metadata?.namespace === namespace &&
+      entry.spec?.scaleTargetRef?.kind === item.kind && entry.spec?.scaleTargetRef?.name === name);
     const node = add(item, {
       id: idOf(item.kind, namespace, name),
       kind: item.kind,
@@ -318,6 +328,11 @@ function graphFrom(lists, helpers, now = Date.now()) {
       namespace,
       ...state,
       images,
+      hpa: hpa?.metadata?.name ?? '',
+      hpaOn: measuredBy(hpa),
+      hpaRange: hpa ? `${hpa.spec?.minReplicas ?? 1}–${hpa.spec?.maxReplicas ?? '?'}` : '',
+      // Containers that ask for no CPU: an autoscaler told to hold a share of the request has nothing to take a share of.
+      unrequested: (template?.spec?.containers ?? []).filter((container) => !container.resources?.requests?.cpu).map((container) => container.name ?? ''),
       cpuReq: requests.cpu,
       memReq: requests.memory,
       cpuLim: limits.cpu,
@@ -622,6 +637,43 @@ function graphFrom(lists, helpers, now = Date.now()) {
     .sort()
     .map((name) => ({ name, system: SYSTEM_NAMESPACE.test(name) }));
 
+  /*
+   * What the cluster is complaining about, put on the thing it is complaining
+   * about. An event names its object, so this is the API's own statement; an
+   * autoscaler's complaint goes on the workload it scales, which it also names.
+   * Only a count and the latest words — the events themselves are the pane's.
+   */
+  const scaledBy = new Map();
+  for (const hpa of hpas) {
+    const target = hpa.spec?.scaleTargetRef;
+    if (target?.kind && target?.name) scaledBy.set(`${hpa.metadata?.namespace ?? ''}/${hpa.metadata?.name ?? ''}`, idOf(target.kind, hpa.metadata?.namespace, target.name));
+  }
+  for (const event of all('warnings')) {
+    const about = event.involvedObject ?? event.regarding ?? {};
+    if (!about.kind || !about.name) continue;
+    const namespace = about.kind === 'Node' ? '' : about.namespace ?? event.metadata?.namespace ?? '';
+    const id = about.kind === 'HorizontalPodAutoscaler'
+      ? scaledBy.get(`${namespace}/${about.name}`)
+      : idOf(about.kind, namespace, about.name);
+    const node = id ? byId.get(id) : null;
+    if (!node) continue;
+    const at = event.lastTimestamp || event.eventTime || event.metadata?.creationTimestamp || '';
+    node.warnings = (node.warnings ?? 0) + 1;
+    if (!node.warnedAt || at > node.warnedAt) {
+      node.warnedAt = at;
+      node.warning = `${event.reason ?? 'Warning'}: ${String(event.message ?? '').trim().slice(0, 180)}`;
+    }
+  }
+
+  // A workload's card is what is on screen when its pods are folded into it: their complaints are counted there too.
+  for (const pod of nodes) {
+    if (pod.kind !== 'Pod' || !pod.warnings || !pod.owner) continue;
+    const owner = byId.get(pod.owner);
+    if (!owner) continue;
+    owner.podWarnings = (owner.podWarnings ?? 0) + pod.warnings;
+    if (!owner.warning) owner.warning = `${pod.name}: ${pod.warning}`;
+  }
+
   return {
     nodes,
     edges,
@@ -733,6 +785,16 @@ function findingsFrom(nodes, edges) {
         title: 'A single replica',
         text: 'There is no second copy running: it is down while its one pod restarts or moves.',
         source: 'API · replicas',
+        ids: [],
+      });
+    }
+    if (workload.hpa && (workload.hpaOn ?? []).includes('cpu') && (workload.unrequested ?? []).length) {
+      list.push({
+        level: 'now',
+        title: 'Its autoscaler cannot measure it',
+        text: `${workload.hpa} scales on CPU as a share of what is requested, and ${workload.unrequested.join(', ')} ` +
+          `request${workload.unrequested.length === 1 ? 's' : ''} none. It stays at the number it has; set a CPU request.`,
+        source: 'API · autoscaler, container requests',
         ids: [],
       });
     }

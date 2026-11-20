@@ -314,6 +314,38 @@
   .edit-note-tools .btn { white-space: nowrap; }
   @keyframes note-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 
+  .mwarn {
+    position: absolute; top: 2px; right: 3px; min-width: 14px; height: 14px; padding: 0 4px; border-radius: 7px;
+    font-size: 9px; line-height: 14px; font-weight: 700; text-align: center; color: #fff; background: var(--danger);
+  }
+  .edit-note.is-owned { border-left-color: var(--warn, #e0af68); }
+  .btn[data-cannot="1"] { text-decoration: line-through; }
+  #sheet { position: fixed; inset: 0; z-index: 12; display: grid; place-items: center; background: rgba(0, 0, 0, 0.45); animation: note-in 0.14s ease-out; }
+  .sheet-box {
+    width: min(720px, 92vw); max-height: 84vh; display: grid; grid-template-rows: auto minmax(0, 1fr);
+    background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  }
+  .sheet-head { display: flex; align-items: center; padding: 9px 12px; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .sheet-body { padding: 10px 12px 12px; overflow: auto; font-size: 11.5px; }
+  .sheet-sub { margin-bottom: 8px; }
+  .sheet-foot { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  .keys { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 4px 0 12px; }
+  .keys dd { margin: 0; color: var(--text); }
+  kbd {
+    font: inherit; font-size: 10.5px; padding: 1px 6px; border-radius: 4px; white-space: nowrap;
+    background: var(--bg-input); border: 1px solid var(--border-strong); color: var(--text);
+  }
+  .keys-link { opacity: 0.6; margin-left: 6px; }
+  .keys-link:hover { opacity: 1; }
+  .rev-tools { white-space: nowrap; }
+  .rev-tools .btn + .btn { margin-left: 4px; }
+  .timeline-scale { display: flex; font-size: 10px; margin-bottom: 4px; }
+  .timeline-track { position: relative; height: 5px; margin: 5px 0 2px; border-radius: 3px; background: var(--bg-panel); overflow: hidden; }
+  .timeline-track i { position: absolute; top: 0; bottom: 0; border-radius: 3px; background: var(--text-faint); }
+  .event.is-warn .timeline-track i { background: var(--danger); }
+  .timeline-track i.is-going { animation: going 1.6s ease-in-out infinite; }
+  @keyframes going { 50% { opacity: 0.45; } }
+  .event-about { font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .pane-find { display: flex; align-items: center; gap: 4px; margin-top: 7px; }
   .pane-find input {
     flex: 1; min-width: 0; font: inherit; font-size: 11px; color: var(--text); background: var(--bg-input);
@@ -1012,6 +1044,8 @@
     editing: false,
     /** Edits not applied yet, each kept against the object it is of: uid → { text, base, name }. */
     drafts: {}, configs: {},
+    /** What was applied from here, newest first: the way to see it again and to put it back. */
+    history: [], can: {}, showSecret: false, eventsGroup: false,
     /** Looking for a word in what the pane is showing. */
     find: { open: false, text: '', at: 0 },
     /** What an apply is doing, what the server last said about one, and whether the edit or its changes are showing. */
@@ -1082,12 +1116,49 @@
    */
   function remember() {
     var here = placeNow();
-    host.emit('remember', assign(assign({}, here), {
+    host.emit('remember', assign(assign({ edits: editsToKeep() }, here), {
       // Every subtab's place, with the one in front as it is right now.
       tabs: state.tabs ? state.tabs.map(function (tab, at) { return at === state.tabAt ? here : tab.place; }) : null,
       tabAt: state.tabAt,
     }));
     drawTabs();
+  }
+
+  /**
+   * The edits and the record of what was applied, as they go to the app.
+   *
+   * They are kept with the workspace so a restart does not cost an afternoon's
+   * edit. Never a Secret's: its text is its values, and those are not written
+   * anywhere by this panel. And within a size, oldest dropped first — the app
+   * is keeping a place, not an archive.
+   */
+  function editsToKeep() {
+    var drafts = {};
+    var room = 400000;
+    Object.keys(state.drafts).reverse().forEach(function (uid) {
+      var draft = state.drafts[uid];
+      var size = draft.text.length + draft.base.length;
+      if (draft.kind === 'Secret' || size > room) return;
+      room -= size;
+      drafts[uid] = draft;
+    });
+    var configs = {};
+    Object.keys(state.configs).forEach(function (key) {
+      var config = state.configs[key];
+      if (configChanges(config).length) configs[key] = { key: key, kind: config.kind, live: config.live, draft: config.draft };
+    });
+    var history = state.history.filter(function (entry) { return entry.kind !== 'Secret'; }).slice(0, 20).filter(function (entry) {
+      var size = (entry.before || '').length + (entry.after || '').length;
+      if (size > room) return false;
+      room -= size;
+      return true;
+    });
+    return { context: state.context, drafts: drafts, configs: configs, history: history };
+  }
+  var rememberSoonTimer = 0;
+  function rememberSoon() {
+    clearTimeout(rememberSoonTimer);
+    rememberSoonTimer = setTimeout(remember, 1500);
   }
 
   /** Where this panel is looking, as one value: what a subtab holds. */
@@ -1112,6 +1183,13 @@
     if (saved.pane) {
       state.paneScale = Math.max(0.85, Math.min(1.6, Number(saved.pane.scale) || 1));
       state.paneBig = Boolean(saved.pane.big);
+    }
+    if (saved.edits && typeof saved.edits === 'object') {
+      // For the cluster they were made on: a uid means nothing on another one.
+      state.editsFor = saved.edits.context || null;
+      state.drafts = saved.edits.drafts || {};
+      state.configs = saved.edits.configs || {};
+      state.history = Array.isArray(saved.edits.history) ? saved.edits.history : [];
     }
     state.view = saved.view;
     state.only = saved.only || null;
@@ -1583,11 +1661,59 @@
   }
   setInterval(tickAges, 1000);
 
+  /**
+   * The map, read before it is asked for.
+   *
+   * It is the slowest thing here — every node, pod, workload, service and
+   * volume, six seconds on a real cluster — and it was only started when
+   * somebody clicked Map, who then watched it load. So it is read behind
+   * whatever the panel opens on, kept per cluster and namespace, and shown at
+   * once from what was kept while it is read again. The header says how old
+   * what is on screen is, as it does for everything else.
+   */
+  var mapCache = {};
+  var mapFetching = {};
+  function mapKeep(key, result, text) {
+    mapCache[key] = { result: result, text: text, at: Date.now() };
+    var keys = Object.keys(mapCache);
+    if (keys.length > 4) delete mapCache[keys[0]];
+  }
+  function mapPrefetch() {
+    var key = mapKey();
+    if (!state.context || state.view.type === 'map' || mapFetching[key]) return;
+    if (mapCache[key] && Date.now() - mapCache[key].at < 5 * 60 * 1000) return;
+    mapFetching[key] = true;
+    call('kube.topology', where()).then(function (result) {
+      delete mapFetching[key];
+      mapKeep(key, result, JSON.stringify([result.nodes, result.edges, result.findings, result.missing]));
+      // The form may be waiting to know whether an autoscaler is watching what it edits.
+      if (state.selected && state.detail.tab === 'configure' && !state.editing) drawDetail();
+    }).catch(function () { delete mapFetching[key]; });
+  }
+  /** What the map knows about a row of a table, if the map has been read. */
+  function mapKnown(row) {
+    if (!row) return null;
+    var id = row.kind + '/' + (row.namespace || '') + '/' + row.name;
+    if (state.mapIndex && state.mapFor === mapKey() && state.mapIndex.byId[id]) return state.mapIndex.byId[id];
+    var kept = mapCache[mapKey()] || mapCache[(state.context || '') + '/'];
+    if (!kept) return null;
+    if (!kept.byId) { kept.byId = {}; (kept.result.nodes || []).forEach(function (node) { kept.byId[node.id] = node; }); }
+    return kept.byId[id] || null;
+  }
+
   function load(quiet) {
     var mine = (loadToken += 1);
     state.busy = true;
     drawFresh();
     var started = Date.now();
+    if (state.view.type === 'map' && (!state.map || state.mapFor !== mapKey()) && mapCache[mapKey()]) {
+      var kept = mapCache[mapKey()];
+      state.map = kept.result;
+      state.mapIndex = mapIndexOf(kept.result);
+      state.mapText = kept.text;
+      state.mapFor = mapKey();
+      state.updatedAt = kept.at;
+    }
     if (!quiet) { state.loading = true; state.error = null; draw(); }
 
     var request = state.view.type === 'overview'
@@ -1642,6 +1768,7 @@
           state.mapText = text;
         }
         state.mapFor = mapKey();
+        mapKeep(mapKey(), result, text);
         if (state.selected) mapRefreshSelected();
         if (state.selected && state.detail.tab === 'events') loadEvents(true);
       }
@@ -1654,6 +1781,7 @@
         if (state.selected && state.detail.tab === 'events') loadEvents(true);
       }
       draw(quiet ? { keepDock: true } : null);
+      if (state.view.type !== 'map') mapPrefetch();
       /*
        * Somebody clicked a node on the overview and this is the table it was
        * on. Opening it is what they were asking for.
@@ -2359,11 +2487,16 @@
       bits.push('<button class="link pending-edits" data-pending="1" title="Edits that have not been applied to the cluster">' +
         '<span class="tab-unsaved">●</span> ' + pending.length + ' edit' + (pending.length === 1 ? '' : 's') + ' not applied ▾</button>');
     }
+    if (state.history.length) {
+      bits.push('<button class="link" data-history="1" title="What was applied to the cluster from this panel">' + state.history.length + ' applied ▾</button>');
+    }
     if (state.loading) bits.push('<span class="spin">◐</span>');
     $('crumb').innerHTML =
       bits.join('<span class="dim"> · </span>') +
+      (state.table && listing ? '' : '<span class="spacer"></span>') +
+      '<button class="link keys-link" data-keys="1" title="Keys (?)">⌨</button>' +
       (state.table && listing
-        ? '<span class="spacer"></span><button class="btn" data-do="copy-table" ' +
+        ? '<span class="spacer keys-first"></span><button class="btn" data-do="copy-table" ' +
           'title="Copy this table, as text">Copy table</button>'
         : '');
   }
@@ -2615,7 +2748,88 @@
     state.editNote = null;
     state.yamlView = 'edit';
     state.revertArmed = 0;
+    state.showSecret = false;
   }
+
+  /** Write down something that was applied. Newest first, and not for ever. */
+  function recordApplied(row, how, entry) {
+    state.history.unshift(assign({ at: Date.now(), how: how, kind: row.kind, namespace: row.namespace || '', name: row.name, uid: row.uid }, entry));
+    if (state.history.length > 30) state.history.length = 30;
+    rememberSoon();
+  }
+
+  /** A sheet over the panel, for something to be read and closed. */
+  function sheet(title, html) {
+    var old = document.getElementById('sheet');
+    if (old) old.remove();
+    var box = document.createElement('div');
+    box.id = 'sheet';
+    box.innerHTML = '<div class="sheet-box" role="dialog" aria-label="' + esc(title) + '"><div class="sheet-head"><b>' + esc(title) + '</b><span class="spacer"></span>' +
+      '<button class="pane-tool" data-sheet-close="1" title="Close (Esc)" aria-label="Close">×</button></div><div class="sheet-body">' + html + '</div></div>';
+    document.body.appendChild(box);
+    box.addEventListener('click', function (event) {
+      if (event.target === box || event.target.closest('[data-sheet-close]')) box.remove();
+    });
+    return box;
+  }
+  document.addEventListener('keydown', function (event) {
+    var open = document.getElementById('sheet');
+    if (open && event.key === 'Escape') { event.stopPropagation(); event.preventDefault(); open.remove(); }
+  }, true);
+
+  function historyLine(entry) {
+    return entry.how + (entry.added != null ? ' · +' + entry.added + ' −' + entry.removed : entry.lines ? ' · ' + entry.lines.length + ' change' + (entry.lines.length === 1 ? '' : 's') : '') +
+      ' · ' + sinceText(entry.at);
+  }
+
+  function showHistory(at) {
+    var entry = state.history[at];
+    if (!entry) return;
+    var body = '<div class="dim sheet-sub">' + esc(entry.kind + ' ' + (entry.namespace ? entry.namespace + '/' : '') + entry.name + ' · ' + historyLine(entry) + ' · ' + new Date(entry.at).toLocaleString()) + '</div>' +
+      (entry.before != null
+        ? '<div class="diff">' + (diffHtml(lineDiff(entry.before, entry.after)) || '<div class="dim">Nothing changed.</div>') + '</div>' +
+          '<div class="sheet-foot"><span class="dim">Putting it back opens the editor with the text as it was. Nothing is applied until you apply it.</span>' +
+          '<span class="spacer"></span><button class="btn go" data-history-back="' + at + '">Put it back…</button></div>'
+        : '<ul class="config-diff">' + (entry.lines || []).map(function (line) { return '<li>' + esc(line) + '</li>'; }).join('') + '</ul>');
+    var box = sheet('Applied from here', body);
+    box.addEventListener('click', function (event) {
+      var back = event.target.closest('[data-history-back]');
+      if (!back) return;
+      box.remove();
+      // As an edit like any other: the text as it was, measured against what was applied over it.
+      state.drafts[entry.uid] = { text: entry.before, base: entry.after, name: entry.name, kind: entry.kind, namespace: entry.namespace };
+      drawCrumb();
+      openPending({ tab: 'yaml', name: entry.name, kind: entry.kind, namespace: entry.namespace });
+    });
+  }
+
+  var KEYS = [
+    ['Anywhere', [['/', 'Filter the table'], ['↑ ↓', 'The row above or below'], ['Esc', 'Close what is open'], ['⌘C', 'Copy what is selected'], ['?', 'This list']]],
+    ['In the pane', [['⌘F', 'Find in the tab that is showing'], ['↵ / ⇧↵ or ⌘G / ⇧⌘G', 'Next and previous match'], ['A− A+', 'Smaller or larger text']]],
+    ['Editing a manifest', [['⌘S', 'Apply'], ['⌘↵', 'Dry run: ask the server, change nothing'], ['⌘D', 'What you changed'], ['Tab / ⇧Tab', 'Indent or outdent the lines selected'], ['Esc', 'Leave the editor, when nothing was typed']]],
+    ['Configure', [['⌘S', 'Apply'], ['⌘↵', 'Dry run']]],
+    ['A log', [['↵ / ⇧↵', 'Next and previous match'], ['Esc', 'Let go of the search']]],
+    ['The map', [['Double click', 'What it depends on'], ['Right click', 'Everything that can be done to it'], ['Hover', 'Light the whole chain']]],
+  ];
+  function showKeys() {
+    sheet('Keys', KEYS.map(function (group) {
+      return '<h5 class="msub">' + esc(group[0]) + '</h5><dl class="keys">' + group[1].map(function (pair) {
+        return '<dt><kbd>' + esc(pair[0]) + '</kbd></dt><dd>' + esc(pair[1]) + '</dd>';
+      }).join('') + '</dl>';
+    }).join(''));
+  }
+
+  document.addEventListener('click', function (event) {
+    var keys = event.target.closest && event.target.closest('[data-keys]');
+    if (keys) { showKeys(); return; }
+    var button = event.target.closest && event.target.closest('[data-history]');
+    if (!button) return;
+    var at = button.getBoundingClientRect();
+    event.stopPropagation();
+    menuAt(state.history.slice(0, 15).map(function (entry, i) {
+      return { label: entry.name, hint: historyLine(entry), run: function () { showHistory(i); } };
+    }), { clientX: at.left, clientY: at.bottom + 2 });
+  });
 
   /** Every edit that is waiting, in YAML or in the form, with enough to get back to it. */
   function pendingEdits() {
@@ -3306,14 +3520,17 @@
   function mapCard(node, x, y, o) {
     o = o || {};
     var ui = mapUi();
+    // What the cluster has complained about it lately — and, for a workload, about its pods — as a number in the corner.
+    var warned = o.more ? 0 : (node.warnings || 0) + (node.podWarnings || 0);
     var cls = 'mcard c-' + (MAP_CAT[node.kind] || 'wk') + ' h-' + (o.health || node.health || 'ok') +
       (ui.sel && ui.sel === node.id && !o.more ? ' sel' : '') + (o.cls ? ' ' + o.cls : '');
     return '<button class="' + cls + '" style="left:' + x + 'px;top:' + y + 'px' +
       (o.w ? ';width:' + o.w + 'px' : '') + (o.h ? ';height:' + o.h + 'px' : '') + '"' +
       (o.more ? ' data-map-more="' + esc(o.more) + '"' : ' data-map-id="' + esc(node.id) + '"') +
-      ' title="' + esc(o.title || mapTip(node)) + '">' +
+      ' title="' + esc(o.title || mapTip(node)) + (warned && node.warning ? '\n\n⚠ ' + esc(node.warning) : '') + '">' +
       '<i class="mdot"></i><span class="mtext"><b>' + esc(o.name || node.name) + '</b><small>' +
-      (o.html || esc(o.line != null ? o.line : mapLine(node))) + '</small></span></button>';
+      (o.html || esc(o.line != null ? o.line : mapLine(node))) + '</small></span>' +
+      (warned ? '<span class="mwarn">' + (warned > 99 ? '99+' : warned) + '</span>' : '') + '</button>';
   }
 
   /** A line that leaves sideways, turns once, and arrives sideways. */
@@ -4479,7 +4696,15 @@
           (users.length ? '<h5 class="msub">Used by <span class="mtag inf">inferred</span></h5><div class="mgos">' + users.map(function (user) { return mapGo(user.node, user.via); }).join('') + '</div>' : '') +
           (needs.length ? '<h5 class="msub">Uses <span class="mtag inf">inferred</span></h5><div class="mgos">' + needs.map(function (need) { return mapGo(need.node, need.via); }).join('') + '</div>' : ''));
       }
-      html += block('Placement', '<dl class="facts"><dt>Kept apart</dt><dd>' +
+      if (node.warnings || node.podWarnings) {
+        html += block('Warnings', '<div class="events"><div class="event is-warn"><div class="event-head"><span class="dot bad"></span><b>' +
+          ((node.warnings || 0) + (node.podWarnings || 0)) + ' lately</b><span class="spacer"></span>' +
+          '<button class="btn" data-tab="events">Open Events</button></div><div class="event-text">' + esc(node.warning || '') + '</div></div></div>');
+      }
+      html += block('Placement', '<dl class="facts">' +
+        (node.hpa ? '<dt>Autoscaler</dt><dd>' + esc(node.hpa + ' · ' + node.hpaRange + ' replicas' + ((node.hpaOn || []).length ? ', on ' + node.hpaOn.join(' and ') : '')) +
+          ((node.hpaOn || []).indexOf('cpu') >= 0 && (node.unrequested || []).length ? ' <span class="bad-text">· cannot measure: ' + esc(node.unrequested.join(', ')) + ' requests no CPU</span>' : '') + '</dd>' : '') +
+        '<dt>Kept apart</dt><dd>' +
         esc(node.spread ? node.spread.mode + (node.spread.key ? ', by ' + node.spread.key : '') : 'nothing keeps replicas on different nodes') + '</dd>' +
         '<dt>Disruption budget</dt><dd>' + esc(node.pdb ? node.pdb + (node.pdbAllowed != null ? ' · ' + node.pdbAllowed + ' may go right now' : '') : 'none') + '</dd>' +
         (node.helm ? '<dt>Installed by</dt><dd>' + esc(node.helm) + '</dd>' : '') + '</dl>');
@@ -6098,6 +6323,7 @@
       if (at < strip.scrollLeft || at + lit.offsetWidth > strip.scrollLeft + strip.clientWidth - 60) strip.scrollLeft = Math.max(0, at - 40);
     }
 
+    applyCan(aside);
     // An image is read from its end: the tag is what changes, and a long registry pushed it out of the field.
     var images = aside.querySelectorAll('[data-config="image"]');
     for (var im = 0; im < images.length; im += 1) images[im].scrollLeft = images[im].scrollWidth;
@@ -6236,6 +6462,23 @@
     if (!got) return '<pre>reading…</pre>';
     if (typeof got === 'string') return '<div class="dim">' + esc(got) + '</div>';
     if (!got.rows.length) return '<div class="dim">No revisions are kept for this one.</div>';
+    /*
+     * A rollback reads as "undo" and is not: it puts the whole template back.
+     * So before the button, the difference — what the pods would run after,
+     * against what they run now — for anybody who wants to know what "revision
+     * 7" was before going back to it.
+     */
+    var running = got.rows.filter(function (rev) { return rev.current; })[0];
+    var comparing = state.detailData.compare;
+    var other = comparing == null ? null : got.rows.filter(function (rev) { return rev.revision === comparing; })[0];
+    var compared = '';
+    if (other && running) {
+      var change = lineDiff(running.spec || '', other.spec || '');
+      compared = '<section class="block"><h4 class="block-head">Going back to revision ' + other.revision + ' would change<span class="spacer"></span>' +
+        '<span class="dim">' + esc(linesText(change)) + '</span></h4>' +
+        (change.added || change.removed ? '<div class="diff">' + diffHtml(change) + '</div>'
+          : '<div class="dim">Nothing in what its pods run. It differs only in what is not part of the template.</div>') + '</section>';
+    }
     return (row.paused ? '<p class="all-well warn-text">Its rollout is paused — nothing is replacing anything.</p>' : '') +
       '<table><tbody>' + got.rows.map(function (rev) {
         return '<tr>' +
@@ -6243,11 +6486,12 @@
           '<td class="grow"><div>' + esc(rev.images.join(', ') || rev.name) + '</div>' +
             (rev.cause ? '<div class="dim">' + esc(rev.cause) + '</div>' : '') + '</td>' +
           '<td class="dim age">' + ageHtml(rev) + '</td>' +
-          '<td>' + (rev.current
+          '<td class="rev-tools">' + (rev.current
             ? '<span class="dim">running</span>'
-            : '<button class="btn" data-undo="' + rev.revision + '">Roll back</button>') + '</td>' +
+            : (rev.spec && running && running.spec ? '<button class="btn' + (comparing === rev.revision ? ' on' : '') + '" data-compare="' + rev.revision + '" title="What going back to it would change">Compare</button>' : '') +
+              '<button class="btn" data-undo="' + rev.revision + '"' + cannot('patch') + '>Roll back</button>') + '</td>' +
           '</tr>';
-      }).join('') + '</tbody></table>';
+      }).join('') + '</tbody></table>' + compared;
   }
 
 
@@ -6404,10 +6648,98 @@
     return out;
   }
 
+  /** Not wrong, and worth saying: what the map knows that the form cannot see in the object. */
+  function configHintsHtml(config, row) {
+    var known = mapKnown(row);
+    if (!known || !known.hpa || (known.hpaOn || []).indexOf('cpu') < 0) return '';
+    var without = config.draft.containers.filter(function (container) { return !container.init && !String(container.requests.cpu).trim(); })
+      .map(function (container) { return container.name; });
+    if (!without.length) return '';
+    return '<div class="edit-note is-bad" role="note"><div class="edit-note-text">' +
+      esc(known.hpa + ' scales this on CPU as a share of what is requested, and ' + without.join(', ') + ' request' + (without.length === 1 ? 's' : '') +
+        ' none — so it cannot measure it and never scales. Set a CPU request below.') + '</div></div>';
+  }
+
   function configWrong(problems) {
     var keys = {};
     problems.forEach(function (problem) { keys[problem.key] = problem.text; });
     return keys;
+  }
+
+  /**
+   * Who will put this back.
+   *
+   * An object installed by Helm, synced by Argo CD or made by another object
+   * can be edited here, and the edit will hold until its owner next looks.
+   * That is worth knowing before typing, not in the question after it.
+   */
+  function managedNote() {
+    var data = state.detailData;
+    var meta = data.object && typeof data.object === 'object' ? data.object.metadata || {} : null;
+    var text = typeof data.yaml === 'string' ? data.yaml : '';
+    var pick = function (key) {
+      if (meta) return (meta.annotations || {})[key] || (meta.labels || {})[key] || '';
+      var found = new RegExp('^\\s+' + key.replace(/[.\/]/g, '\\$&') + ':\\s*["\']?([^"\'\\s]+)', 'm').exec(text);
+      return found ? found[1] : '';
+    };
+    var notes = [];
+    var owner = meta ? (meta.ownerReferences || [])[0] : null;
+    if (!meta) {
+      var owned = /^ {2}ownerReferences:\n(?: {2}- .*\n| {4}.*\n)*/m.exec(text);
+      if (owned) owner = { kind: (/kind:\s*(\S+)/.exec(owned[0]) || [])[1], name: (/name:\s*(\S+)/.exec(owned[0]) || [])[1] };
+    }
+    if (owner && owner.kind) notes.push(owner.kind + ' ' + owner.name + ' made this and keeps it as it wants it. Change that one instead.');
+    var argo = pick('argocd.argoproj.io/instance') || pick('argocd.argoproj.io/tracking-id').split(':')[0];
+    if (argo) notes.push('Argo CD manages this, as part of the application ' + argo + '. If it syncs by itself, an edit here is put back the way Git says.');
+    var helm = pick('meta.helm.sh/release-name');
+    if (helm) notes.push('Helm installed this, as part of the release ' + helm + '. The next upgrade of that release puts it back the way the chart says.');
+    if (!notes.length) return '';
+    return '<div class="edit-note is-owned" role="note"><div class="edit-note-text">' + notes.map(esc).join('\n') + '</div></div>';
+  }
+
+  /**
+   * Whether the cluster would refuse, known before the button is pressed.
+   *
+   * Asked once per kind and namespace when something is opened. A button the
+   * account cannot use is drawn switched off and says why; one the cluster
+   * gave no answer about is left alone, because not knowing is not a no.
+   */
+  function canKey(row) { return (row.resource || row.kind) + '|' + (row.namespace || ''); }
+  function askCan(row) {
+    if (!row || row.kind === 'Release' || row.kind === 'Event') return;
+    var key = canKey(row);
+    if (state.can[key]) return;
+    state.can[key] = { asked: true };
+    var at = { context: state.context, kind: row.resource || navFor(row.kind) || row.kind };
+    if (row.namespace) at.namespace = row.namespace;
+    call('kube.can', at).then(function (answer) {
+      state.can[key] = { patch: answer.patch, delete: answer.delete };
+      if ((answer.patch === false || answer.delete === false) && state.selected === row) { if (holdingEdit()) redrawEditor(); else drawDetail(); }
+    }).catch(function () { /* not known, and so not held against anything */ });
+  }
+  /** The attributes that switch a button off, or nothing. */
+  function cannot(verb) {
+    var row = state.selected;
+    var known = row && state.can[canKey(row)];
+    if (!known || known[verb] !== false) return '';
+    return ' disabled data-cannot="1" title="This account may not ' + (verb === 'delete' ? 'delete' : 'change') + ' ' + esc(row.kind) +
+      (row.namespace ? ' in ' + esc(row.namespace) : '') + '. The cluster said so."';
+  }
+  var CAN_VERB = { delete: 'delete', scale: 'patch', restart: 'patch', pause: 'patch', suspend: 'patch', cordon: 'patch',
+    'yaml-edit': 'patch', 'config-apply': 'patch', 'config-check': 'patch', 'yaml-apply': 'patch' };
+  /** Applied to whatever was just drawn, so no button has to know about it. */
+  function applyCan(root) {
+    var row = state.selected;
+    var known = row && state.can[canKey(row)];
+    if (!known) return;
+    var buttons = root.querySelectorAll('[data-do]');
+    for (var i = 0; i < buttons.length; i += 1) {
+      var verb = CAN_VERB[buttons[i].dataset.do];
+      if (!verb || known[verb] !== false) continue;
+      buttons[i].disabled = true;
+      buttons[i].dataset.cannot = '1';
+      buttons[i].title = 'This account may not ' + (verb === 'delete' ? 'delete' : 'change') + ' ' + row.kind + (row.namespace ? ' in ' + row.namespace : '') + '. The cluster said so.';
+    }
   }
 
   /** What the server last said about an edit, kept on the page until the next keystroke. */
@@ -6616,7 +6948,8 @@
       '<button class="btn" data-do="config-revert"' + (changes.length && !state.applying ? '' : ' disabled') + '>' + revertLabel() + '</button>' +
       '<span class="dim" id="config-count">' + esc(configCountText(changes)) + '</span>' +
       '</div>' +
-      editNoteHtml() +
+      editNoteHtml() + managedNote() +
+      '<div id="config-hints">' + configHintsHtml(config, row) + '</div>' +
       (config.moved ? '<div class="edit-note" role="status"><div class="edit-note-text">This was changed in the cluster after you started. ' +
         'What is listed below is measured against what it has now.</div></div>' : '') +
       '<ul class="config-problems" id="config-problems">' + problems.map(function (p) { return '<li>' + esc(p.text) + '</li>'; }).join('') + '</ul>' +
@@ -6670,6 +7003,7 @@
       }
     }
     state.revertArmed = 0;
+    rememberSoon();
     if (state.editNote) { state.editNote = null; var note = document.querySelector('.edit-note'); if (note) note.remove(); }
     configShow();
   }
@@ -6692,6 +7026,8 @@
     if (list) list.innerHTML = configDiffHtml(changes);
     var pending = document.getElementById('config-pending');
     if (pending) pending.hidden = !changes.length;
+    var hints = document.getElementById('config-hints');
+    if (hints && state.selected) hints.innerHTML = configHintsHtml(config, state.selected);
     var wrong = document.getElementById('config-problems');
     if (wrong) wrong.innerHTML = problems.map(function (p) { return '<li>' + esc(p.text) + '</li>'; }).join('');
     configWrongNow = configWrong(problems);
@@ -6704,7 +7040,7 @@
     }
     ['config-apply', 'config-check'].forEach(function (name) {
       var button = document.querySelector('[data-do="' + name + '"]');
-      if (button) button.disabled = !changes.length || problems.length > 0 || Boolean(state.applying);
+      if (button && !button.dataset.cannot) button.disabled = !changes.length || problems.length > 0 || Boolean(state.applying);
     });
     var revert = document.querySelector('[data-do="config-revert"]');
     if (revert) { revert.disabled = !changes.length; revert.textContent = revertLabel(); revert.dataset.armed = state.revertArmed ? 1 : 0; }
@@ -6747,6 +7083,7 @@
       }
       return call('kube.configure', at).then(function (done) {
         say(done.text || 'Changed.');
+        recordApplied(row, 'Configure', { lines: changes });
         delete state.configs[config.key];
         drawCrumb();
         if (!mine()) return null;
@@ -7127,6 +7464,29 @@
    * status, its resourceVersion, what it last applied — are left out, because
    * sent back they are either refused or asserted. See editableYaml.
    */
+  /**
+   * A Secret with its values covered.
+   *
+   * The tab used to paint them the moment it was opened, on a screen that may
+   * be shared — and in base64, which hides nothing. Each value is replaced by
+   * its length; the keys, which are what is usually being checked, stay.
+   */
+  function maskSecret(text) {
+    var inData = false;
+    var out = [];
+    String(text).split('\n').forEach(function (line) {
+      if (/^\S/.test(line)) { inData = /^(data|stringData):/.test(line); out.push(line); return; }
+      if (!inData) { out.push(line); return; }
+      var pair = /^( {2}[^\s:][^:]*):\s*(.*)$/.exec(line);
+      // Deeper lines are the body of a block value: gone with it.
+      if (!pair) return;
+      // A block value's first line is only its marker: no length to give.
+      out.push(pair[1] + ': ' + (pair[2] && !/^[|>]/.test(pair[2]) ? '•••••• (' + pair[2].replace(/^["\']|["\']$/g, '').length + ' characters)' : '••••••'));
+    });
+    return out.join('\n');
+  }
+  function hidesValues(row) { return row.kind === 'Secret' && !state.showSecret; }
+
   function yamlBody(row) {
     var draft = draftFor(row);
     // Typing that survived a trip to another tab, or to another object, comes back with the editor open.
@@ -7145,7 +7505,9 @@
         '<button class="btn" data-do="yaml-check" title="Ask the server whether this is legal, and change nothing (⌘↵)"' + (busy ? ' disabled' : '') + '>' + applyLabel('check') + '</button>' +
         '<button class="btn' + (showDiff ? ' on' : '') + '" data-do="yaml-diff" title="What you changed, against what the cluster had (⌘D)"' + (changed ? '' : ' disabled') + '>Changes</button>' +
         '<button class="btn" data-do="yaml-revert" title="' + (changed ? 'Throw the edit away' : 'Leave the editor (Esc)') + '" data-armed="' + (state.revertArmed ? 1 : 0) + '"' + (busy ? ' disabled' : '') + '>' + (changed ? revertLabel() : 'Done') + '</button>'
-      : row.kind === 'Event' ? '' : '<button class="btn" data-do="yaml-edit" title="Change this manifest and apply it to the cluster"' + (state.applying === 'open' ? ' disabled' : '') + '>' +
+      : row.kind === 'Event' ? '' : (row.kind === 'Secret'
+        ? '<button class="btn' + (state.showSecret ? ' on' : '') + '" data-do="secret-show" title="' + (state.showSecret ? 'Cover the values again' : 'Show the values on this screen') + '">' + (state.showSecret ? 'Hide values' : 'Show values') + '</button>' : '') +
+        '<button class="btn" data-do="yaml-edit" title="' + (hidesValues(row) ? 'Editing shows the values. ' : '') + 'Change this manifest and apply it to the cluster"' + (state.applying === 'open' ? ' disabled' : '') + '>' +
         (state.applying === 'open' ? '<span class="spin">◐</span> Reading…' : 'Edit') + '</button>';
 
     return '<div class="yaml-tools is-stuck">' + tools +
@@ -7155,7 +7517,7 @@
       '<button class="btn" data-do="yaml-save" title="Save this text to a file on this machine">Save…</button>' +
       '<button class="btn" data-do="copy-detail" title="Copy the whole manifest">Copy</button>' +
       '</div>' +
-      editNoteHtml() +
+      editNoteHtml() + (editing ? managedNote() : '') +
       (theirs
         ? '<div class="diff-title dim">What changed in the cluster since you started <button class="btn" data-do="yaml-diff-close">Back to the edit</button></div>' +
           '<div class="diff">' + (diffHtml(lineDiff(base, state.detailData.theirs)) || '<div class="dim">Nothing you would see in this text.</div>') + '</div>'
@@ -7164,7 +7526,9 @@
             '<div class="diff">' + diffHtml(diff) + '</div>'
           : editing
             ? '<textarea id="yaml-edit" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"' + (busy ? ' readonly' : '') + '>' + esc(body) + '</textarea>'
-            : '<pre class="yaml">' + yamlHtml(state.detailData.yaml) + '</pre>');
+            // A Secret is painted from the text without what was last applied, which is the values over again.
+            : '<pre class="yaml">' + yamlHtml(row.kind === 'Secret'
+              ? (hidesValues(row) ? maskSecret(base) : base) : state.detailData.yaml) + '</pre>');
   }
 
   /* ------------------------------------------------------------------ *
@@ -7208,6 +7572,49 @@
       '</div>';
   }
 
+  /**
+   * The same events, as problems with a beginning.
+   *
+   * A list newest-first answers "what was said last". This answers the other
+   * question — what started when, and is it still going — by putting every
+   * event about one thing for one reason on one line, drawn from when it was
+   * first said to when it was last said, across the time the cluster remembers.
+   */
+  function eventTimeline(events, withObject) {
+    var groups = {};
+    var order = [];
+    var now = Date.now();
+    var from = now;
+    events.forEach(function (event) {
+      var key = event.object + '|' + event.status;
+      var last = Date.parse(event.at) || now;
+      var first = Date.parse(event.firstAt) || last;
+      if (!groups[key]) { groups[key] = { event: event, first: first, last: last, count: 0, warn: false }; order.push(key); }
+      var group = groups[key];
+      group.first = Math.min(group.first, first);
+      if (last >= group.last) { group.last = last; group.event = event; }
+      group.count += Number(event.count) || 1;
+      group.warn = group.warn || event.type === 'Warning';
+      from = Math.min(from, first);
+    });
+    var span = Math.max(60000, now - from);
+    order.sort(function (a, b) { return groups[a].first - groups[b].first; });
+    return '<div class="timeline-scale dim"><span>' + esc(ageText(from)) + ' ago</span><span class="spacer"></span><span>now</span></div>' +
+      '<div class="events">' + order.map(function (key) {
+        var group = groups[key];
+        var left = (group.first - from) / span * 100;
+        var width = Math.max(1.5, (group.last - group.first) / span * 100);
+        var going = now - group.last < 120000;
+        return '<div class="event' + (group.warn ? ' is-warn' : '') + '">' +
+          '<div class="event-head"><span class="dot ' + (group.warn ? 'bad' : 'idle') + '"></span><b>' + esc(group.event.status) + '</b>' +
+            (group.count > 1 ? '<span class="event-count">×' + group.count + '</span>' : '') +
+            (withObject ? '<span class="dim event-about">' + esc(group.event.object) + '</span>' : '') +
+            '<span class="spacer"></span><span class="dim">' + (going ? 'still going · ' : 'stopped ' + esc(ageText(group.last)) + ' ago · ') + 'began ' + esc(ageText(group.first)) + ' ago</span></div>' +
+          '<div class="timeline-track"><i class="' + (going ? 'is-going' : '') + '" style="left:' + left.toFixed(2) + '%;width:' + Math.min(100 - left, width).toFixed(2) + '%"></i></div>' +
+          '<div class="event-text">' + esc(group.event.message) + '</div></div>';
+      }).join('') + '</div>';
+  }
+
   function eventsBody(row) {
     var events = state.detailData.events;
     var failed = state.detailData.eventsError;
@@ -7219,6 +7626,7 @@
         ? (warnings.length ? warnings.length + ' warning' + (warnings.length === 1 ? '' : 's') + ' · ' : '') + events.length + ' event' + (events.length === 1 ? '' : 's')
         : failed ? 'not read' : 'reading…') + '</span>' +
       '<button class="btn' + (state.eventsOnly ? ' on' : '') + '" data-do="events-only" title="Only what went wrong"' + (warnings.length || state.eventsOnly ? '' : ' disabled') + '>Warnings</button>' +
+      '<button class="btn' + (state.eventsGroup ? ' on' : '') + '" data-do="events-group" title="One line per problem, from when it began to when it was last said"' + (events && events.length ? '' : ' disabled') + '>Timeline</button>' +
       (wide ? '<button class="btn' + (state.eventsWide ? ' on' : '') + '" data-do="events-wide" ' +
         'title="Also the events of what it made — its pods, replica sets, jobs and claims — found by their names">What it made</button>' : '') +
       '<span class="spacer"></span>' +
@@ -7234,7 +7642,8 @@
     }
     if (!shown.length) return tools + '<div class="dim event-none">No warnings among them.</div>';
     return tools + (failed ? '<div class="edit-note is-bad"><div class="edit-note-text">Not read again: ' + esc(failed) + '</div></div>' : '') +
-      '<div class="events">' + shown.map(function (event) { return eventCard(event, wide && state.eventsWide); }).join('') + '</div>';
+      (state.eventsGroup ? eventTimeline(shown, wide && state.eventsWide)
+        : '<div class="events">' + shown.map(function (event) { return eventCard(event, wide && state.eventsWide); }).join('') + '</div>');
   }
 
   /** The name this panel lists a kind under — `pods` for Pod — if it lists it at all. */
@@ -7365,6 +7774,13 @@
    * wrong one gets called on the wrong row.
    */
   document.addEventListener('click', function (event) {
+    var compare = event.target.closest('[data-compare]');
+    if (compare && state.selected) {
+      var which = Number(compare.dataset.compare);
+      state.detailData.compare = state.detailData.compare === which ? null : which;
+      drawDetail();
+      return;
+    }
     var undo = event.target.closest('[data-undo]');
     if (undo && state.selected) {
       var subject = state.selected;
@@ -7462,6 +7878,7 @@
     if (row.kind === 'Release') return loadReleaseDetail(row);
     var at = { context: state.context, kind: row.kind, name: row.name };
     if (row.kind === 'Event' && state.detail.tab === 'overview') return;
+    askCan(row);
     if (row.namespace) at.namespace = row.namespace;
 
     if (state.detail.tab === 'overview') loadCharts(row);
@@ -8501,7 +8918,8 @@
       if (!body) return;
       // A manifest is copied as the text it is — what is in the editor if one is open — and not as a bar of buttons above a box.
       if (state.detail.tab === 'yaml' && state.selected && state.detailData.yaml != null && state.selected.kind !== 'Release') {
-        var manifest = state.editingYaml ? (draftFor(state.selected) == null ? baseFor(state.selected) : draftFor(state.selected)) : state.detailData.yaml;
+        var manifest = state.editingYaml ? (draftFor(state.selected) == null ? baseFor(state.selected) : draftFor(state.selected))
+          : hidesValues(state.selected) ? maskSecret(baseFor(state.selected)) : state.detailData.yaml;
         host.emit('copy', { text: manifest });
         say('Copied ' + manifest.split('\n').length + ' lines' + (state.editingYaml && draftFor(state.selected) != null ? ', with your edit.' : '.'));
         return;
@@ -8640,6 +9058,8 @@
        * maintaining an editor inside a panel.
        */
       if (state.detailData.unread || state.applying) return;
+      // The editor holds the real text: to edit a Secret is to have asked to see it.
+      if (row.kind === 'Secret') state.showSecret = true;
       /*
        * Read again first. The manifest on screen was read when the tab was
        * opened, which may be a while ago, and an edit that starts from an old
@@ -8699,11 +9119,13 @@
       return;
     }
     if (what === 'yaml-save') {
-      var saving = state.editingYaml ? (draftFor(row) == null ? baseFor(row) : draftFor(row)) : state.detailData.yaml;
+      var saving = state.editingYaml ? (draftFor(row) == null ? baseFor(row) : draftFor(row)) : hidesValues(row) ? maskSecret(baseFor(row)) : state.detailData.yaml;
       if (saving == null || state.detailData.unread) return;
       host.emit('save', { name: [row.namespace, row.kind.toLowerCase(), row.name].filter(Boolean).join('-') + '.yaml', text: saving });
       return;
     }
+    if (what === 'secret-show') { state.showSecret = !state.showSecret; drawDetail(true); return; }
+    if (what === 'events-group') { state.eventsGroup = !state.eventsGroup; drawDetail(); return; }
     if (what === 'events-only') { state.eventsOnly = !state.eventsOnly; drawDetail(); return; }
     if (what === 'events-wide') {
       state.eventsWide = !state.eventsWide;
@@ -8916,6 +9338,7 @@
       if (held.length > 20) delete state.drafts[held[0]];
     }
     state.editing = text !== base;
+    rememberSoon();
     state.revertArmed = 0;
     if (state.editNote) { state.editNote = null; var note = document.querySelector('.edit-note'); if (note) note.remove(); }
     yamlWhere();
@@ -8934,7 +9357,8 @@
     var changed = Boolean(diff && (diff.added || diff.removed));
     mark.textContent = changed ? 'edited · ' + linesText(diff) : 'nothing changed yet';
     var set = function (name, off) { var b = document.querySelector('[data-do="' + name + '"]'); if (b) b.disabled = off; return b; };
-    set('yaml-apply', !changed || Boolean(state.applying));
+    var apply = document.querySelector('[data-do="yaml-apply"]');
+    if (!apply || !apply.dataset.cannot) set('yaml-apply', !changed || Boolean(state.applying));
     set('yaml-diff', !changed);
     var revert = set('yaml-revert', Boolean(state.applying));
     if (revert) { revert.textContent = changed ? revertLabel() : 'Done'; revert.title = changed ? 'Throw the edit away' : 'Leave the editor (Esc)'; revert.dataset.armed = state.revertArmed ? 1 : 0; }
@@ -9090,6 +9514,7 @@
         }
         return call('kube.apply', send).then(function (done) {
           dropDraft(row);
+          recordApplied(row, 'YAML', { before: base, after: text, added: diff.added, removed: diff.removed });
           say(done.text || 'Applied.');
           if (!mine()) return null;
           stopEditing();
@@ -9616,6 +10041,7 @@
       $('search').focus();
       return;
     }
+    if (event.key === '?') { event.preventDefault(); showKeys(); return; }
     if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && state.table) {
       var rows = visible();
       if (!rows.length) return;
