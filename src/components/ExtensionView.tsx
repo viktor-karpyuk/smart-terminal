@@ -733,6 +733,25 @@ function Frame({
         return { ok: true, sessionId, delivered: handed.delivered ?? false };
       }
 
+      /*
+       * A change to the infrastructure, asked for from the map.
+       *
+       * The panel names the operation and the pool; the app reads the cluster
+       * again and writes the brief — what runs on those machines, what is
+       * fragile about moving it, and the order to do it in. It goes to this
+       * panel's session, which does the work a step at a time with the person
+       * agreeing to each: nothing here changes a cluster by itself.
+       */
+      if (name === 'kube.askPlan') {
+        const planned = await window.api.kube.call('plan', { ...args, context: where.context });
+        if (planned.ok === false) return planned;
+        const sessionId = await claudeFor(panelId);
+        if (!sessionId) return { ok: false, error: 'the app could not open a session' };
+        store.focusSession(sessionId);
+        const handed = await window.api.analysis.handOver(sessionId, String(planned.text ?? ''));
+        return { ok: true, sessionId, delivered: handed.delivered ?? false };
+      }
+
       // Ask Claude. The evidence is gathered by the app, in the app's words.
       const brief = await window.api.kube.call('brief', {
         ...where,

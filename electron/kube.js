@@ -27,7 +27,7 @@
 
 const { execFile, spawn } = require('node:child_process');
 const { resolvedPath } = require('./cli-env');
-const { graphFrom } = require('./kube-map');
+const { graphFrom, planFrom } = require('./kube-map');
 
 /** Long enough for a slow API server, short enough that a panel is never stuck. */
 const TIMEOUT = 30000;
@@ -672,6 +672,24 @@ const NODE_GROUP_LABELS = [
   'node-pool',
   'nodegroup',
 ];
+
+/** What makes that pool's nodes, said the way a person would: it decides where a change to it has to be made. */
+const NODE_GROUP_KINDS = {
+  'eks.amazonaws.com/nodegroup': 'EKS managed node group',
+  'alpha.eksctl.io/nodegroup-name': 'eksctl node group',
+  'karpenter.sh/nodepool': 'karpenter',
+  'karpenter.sh/provisioner-name': 'karpenter',
+  'cloud.google.com/gke-nodepool': 'GKE node pool',
+  'kubernetes.azure.com/agentpool': 'AKS agent pool',
+  agentpool: 'AKS agent pool',
+  'kops.k8s.io/instancegroup': 'kops instance group',
+  'doks.digitalocean.com/node-pool': 'DigitalOcean node pool',
+};
+
+function nodeGroupKindOf(labels) {
+  for (const key of NODE_GROUP_LABELS) if (labels[key]) return NODE_GROUP_KINDS[key] ?? '';
+  return '';
+}
 
 function nodeGroupOf(labels) {
   for (const key of NODE_GROUP_LABELS) if (labels[key]) return labels[key];
@@ -1694,9 +1712,41 @@ async function topology({ context, namespace } = {}) {
       attachments: ofKind(items.storage, 'VolumeAttachment'),
       usage: { nodes: nodeUsage.metrics ?? {}, pods: podUsage.metrics ?? {} },
       scoped: Boolean(namespace),
-    }, { podStatus, health, quantity, millicores, podRequests, holdsRoom, nodeGroupOf });
+    }, { podStatus, health, quantity, millicores, podRequests, holdsRoom, nodeGroupOf, nodeGroupKindOf });
     return { ok: true, ...graph, missing };
   });
+}
+
+/**
+ * An infrastructure change, as a brief for Claude.
+ *
+ * The whole cluster is read again for it, whatever namespace the panel was
+ * looking at: what runs on a pool is every namespace's business, and a brief
+ * that left out the database in another namespace would be a plan to break it.
+ */
+async function plan({ context, ...request } = {}) {
+  const graph = await topology({ context });
+  if (!graph.ok) return graph;
+  return planFrom(graph, request, context ?? '');
+}
+
+/**
+ * Cordon or uncordon several nodes — a pool — as one act.
+ *
+ * One after another and not all at once: the answer says which of them it
+ * reached, so a pool left half cordoned by a dropped connection reads as that.
+ */
+async function cordonMany({ names, on = true, ...rest } = {}) {
+  const wanted = Array.isArray(names) ? names.slice(0, 500) : [];
+  if (!wanted.length) return { ok: false, error: 'No nodes were named.' };
+  const done = [];
+  for (const name of wanted) {
+    const result = await cordon({ name, on, ...rest });
+    if (!result.ok) return { ok: false, error: `${done.length} of ${wanted.length} done, then ${String(name)}: ${result.error}`, done };
+    done.push(String(name));
+  }
+  forgetAnswers();
+  return { ok: true, done };
 }
 
 /**
@@ -2635,6 +2685,9 @@ module.exports = {
   summary,
   topology,
   graphFrom,
+  plan,
+  planFrom,
+  nodeGroupKindOf,
   brief,
   promQuery,
   promNow,
@@ -2646,6 +2699,7 @@ module.exports = {
   apply,
   configure,
   cordon,
+  cordonMany,
   history,
   rollback,
   pause,

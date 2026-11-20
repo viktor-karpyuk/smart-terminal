@@ -81,6 +81,7 @@ const KUBE_READ = [
   'top',
   'summary',
   'topology',
+  'plan',
   'brief',
   'prometheus',
   'history',
@@ -103,6 +104,7 @@ const KUBE_WRITE = [
   'apply',
   'configure',
   'cordon',
+  'cordonMany',
   'rollback',
   'pause',
   'suspend',
@@ -129,7 +131,7 @@ const KUBE_STREAM = ['follow', 'stopFollow', 'forward', 'stopForward', 'forwards
  * whole reason these can exist at all: an extension that could compose the text
  * going into a Claude session could ask it to do anything.
  */
-const KUBE_APP = ['shell', 'terminal', 'ask'] as const;
+const KUBE_APP = ['shell', 'terminal', 'ask', 'askPlan'] as const;
 
 /**
  * Helm, which is a different tool and gets a different door.
@@ -744,6 +746,11 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
     if (name === 'kube.trigger') {
       return `Run ${String(args.name ?? 'this cron job')} now${where}?\n\nIt makes a real job, off schedule.`;
     }
+    // A whole pool at once: one question that says how many, rather than six that get waved through.
+    if (name === 'kube.cordonMany' && args.on !== false) {
+      const many = Array.isArray(args.names) ? args.names.length : 0;
+      return `Stop scheduling new pods onto ${many} node${many === 1 ? '' : 's'}${args.pool ? ` of ${String(args.pool)}` : ''}${where}?\n\nWhat already runs there keeps running. Uncordon puts them back.`;
+    }
     if (name === 'kube.cordon' && args.on !== false) {
       return `Stop scheduling new pods onto ${String(args.name ?? 'this node')}${where}?`;
     }
@@ -754,7 +761,7 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
      */
     if (name === 'kube.drain') {
       return (
-        `Move everything off ${String(args.name ?? 'this node')}${where}?\n\n` +
+        `Move everything off ${String(args.name ?? 'this node')}${args.step ? ` (node ${String(args.step)}${args.pool ? ` of ${String(args.pool)}` : ''})` : ''}${where}?\n\n` +
         'Every pod on it is evicted, one at a time. It stops if a disruption budget will not allow it, ' +
         'and you will see that happen in the dock.'
       );
