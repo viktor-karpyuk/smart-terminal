@@ -300,6 +300,7 @@
   #yaml-pos { font-variant-numeric: tabular-nums; }
   .btn[data-armed="1"] { color: var(--danger); border-color: var(--danger); }
   #yaml-edit[readonly] { opacity: 0.7; }
+  #yaml-edit.is-wrapped { white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: hidden; }
 
   /* What the server said, where the edit is: a toast is gone before a long error has been read. */
   .edit-note {
@@ -672,7 +673,8 @@
   }
   .config-field input:focus, .config-env input:focus { outline: none; border-color: var(--accent); }
   .config-envs { display: grid; gap: 4px; padding: 4px 2px 2px; }
-  .config-env { display: grid; grid-template-columns: minmax(90px, 34%) 1fr auto; gap: 5px; align-items: center; }
+  .config-env { display: grid; grid-template-columns: minmax(90px, 34%) 1fr auto auto; gap: 5px; align-items: center; }
+  .config-env.is-from { grid-template-columns: minmax(90px, 34%) 1fr auto; }
   .config-env.is-from { font-size: 11px; }
   .config-env .env-name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .config-env .btn { padding: 2px 6px; opacity: 0.5; }
@@ -2486,9 +2488,13 @@
      * to a table that had lost most of its rows: "3 of 171" and no word about
      * a filter anywhere. The filter says its own name now, and takes it off.
      */
+    if (state.view.type === 'kind' && state.view.name === 'events' && state.only !== 'bad' && state.table &&
+        (state.table.rows || []).some(function (row) { return row.health === 'bad'; })) {
+      bits.push('<button class="link" data-do="only-bad" title="Leave out what is only being reported">warnings only</button>');
+    }
     if (state.only === 'bad' && listing) {
       bits.push('<button class="link" data-do="show-all" title="Show all of them again">' +
-        'only the ones that are failing ✕</button>');
+        (state.view.name === 'events' ? 'warnings only ✕' : 'only the ones that are failing ✕') + '</button>');
     }
     /*
      * Edits are kept against their objects, which is only a kindness if they
@@ -2763,6 +2769,7 @@
     state.yamlView = 'edit';
     state.revertArmed = 0;
     state.showSecret = false;
+    shownEnv = {};
   }
 
   /** Write down something that was applied. Newest first, and not for ever. */
@@ -2784,6 +2791,8 @@
     box.addEventListener('click', function (event) {
       if (event.target === box || event.target.closest('[data-sheet-close]')) box.remove();
     });
+    var shut = box.querySelector('[data-sheet-close]');
+    if (shut) shut.focus();
     return box;
   }
   document.addEventListener('keydown', function (event) {
@@ -2803,10 +2812,11 @@
       (entry.before != null
         ? '<div class="diff">' + (diffHtml(lineDiff(entry.before, entry.after)) || '<div class="dim">Nothing changed.</div>') + '</div>' +
           '<div class="sheet-foot"><span class="dim">Putting it back opens the editor with the text as it was. Nothing is applied until you apply it.</span>' +
-          '<span class="spacer"></span><button class="btn go" data-history-back="' + at + '">Put it back…</button></div>'
+          '<span class="spacer"></span><button class="btn" data-history-copy="' + at + '">Copy diff</button><button class="btn go" data-history-back="' + at + '">Put it back…</button></div>'
         : '<ul class="config-diff">' + (entry.lines || []).map(function (line) { return '<li>' + esc(line) + '</li>'; }).join('') + '</ul>');
     var box = sheet('Applied from here', body);
     box.addEventListener('click', function (event) {
+      if (event.target.closest('[data-history-copy]')) { copyText(diffText(lineDiff(entry.before, entry.after)), 'the changes'); return; }
       var back = event.target.closest('[data-history-back]');
       if (!back) return;
       box.remove();
@@ -2842,7 +2852,8 @@
     event.stopPropagation();
     menuAt(state.history.slice(0, 15).map(function (entry, i) {
       return { label: entry.name, hint: historyLine(entry), run: function () { showHistory(i); } };
-    }), { clientX: at.left, clientY: at.bottom + 2 });
+    }).concat(['-', { label: 'Forget these', hint: 'the cluster keeps what was applied', run: function () { state.history = []; remember(); drawCrumb(); } }]),
+    { clientX: at.left, clientY: at.bottom + 2 });
   });
 
   /** Every edit that is waiting, in YAML or in the form, with enough to get back to it. */
@@ -3021,6 +3032,15 @@
         '<span class="diff-text">' + (esc(line.text) || ' ') + '</span></div>');
     });
     return out.join('');
+  }
+
+  /** The same changes as text, for a message or a ticket: the form every tool that shows a diff understands. */
+  function diffText(diff) {
+    var lines = [];
+    diff.head.slice(-3).forEach(function (text) { lines.push('  ' + text); });
+    diff.ops.forEach(function (entry) { lines.push((entry.op === ' ' ? ' ' : entry.op) + ' ' + entry.text); });
+    diff.tail.slice(0, 3).forEach(function (text) { lines.push('  ' + text); });
+    return lines.join('\n');
   }
 
   function linesText(diff) {
@@ -3951,6 +3971,7 @@
       row('<svg width="34" height="8"><path class="medge" d="M0 4H34"/></svg>', 'Stated by the Kubernetes API: an owner, a selector, a binding') +
       row('<svg width="34" height="8"><path class="medge inf" d="M0 4H34"/></svg>', 'Inferred: a service named in a pod template, a data service known by its image') +
       row('<svg width="34" height="8"><path class="medge vol on" d="M0 4H34"/></svg>', 'A pod mounting a volume that lives in the storage backend') +
+      row('<span class="mwarn is-inline">3</span>', 'Warnings the cluster raised about it lately. Click the number for its events') +
       row('<span class="mtag warn">spof</span>', 'Amber, thick border: every replica depends on it') +
       row('<span class="mtag bad">lost</span>', 'Red fill: gone in the failure being tried') +
       '<div class="mleg dim" style="margin-top:6px">Point at a card to light everything it reaches and everything that reaches it. Right-click a card for more. ⌘ and the wheel zooms.</div>' +
@@ -5812,7 +5833,7 @@
             '<td class="bad-text">' + esc(row.status) + '</td></tr>';
         }).join('') + '</tbody></table>';
     } else {
-      trouble = '<div class="note">Nothing is failing, and nothing has raised a warning recently.</div>';
+      trouble = '<div class="note">' + (attentionOf() ? 'No pod is failing. What is listed above is the rest of it.' : 'Nothing is failing, and nothing has raised a warning recently.') + '</div>';
     }
 
     var recent = '';
@@ -6430,6 +6451,7 @@
         '<div class="pane-tools">' +
           (state.view.type === 'map' && mapTrail.length
             ? '<button class="pane-tool" data-pane="back" title="Back to what was open before" aria-label="Back">←</button>' : '') +
+          (release || chosen.kind === 'Event' ? '' : '<button class="pane-tool" data-do="pane-kubectl" title="Copy the kubectl command that reads this" aria-label="Copy kubectl command">&gt;_</button>') +
           '<button class="pane-tool" data-pane="smaller" title="Smaller text" aria-label="Smaller text"' + (state.paneScale <= 0.86 ? ' disabled' : '') + '>A−</button>' +
           '<button class="pane-tool" data-pane="bigger" title="Larger text" aria-label="Larger text"' + (state.paneScale >= 1.59 ? ' disabled' : '') + '>A+</button>' +
           '<button class="pane-tool' + (state.paneBig ? ' on' : '') + '" data-pane="wide" title="' + (state.paneBig ? 'Back to its usual width' : 'Give it most of the room') + '" aria-label="Wider">⤢</button>' +
@@ -7056,6 +7078,8 @@
         'placeholder="' + esc(placeholder || '') + '" spellcheck="false" /></label>';
     };
     var env = container.env.map(function (entry, i) {
+      // By its name only: PASSWORD, TOKEN, SECRET, a KEY. The value is on a screen somebody else may be looking at.
+      var hush = /pass(word)?|secret|token|credential|private|api_?key|access_?key|_key$/i.test(entry.name) && entry.value !== '' && !shownEnv[at + '|' + entry.name];
       if (entry.from) {
         return '<div class="config-env is-from">' +
           '<span class="env-name">' + esc(entry.name) + '</span>' +
@@ -7067,7 +7091,9 @@
         '<input class="env-name" data-config="env-name" data-at="' + at + '" data-env="' + i + '" ' +
           'value="' + esc(entry.name) + '" spellcheck="false" />' +
         '<input data-config="env-value" data-at="' + at + '" data-env="' + i + '" ' +
+          (hush ? 'type="password" autocomplete="off" title="Covered because of its name. Click the eye to see it." ' : '') +
           'value="' + esc(entry.value) + '" spellcheck="false" />' +
+        (hush || shownEnv[at + '|' + entry.name] ? '<button class="btn env-eye" data-env-eye="' + esc(at + '|' + entry.name) + '" title="' + (hush ? 'Show it' : 'Cover it') + '" aria-label="Show or cover the value">' + (hush ? '◉' : '◎') + '</button>' : '<span></span>') +
         '<button class="btn" data-config-drop="' + at + '" data-env="' + i + '" title="Remove this variable">✕</button>' +
         '</div>';
     }).join('');
@@ -7128,6 +7154,15 @@
   }
 
   var configWrongNow = {};
+  /** Covered values somebody asked to see, by container and name. Forgotten with the pane. */
+  var shownEnv = {};
+  document.addEventListener('click', function (event) {
+    var eye = event.target.closest && event.target.closest('[data-env-eye]');
+    if (!eye) return;
+    var key = eye.dataset.envEye;
+    if (shownEnv[key]) delete shownEnv[key]; else shownEnv[key] = true;
+    redrawEditor();
+  });
 
   function configDiffHtml(changes) {
     return changes.map(function (line) { return '<li>' + esc(line) + '</li>'; }).join('');
@@ -7683,7 +7718,8 @@
         ? '<button class="btn' + (state.yamlClean ? ' on' : '') + '" data-do="yaml-clean" title="Leave out what the cluster writes: status, managed fields, what was last applied">Without status</button>' : '') +
       '<span class="dim" id="yaml-state">' + (editing ? (changed ? 'edited · ' + linesText(diff) : 'nothing changed yet') : state.yamlClean && row.kind !== 'Secret' ? 'as somebody would write it' : 'as it is in the cluster') + '</span>' +
       '<span class="spacer"></span>' +
-      (editing && !showDiff && !theirs ? '<span class="dim" id="yaml-pos"></span>' : '') +
+      (editing && !showDiff && !theirs ? '<span class="dim" id="yaml-pos"></span>' +
+        '<button class="btn' + (state.yamlWrap ? ' on' : '') + '" data-do="yaml-wrap" title="Wrap long lines instead of scrolling sideways">Wrap</button>' : '') +
       '<button class="btn" data-do="yaml-save" title="Save this text to a file on this machine">Save…</button>' +
       '<button class="btn" data-do="copy-detail" title="Copy the whole manifest">Copy</button>' +
       '</div>' +
@@ -7692,10 +7728,11 @@
         ? '<div class="diff-title dim">What changed in the cluster since you started <button class="btn" data-do="yaml-diff-close">Back to the edit</button></div>' +
           '<div class="diff">' + (diffHtml(lineDiff(base, state.detailData.theirs)) || '<div class="dim">Nothing you would see in this text.</div>') + '</div>'
         : showDiff
-          ? '<div class="diff-title dim">Yours against the cluster\u2019s. Click a line to go to it. <button class="btn" data-do="yaml-diff-close">Back to the edit</button></div>' +
+          ? '<div class="diff-title dim">Yours against the cluster\u2019s. Click a line to go to it. <button class="btn" data-do="yaml-diff-close">Back to the edit</button>' +
+            '<button class="btn" data-do="yaml-diff-copy" title="Copy the changes as a diff">Copy diff</button></div>' +
             '<div class="diff">' + diffHtml(diff) + '</div>'
           : editing
-            ? '<textarea id="yaml-edit" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"' + (busy ? ' readonly' : '') + '>' + esc(body) + '</textarea>'
+            ? '<textarea id="yaml-edit" spellcheck="false" autocapitalize="off" autocomplete="off" class="' + (state.yamlWrap ? 'is-wrapped' : '') + '" wrap="' + (state.yamlWrap ? 'soft' : 'off') + '"' + (busy ? ' readonly' : '') + '>' + esc(body) + '</textarea>'
             // A Secret is painted from the text without what was last applied, which is the values over again.
             : '<pre class="yaml">' + yamlHtml(row.kind === 'Secret'
               ? (hidesValues(row) ? maskSecret(base) : base) : state.yamlClean && state.detailData.editable != null ? state.detailData.editable : state.detailData.yaml) + '</pre>');
@@ -9118,6 +9155,7 @@
     if (what === 'find-next' || what === 'find-prev') { state.find.at += what === 'find-next' ? 1 : -1; findApply(true); return; }
     if (what === 'find-close') { findClose(); return; }
 
+    if (what === 'only-bad') { state.only = 'bad'; remember(); drawCrumb(); drawTable(); return; }
     if (what === 'show-all') {
       state.only = null;
       remember();
@@ -9297,6 +9335,13 @@
       host.emit('save', { name: [row.namespace, row.kind.toLowerCase(), row.name].filter(Boolean).join('-') + '.yaml', text: saving });
       return;
     }
+    if (what === 'yaml-diff-copy') {
+      var mineNow = draftFor(row);
+      if (mineNow != null) copyText(diffText(lineDiff(baseFor(row), mineNow)), 'the changes');
+      return;
+    }
+    if (what === 'yaml-wrap') { state.yamlWrap = !state.yamlWrap; redrawEditor(); return; }
+    if (what === 'pane-kubectl') { copyText(kubectlFor(row), 'the kubectl line'); return; }
     if (what === 'yaml-clean') { state.yamlClean = !state.yamlClean; drawDetail(true); return; }
     if (what === 'secret-show') { state.showSecret = !state.showSecret; drawDetail(true); return; }
     if (what === 'events-group') { state.eventsGroup = !state.eventsGroup; drawDetail(); return; }
