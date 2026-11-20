@@ -747,3 +747,36 @@ test('Remote verbs route to their door, and no permission can grant them', () =>
   assert.equal(H.permitted({ trusted: true }, 'remote.pair'), true);
   assert.equal(H.permitted({ trusted: false, permissions: ['terminal', 'teams', 'jenkins.write'] }, 'remote.pair'), false);
 });
+
+test('a cluster is added by the cloud’s own command, built from parts a shell cannot read as anything else', () => {
+  const { addClusterCommand, needsConsent, permissionFor } = H;
+  assert.equal(
+    addClusterCommand({ provider: 'eks', name: 'kubrik-k8s', region: 'sa-east-1' }),
+    'aws eks update-kubeconfig --name kubrik-k8s --region sa-east-1',
+  );
+  assert.equal(
+    addClusterCommand({ provider: 'eks', name: 'a', region: 'us-east-1', profile: 'prod' }),
+    'aws eks update-kubeconfig --name a --region us-east-1 --profile prod',
+  );
+  assert.equal(addClusterCommand({ provider: 'doks', name: 'one' }), 'doctl kubernetes cluster kubeconfig save one');
+  assert.equal(
+    addClusterCommand({ provider: 'gke', name: 'prod', region: 'southamerica-east1', project: 'my-proj' }),
+    'gcloud container clusters get-credentials prod --location southamerica-east1 --project my-proj',
+  );
+  assert.equal(addClusterCommand({ provider: 'aks', name: 'prod', group: 'rg' }), 'az aks get-credentials --name prod --resource-group rg');
+
+  // Nothing a shell would act on gets through, in any part.
+  for (const bad of ['a; rm -rf ~', 'a b', '$(id)', 'a`id`', "a'b", '-x', 'a|b', 'a&&b', '']) {
+    assert.throws(() => addClusterCommand({ provider: 'eks', name: bad, region: 'sa-east-1' }), undefined, bad);
+    assert.throws(() => addClusterCommand({ provider: 'eks', name: 'ok', region: bad }), undefined, bad);
+  }
+  assert.throws(() => addClusterCommand({ provider: 'eks', name: 'ok', region: 'r', profile: 'p; id' }));
+  assert.throws(() => addClusterCommand({ provider: 'other', name: 'ok' }));
+
+  // It is asked about first, with the line itself, and it is the terminal's permission.
+  const asked = needsConsent('kube.addCluster', { provider: 'eks', name: 'kubrik-k8s', region: 'sa-east-1' });
+  assert.match(asked, /aws eks update-kubeconfig --name kubrik-k8s --region sa-east-1/);
+  assert.match(asked, /kubeconfig/);
+  assert.equal(needsConsent('kube.addCluster', { provider: 'eks', name: 'x; id', region: 'r' }), null);
+  assert.equal(permissionFor('kube.addCluster'), 'terminal');
+});

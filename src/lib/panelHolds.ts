@@ -44,3 +44,15 @@ export function forgetPanel(panelId: string) {
   dropFrame(panelId);
   void window.api.extensions.stagePanel(panelId, null);
 }
+
+/**
+ * The panel stays and what it is about changes: a cluster tab pointed at
+ * another cluster. What it started is stopped and its place forgotten, as on
+ * closing — but the frame is left to whoever rebuilds it, and the panel lives.
+ */
+export function releasePanelHolds(panelId: string) {
+  for (const id of streamsByPanel.get(panelId) ?? []) window.api.kube.stopStream(id);
+  streamsByPanel.get(panelId)?.clear();
+  whereEachPanelWas.delete(panelId);
+  claudeForPanel.delete(panelId);
+}

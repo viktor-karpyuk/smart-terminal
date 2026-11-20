@@ -8,7 +8,7 @@ import { generateSessionName } from '../lib/names';
 import { shortContext, terminalSetup } from '../lib/extensionHost';
 import { whatItDid } from '../lib/gitUpdate';
 import { launchPlan } from '../lib/launcher';
-import { forgetPanel, whereEachPanelWas } from '../lib/panelHolds';
+import { forgetPanel, releasePanelHolds, whereEachPanelWas } from '../lib/panelHolds';
 import { baseOf, movedPath, moveProblem, nameProblem, parentOf } from '../lib/fileOps';
 import { arrangeGroup, moveGroupTo } from './groups';
 import { closePane, movePane, panePlace, restorePaneAt, splitEmpty, splitOffTabs, swapPanes } from './layout';
@@ -513,6 +513,14 @@ interface State {
   probeClusters(again?: boolean): Promise<void>;
   /** Open the Kubernetes panel on one cluster, or bring its tab forward. */
   openCluster(context: string): void;
+  /** The cluster panel from its button: the one already open, or kubeconfig's own cluster in a new tab. */
+  launchClusters(): void;
+  /**
+   * Point a cluster tab at another cluster. If a tab is already on that
+   * cluster, it is that tab that comes forward: one cluster in two tabs by
+   * accident is two places to follow the same thing.
+   */
+  retargetCluster(panelId: string, context: string): void;
   /**
    * The Code Reviewer, at a place in it — the board, a repository's pull
    * requests, settings. Opened if it is not, brought forward if it is.
@@ -3591,6 +3599,40 @@ export const useStore = create<State>((set, get) => ({
     const view = get().extensions.panels.find((panel) => panel.needs === 'kubernetes');
     if (!view) return;
     get().openExtensionView(view.id, context);
+  },
+
+  launchClusters() {
+    const state = get();
+    const view = state.extensions.panels.find((panel) => panel.needs === 'kubernetes');
+    if (!view) return;
+    const open = Object.values(state.panels).filter((panel) => panel.kind === 'extension' && panel.viewId === view.id);
+    // The one in the section in front, if there is one; otherwise any.
+    const front = allLeaves(state.layout).find((leaf) => leaf.id === state.activeLeafId);
+    const existing = open.find((panel) => front?.tabs.includes(panel.id)) ?? open[0];
+    if (existing && existing.kind === 'extension') {
+      get().openExtensionView(view.id, existing.root);
+      return;
+    }
+    get().openExtensionView(view.id, state.clusters.current ?? state.clusters.list[0]?.name ?? null);
+  },
+
+  retargetCluster(panelId, context) {
+    const state = get();
+    const panel = state.panels[panelId];
+    if (!panel || panel.kind !== 'extension' || !context || panel.root === context) return;
+    const other = Object.values(state.panels).find(
+      (one) => one.kind === 'extension' && one.id !== panelId && one.viewId === panel.viewId && one.root === context,
+    );
+    if (other) {
+      get().openExtensionView(panel.viewId, context);
+      return;
+    }
+    // What the tab was holding belonged to the cluster it was on: a followed log, a place in a table.
+    releasePanelHolds(panelId);
+    set((prev) => ({
+      panels: { ...prev.panels, [panelId]: { ...panel, root: context, title: shortContext(context), resume: undefined } },
+    }));
+    schedulePersist(get);
   },
 
   async probeCluster(context) {

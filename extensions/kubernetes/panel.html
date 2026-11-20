@@ -650,10 +650,71 @@
     background: color-mix(in srgb, var(--danger) 7%, transparent);
   }
 
-  .cluster-name {
-    font-weight: 550; color: var(--text); padding: 3px 0 3px 2px;
-    max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* The cluster, chosen where it is named. A control of the same height and
+     edge as the namespace beside it, heavier in weight because it is the one
+     everything else on the page hangs from. */
+  .cluster-pick {
+    display: inline-flex; align-items: center; gap: 6px; font: inherit; font-weight: 550; color: var(--text);
+    background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 3px 6px 3px 9px; min-height: 26px; box-sizing: border-box; max-width: 240px; cursor: pointer;
   }
+  .cluster-pick:hover, .cluster-pick[aria-expanded="true"] { border-color: var(--border-strong); }
+  .cluster-pick:focus-visible, .cluster-pick[aria-expanded="true"] { outline: none; border-color: var(--accent); }
+  .cluster-pick .cl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cluster-pick svg { width: 13px; height: 13px; flex: none; color: var(--text-faint); }
+  .cluster-menu {
+    position: fixed; z-index: 9; width: 320px; max-width: calc(100vw - 16px); display: flex; flex-direction: column;
+    background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: var(--radius);
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45); font-size: 11.5px; overflow: hidden;
+  }
+  .cluster-menu input {
+    font: inherit; color: var(--text); background: transparent; border: 0; border-bottom: 1px solid var(--border);
+    padding: 8px 10px; outline: none; width: 100%; box-sizing: border-box;
+  }
+  .cl-list { max-height: min(46vh, 340px); overflow: auto; padding: 4px; }
+  .cl-row {
+    display: flex; align-items: center; gap: 8px; padding: 0 4px 0 8px; min-height: 28px; cursor: pointer;
+    border-radius: max(2px, calc(var(--radius, 8px) - 4px)); color: var(--text);
+  }
+  .cl-row.on { background: var(--accent-soft); }
+  .cl-row.here .cl-label { color: var(--accent); }
+  .cl-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .cl-dot.is-ok { background: var(--ok); }
+  .cl-dot.is-bad { background: var(--danger); }
+  .cl-dot.is-warn { background: var(--warn, #e0af68); }
+  .cl-dot.is-unknown { box-shadow: inset 0 0 0 1px var(--border-strong); }
+  .cl-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cl-note { color: var(--text-faint); font-size: 10.5px; white-space: nowrap; }
+  .cl-badge { color: var(--text-dim); font-size: 10px; border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; white-space: nowrap; }
+  .cl-check { margin-left: auto; color: var(--accent); width: 14px; text-align: center; flex: none; }
+  .cl-tool {
+    font: inherit; color: var(--text-faint); background: none; border: 0; border-radius: var(--radius); cursor: pointer;
+    width: 22px; height: 22px; display: inline-grid; place-items: center; flex: none; opacity: 0; padding: 0;
+  }
+  .cl-tool svg { width: 13px; height: 13px; }
+  .cl-row:hover .cl-tool, .cl-row.on .cl-tool, .cl-tool:focus-visible { opacity: 1; }
+  .cl-tool:hover { color: var(--text); background: var(--bg-panel); }
+  .cl-empty { padding: 10px; color: var(--text-dim); line-height: 1.5; }
+  .cl-foot { display: flex; gap: 2px; padding: 4px; border-top: 1px solid var(--border); }
+  .cl-foot button {
+    font: inherit; color: var(--text-dim); background: none; border: 0; cursor: pointer; padding: 5px 8px;
+    border-radius: max(2px, calc(var(--radius, 8px) - 4px)); display: inline-flex; align-items: center; gap: 6px;
+  }
+  .cl-foot button:hover { color: var(--text); background: var(--bg-panel); }
+  .cl-foot svg { width: 12px; height: 12px; }
+  .cl-foot .spacer { flex: 1; }
+  .add-cluster { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 12px; align-items: center; }
+  .add-cluster label { color: var(--text-dim); }
+  .add-cluster input, .add-cluster select {
+    font: inherit; color: var(--text); background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 4px 7px; min-height: 26px; box-sizing: border-box; width: 100%;
+  }
+  .add-cluster input:focus, .add-cluster select:focus { outline: none; border-color: var(--accent); }
+  .add-line {
+    margin: 12px 0 0; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+    font-family: var(--mono, ui-monospace, Menlo, monospace); font-size: 11px; white-space: pre-wrap; word-break: break-all; color: var(--text);
+  }
+  .add-line.is-short { color: var(--text-faint); }
 
   /* The configuration form.
 
@@ -996,7 +1057,7 @@
 
 <div id="app">
   <header class="top">
-    <span id="cluster" class="cluster-name"></span>
+    <button id="cluster" class="cluster-pick" aria-haspopup="listbox" aria-expanded="false"><span class="cl-name"></span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button>
     <select id="namespace" title="Which namespace"></select>
     <input id="search" placeholder="Filter by name, namespace or status" />
     <button class="btn with-icon" id="terminal" title="Open a terminal aimed at this cluster and namespace"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4.5 6.5 6.5 8l-2 1.5M8 10h3"/></svg>Terminal</button>
@@ -2331,12 +2392,330 @@
   }
 
   /* ---------------------------------------------------------------------- *
+   * Which cluster.
+   *
+   * Chosen from the header, where the cluster is named, rather than from a
+   * list down the side of the app. Choosing one points this tab at it; the
+   * arrow on a row, or the command key, opens it in a tab of its own, which is
+   * still how two clusters are looked at together.
+   *
+   * The tab is not pointed elsewhere while it is holding something that
+   * belongs to the cluster it is on — an edit that is kept, a port held open,
+   * a log being followed. Then the other cluster gets its own tab, and says so.
+   * ---------------------------------------------------------------------- */
+  var clusters = { names: null, current: null, reach: {}, askedAt: 0, asking: 0, error: null, on: 0, filter: '', stale: false };
+
+  /** What tells two contexts with the same short name apart: the region of an EKS ARN, or that it is the alias. */
+  function clusterNote(name, names) {
+    var short = shortContext(name);
+    var clash = names.some(function (other) { return other !== name && shortContext(other) === short; });
+    if (!clash) return '';
+    var eks = /^arn:aws:eks:([^:]+):/.exec(name);
+    if (eks) return eks[1];
+    return name === short ? 'alias' : '';
+  }
+
+  /** Answered, said no, did not answer, not asked yet: four things, and the third is not the second. */
+  function clusterDot(name) {
+    var reach = clusters.reach[name];
+    if (!reach) return 'unknown';
+    if (reach.up) return 'ok';
+    return reach.slow ? 'warn' : 'bad';
+  }
+
+  function readClusters(fresh) {
+    clusters.error = null;
+    return call('kube.contexts', fresh ? { fresh: true } : {}).then(function (result) {
+      clusters.names = (result.contexts || []).map(function (one) { return one.name; });
+      clusters.current = result.current || null;
+      clusters.stale = false;
+      // Until somebody has moved, the mark sits on the cluster this tab is on.
+      if (!clusters.moved) clusters.on = Math.max(0, clustersShown().indexOf(state.context));
+      drawClusterList();
+      askClusters(fresh);
+    }, function (error) {
+      clusters.error = String(error.message || error);
+      drawClusterList();
+    });
+  }
+
+  /** Each one asked whether it answers; a minute old is recent enough for a dot. */
+  function askClusters(again) {
+    if (!again && Date.now() - clusters.askedAt < 60000) return;
+    clusters.askedAt = Date.now();
+    (clusters.names || []).forEach(function (name) {
+      clusters.asking += 1;
+      call('kube.reachable', { context: name }).then(function (answer) {
+        clusters.reach[name] = { up: Boolean(answer.up), slow: Boolean(answer.slow), error: answer.error || null };
+      }, function (error) {
+        clusters.reach[name] = { up: false, slow: false, error: String(error.message || error) };
+      }).then(function () {
+        clusters.asking -= 1;
+        drawClusterList();
+      });
+    });
+    drawClusterList();
+  }
+
+  function clustersShown() {
+    var words = clusters.filter.trim().toLowerCase();
+    return (clusters.names || []).filter(function (name) { return !words || name.toLowerCase().indexOf(words) >= 0; });
+  }
+
+  var ICON_NEW_TAB = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h4v4M13 3 7.5 8.5M11 9.5V12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h2.5"/></svg>';
+  var ICON_MORE = '<svg viewBox="0 0 16 16" fill="currentColor"><circle cx="3.5" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12.5" cy="8" r="1.2"/></svg>';
+
+  function drawClusterList() {
+    var menu = document.getElementById('cluster-menu');
+    if (!menu) return;
+    var list = menu.querySelector('.cl-list');
+    var shown = clustersShown();
+    if (clusters.on >= shown.length) clusters.on = Math.max(0, shown.length - 1);
+    var names = clusters.names || [];
+    if (clusters.error) list.innerHTML = '<div class="cl-empty">' + esc(clusters.error) + '</div>';
+    else if (!clusters.names) list.innerHTML = '<div class="cl-empty">Reading kubeconfig…</div>';
+    else if (!names.length) list.innerHTML = '<div class="cl-empty">No clusters in kubeconfig. Add one below.</div>';
+    else if (!shown.length) list.innerHTML = '<div class="cl-empty">Nothing called that.</div>';
+    else {
+      list.innerHTML = shown.map(function (name, at) {
+        var reach = clusters.reach[name];
+        var note = clusterNote(name, names);
+        var here = name === state.context;
+        var tip = name + (reach && reach.error ? '\n' + reach.error : '');
+        return '<div class="cl-row' + (at === clusters.on ? ' on' : '') + (here ? ' here' : '') + '" role="option" aria-selected="' + (here ? 'true' : 'false') + '" data-cluster="' + esc(name) + '" title="' + esc(tip) + '">' +
+          '<span class="cl-dot is-' + clusterDot(name) + '"></span>' +
+          '<span class="cl-label">' + esc(shortContext(name)) + '</span>' +
+          (note ? '<span class="cl-note">' + esc(note) + '</span>' : '') +
+          (name === clusters.current ? '<span class="cl-badge" title="What a plain kubectl uses">default</span>' : '') +
+          '<span class="cl-check">' + (here ? '✓' : '') + '</span>' +
+          '<button class="cl-tool" data-cluster-tab="1" title="Open in a tab of its own" aria-label="Open ' + esc(shortContext(name)) + ' in a tab of its own">' + ICON_NEW_TAB + '</button>' +
+          '<button class="cl-tool" data-cluster-more="1" title="Check it, make it the default, remove it…" aria-label="More for ' + esc(shortContext(name)) + '">' + ICON_MORE + '</button>' +
+          '</div>';
+      }).join('');
+      var on = list.querySelector('.cl-row.on');
+      if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest' });
+    }
+    var again = menu.querySelector('[data-cluster-again] span');
+    if (again) again.textContent = clusters.asking > 0 ? 'Asking each one…' : 'Check again';
+  }
+
+  function closeClusterMenu() {
+    var menu = document.getElementById('cluster-menu');
+    if (!menu) return false;
+    menu.remove();
+    $('cluster').setAttribute('aria-expanded', 'false');
+    return true;
+  }
+
+  function openClusterMenu() {
+    if (closeClusterMenu()) return;
+    closeRowMenu();
+    var button = $('cluster');
+    var at = button.getBoundingClientRect();
+    var menu = document.createElement('div');
+    menu.id = 'cluster-menu';
+    menu.className = 'cluster-menu';
+    menu.innerHTML =
+      '<input type="text" placeholder="Find a cluster…" aria-label="Find a cluster" spellcheck="false" />' +
+      '<div class="cl-list" role="listbox" aria-label="Clusters"></div>' +
+      '<div class="cl-foot">' +
+        '<button data-cluster-again="1" title="Read kubeconfig again and ask each cluster whether it answers"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 1 1-1.6-3.7M13 3v2.6h-2.6"/></svg><span>Check again</span></button>' +
+        '<span class="spacer"></span>' +
+        '<button data-cluster-add="1" title="Put another cluster in kubeconfig"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg><span>Add a cluster…</span></button>' +
+      '</div>';
+    document.body.appendChild(menu);
+    menu.style.left = Math.max(8, Math.min(at.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+    menu.style.top = (at.bottom + 4) + 'px';
+    button.setAttribute('aria-expanded', 'true');
+    clusters.filter = '';
+    clusters.moved = false;
+    var shown = clusters.names || [];
+    clusters.on = Math.max(0, shown.indexOf(state.context));
+    drawClusterList();
+    readClusters(clusters.stale);
+
+    var input = menu.querySelector('input');
+    input.focus();
+    input.addEventListener('input', function () {
+      clusters.filter = input.value;
+      clusters.moved = true;
+      clusters.on = 0;
+      drawClusterList();
+    });
+    menu.addEventListener('keydown', function (event) {
+      var rows = clustersShown();
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        if (!rows.length) return;
+        clusters.moved = true;
+        clusters.on = (clusters.on + (event.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length;
+        drawClusterList();
+      } else if (event.key === 'Enter') {
+        // On one of the two small buttons Enter is that button's.
+        if (event.target.closest && event.target.closest('button')) return;
+        event.preventDefault();
+        if (rows[clusters.on]) chooseCluster(rows[clusters.on], event.metaKey || event.ctrlKey);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        closeClusterMenu();
+        button.focus();
+      }
+    });
+    menu.addEventListener('mousemove', function (event) {
+      var row = event.target.closest && event.target.closest('.cl-row');
+      if (!row) return;
+      var at = clustersShown().indexOf(row.dataset.cluster);
+      if (at < 0 || at === clusters.on) return;
+      // Only the mark is moved: the row under the pointer must still be the row that is pressed.
+      var was = menu.querySelector('.cl-row.on');
+      if (was) was.classList.remove('on');
+      row.classList.add('on');
+      clusters.moved = true;
+      clusters.on = at;
+    });
+    menu.addEventListener('click', function (event) {
+      var target = event.target;
+      if (target.closest('[data-cluster-again]')) { readClusters(true); return; }
+      if (target.closest('[data-cluster-add]')) { closeClusterMenu(); addClusterSheet(); return; }
+      var row = target.closest('.cl-row');
+      if (!row) return;
+      var name = row.dataset.cluster;
+      if (target.closest('[data-cluster-more]')) {
+        var where = target.closest('[data-cluster-more]').getBoundingClientRect();
+        closeClusterMenu();
+        host.emit('clusterMenu', { context: name, x: where.left, y: where.bottom + 2 });
+        return;
+      }
+      chooseCluster(name, Boolean(target.closest('[data-cluster-tab]')) || event.metaKey || event.ctrlKey);
+    });
+  }
+
+  /** What this tab is holding that belongs to the cluster it is on, in words; or nothing. */
+  function heldHere() {
+    var edits = pendingEdits().length;
+    if (edits) return edits === 1 ? 'an edit kept' : edits + ' edits kept';
+    if (state.forwards && state.forwards.length) return state.forwards.length === 1 ? 'a port held open' : state.forwards.length + ' ports held open';
+    var following = (state.logs || []).filter(function (log) { return log.following; }).length;
+    if (following) return 'a log being followed';
+    return '';
+  }
+
+  function chooseCluster(name, newTab) {
+    closeClusterMenu();
+    if (!name || (name === state.context && !newTab)) return;
+    var held = newTab ? '' : heldHere();
+    if (held) {
+      say(shortContext(state.context || '') + ' has ' + held + ' in this tab, so ' + shortContext(name) + ' opened in a tab of its own.');
+      newTab = true;
+    }
+    host.emit('openCluster', { context: name, newTab: Boolean(newTab) });
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * Another cluster in kubeconfig.
+   *
+   * Each cloud has one command that does this with the login already on the
+   * machine, and that command is what is run — in a terminal, where it can ask
+   * for whatever it asks for and where what it said stays readable. The app
+   * builds the line from these fields and shows it before running it; what is
+   * drawn here is the same line, so the question is not a surprise.
+   * ---------------------------------------------------------------------- */
+  var NEW_CLUSTER = {
+    eks: { title: 'Amazon EKS', fields: [['name', 'Cluster name', 'kubrik-k8s'], ['region', 'Region', 'sa-east-1'], ['profile', 'AWS profile', 'optional']],
+      line: function (v) { return 'aws eks update-kubeconfig --name ' + v.name + ' --region ' + v.region + (v.profile ? ' --profile ' + v.profile : ''); } },
+    doks: { title: 'DigitalOcean', fields: [['name', 'Cluster name', 'my-cluster']],
+      line: function (v) { return 'doctl kubernetes cluster kubeconfig save ' + v.name; } },
+    gke: { title: 'Google GKE', fields: [['name', 'Cluster name', 'prod'], ['region', 'Location', 'southamerica-east1'], ['project', 'Project', 'optional']],
+      line: function (v) { return 'gcloud container clusters get-credentials ' + v.name + ' --location ' + v.region + (v.project ? ' --project ' + v.project : ''); } },
+    aks: { title: 'Azure AKS', fields: [['name', 'Cluster name', 'prod'], ['group', 'Resource group', 'my-group']],
+      line: function (v) { return 'az aks get-credentials --name ' + v.name + ' --resource-group ' + v.group; } },
+  };
+  var newCluster = { provider: 'eks', values: {} };
+
+  function addClusterSheet() {
+    var box = sheet('Add a cluster', '');
+    var body = box.querySelector('.sheet-body');
+    box.querySelector('.sheet-box').style.width = 'min(520px, 92vw)';
+
+    function wanted() {
+      var kind = NEW_CLUSTER[newCluster.provider];
+      var out = { provider: newCluster.provider };
+      kind.fields.forEach(function (field) { out[field[0]] = String(newCluster.values[field[0]] || '').trim(); });
+      return out;
+    }
+    function missing() {
+      var kind = NEW_CLUSTER[newCluster.provider];
+      var values = wanted();
+      return kind.fields.filter(function (field) { return field[2] !== 'optional' && !values[field[0]]; }).map(function (field) { return field[1].toLowerCase(); });
+    }
+    function drawLine() {
+      var line = body.querySelector('.add-line');
+      var lacks = missing();
+      line.classList.toggle('is-short', lacks.length > 0);
+      line.textContent = lacks.length ? 'Needs the ' + lacks.join(' and the ') + '.' : NEW_CLUSTER[newCluster.provider].line(wanted());
+      body.querySelector('[data-add-run]').disabled = lacks.length > 0;
+      body.querySelector('[data-add-copy]').disabled = lacks.length > 0;
+    }
+    function draw() {
+      var kind = NEW_CLUSTER[newCluster.provider];
+      body.innerHTML =
+        '<div class="dim sheet-sub">Puts a context in your kubeconfig with the cloud’s own command, using the login you already have there. Nothing is created in the cloud.</div>' +
+        '<div class="add-cluster"><label for="add-provider">Where it runs</label><select id="add-provider">' +
+        Object.keys(NEW_CLUSTER).map(function (id) { return '<option value="' + id + '"' + (id === newCluster.provider ? ' selected' : '') + '>' + NEW_CLUSTER[id].title + '</option>'; }).join('') +
+        '</select>' +
+        kind.fields.map(function (field) {
+          return '<label for="add-' + field[0] + '">' + esc(field[1]) + '</label><input id="add-' + field[0] + '" data-add-field="' + field[0] + '" spellcheck="false" autocomplete="off" placeholder="' + esc(field[2]) + '" value="' + esc(newCluster.values[field[0]] || '') + '" />';
+        }).join('') +
+        '</div><div class="add-line"></div>' +
+        '<div class="sheet-foot"><button class="btn go" data-add-run="1">Run in a terminal</button><button class="btn" data-add-copy="1">Copy the command</button>' +
+        '<span class="dim">It is in the list once the command has finished.</span></div>';
+      drawLine();
+    }
+    draw();
+    var first = body.querySelector('[data-add-field]');
+    if (first) first.focus();
+
+    body.addEventListener('change', function (event) {
+      if (event.target.id !== 'add-provider') return;
+      newCluster.provider = event.target.value;
+      draw();
+      var input = body.querySelector('[data-add-field]');
+      if (input) input.focus();
+    });
+    body.addEventListener('input', function (event) {
+      var field = event.target.dataset && event.target.dataset.addField;
+      if (!field) return;
+      newCluster.values[field] = event.target.value;
+      drawLine();
+    });
+    function run() {
+      if (missing().length) return;
+      call('kube.addCluster', wanted()).then(function () {
+        clusters.stale = true;
+        box.remove();
+        say('Running it in a terminal. Open the cluster list again when it has finished.');
+      }, function (error) { say(String(error.message || error), true); });
+    }
+    body.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter' && event.target.dataset && event.target.dataset.addField) { event.preventDefault(); run(); }
+    });
+    body.addEventListener('click', function (event) {
+      if (event.target.closest('[data-add-run]')) run();
+      else if (event.target.closest('[data-add-copy]') && !missing().length) {
+        host.emit('copy', { text: NEW_CLUSTER[newCluster.provider].line(wanted()) });
+        say('Copied the command.');
+      }
+    });
+  }
+
+  /* ---------------------------------------------------------------------- *
    * The header.
    * ---------------------------------------------------------------------- */
   function drawTop() {
     var head = $('cluster');
-    head.textContent = shortContext(state.context || '');
-    head.title = state.context || '';
+    head.querySelector('.cl-name').textContent = shortContext(state.context || '') || 'Choose a cluster';
+    head.title = (state.context ? state.context + '\n' : '') + 'Choose the cluster this tab is on';
 
     var namespaces = ['<option value="">All namespaces</option>'].concat(
       state.namespaces.map(function (name) {
@@ -10484,6 +10863,20 @@
     // the room there is now, and the handles are told where they ended up.
     applyColumns();
     drawGrips();
+  });
+
+  $('cluster').addEventListener('click', openClusterMenu);
+  // A press anywhere else, or outside the frame altogether, puts the list away.
+  document.addEventListener('mousedown', function (event) {
+    if (!document.getElementById('cluster-menu')) return;
+    if (event.target.closest && (event.target.closest('#cluster-menu') || event.target.closest('#cluster'))) return;
+    closeClusterMenu();
+  });
+  window.addEventListener('blur', closeClusterMenu);
+  // The app changed kubeconfig — a context removed, another made the default.
+  host.on('clusters', function () {
+    clusters.stale = true;
+    if (document.getElementById('cluster-menu')) readClusters(true);
   });
 
   host.on('theme', function () { /* the app rebuilds the frame; nothing to do here */ });

@@ -132,7 +132,7 @@ const KUBE_STREAM = ['follow', 'stopFollow', 'forward', 'stopForward', 'forwards
  * whole reason these can exist at all: an extension that could compose the text
  * going into a Claude session could ask it to do anything.
  */
-const KUBE_APP = ['shell', 'terminal', 'ask', 'askPlan'] as const;
+const KUBE_APP = ['shell', 'terminal', 'ask', 'askPlan', 'addCluster'] as const;
 
 /**
  * Helm, which is a different tool and gets a different door.
@@ -911,6 +911,12 @@ export function looksLikeProduction(text: string): boolean {
 }
 
 export function needsConsent(name: string, args: Record<string, unknown>): string | null {
+  if (name === 'kube.addCluster') {
+    let line: string;
+    // What cannot be built is refused where it is run, with the reason; nothing to ask about.
+    try { line = addClusterCommand(args as NewCluster); } catch { return null; }
+    return `Run this in a terminal?\n\n${line}\n\nIt adds a context to your kubeconfig, using the login that tool already has. Nothing is created in the cloud.`;
+  }
   if (name === 'push' && args?.force) {
     return 'Force-push, overwriting what is on the remote?';
   }
@@ -1335,6 +1341,41 @@ export function terminalSetup({ context, namespace }: Where): string {
   if (context) parts.push(`--context ${innerQuote(context, 'The context')}`);
   if (namespace) parts.push(`--namespace ${innerQuote(namespace, 'The namespace')}`);
   return `alias k='${parts.join(' ')}'`;
+}
+
+/**
+ * The command that puts a cluster in kubeconfig, from the parts a person typed.
+ *
+ * Each provider has one command for this and it is the provider's own: it asks
+ * the cloud who you are, with the login you already have, and writes a context.
+ * Nothing here holds a credential, and nothing here creates anything in a
+ * cloud. Built by the app from named parts rather than passed as a line,
+ * because it is run in a shell: a part may only be what a name, a region or a
+ * project can be, so there is nothing in it for a shell to read as anything
+ * else.
+ */
+export type NewCluster = { provider?: string; name?: string; region?: string; profile?: string; project?: string; group?: string };
+const CLUSTER_PART = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+export function addClusterCommand(wanted: NewCluster): string {
+  const part = (value: unknown, what: string, optional = false) => {
+    const text = String(value ?? '').trim();
+    if (!text && optional) return '';
+    if (!text) throw new Error(`${what} is missing`);
+    if (!CLUSTER_PART.test(text)) throw new Error(`${what} may only have letters, digits, dots, dashes and underscores`);
+    return text;
+  };
+  const name = part(wanted.name, 'The cluster\u2019s name');
+  if (wanted.provider === 'eks') {
+    const profile = part(wanted.profile, 'The profile', true);
+    return `aws eks update-kubeconfig --name ${name} --region ${part(wanted.region, 'The region')}${profile ? ` --profile ${profile}` : ''}`;
+  }
+  if (wanted.provider === 'doks') return `doctl kubernetes cluster kubeconfig save ${name}`;
+  if (wanted.provider === 'gke') {
+    const project = part(wanted.project, 'The project', true);
+    return `gcloud container clusters get-credentials ${name} --location ${part(wanted.region, 'The location')}${project ? ` --project ${project}` : ''}`;
+  }
+  if (wanted.provider === 'aks') return `az aks get-credentials --name ${name} --resource-group ${part(wanted.group, 'The resource group')}`;
+  throw new Error('That is not a provider this knows the command for');
 }
 
 /**

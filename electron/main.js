@@ -2516,7 +2516,7 @@ function registerIpc() {
    * person's own shell does anywhere else.
    */
   const KUBE = {
-    contexts: () => kube.contexts(),
+    contexts: (args) => kube.contexts(args),
     reachable: (args) => kube.reachable(args),
     resources: (args) => kube.resources(args),
     list: (args) => kube.list(args),

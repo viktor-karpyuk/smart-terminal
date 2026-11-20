@@ -5,11 +5,9 @@ import { asFilePanel, JENKINS_VIEW, REVIEWER_VIEW, useStore, type JenkinsPlace, 
 import { allLeaves, allTabs, findLeaf, leafOfTab } from '../state/layout';
 import { SESSION_MIME } from '../lib/drag';
 import { sessionLabel, cutName, nameTip } from '../lib/labels';
-import { shortContext } from '../lib/extensionHost';
 import { agoShort, ancestorsOf, jenkinsDot, jenkinsHere } from '../lib/jenkinsTree';
 import { compactPath } from '../lib/labels';
 import { PathLabel } from './PathLabel';
-import { Popover } from './Popover';
 import { AccountsIcon, AppearanceIcon, ClustersIcon, ExtensionsIcon, HistoryIcon, MonitorIcon, UsageIcon, OpenInSectionIcon, RefreshIcon, CloseGlyph } from './icons';
 import { legible } from '../lib/looks';
 import { useNameMax } from '../lib/useNameMax';
@@ -402,7 +400,6 @@ export function Sidebar() {
   // Whether anything contributes a cluster view at all. A boolean, not the
   // list: this component re-renders on every session change, and it has no
   // business re-rendering because a pod somewhere restarted.
-  const hasClusters = useStore((s) => s.extensions.panels.some((panel) => panel.needs === 'kubernetes'));
   const authByProfile = useStore((s) => s.authByProfile);
   const updateSettings = useStore((s) => s.updateSettings);
 
@@ -465,8 +462,7 @@ export function Sidebar() {
   const showsSomething =
     settings.sidebarShowSessions ||
     settings.sidebarShowFolders ||
-    settings.sidebarShowMonitor ||
-    (settings.sidebarShowClusters && hasClusters);
+    settings.sidebarShowMonitor;
   // Any list the order does not mention yet — the monitor, for a workspace saved
   // before it existed — goes on the end rather than disappearing.
   const ordered = [
@@ -477,9 +473,12 @@ export function Sidebar() {
     sessions: settings.sidebarShowSessions,
     folders: settings.sidebarShowFolders,
     monitor: settings.sidebarShowMonitor,
-    // Only when something contributes it. A list of clusters on the sidebar of
-    // somebody who does not run Kubernetes is a permanent empty box.
-    clusters: settings.sidebarShowClusters && hasClusters,
+    /*
+     * The clusters are chosen in the cluster panel's own header now, beside the
+     * namespace: a list here was a column spent on five names, and the one that
+     * was open was said twice.
+     */
+    clusters: false,
     /*
      * The Code Reviewer's and Jenkins' menus live inside their own panels now,
      * as a navigator down the panel's left edge: a tree in the sidebar was a
@@ -621,8 +620,6 @@ export function Sidebar() {
               </List>
             ) : which === 'folders' ? (
               <Folders />
-            ) : which === 'clusters' ? (
-              <ClustersList />
             ) : which === 'reviewer' ? (
               <ReviewerList />
             ) : which === 'jenkins' ? (
@@ -1581,262 +1578,6 @@ function ReviewerPrRow({
 }
 
 /**
- * The clusters, as a list.
- *
- * Every context in kubeconfig with a dot saying whether it answers, because on
- * a laptop with seven of them two are usually behind a VPN nobody is on and one
- * has a token that expired — and finding that out by clicking is a slow way to
- * learn something a dot can say.
- *
- * Clicking one opens it. A tab per cluster, not one tab that switches: two
- * clusters open at once is the whole reason to have a list of them, and a tab
- * that changed what it was showing underneath you would be worse than useless
- * while something is being followed in it.
- */
-function ClustersList() {
-  const [menu, setMenu] = useState<{ name: string; x: number; y: number } | null>(null);
-  const collapsed = useStore((s) => s.settings.sidebarClustersCollapsed);
-  const updateSettings = useStore((s) => s.updateSettings);
-  const names = useStore(useShallow((s) => s.clusters.list.map((entry) => entry.name)));
-  const error = useStore((s) => s.clusters.error);
-  const loaded = useStore((s) => s.clusters.loaded);
-  const probing = useStore((s) => s.clusters.probing);
-
-  /*
-   * The list asks for itself.
-   *
-   * It used to be loaded once, on the transition where the extension appeared,
-   * and never again — so anything that emptied it left the sidebar saying "no
-   * clusters in kubeconfig" for the life of the window, which was not true and
-   * had no way back. The thing that draws the data is the right thing to ask
-   * for it, and `loaded` keeps that from being a loop.
-   */
-  useEffect(() => {
-    if (!loaded) void useStore.getState().loadClusters().then(() => useStore.getState().probeClusters());
-  }, [loaded]);
-  const down = useStore(
-    (s) => Object.values(s.clusters.reach).filter((entry) => entry.up === false && !entry.slow).length,
-  );
-
-  return (
-    <List
-      id="clusters"
-      collapsed={collapsed}
-      header={
-        <SectionHeader
-          id="clusters"
-          label="Clusters"
-          count={down}
-          collapsed={collapsed}
-          onToggle={() => updateSettings({ sidebarClustersCollapsed: !collapsed })}
-          onClose={() => updateSettings({ sidebarShowClusters: false })}
-          extra={
-            <button
-              className="section-open"
-              title={probing ? 'Asking each cluster…' : 'Ask each cluster again'}
-              aria-label="Check the clusters again"
-              onClick={(event) => {
-                event.stopPropagation();
-                void useStore
-                  .getState()
-                  .loadClusters()
-                  .then(() => useStore.getState().probeClusters(true));
-              }}
-            >
-              <RefreshIcon spinning={probing} />
-            </button>
-          }
-        />
-      }
-    >
-      {error && <p className="sidebar-empty">{error}</p>}
-      {/* Only once something has actually looked. Before that it is not a fact. */}
-      {!error && !names.length && (
-        <p className="sidebar-empty">{loaded ? 'No clusters in kubeconfig.' : 'Reading kubeconfig…'}</p>
-      )}
-      {names.map((name) => (
-        <ClusterRow key={name} name={name} note={sameNameNote(name, names)} onMenu={setMenu} />
-      ))}
-      {menu && <ClusterMenu name={menu.name} x={menu.x} y={menu.y} onClose={() => setMenu(null)} />}
-    </List>
-  );
-}
-
-/**
- * What tells two contexts with the same short name apart.
- *
- * Two contexts often point at one cluster — the ARN EKS wrote and the alias
- * somebody gave it — and both shortened to "kubrik-k8s" twice, with nothing to
- * choose between them. Only said when there is a clash: the region of an EKS
- * ARN, and "alias" for the plain one.
- */
-function sameNameNote(name: string, names: string[]): string | null {
-  const short = shortContext(name);
-  if (!names.some((other) => other !== name && shortContext(other) === short)) return null;
-  const eks = /^arn:aws:eks:([^:]+):/.exec(name);
-  if (eks) return eks[1];
-  return name === short ? 'alias' : null;
-}
-
-/** One cluster: whether it answers, and what it is called by people. */
-function ClusterRow({
-  name,
-  note,
-  onMenu,
-}: {
-  name: string;
-  note: string | null;
-  onMenu(at: { name: string; x: number; y: number }): void;
-}) {
-  const nameMax = useNameMax();
-  const reach = useStore((s) => s.clusters.reach[name]);
-  const openCluster = useStore((s) => s.openCluster);
-  const isDefault = useStore((s) => s.clusters.current === name);
-  const open = useStore(
-    (s) => Object.values(s.panels).some((panel) => panel.kind === 'extension' && panel.root === name),
-  );
-  const state = dotFor(reach);
-
-  return (
-    <button
-      className={`sidebar-item cluster-row${open ? ' is-open' : ''}`}
-      title={nameTip(shortContext(name), name !== shortContext(name) && name, reach?.error && `\n${reach.error}`)}
-      onClick={() => openCluster(name)}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        onMenu({ name, x: event.clientX, y: event.clientY });
-      }}
-    >
-      <span className={`cluster-dot is-${state}`} />
-      <span className="sidebar-item-title">{cutName(shortContext(name), nameMax)}</span>
-      {note && <span className="cluster-note">{note}</span>}
-      {/* Which one a plain `kubectl` uses. Worth marking, precisely because
-          nothing this app does depends on it. */}
-      {isDefault && <span className="cluster-default" title="What a plain kubectl uses">default</span>}
-    </button>
-  );
-}
-
-/**
- * Three answers, not two.
- *
- * Answered: green. Said no — refused the connection, or the credentials are
- * stale: red. Did not answer at all: amber, because that is not the same claim.
- * A cluster that is merely slow, or behind a VPN that drops rather than
- * refuses, has told us nothing, and a confident red about a healthy production
- * cluster is how a dashboard stops being believed.
- */
-function dotFor(reach?: { up: boolean | null; slow?: boolean }): 'ok' | 'warn' | 'bad' | 'unknown' {
-  if (!reach || reach.up == null) return 'unknown';
-  if (reach.up) return 'ok';
-  return reach.slow ? 'warn' : 'bad';
-}
-
-/**
- * What you can do to a cluster from the list.
- *
- * Two of these edit the person's own kubeconfig rather than talk to a cluster,
- * and they are the two worth being careful about — so removing asks first, and
- * making one the default says out loud what else that changes.
- */
-function ClusterMenu({
-  name,
-  x,
-  y,
-  onClose,
-}: {
-  name: string;
-  x: number;
-  y: number;
-  onClose(): void;
-}) {
-  const reach = useStore((s) => s.clusters.reach[name]);
-  const isDefault = useStore((s) => s.clusters.current === name);
-  const [confirming, setConfirming] = useState(false);
-  const run = (fn: () => void) => () => {
-    onClose();
-    fn();
-  };
-
-  if (confirming) {
-    return (
-      <div className="modal-backdrop" onMouseDown={onClose}>
-        <div className="confirm" onMouseDown={(event) => event.stopPropagation()}>
-          <h3>Remove {shortContext(name)}?</h3>
-          <p style={{ color: 'var(--text)' }}>{name}</p>
-          <p>
-            This edits your kubeconfig. The context goes, and so do its cluster and user entries
-            unless another context is still pointing at them. Nothing in the cluster itself is
-            touched — you are removing the way in, not the thing.
-          </p>
-          <div className="confirm-actions">
-            <button className="ghost-btn" onClick={onClose} autoFocus>
-              Keep it
-            </button>
-            <button
-              className="danger-btn"
-              onClick={() => {
-                onClose();
-                void useStore.getState().removeCluster(name);
-              }}
-            >
-              Remove from kubeconfig
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <Popover anchorPoint={{ x, y }} onClose={onClose}>
-      <div className="menu-heading">
-        <span className={`cluster-dot is-${dotFor(reach)}`} />
-        <span>{shortContext(name)}</span>
-      </div>
-
-      <button className="menu-item" onClick={run(() => useStore.getState().openCluster(name))}>
-        <span>Open</span>
-        <kbd>a tab of its own</kbd>
-      </button>
-      <button
-        className="menu-item"
-        onClick={run(() => void useStore.getState().openClusterTerminal(name))}
-      >
-        <span>Terminal here</span>
-        <kbd>k aliased to it</kbd>
-      </button>
-      <button className="menu-item" onClick={run(() => void useStore.getState().probeCluster(name))}>
-        <span>Check it again</span>
-        {reach?.error && <kbd title={reach.error}>not answering</kbd>}
-      </button>
-
-      <div className="menu-separator" />
-
-      <button className="menu-item" onClick={run(() => void navigator.clipboard.writeText(name))}>
-        <span>Copy its full name</span>
-      </button>
-      {!isDefault && (
-        <button
-          className="menu-item"
-          onClick={run(() => void useStore.getState().makeClusterDefault(name))}
-          title="Changes what a plain kubectl does everywhere, including in your own shells"
-        >
-          <span>Make it kubectl's default</span>
-          <kbd>outside this app too</kbd>
-        </button>
-      )}
-
-      <div className="menu-separator" />
-
-      <button className="menu-item is-danger" onClick={() => setConfirming(true)}>
-        <span>Remove from kubeconfig…</span>
-      </button>
-    </Popover>
-  );
-}
-
-/**
  * The fleet's health, as a list.
  *
  * The same readings the monitor section shows, in the place you already look to
@@ -2108,6 +1849,21 @@ function ActivityBar() {
   const settings = useStore((s) => s.settings);
   const updateSettings = useStore((s) => s.updateSettings);
   const hasClusters = useStore((s) => s.extensions.panels.some((panel) => panel.needs === 'kubernetes'));
+  const clusterInFront = useStore((s) => {
+    const leaf = s.activeLeafId ? allLeaves(s.layout).find((candidate) => candidate.id === s.activeLeafId) : null;
+    const panel = leaf?.active ? s.panels[leaf.active] : null;
+    if (!panel || panel.kind !== 'extension') return false;
+    return s.extensions.panels.some((view) => view.id === panel.viewId && view.needs === 'kubernetes');
+  });
+  /*
+   * The count on the button is asked for by the button. It was the sidebar's
+   * list that read kubeconfig and asked each cluster; with the list gone,
+   * nothing else would.
+   */
+  const clustersLoaded = useStore((s) => s.clusters.loaded);
+  useEffect(() => {
+    if (hasClusters && !clustersLoaded) void useStore.getState().loadClusters().then(() => useStore.getState().probeClusters());
+  }, [hasClusters, clustersLoaded]);
   const down = useStore(
     (s) => Object.values(s.clusters.reach).filter((entry) => entry.up === false && !entry.slow).length,
   );
@@ -2180,11 +1936,11 @@ function ActivityBar() {
 
       {hasClusters && (
         <button
-          className={`activity${settings.sidebarShowClusters ? ' is-on' : ''}`}
-          data-tip={down ? `Clusters — ${down} not answering` : 'Clusters'}
-          aria-label="Clusters"
-          aria-pressed={settings.sidebarShowClusters}
-          onClick={() => updateSettings({ sidebarShowClusters: !settings.sidebarShowClusters })}
+          className={`activity${clusterInFront ? ' is-on' : ''}`}
+          data-tip={down ? `Kubernetes — ${down} not answering` : 'Kubernetes — the cluster is chosen in its header'}
+          aria-label="Kubernetes"
+          aria-pressed={clusterInFront}
+          onClick={() => useStore.getState().launchClusters()}
         >
           <ClustersIcon />
           {down > 0 && <span className="activity-count">{down}</span>}

@@ -1436,7 +1436,9 @@ function forgetAnswers() {
   answers.clear();
 }
 
-async function contexts() {
+async function contexts({ fresh } = {}) {
+  // Asked to look again: kubeconfig is edited by other tools, and by a terminal this app just opened.
+  if (fresh) answers.delete('contexts');
   return memo('contexts', 15000, wholeContexts);
 }
 
