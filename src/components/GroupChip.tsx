@@ -4,6 +4,7 @@ import type { GroupArrangement } from '../state/types';
 import { Popover } from './Popover';
 import { GROUP_MIME, SESSION_MIME } from '../lib/drag';
 import { legible } from '../lib/looks';
+import { GroupSessions } from './GroupSessions';
 
 const ARRANGEMENTS: Array<{ id: GroupArrangement; label: string; hint: string }> = [
   { id: 'tabs', label: 'Stack as tabs', hint: 'one pane' },
@@ -113,6 +114,20 @@ export function GroupChip({ groupId, leafId }: { groupId: string; leafId: string
               Rename
             </button>
           </div>
+
+          {/*
+            Its sessions first: open ones take you to them, closed ones can be
+            ticked and brought back into the group from right here.
+          */}
+          <div className="menu-label">Sessions</div>
+          <GroupSessions
+            groupId={groupId}
+            arrangement={group.arrangement ?? null}
+            onRestored={(count) => {
+              if (count > 0) setOpen(false);
+            }}
+          />
+          <div className="menu-separator" />
 
           {/* The same two rows, drawn the same way, as a tab's own menu. */}
           <div className="menu-row">

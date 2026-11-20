@@ -71,7 +71,14 @@ export function Popover({ anchorEl, anchorPoint, menu, onClose, children }: Prop
 
     place();
     window.addEventListener('resize', place);
-    return () => window.removeEventListener('resize', place);
+    // Content that arrives after it opens (a list read from history) changes
+    // its size, and a popover placed for the smaller one runs off the screen.
+    const watcher = typeof ResizeObserver === 'undefined' || !el ? null : new ResizeObserver(() => place());
+    if (watcher && el) watcher.observe(el);
+    return () => {
+      window.removeEventListener('resize', place);
+      watcher?.disconnect();
+    };
   // Depend on the coordinates, not the object: callers pass a fresh literal each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [anchorEl, anchorPoint?.x, anchorPoint?.y]);

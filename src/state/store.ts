@@ -780,7 +780,8 @@ interface State {
   membersOf(groupId: string): string[];
   reconcileGroup(tabId: string): void;
   addToGroup(sessionId: string, groupId: string): void;
-  restoreGroup(groupId: string, arrangement?: GroupArrangement): Promise<number>;
+  /** With `onlyIds`, only those of its history sessions come back; the rest stay closed. */
+  restoreGroup(groupId: string, arrangement?: GroupArrangement, onlyIds?: string[]): Promise<number>;
   setHistoryOpen(open: boolean): void;
   setHousekeepingStatus(status: 'fine' | 'attention' | 'limit'): void;
   setRemoteStatus(status: RemoteStatus): void;
@@ -4120,14 +4121,16 @@ export const useStore = create<State>((set, get) => ({
    * Sessions still open are left alone and simply re-joined, so restoring twice
    * does not give you two of everything.
    */
-  async restoreGroup(groupId, arrangement) {
+  async restoreGroup(groupId, arrangement, onlyIds) {
     const [record] = (await window.api.history.groups({ limit: 500 })).filter((g) => g.id === groupId);
     const members = await window.api.history.groupMembers(groupId);
     if (!record || !members.length) return 0;
 
     const live = get().sessions;
+    const wanted = onlyIds ? new Set(onlyIds) : null;
     const alreadyOpen = members.filter((member) => live[member.id]);
-    const toOpen = members.filter((member) => !live[member.id]);
+    const toOpen = members.filter((member) => !live[member.id] && (!wanted || wanted.has(member.id)));
+    if (wanted && !toOpen.length) return 0;
 
     // Recreate the group itself first, so each session can join as it opens.
     recreateGroup(set, get, record);

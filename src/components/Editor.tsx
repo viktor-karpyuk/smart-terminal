@@ -268,7 +268,9 @@ function takeWantedLine(view: EditorView, path: string, mounting = false) {
   const doc = view.state.doc;
   const line = doc.line(Math.min(Math.max(1, wanted.line), doc.lines));
   const at = Math.min(line.to, line.from + Math.max(0, (wanted.column ?? 1) - 1));
-  view.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: 'center' }) });
+  // A search result asks for the match itself selected, not just the caret before it.
+  const head = wanted.endColumn ? Math.min(line.to, line.from + Math.max(0, wanted.endColumn - 1)) : at;
+  view.dispatch({ selection: { anchor: at, head }, effects: EditorView.scrollIntoView(at, { y: 'center' }) });
   view.focus();
 }
 

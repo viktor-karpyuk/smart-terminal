@@ -403,8 +403,6 @@ export function Sidebar() {
   // list: this component re-renders on every session change, and it has no
   // business re-rendering because a pod somewhere restarted.
   const hasClusters = useStore((s) => s.extensions.panels.some((panel) => panel.needs === 'kubernetes'));
-  const hasReviewer = useStore((s) => s.extensions.panels.some((panel) => panel.id === REVIEWER_VIEW && !panel.error));
-  const hasJenkins = useStore((s) => s.extensions.panels.some((panel) => panel.id === JENKINS_VIEW && !panel.error));
   const authByProfile = useStore((s) => s.authByProfile);
   const updateSettings = useStore((s) => s.updateSettings);
 
@@ -468,9 +466,7 @@ export function Sidebar() {
     settings.sidebarShowSessions ||
     settings.sidebarShowFolders ||
     settings.sidebarShowMonitor ||
-    (settings.sidebarShowClusters && hasClusters) ||
-    (settings.sidebarShowReviewer && hasReviewer) ||
-    (settings.sidebarShowJenkins && hasJenkins);
+    (settings.sidebarShowClusters && hasClusters);
   // Any list the order does not mention yet — the monitor, for a workspace saved
   // before it existed — goes on the end rather than disappearing.
   const ordered = [
@@ -484,9 +480,13 @@ export function Sidebar() {
     // Only when something contributes it. A list of clusters on the sidebar of
     // somebody who does not run Kubernetes is a permanent empty box.
     clusters: settings.sidebarShowClusters && hasClusters,
-    reviewer: settings.sidebarShowReviewer && hasReviewer,
-    // Only when the extension is there, like the reviewer's.
-    jenkins: settings.sidebarShowJenkins && hasJenkins,
+    /*
+     * The Code Reviewer's and Jenkins' menus live inside their own panels now,
+     * as a navigator down the panel's left edge: a tree in the sidebar was a
+     * second copy of the panel's map, far from the thing it steers.
+     */
+    reviewer: false,
+    jenkins: false,
   };
   const open = ordered.filter((which) => shown[which]);
   /*
@@ -678,7 +678,7 @@ function reviewerHere(resume: unknown): ReviewerPlace | null {
  * of its panel, where they took a row of a pane that wants every row for code.
  * Clicking one shows the reviewer at that place, opening it if it is not open.
  */
-function ReviewerList() {
+function ReviewerList({ inline = false }: { inline?: boolean }) {
   const collapsed = useStore((s) => s.settings.sidebarReviewerCollapsed);
   const updateSettings = useStore((s) => s.updateSettings);
   const openReviewerAt = useStore((s) => s.openReviewerAt);
@@ -747,7 +747,9 @@ function ReviewerList() {
   ];
 
   return (
-    <List
+    <ListOrNav
+      inline={inline}
+      title="Code Reviewer"
       id="reviewer"
       collapsed={collapsed}
       header={
@@ -840,7 +842,7 @@ function ReviewerList() {
           onOpen={() => openReviewerAt({ view: page.view })}
         />
       ))}
-    </List>
+    </ListOrNav>
   );
 }
 
@@ -905,7 +907,7 @@ const JENKINS_ROWS_MAX = 200;
  * Nothing here polls. The service tells the app when a build starts or ends,
  * and the lines that are open read again then.
  */
-function JenkinsList() {
+function JenkinsList({ inline = false }: { inline?: boolean }) {
   const collapsed = useStore((s) => s.settings.sidebarJenkinsCollapsed);
   const mode = useStore((s) => s.settings.sidebarJenkinsMode ?? 'tree');
   const savedServer = useStore((s) => s.settings.sidebarJenkinsServer ?? null);
@@ -1240,7 +1242,9 @@ function JenkinsList() {
   const treeRoot = rows['tree:'];
 
   return (
-    <List
+    <ListOrNav
+      inline={inline}
+      title="Jenkins"
       id="jenkins"
       collapsed={collapsed}
       header={
@@ -1412,8 +1416,52 @@ function JenkinsList() {
           )}
         </>
       )}
-    </List>
+    </ListOrNav>
   );
+}
+
+/**
+ * A list for the sidebar, or the same list as a panel's own navigator.
+ *
+ * Inline, the sidebar's heading — fold, close, drag to reorder — has nothing to
+ * do: the navigator folds from the panel. Its actions (refresh, dashboard) are
+ * kept, on a heading of the navigator's own.
+ */
+function ListOrNav({
+  inline,
+  title,
+  id,
+  collapsed,
+  header,
+  children,
+}: {
+  inline: boolean;
+  title: string;
+  id: string;
+  collapsed: boolean;
+  header: React.ReactElement<{ extra?: React.ReactNode }>;
+  children: React.ReactNode;
+}) {
+  if (!inline) return <List id={id} collapsed={collapsed} header={header}>{children}</List>;
+  return (
+    <>
+      <div className="extnav-head">
+        <span className="extnav-title">{title}</span>
+        <span className="extnav-actions">{header.props.extra}</span>
+      </div>
+      <div className="extnav-body">{children}</div>
+    </>
+  );
+}
+
+/** The Code Reviewer's menu, drawn inside its own panel. */
+export function ReviewerNav() {
+  return <ReviewerList inline />;
+}
+
+/** Jenkins' tree and views, drawn inside its own panel. */
+export function JenkinsNav() {
+  return <JenkinsList inline />;
 }
 
 /** One line of the reviewer's list, drawn like every other line in the sidebar. */
@@ -2122,11 +2170,10 @@ function ActivityBar() {
 
       {hasReviewer && (
         <button
-          className={`activity${settings.sidebarShowReviewer ? ' is-on' : ''}`}
+          className="activity"
           data-tip="Code Reviewer"
           aria-label="Code Reviewer"
-          aria-pressed={settings.sidebarShowReviewer}
-          onClick={() => updateSettings({ sidebarShowReviewer: !settings.sidebarShowReviewer })}
+          onClick={() => useStore.getState().launchExtensionView(REVIEWER_VIEW)}
         >
           <ReviewIcon />
         </button>
@@ -2134,11 +2181,10 @@ function ActivityBar() {
 
       {hasJenkins && (
         <button
-          className={`activity${settings.sidebarShowJenkins ? ' is-on' : ''}`}
+          className="activity"
           data-tip="Jenkins"
           aria-label="Jenkins"
-          aria-pressed={settings.sidebarShowJenkins}
-          onClick={() => updateSettings({ sidebarShowJenkins: !settings.sidebarShowJenkins })}
+          onClick={() => useStore.getState().launchExtensionView(JENKINS_VIEW)}
         >
           <JenkinsIcon />
         </button>

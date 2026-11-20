@@ -169,6 +169,8 @@ contextBridge.exposeInMainWorld('api', {
     list: (dir) => ipcRenderer.invoke('files:list', dir),
     /** Files and folders whose name matches, under one root. Bounded; may come back cut short. */
     find: (root, query, options) => ipcRenderer.invoke('files:find', { root, query, ...options }),
+    search: (root, options) => ipcRenderer.invoke('files:search', { root, ...options }),
+    replace: (root, files, options) => ipcRenderer.invoke('files:replace', { root, files, ...options }),
     read: (file) => ipcRenderer.invoke('files:read', file),
     /** Which of these absolute paths are files. */
     which: (paths) => ipcRenderer.invoke('files:which', paths),

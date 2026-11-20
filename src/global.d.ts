@@ -430,6 +430,39 @@ export interface RosterEntry {
   groupId: string | null;
 }
 
+export interface SearchOptions {
+  query: string;
+  regex?: boolean;
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+  /** Comma-separated globs: `src/**, *.ts`. */
+  include?: string;
+  exclude?: string;
+}
+
+export interface SearchMatch {
+  line: number;
+  column: number;
+  text: string;
+  ranges: [number, number][];
+  count: number;
+}
+
+export interface SearchResult {
+  ok: boolean;
+  files?: { path: string; relative: string; matches: SearchMatch[]; count: number }[];
+  matches?: number;
+  cut?: boolean;
+  error?: string;
+}
+
+/** What deleting sessions did to the worktrees they worked in. */
+export interface WorktreeCleanup {
+  removed: string[];
+  kept: { path: string; reason: string }[];
+  error?: string;
+}
+
 export interface GroupRecord {
   id: string;
   name: string;
@@ -975,8 +1008,9 @@ declare global {
           sessionId: string,
           profileId: string,
         ): Promise<{ claudeSessionId: string | null; cwd: string } | null>;
-        deleteSession(sessionId: string): Promise<boolean>;
-        clearHistory(options?: { before?: number }): Promise<number>;
+        /** Also removes the git worktrees it worked in that nothing else uses and that hold no uncommitted work. */
+        deleteSession(sessionId: string): Promise<{ removed: boolean; worktrees: WorktreeCleanup }>;
+        clearHistory(options?: { before?: number }): Promise<{ removed: number; worktrees: WorktreeCleanup }>;
         groups(options?: { limit?: number }): Promise<GroupRecord[]>;
         recentFolders(limit?: number): Promise<string[]>;
         groupMembers(groupId: string): Promise<HistorySession[]>;
@@ -1118,6 +1152,14 @@ declare global {
           query: string,
           options?: { hidden?: boolean },
         ): Promise<{ ok: boolean; results?: FoundEntry[]; scanned?: number; cut?: boolean; error?: string }>;
+        /** Text inside the files under `root`: the Search view. */
+        search(root: string, options: SearchOptions): Promise<SearchResult>;
+        /** Replace every match in these files; only files under `root` are touched. */
+        replace(
+          root: string,
+          files: string[],
+          options: SearchOptions & { replacement: string },
+        ): Promise<{ ok: boolean; changed?: string[]; replaced?: number; failed?: { path: string; error: string }[]; error?: string }>;
         read(file: string): Promise<FileRead>;
         which(paths: string[]): Promise<string[]>;
         write(
