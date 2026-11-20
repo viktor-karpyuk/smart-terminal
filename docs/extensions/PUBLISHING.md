@@ -54,6 +54,8 @@ installing it reads this list first, in these words:
 | `timelogbook.write` | Change the Timelogbook connection, and run tools that change things in Timelogbook (each one asks you first) |
 | `kubrik.read` | Read Kubrik OS as you: the ERP modules your API key reaches |
 | `kubrik.write` | Change the Kubrik OS connection, and run tools that change things in Kubrik OS (each one asks you first) |
+| `db.read` | Read the databases you connected: their tables, rows and structure |
+| `db.write` | Run SQL on your databases, change rows, and change the connections this app knows |
 | `terminal` | Open terminals and Claude sessions about what it shows |
 
 Ask for the fewest that work. A call the extension did not declare is refused
