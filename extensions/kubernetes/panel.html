@@ -318,6 +318,8 @@
     position: absolute; top: 2px; right: 3px; min-width: 14px; height: 14px; padding: 0 4px; border-radius: 7px;
     font-size: 9px; line-height: 14px; font-weight: 700; text-align: center; color: #fff; background: var(--danger);
   }
+  .block-note { margin-left: 8px; font-weight: 400; letter-spacing: 0; text-transform: none; }
+  .row-warn, .mcard .mwarn, .mtile .mwarn { cursor: pointer; }
   .row-warn {
     margin-left: 6px; padding: 0 5px; border-radius: 7px; font-size: 9.5px; font-weight: 700; line-height: 14px;
     color: var(--danger); background: color-mix(in srgb, var(--danger) 20%, transparent);
@@ -1571,8 +1573,8 @@
       if (group) openGroups()[group] = true;
     }
     leaveDetail();
-    state.search = '';
-    $('search').value = '';
+    state.search = extras.search || '';
+    $('search').value = state.search;
     state.sort = extras.sort || { column: null, dir: 1 };
     state.wanted = extras.wanted || null;
     state.wantedTab = extras.wantedTab || null;
@@ -1696,6 +1698,7 @@
       mapKeep(key, result, JSON.stringify([result.nodes, result.edges, result.findings, result.missing]));
       // The form may be waiting to know whether an autoscaler is watching what it edits.
       if (state.view.type === 'kind' && key === mapKey()) { drawTable(); if (state.selected && !holdingEdit()) drawDetail(); }
+      if (state.view.type === 'overview' && state.overview) drawOverview();
     }).catch(function () { delete mapFetching[key]; });
   }
   /** What the map knows about a row of a table, if the map has been read. */
@@ -1804,9 +1807,11 @@
         var inNamespace = state.wantedNamespace;
         var found = state.table.rows.filter(function (row) { return row.name === state.wanted && (!inNamespace || row.namespace === inNamespace); })[0];
         var onTab = state.wantedTab;
+        state.wantedName = state.wanted;
         state.wanted = null;
         state.wantedTab = null;
         state.wantedNamespace = null;
+        if (!found && state.view.type === 'kind') say(state.wantedName + ' is not in this list. It may be gone, or in another namespace.', true);
         if (found) {
           select(found.uid);
           if (onTab) { var goTo = document.querySelector('.tabs [data-tab="' + onTab + '"]'); if (goTo) goTo.click(); }
@@ -2714,6 +2719,7 @@
     // The end of dragging across a name to copy it, not a click on the row.
     if (selectingIn(row)) return;
     select(row.dataset.uid);
+    if (event.target.closest('.row-warn')) { var toEvents = document.querySelector('aside .tabs [data-tab="events"]'); if (toEvents) toEvents.click(); }
   });
 
   /**
@@ -3245,6 +3251,8 @@
     var box = document.createElement('div');
     box.className = 'row-menu';
     box.innerHTML = actionsFor(row);
+    applyCan(box);
+    askCan(row);
     document.body.appendChild(box);
 
     var at = near.getBoundingClientRect();
@@ -5552,7 +5560,8 @@
     } else if (set.mapId) {
       mapTrail = [];
       mapBring = !state.selected;
-      mapSelect(set.mapId);
+      // The count in the corner is a question — "what warnings?" — and Events is the answer.
+      mapSelect(set.mapId, event.target.closest('.mwarn') ? 'events' : undefined);
       return;
     }
     remember();
@@ -5810,7 +5819,9 @@
     if ((data.recent || []).length) {
       recent = '<div class="crumb"><strong>Recent warnings</strong></div><table><tbody>' +
         data.recent.slice(0, 20).map(function (row) {
-          return '<tr><td class="dim age">' + ageHtml(row) + '</td>' +
+          var nav = row.objectKind ? navFor(row.objectKind) : null;
+          return '<tr' + (nav ? ' class="is-link" data-open="' + esc(row.objectName) + '" data-open-kind="' + esc(nav) + '" data-open-namespace="' + esc(row.namespace || '') + '" title="Open ' + esc(row.object) + '"' : '') +
+            '><td class="dim age">' + ageHtml(row) + '</td>' +
             '<td class="warn-text">' + esc(row.status) + '</td>' +
             '<td class="dim">' + esc(row.object) + '</td>' +
             '<td class="grow dim">' + esc(row.message) + '</td></tr>';
@@ -5819,6 +5830,7 @@
 
     $('table').innerHTML =
       '<div class="cards">' + cards + '</div>' +
+      attentionOf() +
       capacityOf(data) +
       chartsFor(null) +
       pressureOf(data) +
@@ -6035,12 +6047,50 @@
    * them as forty. How many kinds of thing are wrong is the number somebody
    * came for.
    */
+  /**
+   * What is wrong now that no pod status says.
+   *
+   * The cards above count failing pods; this is the rest of it, from the map
+   * that is read behind the overview — an autoscaler with nothing to measure,
+   * a budget that lets nothing go. Each is a workload that looks healthy and
+   * is not doing what it was set up to do, and each line opens it.
+   */
+  function attentionOf() {
+    var kept = mapCache[(state.context || '') + '/'] || mapCache[mapKey()];
+    if (!kept || !kept.result || !kept.result.findings) return '';
+    var rows = [];
+    var byId = {};
+    (kept.result.nodes || []).forEach(function (node) { byId[node.id] = node; });
+    Object.keys(kept.result.findings).forEach(function (id) {
+      kept.result.findings[id].forEach(function (finding) {
+        // A failing pod is already counted above; this is for what is not.
+        if (finding.level !== 'now' || /^API · pod status/.test(finding.source || '')) return;
+        if (byId[id]) rows.push({ node: byId[id], finding: finding });
+      });
+    });
+    if (!rows.length) return '';
+    return '<div class="panel-block"><h4>Needs attention <span class="dim">· healthy to look at, and not doing what it was set up to do</span></h4>' +
+      '<table><tbody>' + rows.slice(0, 12).map(function (row) {
+        var nav = navFor(row.node.kind);
+        return '<tr' + (nav ? ' class="is-link" data-open="' + esc(row.node.name) + '" data-open-kind="' + esc(nav) + '" data-open-namespace="' + esc(row.node.namespace || '') + '"' : '') + '>' +
+          '<td class="name"><span class="dot warn"></span>' + esc(row.node.name) + '</td>' +
+          '<td class="dim">' + esc(row.node.namespace || '') + '</td>' +
+          '<td class="warn-text">' + esc(row.finding.title) + '</td>' +
+          '<td class="grow dim">' + esc(row.finding.text) + '</td></tr>';
+      }).join('') + '</tbody></table>' + (rows.length > 12 ? '<div class="dim" style="padding:4px 2px">and ' + (rows.length - 12) + ' more, on the map under Only problems.</div>' : '') + '</div>';
+  }
+
+  document.addEventListener('click', function (event) {
+    var reason = event.target.closest && event.target.closest('[data-reason]');
+    if (reason) show({ type: 'kind', name: 'events' }, { search: reason.dataset.reason });
+  });
+
   function reasonsOf(data) {
     var rows = data.reasons || [];
     if (!rows.length) return '';
     return '<div class="panel-block"><h4>What the cluster is complaining about</h4>' +
       '<table><tbody>' + rows.map(function (row) {
-        return '<tr><td class="warn-text">' + esc(row.reason) + '</td>' +
+        return '<tr class="is-link" data-reason="' + esc(row.reason) + '" title="The events that say ' + esc(row.reason) + '"><td class="warn-text">' + esc(row.reason) + '</td>' +
           '<td class="dim">' + many(row.count) + '×</td>' +
           '<td class="dim">' + esc(row.newest) + '</td>' +
           '<td class="grow dim">' + esc(String(row.example || '').slice(0, 120)) + '</td></tr>';
@@ -6524,7 +6574,7 @@
         return '<tr class="is-link" data-open="' + esc(pod.name) + '" data-open-kind="pods"' +
             ' data-open-namespace="' + esc(pod.namespace || '') + '">' +
           '<td><span class="dot ' + esc(pod.health) + '"></span></td>' +
-          '<td class="grow">' + esc(pod.name) + '</td>' +
+          '<td class="grow">' + esc(pod.name) + warnMark(assign({ kind: 'Pod' }, pod)) + '</td>' +
           '<td class="dim">' + esc(pod.status) + '</td>' +
           '<td class="dim">' + esc(pod.ready || '') + '</td>' +
           '<td class="' + (Number(pod.restarts) ? 'warn-text' : 'dim') + '">' +
@@ -7066,7 +7116,8 @@
         'What is listed below is measured against what it has now.</div></div>' : '') +
       '<ul class="config-problems" id="config-problems">' + problems.map(function (p) { return '<li>' + esc(p.text) + '</li>'; }).join('') + '</ul>' +
       (draft.replicas == null ? '' :
-        '<section class="block"><h4 class="block-head">Replicas</h4>' +
+        '<section class="block"><h4 class="block-head">Replicas' + (mapKnown(row) && mapKnown(row).hpa
+          ? '<span class="dim block-note">' + esc(mapKnown(row).hpa + ' keeps it between ' + mapKnown(row).hpaRange.replace('–', ' and ') + '; a number set here lasts until it next acts') + '</span>' : '') + '</h4>' +
         '<div class="config-grid config-narrow">' +
           '<label class="config-field"><span>How many</span>' +
           '<input type="number" min="0" data-config="replicas" value="' + esc(String(draft.replicas)) + '" /></label>' +
@@ -7540,6 +7591,10 @@
 
   function describeBlock() {
     var loaded = state.detailData.describe;
+    if (typeof loaded === 'string' && /\(NotFound\)|\bnot found\b/i.test(loaded) && loaded.length < 400) {
+      return '<div class="edit-note is-bad" role="status"><div class="edit-note-text">This is no longer in the cluster. It was deleted, or replaced by another of the same kind.\n' +
+        esc(loaded.trim()) + '</div><div class="edit-note-tools"><button class="btn" data-do="close-detail">Close</button></div></div>';
+    }
     return block('Described by the cluster',
       '<pre class="describe">' + (loaded == null ? 'reading…' : describeHtml(loaded)) + '</pre>');
   }
@@ -7624,7 +7679,9 @@
         (state.applying === 'open' ? '<span class="spin">◐</span> Reading…' : 'Edit') + '</button>';
 
     return '<div class="yaml-tools is-stuck">' + tools +
-      '<span class="dim" id="yaml-state">' + (editing ? (changed ? 'edited · ' + linesText(diff) : 'nothing changed yet') : 'as it is in the cluster') + '</span>' +
+      (!editing && row.kind !== 'Secret' && state.detailData.editable != null && state.detailData.editable !== state.detailData.yaml
+        ? '<button class="btn' + (state.yamlClean ? ' on' : '') + '" data-do="yaml-clean" title="Leave out what the cluster writes: status, managed fields, what was last applied">Without status</button>' : '') +
+      '<span class="dim" id="yaml-state">' + (editing ? (changed ? 'edited · ' + linesText(diff) : 'nothing changed yet') : state.yamlClean && row.kind !== 'Secret' ? 'as somebody would write it' : 'as it is in the cluster') + '</span>' +
       '<span class="spacer"></span>' +
       (editing && !showDiff && !theirs ? '<span class="dim" id="yaml-pos"></span>' : '') +
       '<button class="btn" data-do="yaml-save" title="Save this text to a file on this machine">Save…</button>' +
@@ -7641,7 +7698,7 @@
             ? '<textarea id="yaml-edit" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"' + (busy ? ' readonly' : '') + '>' + esc(body) + '</textarea>'
             // A Secret is painted from the text without what was last applied, which is the values over again.
             : '<pre class="yaml">' + yamlHtml(row.kind === 'Secret'
-              ? (hidesValues(row) ? maskSecret(base) : base) : state.detailData.yaml) + '</pre>');
+              ? (hidesValues(row) ? maskSecret(base) : base) : state.yamlClean && state.detailData.editable != null ? state.detailData.editable : state.detailData.yaml) + '</pre>');
   }
 
   /* ------------------------------------------------------------------ *
@@ -7905,6 +7962,8 @@
         context: state.context, kind: subject.kind, namespace: subject.namespace, name: subject.name, revision: to,
       }).then(function (result) {
         say(result.text || ('Rolled ' + subject.name + ' back to revision ' + to + '.'));
+        recordApplied(subject, 'Rollback', { lines: ['Rolled back to revision ' + to + '.'] });
+        drawCrumb();
         state.detailData.rollout = null;
         drawDetail();
         loadDetail();
@@ -9238,6 +9297,7 @@
       host.emit('save', { name: [row.namespace, row.kind.toLowerCase(), row.name].filter(Boolean).join('-') + '.yaml', text: saving });
       return;
     }
+    if (what === 'yaml-clean') { state.yamlClean = !state.yamlClean; drawDetail(true); return; }
     if (what === 'secret-show') { state.showSecret = !state.showSecret; drawDetail(true); return; }
     if (what === 'events-group') { state.eventsGroup = !state.eventsGroup; drawDetail(); return; }
     if (what === 'events-only') { state.eventsOnly = !state.eventsOnly; drawDetail(); return; }
@@ -9367,7 +9427,10 @@
     }
 
     if (what === 'scale') {
-      askFor('Scale ' + row.name + ' to how many?', String(row.replicas == null ? 1 : row.replicas))
+      var scaler = mapKnown(row);
+      askFor('Scale ' + row.name + ' to how many?' + (scaler && scaler.hpa
+        ? '\n\nThe autoscaler ' + scaler.hpa + ' keeps it between ' + scaler.hpaRange.replace('–', ' and ') + ': a number set here lasts until it next acts.' : ''),
+        String(row.replicas == null ? 1 : row.replicas))
         .then(function (wanted) {
           if (wanted == null) return;
           // "three", "-1" and an empty box are not a number of replicas, and were sent as one.
@@ -9678,8 +9741,11 @@
   }
 
   function run(promise, done, then) {
+    var subject = state.selected;
     promise.then(function () {
       if (then) then();
+      if (subject) recordApplied(subject, 'Action', { lines: [done] });
+      drawCrumb();
       say(done);
       // A change is not visible until the cluster agrees it happened.
       setTimeout(function () { load(true); }, 900);
@@ -9997,7 +10063,7 @@
       box.style.cssText = 'position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,0.45);z-index:9';
       box.innerHTML = '<form style="background:var(--bg-panel);border:1px solid var(--border-strong);' +
         'border-radius:var(--radius);padding:14px 16px;min-width:280px;max-width:82vw">' +
-        '<div style="margin-bottom:9px">' + esc(question) + '</div>' +
+        '<div style="margin-bottom:9px;white-space:pre-wrap">' + esc(question) + '</div>' +
         '<input id="prompt-value" value="' + esc(initial) + '" style="width:100%;font:inherit;color:var(--text);' +
         'background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);padding:5px 8px" />' +
         '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:11px">' +
