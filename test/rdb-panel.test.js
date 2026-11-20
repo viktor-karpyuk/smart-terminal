@@ -266,6 +266,9 @@ test('upkeep and the views offered are the engine\'s own', () => {
   assert.deepEqual(subs(P.serverSubs('sqlite')), ['databases']);
   assert.ok(subs(P.serverSubs('postgres')).includes('replication'));
   assert.equal(subs(P.serverSubs('mysql')).includes('replication'), false);
+  // Performance is the server's to answer: both servers have the page, a file has none.
+  assert.ok(subs(P.serverSubs('postgres')).includes('performance'));
+  assert.ok(subs(P.serverSubs('mysql')).includes('performance'));
 });
 
 test('a file\'s columns are matched to the table\'s by name, or by position when it has no names', () => {

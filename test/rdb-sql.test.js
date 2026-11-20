@@ -379,3 +379,20 @@ test('database calls are routed by name, split into reading and changing, and no
   assert.equal(H.permitted(reader, 'db.ask'), true);
   assert.equal(H.permitted({ trusted: false, permissions: ['terminal'] }, 'db.ask'), false, 'asking Claude about a table reads the table');
 });
+
+test('the performance page only reads, and every section says what its answer is for', () => {
+  const drivers = require('../electron/rdb-drivers');
+  for (const engine of ['postgres', 'mysql']) {
+    const sections = drivers.catalog(engine).reports('performance', { schema: 'shop' });
+    assert.ok(sections.length >= 8, engine);
+    for (const section of sections) {
+      assert.ok(section.title && section.note, `${engine}: ${section.title}`);
+      // One statement, and a read: the page is opened on production servers.
+      assert.equal(S.scan(section.sql, engine).length, 1, section.title);
+      assert.equal(S.readsOnly(section.sql, engine), true, section.title);
+      const marks = engine === 'postgres' ? (section.sql.match(/\$\d+/g) ?? []).length : (section.sql.match(/\?/g) ?? []).length;
+      assert.equal(marks, (section.params ?? []).length, section.title);
+    }
+  }
+  assert.equal(drivers.catalog('sqlite').reports('performance', {}), null);
+});

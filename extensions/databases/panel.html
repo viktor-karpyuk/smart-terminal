@@ -127,6 +127,7 @@
   table.list th { text-align: left; padding: 4px 10px; color: var(--text-faint); font-weight: 600; border-bottom: 1px solid var(--border); white-space: nowrap; }
   table.list td { padding: 4px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
   table.list td.m { font-family: ui-monospace, Menlo, monospace; font-size: 0.95rem; overflow-wrap: anywhere; }
+  table.list td.m.n { white-space: nowrap; overflow-wrap: normal; }
   table.list td.act { text-align: right; white-space: nowrap; width: 1%; }
   .link { color: var(--accent); cursor: pointer; }
   .link:hover { text-decoration: underline; }
@@ -308,6 +309,12 @@
       postgres: [['extensions', 'Extensions'], ['foreign', 'Foreign data'], ['publications', 'Publications and subscriptions'], ['eventTriggers', 'Event triggers'], ['languages', 'Languages and casts']]
     }
   };
+
+  /** A row that is a statement the server remembers leads to that statement, in a query tab, to be read and explained. */
+  function reportStatement(columns, row) {
+    var at = columns.map(function (column) { return column.name; }).indexOf('statement');
+    return at >= 0 && row[at] ? String(row[at]) : null;
+  }
 
   /** Where a row of a report leads when it names a table: that table, in the schema the row says or the one the page is about. */
   function reportTarget(columns, row, fallbackSchema) {
@@ -1825,6 +1832,7 @@
       { label: 'New query', run: function () { openQuery(conn, database, ''); } },
       { label: shellLabel(conn.engine), run: function () { openShell(conn, database); } },
       { label: 'Search objects…', run: function () { openSearch(conn, database); } },
+      { label: 'Performance: what is slow, and why', run: function () { openReport(conn, database, 'performance', 'Performance · ' + database, null); } },
       { label: 'Refresh', run: function () { forget(conn.id, database); drawTree(); } }
     ];
     if (conn.engine === 'mysql' && !conn.readOnly) items.push({ label: 'Grant or revoke privileges…', run: function () { openGrant(conn, database, database, ''); } });
@@ -2112,7 +2120,7 @@
           shown += 1;
           if (shown > 600) return;
           var tr = h('tr', { class: section.open && opts && opts.onOpen ? 'go' : '', onclick: section.open && opts && opts.onOpen ? function () { opts.onOpen(row, section.columns); } : null });
-          row.forEach(function (value) { tr.appendChild(h('td', { class: 'm' + (value === null ? ' faint' : ''), text: value === null ? '—' : value })); });
+          row.forEach(function (value) { tr.appendChild(h('td', { class: 'm' + (value === null ? ' faint' : /^-?[\d.,:]+$/.test(value) ? ' n' : ''), text: value === null ? '—' : value })); });
           body.appendChild(tr);
         });
         if (shown > 600) body.appendChild(h('tr', {}, h('td', { class: 'faint', colspan: section.columns.length, text: '… ' + (shown - 600) + ' more. Narrow it down.' })));
@@ -3216,11 +3224,11 @@
     }
   }
 
-  var SERVER_REPORTS = { locks: true, settings: true, prepared: true, tablespaces: true, replication: true };
+  var SERVER_REPORTS = { locks: true, performance: true, settings: true, prepared: true, tablespaces: true, replication: true };
 
   function serverSubs(engine) {
     if (engine === 'sqlite') return [['databases', 'Databases']];
-    var subs = [['dashboard', 'Dashboard'], ['activity', 'Activity'], ['locks', 'Locks'], ['databases', 'Databases'], ['roles', engine === 'mysql' ? 'Users' : 'Roles']];
+    var subs = [['dashboard', 'Dashboard'], ['activity', 'Activity'], ['locks', 'Locks'], ['performance', 'Performance'], ['databases', 'Databases'], ['roles', engine === 'mysql' ? 'Users' : 'Roles']];
     if (engine === 'postgres') subs.push(['tablespaces', 'Tablespaces'], ['replication', 'Replication'], ['prepared', 'Prepared']);
     subs.push(['settings', 'Configuration']);
     return subs;
@@ -4000,6 +4008,8 @@
     box.appendChild(out);
     call('report', { id: tab.conn, database: tab.database, schema: tab.schema, kind: tab.name }).then(function (data) {
       clear(out).appendChild(reportView(data, { onOpen: function (row, columns) {
+        var statement = reportStatement(columns, row);
+        if (statement) { openQuery(conn, tab.database, statement); return; }
         var target = reportTarget(columns, row, tab.schema);
         if (!target) return;
         var mysql = conn.engine === 'mysql';

@@ -588,6 +588,147 @@ const PG_REPORTS = {
     },
   ],
 
+  /**
+   * Why it is slow, asked of the server itself. Every section is one question a
+   * person would otherwise have to know the catalog to ask, and each note says
+   * what the answer is good for — a list of numbers nobody can act on is not a
+   * diagnosis. Nothing here changes anything; what to do about it is a statement
+   * the person writes.
+   */
+  performance: () => [
+    {
+      title: 'Statements that cost the most time in total',
+      note: 'From pg_stat_statements, since its counters were last reset. A statement is here because it is slow, or because it is run very often — the calls column says which. What reads the catalog, the questions on this page among them, is left out. If this section is an error, the extension is not installed: add pg_stat_statements to shared_preload_libraries, restart, and CREATE EXTENSION pg_stat_statements.',
+      open: true,
+      sql: `SELECT round(s.total_exec_time::numeric / 1000, 1) AS "total s", s.calls, round(s.mean_exec_time::numeric, 2) AS "mean ms",
+                   round(s.max_exec_time::numeric, 1) AS "max ms", s.rows,
+                   round((100 * s.total_exec_time / nullif(sum(s.total_exec_time) OVER (), 0))::numeric, 1) AS "% of all",
+                   s.shared_blks_read AS "blocks from disk", s.temp_blks_written AS "temp blocks", left(s.query, 600) AS statement
+              FROM pg_stat_statements s
+             WHERE s.dbid = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database()) AND s.query NOT LIKE '%pg\\_catalog.%'
+             ORDER BY s.total_exec_time DESC LIMIT 25`,
+    },
+    {
+      title: 'Statements that are slow every time',
+      note: 'The slowest on average, among those run more than five times. These are the ones an index or a rewrite helps most: run one under Explain.',
+      open: true,
+      sql: `SELECT round(s.mean_exec_time::numeric, 1) AS "mean ms", round(s.stddev_exec_time::numeric, 1) AS "± ms", s.calls,
+                   round((s.rows::numeric / nullif(s.calls, 0)), 1) AS "rows per call", left(s.query, 600) AS statement
+              FROM pg_stat_statements s
+             WHERE s.dbid = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database()) AND s.calls > 5 AND s.query NOT LIKE '%pg\\_catalog.%'
+             ORDER BY s.mean_exec_time DESC LIMIT 25`,
+    },
+    {
+      title: 'Running for a long time right now',
+      note: 'Active for more than thirty seconds, or holding a transaction open while doing nothing for more than a minute. An idle transaction keeps its locks and stops vacuum from cleaning behind it.',
+      open: true,
+      sql: `SELECT a.pid, a.usename AS "user", a.application_name AS application, a.state,
+                   date_trunc('second', now() - coalesce(a.query_start, a.xact_start))::text AS "for",
+                   a.wait_event_type AS "waiting on", left(a.query, 400) AS query
+              FROM pg_catalog.pg_stat_activity a
+             WHERE a.pid <> pg_backend_pid() AND a.datname = current_database()
+               AND ((a.state = 'active' AND now() - a.query_start > interval '30 seconds')
+                 OR (a.state LIKE 'idle in transaction%' AND now() - a.state_change > interval '1 minute'))
+             ORDER BY coalesce(a.query_start, a.xact_start)`,
+    },
+    {
+      title: 'Tables read from end to end',
+      note: 'Tables of more than ten thousand rows that are scanned whole more often than through an index. The rows-per-scan column is what each of those scans read: a large number there, on a table that is asked for a few rows at a time, is a missing index.',
+      open: true,
+      sql: `SELECT t.schemaname AS schema, t.relname AS "table", t.seq_scan AS "whole scans", coalesce(t.idx_scan, 0) AS "index scans",
+                   t.seq_tup_read / nullif(t.seq_scan, 0) AS "rows per scan", t.n_live_tup AS "rows",
+                   pg_catalog.pg_size_pretty(pg_catalog.pg_total_relation_size(t.relid)) AS size
+              FROM pg_catalog.pg_stat_user_tables t
+             WHERE t.n_live_tup > 10000 AND t.seq_scan > coalesce(t.idx_scan, 0)
+             ORDER BY t.seq_tup_read DESC LIMIT 50`,
+    },
+    {
+      title: 'Foreign keys with no index behind them',
+      note: 'Deleting or re-keying a row of the table referred to has to look for its children, and without an index on these columns that is a scan of the whole child table, under a lock. Joins from parent to child pay the same.',
+      open: true,
+      sql: `SELECT n.nspname AS schema, cl.relname AS "table", c.conname AS "foreign key",
+                   (SELECT string_agg(a.attname, ', ' ORDER BY k.ord) FROM unnest(c.conkey) WITH ORDINALITY k(attnum, ord)
+                      JOIN pg_catalog.pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum) AS columns,
+                   c.confrelid::regclass::text AS "refers to", nullif(cl.reltuples, -1)::bigint AS "rows (estimate)",
+                   pg_catalog.pg_size_pretty(pg_catalog.pg_relation_size(c.conrelid)) AS size
+              FROM pg_catalog.pg_constraint c
+              JOIN pg_catalog.pg_class cl ON cl.oid = c.conrelid
+              JOIN pg_catalog.pg_namespace n ON n.oid = cl.relnamespace
+             WHERE c.contype = 'f' AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+               AND NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_index i
+                      WHERE i.indrelid = c.conrelid AND i.indpred IS NULL AND i.indnkeyatts >= cardinality(c.conkey)
+                        AND (i.indkey::int2[])[0:cardinality(c.conkey) - 1] @> c.conkey
+                        AND (i.indkey::int2[])[0:cardinality(c.conkey) - 1] <@ c.conkey)
+             ORDER BY pg_catalog.pg_relation_size(c.conrelid) DESC LIMIT 200`,
+    },
+    {
+      title: 'Indexes nothing has used',
+      note: 'Never scanned since the statistics were last reset, and not there to keep anything unique. Every write to the table still pays for them. Look at how long the statistics cover before dropping one — an index used once a month by a report looks the same as one used never.',
+      open: true,
+      sql: `SELECT i.schemaname AS schema, i.relname AS "table", i.indexrelname AS index,
+                   pg_catalog.pg_size_pretty(pg_catalog.pg_relation_size(i.indexrelid)) AS size, t.n_tup_ins + t.n_tup_upd + t.n_tup_del AS "writes it slowed",
+                   coalesce((SELECT date_trunc('second', d.stats_reset)::text FROM pg_catalog.pg_stat_database d WHERE d.datname = current_database()), 'never reset') AS "counted since"
+              FROM pg_catalog.pg_stat_user_indexes i
+              JOIN pg_catalog.pg_index x ON x.indexrelid = i.indexrelid
+              JOIN pg_catalog.pg_stat_user_tables t ON t.relid = i.relid
+             WHERE i.idx_scan = 0 AND NOT x.indisunique AND NOT x.indisprimary
+               AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conindid = i.indexrelid)
+             ORDER BY pg_catalog.pg_relation_size(i.indexrelid) DESC LIMIT 200`,
+    },
+    {
+      title: 'Indexes that say the same thing twice',
+      note: 'The same columns, in the same order, with the same condition. All but one can go; keep the one a constraint stands on.',
+      open: true,
+      sql: `SELECT n.nspname AS schema, cl.relname AS "table", string_agg(x.indexrelid::regclass::text, ', ' ORDER BY x.indexrelid) AS indexes, count(*) AS copies,
+                   pg_catalog.pg_size_pretty(sum(pg_catalog.pg_relation_size(x.indexrelid))::bigint) AS "size together"
+              FROM pg_catalog.pg_index x
+              JOIN pg_catalog.pg_class cl ON cl.oid = x.indrelid
+              JOIN pg_catalog.pg_namespace n ON n.oid = cl.relnamespace
+             WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+             GROUP BY n.nspname, cl.relname, x.indrelid, x.indkey::text, x.indclass::text, x.indoption::text,
+                      coalesce(pg_catalog.pg_get_expr(x.indexprs, x.indrelid), ''), coalesce(pg_catalog.pg_get_expr(x.indpred, x.indrelid), '')
+            HAVING count(*) > 1
+             ORDER BY sum(pg_catalog.pg_relation_size(x.indexrelid)) DESC LIMIT 200`,
+    },
+    {
+      title: 'Tables carrying dead rows',
+      note: 'Rows that were updated or deleted and not yet cleaned away: more than a thousand of them and more than a tenth of the table. They are read by every scan. A table that stays on this list is one autovacuum is not keeping up with, or one a long transaction is holding back.',
+      open: true,
+      sql: `SELECT t.schemaname AS schema, t.relname AS "table", t.n_dead_tup AS "dead rows", t.n_live_tup AS "live rows",
+                   round(100.0 * t.n_dead_tup / nullif(t.n_live_tup + t.n_dead_tup, 0), 1) AS "dead %",
+                   coalesce(date_trunc('second', greatest(t.last_vacuum, t.last_autovacuum))::text, 'never') AS "last vacuumed",
+                   coalesce(date_trunc('second', greatest(t.last_analyze, t.last_autoanalyze))::text, 'never') AS "last analysed",
+                   pg_catalog.pg_size_pretty(pg_catalog.pg_total_relation_size(t.relid)) AS size
+              FROM pg_catalog.pg_stat_user_tables t
+             WHERE t.n_dead_tup > 1000 AND t.n_dead_tup > 0.1 * (t.n_live_tup + t.n_dead_tup)
+             ORDER BY t.n_dead_tup DESC LIMIT 100`,
+    },
+    {
+      title: 'Tables the planner has never been told about',
+      note: 'Never analysed, with rows in them. The planner is guessing their size, and a wrong guess is how a good query gets a bad plan. ANALYZE is in each table\'s menu.',
+      open: true,
+      sql: `SELECT t.schemaname AS schema, t.relname AS "table", t.n_live_tup AS "rows", t.n_mod_since_analyze AS "changed since"
+              FROM pg_catalog.pg_stat_user_tables t
+             WHERE t.last_analyze IS NULL AND t.last_autoanalyze IS NULL AND t.n_live_tup > 0
+             ORDER BY t.n_live_tup DESC LIMIT 100`,
+    },
+    {
+      title: 'This database, as a whole',
+      note: 'A cache hit rate under 99% on a database that is busy means memory is short for what is being asked. Temporary files are sorts and hashes that did not fit in work_mem. Deadlocks and rollbacks are counted since the statistics were reset.',
+      open: true,
+      vertical: true,
+      sql: `SELECT round(100.0 * d.blks_hit / nullif(d.blks_hit + d.blks_read, 0), 2) AS "cache hit %",
+                   d.temp_files AS "temporary files", pg_catalog.pg_size_pretty(d.temp_bytes) AS "temporary bytes",
+                   d.deadlocks, round(100.0 * d.xact_rollback / nullif(d.xact_commit + d.xact_rollback, 0), 2) AS "rolled back %",
+                   d.numbackends AS connections, pg_catalog.age(b.datfrozenxid) AS "transaction id age",
+                   round(100.0 * pg_catalog.age(b.datfrozenxid) / 2000000000, 1) AS "% of the way to wraparound",
+                   coalesce(date_trunc('second', d.stats_reset)::text, 'never reset') AS "counted since"
+              FROM pg_catalog.pg_stat_database d JOIN pg_catalog.pg_database b ON b.oid = d.datid
+             WHERE d.datname = current_database()`,
+    },
+  ],
+
   search: ({ q }) => [
     {
       title: 'Found',
@@ -1113,6 +1254,7 @@ const MYSQL_REPORTS = {
       title: 'The table',
       vertical: true,
       note: 'InnoDB estimates its row count; it is not a count.',
+      open: true,
       sql: `SELECT ENGINE AS engine, ROW_FORMAT AS \`row format\`, TABLE_ROWS AS \`rows, about\`, AVG_ROW_LENGTH AS \`avg row bytes\`,
                    DATA_LENGTH AS \`data bytes\`, INDEX_LENGTH AS \`index bytes\`, DATA_FREE AS \`free bytes\`, AUTO_INCREMENT AS \`next auto increment\`,
                    CREATE_TIME AS created, UPDATE_TIME AS updated, TABLE_COLLATION AS collation
@@ -1189,6 +1331,103 @@ const MYSQL_REPORTS = {
   ],
   settings: () => [
     { title: 'Configuration', filter: true, sql: 'SELECT VARIABLE_NAME AS name, VARIABLE_VALUE AS value FROM performance_schema.global_variables ORDER BY 1' },
+  ],
+  /** Why it is slow, asked of the server itself — see the note on the PostgreSQL one. */
+  performance: ({ schema }) => [
+    {
+      title: 'Statements that cost the most time in total',
+      note: 'From the performance schema, since the server started or its summaries were truncated. A statement is here because it is slow, or because it is run very often — the calls column says which. Empty when performance_schema is off.',
+      open: true,
+      sql: `SELECT ROUND(SUM_TIMER_WAIT / 1e12, 1) AS \`total s\`, COUNT_STAR AS calls, ROUND(AVG_TIMER_WAIT / 1e9, 2) AS \`mean ms\`, ROUND(MAX_TIMER_WAIT / 1e9, 1) AS \`max ms\`,
+                   SUM_ROWS_EXAMINED AS \`rows read\`, SUM_ROWS_SENT AS \`rows sent\`, SUM_CREATED_TMP_DISK_TABLES AS \`temp tables on disk\`, LEFT(DIGEST_TEXT, 600) AS statement
+              FROM performance_schema.events_statements_summary_by_digest
+             WHERE SCHEMA_NAME = ? ORDER BY SUM_TIMER_WAIT DESC LIMIT 25`,
+      params: [schema],
+    },
+    {
+      title: 'Statements that read far more than they return',
+      note: 'Run without an index, or reading more than a hundred rows for each one sent back. These are the ones an index helps most: run one under Explain.',
+      open: true,
+      sql: `SELECT COUNT_STAR AS calls, SUM_NO_INDEX_USED AS \`without an index\`, ROUND(SUM_ROWS_EXAMINED / NULLIF(COUNT_STAR, 0)) AS \`rows read per call\`,
+                   ROUND(SUM_ROWS_SENT / NULLIF(COUNT_STAR, 0), 1) AS \`rows sent per call\`, ROUND(AVG_TIMER_WAIT / 1e9, 2) AS \`mean ms\`, LEFT(DIGEST_TEXT, 600) AS statement
+              FROM performance_schema.events_statements_summary_by_digest
+             WHERE SCHEMA_NAME = ? AND (SUM_NO_INDEX_USED > 0 OR SUM_ROWS_EXAMINED > 100 * GREATEST(SUM_ROWS_SENT, 1)) AND SUM_ROWS_EXAMINED > 1000
+             ORDER BY SUM_ROWS_EXAMINED DESC LIMIT 25`,
+      params: [schema],
+    },
+    {
+      title: 'Running for a long time right now',
+      note: 'Anything that has been at it for more than thirty seconds.',
+      open: true,
+      sql: `SELECT ID AS id, USER AS \`user\`, DB AS \`database\`, COMMAND AS command, TIME AS seconds, STATE AS state, LEFT(INFO, 400) AS query
+              FROM information_schema.PROCESSLIST
+             WHERE COMMAND NOT IN ('Sleep', 'Daemon', 'Binlog Dump', 'Binlog Dump GTID') AND TIME > 30 AND ID <> CONNECTION_ID() ORDER BY TIME DESC`,
+    },
+    {
+      title: 'Transactions left open',
+      note: 'Open for more than a minute. An open transaction keeps its locks, and keeps the history every other reader has to wade through.',
+      open: true,
+      sql: `SELECT trx_mysql_thread_id AS id, trx_state AS state, TIMESTAMPDIFF(SECOND, trx_started, NOW()) AS seconds, trx_rows_locked AS \`rows locked\`,
+                   trx_rows_modified AS \`rows changed\`, LEFT(trx_query, 400) AS query
+              FROM information_schema.INNODB_TRX WHERE trx_started < NOW() - INTERVAL 1 MINUTE ORDER BY trx_started`,
+    },
+    {
+      title: 'Tables read from end to end',
+      note: 'Rows read by scans that used no index, since the server started. A big number on a table that is asked for a few rows at a time is a missing index.',
+      open: true,
+      sql: `SELECT object_name AS \`table\`, rows_full_scanned AS \`rows read by whole scans\`, latency AS \`time spent\`
+              FROM sys.schema_tables_with_full_table_scans WHERE object_schema = ? LIMIT 50`,
+      params: [schema],
+    },
+    {
+      title: 'Indexes nothing has used',
+      note: 'Not read once since the server started, and not a primary key. Every write to the table still pays for them. Look at how long the server has been up before dropping one.',
+      open: true,
+      sql: `SELECT u.object_name AS \`table\`, u.index_name AS \`index\`,
+                   (SELECT VARIABLE_VALUE FROM performance_schema.global_status WHERE VARIABLE_NAME = 'Uptime') AS \`server up, seconds\`
+              FROM sys.schema_unused_indexes u WHERE u.object_schema = ? ORDER BY 1, 2 LIMIT 200`,
+      params: [schema],
+    },
+    {
+      title: 'Indexes another index already covers',
+      note: 'The redundant one starts with the same columns as the dominant one, so anything it can answer the other can too. The last column is the statement that removes it — read it first.',
+      open: true,
+      sql: `SELECT table_name AS \`table\`, redundant_index_name AS redundant, redundant_index_columns AS \`its columns\`,
+                   dominant_index_name AS \`covered by\`, dominant_index_columns AS \`whose columns\`, sql_drop_index AS \`to remove it\`
+              FROM sys.schema_redundant_indexes WHERE table_schema = ? ORDER BY 1, 2 LIMIT 200`,
+      params: [schema],
+    },
+    {
+      title: 'Tables with no primary key',
+      note: 'A table with no primary key gets a hidden one, cannot be replicated row by row efficiently, and cannot be edited in the grid.',
+      open: true,
+      sql: `SELECT t.TABLE_NAME AS \`table\`, t.TABLE_ROWS AS \`rows (estimate)\`, t.ENGINE AS engine
+              FROM information_schema.TABLES t
+             WHERE t.TABLE_SCHEMA = ? AND t.TABLE_TYPE = 'BASE TABLE'
+               AND NOT EXISTS (SELECT 1 FROM information_schema.TABLE_CONSTRAINTS c
+                                WHERE c.TABLE_SCHEMA = t.TABLE_SCHEMA AND c.TABLE_NAME = t.TABLE_NAME AND c.CONSTRAINT_TYPE = 'PRIMARY KEY')
+             ORDER BY t.TABLE_ROWS DESC LIMIT 100`,
+      params: [schema],
+    },
+    {
+      title: 'Space that could be given back',
+      note: 'More than ten megabytes allocated to a table and not used by it — what is left behind by large deletes. OPTIMIZE TABLE rebuilds the table and returns it; on a big table that takes time and a copy.',
+      open: true,
+      sql: `SELECT TABLE_NAME AS \`table\`, ROUND(DATA_FREE / 1048576, 1) AS \`free MB\`, ROUND((DATA_LENGTH + INDEX_LENGTH) / 1048576, 1) AS \`used MB\`,
+                   ROUND(100 * DATA_FREE / NULLIF(DATA_LENGTH + INDEX_LENGTH + DATA_FREE, 0), 1) AS \`free %\`
+              FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = ? AND TABLE_TYPE = 'BASE TABLE' AND DATA_FREE > 10485760 ORDER BY DATA_FREE DESC LIMIT 100`,
+      params: [schema],
+    },
+    {
+      title: 'The server, as a whole',
+      note: 'A buffer pool hit rate under 99% on a busy server means memory is short. Temporary tables on disk are sorts and groupings that did not fit in memory. Counted since the server started.',
+      open: true,
+      sql: `SELECT VARIABLE_NAME AS counter, VARIABLE_VALUE AS value FROM performance_schema.global_status
+             WHERE VARIABLE_NAME IN ('Uptime', 'Slow_queries', 'Select_scan', 'Select_full_join', 'Sort_merge_passes', 'Created_tmp_disk_tables', 'Created_tmp_tables',
+                                     'Innodb_buffer_pool_reads', 'Innodb_buffer_pool_read_requests', 'Innodb_row_lock_waits', 'Innodb_row_lock_time', 'Aborted_connects', 'Threads_running', 'Max_used_connections')
+             ORDER BY 1`,
+    },
   ],
   search: ({ q }) => {
     const like = `%${String(q ?? '').replace(/[\\%_]/g, '\\$&')}%`;
