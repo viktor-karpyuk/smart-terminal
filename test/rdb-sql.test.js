@@ -416,3 +416,12 @@ test('a setting for the whole server is a change, and one for the session is not
   }
   assert.deepEqual(H.sqlWrites("ALTER SYSTEM SET work_mem = '64MB'", 'postgres'), ['ALTER']);
 });
+
+test('the tables a statement names are found well enough to fetch their definitions', () => {
+  const names = (text) => S.tablesIn(text).map((one) => (one.schema ? `${one.schema}.` : '') + one.name);
+  assert.deepEqual(names('SELECT o.id FROM orders o JOIN public.customer c ON c.id = o.customer_id WHERE c.email = $1'), ['orders', 'public.customer']);
+  assert.deepEqual(names('UPDATE `shop`.`orders` SET total = ? WHERE id = ?'), ['shop.orders']);
+  // A word inside a string is not a table, a table named twice is one, and a function is not a table.
+  assert.deepEqual(names("SELECT 'from nowhere' FROM a JOIN a AS b ON true, LATERAL (SELECT 1) z"), ['a']);
+  assert.deepEqual(names('SELECT 1'), []);
+});

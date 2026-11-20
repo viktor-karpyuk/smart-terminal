@@ -518,6 +518,10 @@ function createRdbService() {
   };
   try {
     return new RdbService({
+      // A watched server that has something new wrong with it says so even when no panel is open.
+      notify: ({ title, body }) => {
+        if (Notification.isSupported()) new Notification({ title: String(title).slice(0, 120), body: String(body).slice(0, 400) }).show();
+      },
       db: db.db,
       secrets,
       pickFile: async () => {
