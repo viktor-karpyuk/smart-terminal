@@ -771,6 +771,7 @@ const postgres = {
          LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
          LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
         WHERE n.nspname = $1 AND c.relkind IN ('r', 'p') AND NOT c.relispartition
+          AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_depend e WHERE e.objid = c.oid AND e.classid = 'pg_catalog.pg_class'::regclass AND e.deptype = 'e')
         ORDER BY c.relname, a.attnum`,
       [schema],
     );
@@ -806,7 +807,9 @@ const postgres = {
     const views = await session.all(
       `SELECT c.relname AS name, c.relkind AS kind, pg_catalog.pg_get_viewdef(c.oid, true) AS definition
          FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = $1 AND c.relkind IN ('v', 'm') ORDER BY 1`,
+        WHERE n.nspname = $1 AND c.relkind IN ('v', 'm')
+          AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_depend e WHERE e.objid = c.oid AND e.classid = 'pg_catalog.pg_class'::regclass AND e.deptype = 'e')
+        ORDER BY 1`,
       [schema],
     );
     const sequences = await session.all(

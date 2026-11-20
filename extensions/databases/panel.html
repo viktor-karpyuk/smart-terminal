@@ -1138,7 +1138,7 @@
     names(srcSeq, dstSeq).forEach(function (name) {
       var own = [];
       if (!dstSeq[name]) { put(parts.sequences, 'CREATE SEQUENCE ' + qname(engine, to, name), own); add('sequence', name, 'missing', [], own); }
-      else if (!srcSeq[name]) { if (drops) put(parts.dropping, 'DROP SEQUENCE ' + qname(engine, to, name), own); add('sequence', name, 'extra', [], own); }
+      else if (!srcSeq[name]) { if (drops) put(parts.dropping, 'DROP SEQUENCE IF EXISTS ' + qname(engine, to, name), own); add('sequence', name, 'extra', [], own); }
       else add('sequence', name, 'same', [], own);
     });
 
@@ -1193,35 +1193,35 @@
           var was = dstColumns[column.name];
           var def = there(defaultSql(engine, column));
           var one = { original: was ? column.name : null, name: column.name, type: column.type, notNull: !column.nullable, def: def, pk: false, extra: column.extra || '', comment: column.comment || '' };
-          if (!was) { notes.push('Column ' + column.name + ' is only in the source'); return one; }
+          if (!was) { notes.push('Column ' + column.name + ' is only in the second'); return one; }
           var wasDef = defaultSql(engine, was);
           // The same default said about each schema is the same default.
           one.was = { type: was.type, notNull: !was.nullable, def: plainDef(wasDef, to) === plainDef(defaultSql(engine, column), from) ? def : wasDef };
           if (String(was.type).toLowerCase() !== String(column.type).toLowerCase()) notes.push(column.name + ': ' + was.type + ' → ' + column.type);
-          if (was.nullable !== column.nullable) notes.push(column.name + ': ' + (column.nullable ? 'may be empty in the source' : 'NOT NULL in the source'));
+          if (was.nullable !== column.nullable) notes.push(column.name + ': ' + (column.nullable ? 'may be empty in the second' : 'NOT NULL in the second'));
           if (one.was.def !== def) notes.push(column.name + ': default ' + (wasDef || 'none') + ' → ' + (def || 'none'));
-          if (engine !== 'mysql' && (was.extra || '') !== (column.extra || '')) notes.push(column.name + ': ' + (column.extra || 'plain') + ' in the source, ' + (was.extra || 'plain') + ' in the target — changed by hand');
+          if (engine !== 'mysql' && (was.extra || '') !== (column.extra || '')) notes.push(column.name + ': ' + (column.extra || 'plain') + ' in the second, ' + (was.extra || 'plain') + ' in the first — changed by hand');
           // MySQL says "DEFAULT_GENERATED" of any default that is an expression; that is not an attribute of the column.
           var attrs = function (col) { return String(col.extra || '').replace(/DEFAULT_GENERATED/i, '').replace(/\s+/g, ' ').trim().toLowerCase() + '|' + (col.comment || ''); };
           if (engine === 'mysql' && attrs(was) !== attrs(column)) { one.restate = true; notes.push(column.name + ': its attributes or its comment differ'); }
           return one;
         });
         var gone = dst.columns.filter(function (column) { return !srcColumns[column.name]; }).map(function (column) { return column.name; });
-        gone.forEach(function (column) { notes.push('Column ' + column + ' is only in the target'); });
+        gone.forEach(function (column) { notes.push('Column ' + column + ' is only in the first'); });
         alterTableSql(engine, to, name, design, drops ? gone : [], name).statements.forEach(function (sql) { put(parts.columns, sql, own); });
 
         var srcIndexes = index(src.indexes.filter(function (one) { return !one.implied; }));
         var dstIndexes = index(dst.indexes.filter(function (one) { return !one.implied; }));
         names(srcIndexes, dstIndexes).forEach(function (key) {
-          if (!dstIndexes[key]) { notes.push('Index ' + key + ' is only in the source'); indexSql(name, srcIndexes[key], own); }
-          else if (!srcIndexes[key]) { notes.push('Index ' + key + ' is only in the target'); if (drops) put(parts.detach, dropIndexSql(name, dstIndexes[key]), own); }
+          if (!dstIndexes[key]) { notes.push('Index ' + key + ' is only in the second'); indexSql(name, srcIndexes[key], own); }
+          else if (!srcIndexes[key]) { notes.push('Index ' + key + ' is only in the first'); if (drops) put(parts.detach, dropIndexSql(name, dstIndexes[key]), own); }
           else if (!same(srcIndexes[key].definition, dstIndexes[key].definition)) { notes.push('Index ' + key + ' differs'); put(parts.indexes, dropIndexSql(name, dstIndexes[key]), own); indexSql(name, srcIndexes[key], own); }
         });
         var srcCons = index(src.constraints);
         var dstCons = index(dst.constraints);
         names(srcCons, dstCons).forEach(function (key) {
-          if (!dstCons[key]) { notes.push(srcCons[key].type + ' ' + key + ' is only in the source'); constraintSql(name, srcCons[key], own); }
-          else if (!srcCons[key]) { notes.push(dstCons[key].type + ' ' + key + ' is only in the target'); if (drops) put(parts.detach, dropConstraintSql(name, dstCons[key]), own); }
+          if (!dstCons[key]) { notes.push(srcCons[key].type + ' ' + key + ' is only in the second'); constraintSql(name, srcCons[key], own); }
+          else if (!srcCons[key]) { notes.push(dstCons[key].type + ' ' + key + ' is only in the first'); if (drops) put(parts.detach, dropConstraintSql(name, dstCons[key]), own); }
           else if (!same(srcCons[key].definition, dstCons[key].definition)) { notes.push(srcCons[key].type + ' ' + key + ' differs'); put(parts.constraints, dropConstraintSql(name, dstCons[key]), own); constraintSql(name, srcCons[key], own); }
         });
       }
@@ -1269,12 +1269,38 @@
       } else add(kind, name, 'same', [], own);
     });
 
+    /*
+     * What goes, in an order the server will take: a trigger before the table it
+     * is on, a view before what it reads, a table before the one it refers to,
+     * and a sequence last — one that a column owned went with its table, which is
+     * why it is dropped only if it is still there.
+     */
+    var dropRank = function (sql) { return /^DROP TRIGGER/.test(sql) ? 0 : /^DROP (MATERIALIZED )?VIEW/.test(sql) ? 1 : /^DROP TABLE/.test(sql) ? 2 : /^DROP SEQUENCE/.test(sql) ? 4 : 3; };
+    var refersTo = {};
+    Object.keys(dstTables).forEach(function (name) {
+      (dstTables[name].constraints || []).forEach(function (one) {
+        if (one.type === 'FOREIGN KEY' && one.refTable && one.refTable !== name) refersTo['DROP TABLE ' + qname(engine, to, one.refTable)] = (refersTo['DROP TABLE ' + qname(engine, to, one.refTable)] || []).concat(['DROP TABLE ' + qname(engine, to, name)]);
+      });
+    });
+    parts.dropping = parts.dropping.map(function (sql, at) { return [sql, at]; }).sort(function (x, y) { return dropRank(x[0]) - dropRank(y[0]) || x[1] - y[1]; }).map(function (one) { return one[0]; });
+    // A table that others being dropped refer to waits for them.
+    for (var pass = 0; pass < parts.dropping.length; pass += 1) {
+      var moved = false;
+      parts.dropping.forEach(function (sql, at) {
+        if (moved) return;
+        var last = -1;
+        (refersTo[sql] || []).forEach(function (child) { last = Math.max(last, parts.dropping.indexOf(child)); });
+        if (last > at) { var waiting = parts.dropping.splice(at, 1)[0]; parts.dropping.splice(last, 0, waiting); moved = true; }
+      });
+      if (!moved) break;
+    }
+
     var sections = [
-      ['Sequences only in the source', parts.sequences], ['Tables only in the source', parts.tables],
+      ['Sequences only in the second', parts.sequences], ['Tables only in the second', parts.tables],
       // Before the columns: an index or a constraint goes with the column it is on, and cannot be dropped after it.
-      ['Indexes and constraints only in the target', parts.detach], ['Columns', parts.columns], ['Indexes', parts.indexes],
+      ['Indexes and constraints only in the first', parts.detach], ['Columns', parts.columns], ['Indexes', parts.indexes],
       ['Constraints', parts.constraints], ['Foreign keys, once every table is there', parts.foreign], ['Views', parts.views], ['Functions and triggers', parts.routines],
-      ['Only in the target', parts.dropping]
+      ['Only in the first', parts.dropping]
     ].filter(function (section) { return section[1].length; });
     var script = sections.map(function (section) {
       return '-- ' + section[0] + '\n' + section[1].map(function (sql) { return sql + ';'; }).join('\n');

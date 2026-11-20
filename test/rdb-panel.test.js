@@ -347,12 +347,12 @@ test('what differs is said in words and fixed in SQL, in an order that can run',
   assert.deepEqual(kept.counts, { same: 0, different: 2, missing: 2, extra: 2 });
   const customer = kept.items.find((item) => item.name === 'customer');
   assert.deepEqual(customer.notes, [
-    'name: varchar(80) → varchar(120)', 'name: NOT NULL in the source', 'Column tier is only in the source', 'Column legacy is only in the target',
-    'Index customer_name differs', 'Index old_index is only in the target',
+    'name: varchar(80) → varchar(120)', 'name: NOT NULL in the second', 'Column tier is only in the second', 'Column legacy is only in the first',
+    'Index customer_name differs', 'Index old_index is only in the first',
   ]);
   // Finding out something is only on one side is not wanting it gone.
   assert.equal(/DROP (TABLE|VIEW|COLUMN)|old_index/.test(kept.script), false);
-  assert.match(kept.script, /^-- Sequences only in the source\nCREATE SEQUENCE "staging"\."ticket_no";/);
+  assert.match(kept.script, /^-- Sequences only in the second\nCREATE SEQUENCE "staging"\."ticket_no";/);
   assert.match(kept.script, /CREATE TABLE "staging"\."invoice" \(\n {2}"id" integer NOT NULL,\n {2}"customer_id" bigint,\n {2}CONSTRAINT "invoice_pkey" PRIMARY KEY \(id\)\n\);/);
   assert.match(kept.script, /ALTER TABLE "staging"\."customer" ADD COLUMN "tier" text DEFAULT 'free'::text;/);
   assert.match(kept.script, /DROP INDEX "staging"\."customer_name";\nCREATE INDEX customer_name ON staging\.customer USING btree \(name\);/, 'an index that differs is replaced, and said about the right schema');
@@ -767,4 +767,24 @@ test('the manifest offers the panel from the activity bar, with an icon the app 
   assert.equal(panel.launcher, true);
   assert.ok(PANEL_ICONS.includes(panel.icon));
   assert.equal(panel.error, undefined);
+});
+
+test('what is dropped goes in an order the server will take', () => {
+  const empty = snap('app', {});
+  const full = snap('staging', {
+    // A sequence a column owns goes with its table, so its own DROP must not fail for that.
+    sequences: [{ name: 'orders_id_seq' }],
+    tables: [
+      { name: 'customer', columns: [tcol('id', 'integer', { nullable: false })], indexes: [], constraints: [{ name: 'customer_pkey', type: 'PRIMARY KEY', definition: 'PRIMARY KEY (id)' }] },
+      { name: 'orders', columns: [tcol('id', 'integer'), tcol('customer_id', 'integer')], indexes: [],
+        constraints: [{ name: 'orders_customer_fkey', type: 'FOREIGN KEY', definition: 'FOREIGN KEY (customer_id) REFERENCES staging.customer(id)', refTable: 'customer' }] },
+    ],
+    views: [{ name: 'busy', kind: 'view', definition: 'SELECT id FROM staging.orders;' }],
+  });
+  const script = plain(P.schemaDiff('postgres', empty, full, { drops: true })).script;
+  const at = (text) => { const found = script.indexOf(text); assert.ok(found >= 0, text); return found; };
+  assert.ok(at('DROP VIEW "staging"."busy"') < at('DROP TABLE "staging"."orders"'));
+  // The table that is referred to waits for the one that refers to it.
+  assert.ok(at('DROP TABLE "staging"."orders"') < at('DROP TABLE "staging"."customer"'));
+  assert.ok(at('DROP TABLE "staging"."customer"') < at('DROP SEQUENCE IF EXISTS "staging"."orders_id_seq"'));
 });
