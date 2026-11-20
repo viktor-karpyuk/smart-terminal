@@ -4236,8 +4236,8 @@
 
   function openForm(conn) {
     var form = conn
-      ? { id: conn.id, engine: conn.engine, name: conn.name, host: conn.host, port: conn.port, user: conn.user, database: conn.database, file: conn.file, ssl: conn.ssl, readOnly: conn.readOnly, production: conn.production, password: '', hasPassword: conn.hasPassword }
-      : { engine: 'postgres', name: '', host: 'localhost', port: '', user: '', database: '', file: '', ssl: 'off', readOnly: false, production: false, password: '', hasPassword: false };
+      ? { id: conn.id, engine: conn.engine, name: conn.name, host: conn.host, port: conn.port, user: conn.user, database: conn.database, file: conn.file, ssl: conn.ssl, sshHost: conn.sshHost || '', sshPort: conn.sshPort || '', sshUser: conn.sshUser || '', sshKey: conn.sshKey || '', readOnly: conn.readOnly, production: conn.production, password: '', hasPassword: conn.hasPassword }
+      : { engine: 'postgres', name: '', host: 'localhost', port: '', user: '', database: '', file: '', ssl: 'off', sshHost: '', sshPort: '', sshUser: '', sshKey: '', readOnly: false, production: false, password: '', hasPassword: false };
     var veil = h('div', { id: 'veil', onmousedown: function (event) { if (event.target === veil) veil.remove(); } });
     var result = { text: '', bad: false };
     var busy = false;
@@ -4246,7 +4246,7 @@
       return h('label', { class: 'field' }, h('span', { text: label }), h('input', Object.assign({ type: 'text', value: form[key] === null || form[key] === undefined ? '' : form[key], spellcheck: 'false', oninput: function (event) { form[key] = event.target.value; } }, attrs || {})));
     }
     function payload() {
-      return { id: form.id, engine: form.engine, name: form.name, host: form.host, port: form.port, user: form.user, database: form.database, file: form.file, ssl: form.ssl, readOnly: form.readOnly, production: form.production, password: form.password };
+      return { id: form.id, engine: form.engine, name: form.name, host: form.host, port: form.port, user: form.user, database: form.database, file: form.file, ssl: form.ssl, sshHost: form.viaSsh === false ? '' : form.sshHost, sshPort: form.sshPort, sshUser: form.sshUser, sshKey: form.sshKey, readOnly: form.readOnly, production: form.production, password: form.password };
     }
     function draw() {
       clear(veil);
@@ -4276,6 +4276,17 @@
         box.appendChild(h('div', { class: 'two' }, field('Database', 'database', { placeholder: form.engine === 'postgres' ? 'postgres' : 'optional' }),
           h('label', { class: 'field' }, h('span', { text: 'SSL' }), h('select', { onchange: function (event) { form.ssl = event.target.value; } },
             [['off', 'Off'], ['on', 'On, without verifying the certificate'], ['verify', 'On, and verify the certificate']].map(function (one) { return h('option', { value: one[0], text: one[1], selected: form.ssl === one[0] }); })))));
+      }
+      if (form.engine !== 'sqlite') {
+        if (form.viaSsh === undefined) form.viaSsh = Boolean(form.sshHost);
+        box.appendChild(h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: form.viaSsh, onchange: function (event) { form.viaSsh = event.target.checked; draw(); } }),
+          h('span', {}, 'Through SSH', h('small', { text: 'For a database that only another machine can reach. The host above is then the database as that machine sees it.' }))));
+        if (form.viaSsh) {
+          box.appendChild(h('div', { class: 'two' }, field('SSH host', 'sshHost', { placeholder: 'bastion.example.com, or an alias from ~/.ssh/config' }),
+            h('label', { class: 'field', style: 'flex:0 0 110px' }, h('span', { text: 'SSH port' }), h('input', { type: 'number', value: form.sshPort || '', placeholder: '22', oninput: function (event) { form.sshPort = event.target.value; } }))));
+          box.appendChild(h('div', { class: 'two' }, field('SSH user', 'sshUser', { placeholder: 'yours, unless you say' }), field('Key file', 'sshKey', { placeholder: 'optional — your agent and ~/.ssh are used' })));
+          box.appendChild(h('div', { class: 'faint', style: 'margin:-2px 0 6px', text: 'It is your own ssh that is run, with your keys and your known hosts: what works in a terminal works here. It cannot ask for a password or a passphrase.' }));
+        }
       }
       box.appendChild(h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: form.readOnly, onchange: function (event) { form.readOnly = event.target.checked; } }),
         h('span', {}, 'Read-only', h('small', { text: 'Nothing but a read is ever sent through it, and the server is told the same.' }))));

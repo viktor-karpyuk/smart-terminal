@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { RdbStore } = require('./rdb-store');
 const drivers = require('./rdb-drivers');
+const { Tunnels } = require('./rdb-tunnel');
 const sql = require('./rdb-sql');
 
 /**
@@ -108,7 +109,7 @@ class RdbService {
    * @param {Function} [deps.findTool]       (name) => path of pg_dump and friends, or null
    * @param {Function} [deps.runTool]        (file, args, {env, input}) => Promise<string>
    */
-  constructor({ db, secrets, pickFile, saveFile, open, pickSavePath, pickBackup, findTool: find, runTool: run, pickCsv, pickScript, scratch }) {
+  constructor({ db, secrets, pickFile, saveFile, open, pickSavePath, pickBackup, findTool: find, runTool: run, pickCsv, pickScript, scratch, tunnels }) {
     /** () => Promise<string|null> — a .sql file the person chose to open in an editor. */
     this.pickScript = pickScript ?? (async () => null);
     /** () => Promise<string|null> — a delimited file the person chose to import. */
@@ -126,6 +127,8 @@ class RdbService {
     this.pickFile = pickFile ?? (async () => null);
     this.saveFile = saveFile ?? (async () => null);
     this.open = open ?? drivers.open;
+    /** connection id → the ssh that carries it, for the connections that go through another machine. */
+    this.tunnels = tunnels ?? new Tunnels();
     /** key → { session, opening, tail, used, id } */
     this.sessions = new Map();
     /** connection id → what last went wrong in a query, for a Claude session to be handed */
@@ -149,6 +152,7 @@ class RdbService {
     const all = [...this.sessions.values()];
     this.sessions.clear();
     await Promise.allSettled(all.map((entry) => entry.session?.close()));
+    this.tunnels.closeAll();
   }
 
   async call(name, args = {}) {
@@ -184,6 +188,37 @@ class RdbService {
     return config;
   }
 
+  /**
+   * Where to actually connect. A connection that goes through another machine
+   * is reached at a port on this one, with the tunnel opened if it has to be;
+   * the name the certificate was issued for stays the server's own.
+   */
+  async #through(config, key) {
+    if (config.engine === 'sqlite' || !config.sshHost) return config;
+    const local = await this.tunnels.through(
+      key,
+      { host: config.sshHost, port: config.sshPort, user: config.sshUser, key: config.sshKey },
+      { host: config.host || 'localhost', port: config.port || (config.engine === 'mysql' ? 3306 : 5432) },
+    );
+    return { ...config, host: local.host, port: local.port, tlsHost: config.host, via: `${config.host || 'localhost'}:${config.port || (config.engine === 'mysql' ? 3306 : 5432)}` };
+  }
+
+  /** Open it, and when what failed was the far end of a tunnel, say that — the port on this machine means nothing to anybody. */
+  async #opened(config) {
+    try {
+      return await this.open(config);
+    } catch (error) {
+      if (config.via && ['ECONNRESET', 'ECONNREFUSED', 'EPIPE', 'PROTOCOL_CONNECTION_LOST'].includes(error?.code)) {
+        throw new drivers.RdbError(`${config.sshHost} let you in over SSH, but could not reach the database at ${config.via} from there`);
+      }
+      throw error;
+    }
+  }
+
+  async #reach(id, database) {
+    return this.#through(this.#config(id, database), String(id));
+  }
+
   #key(id, database, purpose) {
     return `${id}\u0000${database ?? ''}\u0000${purpose}`;
   }
@@ -200,7 +235,8 @@ class RdbService {
       await this.#makeRoom();
       entry = { id: String(id), key, session: null, tail: Promise.resolve(), used: Date.now(), opening: null };
       entry.opening = Promise.resolve()
-        .then(() => this.open(this.#config(id, database)))
+        .then(() => this.#reach(id, database))
+        .then((config) => this.#opened(config))
         .then((session) => { entry.session = session; return session; });
       this.sessions.set(key, entry);
       entry.opening.catch(() => {
@@ -244,12 +280,18 @@ class RdbService {
         entry.session.close().catch(() => {});
       }
     }
+    // A tunnel outlives its last connection by the same patience, and no longer.
+    const inUse = new Set([...this.sessions.values()].map((entry) => entry.id));
+    for (const key of this.tunnels.keys()) {
+      if (!inUse.has(key) && this.tunnels.idle(key, IDLE_MS)) this.tunnels.close(key);
+    }
   }
 
   async #closeAll(id) {
     const mine = [...this.sessions.values()].filter((entry) => entry.id === String(id));
     for (const entry of mine) this.sessions.delete(entry.key);
     await Promise.allSettled(mine.map((entry) => entry.session?.close()));
+    this.tunnels.close(String(id));
   }
 
   #isOpen(id) {
@@ -307,14 +349,20 @@ class RdbService {
         const clean = RdbStore.clean(given);
         let password = typeof given.password === 'string' ? given.password : '';
         if (!password && given.id && given.clearPassword !== true) password = store.secret(given.id)?.password ?? '';
-        const config = { ...clean, password };
         const started = Date.now();
-        const session = await this.open(config);
+        // A tunnel of its own, gone when the test is: what is being tested may not be what is saved.
+        const trial = `test:${crypto.randomUUID()}`;
         try {
-          const info = await drivers.catalog(config.engine).info(session);
-          return { ok: true, version: String(info.version ?? '').slice(0, 200), ms: Date.now() - started };
+          const config = await this.#through({ ...clean, password }, trial);
+          const session = await this.#opened(config);
+          try {
+            const info = await drivers.catalog(config.engine).info(session);
+            return { ok: true, version: String(info.version ?? '').slice(0, 200), ms: Date.now() - started };
+          } finally {
+            await session.close();
+          }
         } finally {
-          await session.close();
+          this.tunnels.close(trial);
         }
       },
 
@@ -860,7 +908,9 @@ class RdbService {
    */
   async #shellCommand(args) {
     const connection = this.#connection(args.id);
-    const config = this.#config(args.id, args.database);
+    const config = await this.#reach(args.id, args.database);
+    // A terminal is somebody's to close: its tunnel stays until the connection is disconnected or the app quits.
+    if (config.tlsHost !== undefined) this.tunnels.hold(String(args.id));
     const secret = (text) => {
       const file = path.join(this.scratch, `st-db-${crypto.randomUUID()}`);
       fs.mkdirSync(this.scratch, { recursive: true });
@@ -926,7 +976,16 @@ class RdbService {
    */
   async #backup(args) {
     const connection = this.#connection(args.id);
-    const config = this.#config(args.id, args.database);
+    const config = await this.#reach(args.id, args.database);
+    const release = this.tunnels.hold(String(args.id));
+    try {
+      return await this.#backupThrough(args, connection, config);
+    } finally {
+      release();
+    }
+  }
+
+  async #backupThrough(args, connection, config) {
     const table = args.name ? String(args.name) : '';
     const schema = this.#schema(connection, args);
     const custom = connection.engine === 'postgres' && args.format === 'custom';
@@ -968,7 +1027,16 @@ class RdbService {
     const connection = this.#connection(args.id);
     if (connection.readOnly) throw new Error('This connection is read-only');
     if (connection.engine === 'sqlite') throw new Error('A SQLite database is a file: to restore one, put the file back.');
-    const config = this.#config(args.id, args.database);
+    const config = await this.#reach(args.id, args.database);
+    const release = this.tunnels.hold(String(args.id));
+    try {
+      return await this.#restoreThrough(args, connection, config);
+    } finally {
+      release();
+    }
+  }
+
+  async #restoreThrough(args, connection, config) {
     const plainTool = connection.engine === 'postgres' ? this.#tool('psql', 'restoring a .sql file') : this.#tool('mysql', 'a restore');
     const source = await this.pickBackup();
     if (!source) return { ok: false, error: 'Nothing was restored', cancelled: true };

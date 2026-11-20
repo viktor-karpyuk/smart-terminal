@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const net = require('node:net');
 const { quoteIdent, qualified } = require('./rdb-sql');
 
 /**
@@ -120,9 +121,11 @@ function explain(error, config = {}) {
 }
 
 function sslOf(config) {
-  if (config.ssl === 'verify') return { rejectUnauthorized: true };
-  if (config.ssl === 'on') return { rejectUnauthorized: false };
-  return undefined;
+  if (config.ssl !== 'verify' && config.ssl !== 'on') return undefined;
+  const out = { rejectUnauthorized: config.ssl === 'verify' };
+  // Through a tunnel the address is this machine's, and the certificate is still the server's: it is checked against the server's name.
+  if (config.tlsHost && !net.isIP(config.tlsHost)) out.servername = config.tlsHost;
+  return out;
 }
 
 // ───────────────────────────────────────────────────────────── PostgreSQL ──
@@ -627,7 +630,7 @@ const PG_REPORTS = {
                    round((100 * s.total_exec_time / nullif(sum(s.total_exec_time) OVER (), 0))::numeric, 1) AS "% of all",
                    s.shared_blks_read AS "blocks from disk", s.temp_blks_written AS "temp blocks", left(s.query, 600) AS statement
               FROM pg_stat_statements s
-             WHERE s.dbid = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database()) AND s.query NOT LIKE '%pg\\_catalog.%'
+             WHERE s.dbid = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database()) AND s.query NOT LIKE '%pg\\_catalog.%' AND s.query !~* '^\\s*(BEGIN|COMMIT|ROLLBACK|START TRANSACTION|SET|SHOW|RESET)\\M'
              ORDER BY s.total_exec_time DESC LIMIT 25`,
     },
     {
@@ -637,7 +640,7 @@ const PG_REPORTS = {
       sql: `SELECT round(s.mean_exec_time::numeric, 1) AS "mean ms", round(s.stddev_exec_time::numeric, 1) AS "± ms", s.calls,
                    round((s.rows::numeric / nullif(s.calls, 0)), 1) AS "rows per call", left(s.query, 600) AS statement
               FROM pg_stat_statements s
-             WHERE s.dbid = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database()) AND s.calls > 5 AND s.query NOT LIKE '%pg\\_catalog.%'
+             WHERE s.dbid = (SELECT oid FROM pg_catalog.pg_database WHERE datname = current_database()) AND s.calls > 5 AND s.query NOT LIKE '%pg\\_catalog.%' AND s.query !~* '^\\s*(BEGIN|COMMIT|ROLLBACK|START TRANSACTION|SET|SHOW|RESET)\\M'
              ORDER BY s.mean_exec_time DESC LIMIT 25`,
     },
     {
@@ -1386,7 +1389,8 @@ const MYSQL_REPORTS = {
       sql: `SELECT ROUND(SUM_TIMER_WAIT / 1e12, 1) AS \`total s\`, COUNT_STAR AS calls, ROUND(AVG_TIMER_WAIT / 1e9, 2) AS \`mean ms\`, ROUND(MAX_TIMER_WAIT / 1e9, 1) AS \`max ms\`,
                    SUM_ROWS_EXAMINED AS \`rows read\`, SUM_ROWS_SENT AS \`rows sent\`, SUM_CREATED_TMP_DISK_TABLES AS \`temp tables on disk\`, LEFT(DIGEST_TEXT, 600) AS statement
               FROM performance_schema.events_statements_summary_by_digest
-             WHERE SCHEMA_NAME = ? ORDER BY SUM_TIMER_WAIT DESC LIMIT 25`,
+             WHERE SCHEMA_NAME = ? AND DIGEST_TEXT NOT REGEXP '^(BEGIN|COMMIT|ROLLBACK|START TRANSACTION|SET|SHOW)( |$)'
+             ORDER BY SUM_TIMER_WAIT DESC LIMIT 25`,
       params: [schema],
     },
     {

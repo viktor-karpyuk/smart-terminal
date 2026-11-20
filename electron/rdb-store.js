@@ -2,6 +2,7 @@
 
 const crypto = require('node:crypto');
 const { ENGINES } = require('./rdb-sql');
+const { sshHostOk, sshUserOk } = require('./rdb-tunnel');
 
 /**
  * What the Databases extension remembers: the connections it was given, what
@@ -48,6 +49,11 @@ const MIGRATIONS = [
      sql TEXT NOT NULL,
      at INTEGER NOT NULL
    );`,
+  // Reaching a database through another machine. No secret here: the tunnel is the person's own ssh, with their keys.
+  `ALTER TABLE rdb_connection ADD COLUMN ssh_host TEXT NOT NULL DEFAULT '';
+   ALTER TABLE rdb_connection ADD COLUMN ssh_port INTEGER;
+   ALTER TABLE rdb_connection ADD COLUMN ssh_user TEXT NOT NULL DEFAULT '';
+   ALTER TABLE rdb_connection ADD COLUMN ssh_key TEXT NOT NULL DEFAULT '';`,
 ];
 
 const MAX_CONNECTIONS = 200;
@@ -84,6 +90,10 @@ class RdbStore {
       ssl: row.ssl,
       readOnly: row.read_only === 1,
       production: row.production === 1,
+      sshHost: row.ssh_host ?? '',
+      sshPort: row.ssh_port ?? null,
+      sshUser: row.ssh_user ?? '',
+      sshKey: row.ssh_key ?? '',
       hasPassword: Boolean(row.password),
     };
   }
@@ -121,6 +131,10 @@ class RdbStore {
       ssl: 'off',
       readOnly: given.readOnly === true,
       production: given.production === true,
+      sshHost: '',
+      sshPort: null,
+      sshUser: '',
+      sshKey: '',
     };
     if (engine === 'sqlite') {
       out.file = text(given.file, 1000);
@@ -136,6 +150,18 @@ class RdbStore {
     out.user = text(given.user, 128);
     out.database = text(given.database, 128);
     out.ssl = ['off', 'on', 'verify'].includes(given.ssl) ? given.ssl : 'off';
+    out.sshHost = text(given.sshHost, 255);
+    if (out.sshHost) {
+      if (!sshHostOk(out.sshHost)) throw new Error('The SSH host is a name or an address, with nothing else in it');
+      out.sshUser = text(given.sshUser, 64);
+      if (out.sshUser && !sshUserOk(out.sshUser)) throw new Error('The SSH user is a login name, with nothing else in it');
+      if (given.sshPort !== '' && given.sshPort !== null && given.sshPort !== undefined) {
+        const sshPort = Number(given.sshPort);
+        if (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535) throw new Error('The SSH port is a number between 1 and 65535');
+        out.sshPort = sshPort;
+      }
+      out.sshKey = text(given.sshKey, 1000);
+    }
     if (!out.name) out.name = `${out.database || out.user || engine}@${out.host}`;
     return out;
   }
@@ -161,9 +187,10 @@ class RdbStore {
       this.db
         .prepare(
           `UPDATE rdb_connection SET name = ?, engine = ?, host = ?, port = ?, user = ?, password = ?, database = ?, file = ?,
-                  ssl = ?, read_only = ?, production = ? WHERE id = ?`,
+                  ssl = ?, read_only = ?, production = ?, ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_key = ? WHERE id = ?`,
         )
-        .run(clean.name, clean.engine, clean.host, clean.port, clean.user, password, clean.database, clean.file, clean.ssl, clean.readOnly ? 1 : 0, clean.production ? 1 : 0, id);
+        .run(clean.name, clean.engine, clean.host, clean.port, clean.user, password, clean.database, clean.file, clean.ssl, clean.readOnly ? 1 : 0, clean.production ? 1 : 0,
+          clean.sshHost, clean.sshPort, clean.sshUser, clean.sshKey, id);
       return this.connection(id);
     }
     const count = this.db.prepare('SELECT COUNT(*) AS n FROM rdb_connection').get().n;
@@ -171,10 +198,11 @@ class RdbStore {
     const fresh = crypto.randomUUID();
     this.db
       .prepare(
-        `INSERT INTO rdb_connection (id, name, engine, host, port, user, password, database, file, ssl, read_only, production, position)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO rdb_connection (id, name, engine, host, port, user, password, database, file, ssl, read_only, production, position, ssh_host, ssh_port, ssh_user, ssh_key)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(fresh, clean.name, clean.engine, clean.host, clean.port, clean.user, password, clean.database, clean.file, clean.ssl, clean.readOnly ? 1 : 0, clean.production ? 1 : 0, count);
+      .run(fresh, clean.name, clean.engine, clean.host, clean.port, clean.user, password, clean.database, clean.file, clean.ssl, clean.readOnly ? 1 : 0, clean.production ? 1 : 0, count,
+        clean.sshHost, clean.sshPort, clean.sshUser, clean.sshKey);
     return this.connection(fresh);
   }
 
