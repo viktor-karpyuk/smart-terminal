@@ -31,6 +31,12 @@ const CORPUS = [
   ['SELECT 1 # mysql comment; here\n; SELECT `a;b` FROM t', 'mysql'],
   ['SELECT a # b FROM t; SELECT 2', 'postgres'],
   ['UPDATE t SET a = 1', 'postgres'],
+  ['SET GLOBAL max_connections = 500', 'mysql'],
+  ['set persist innodb_buffer_pool_size = 1073741824; SELECT 1', 'mysql'],
+  ['SET @@GLOBAL.sql_mode = \'\'', 'mysql'],
+  ['RESET PERSIST max_connections', 'mysql'],
+  ['SET sql_mode = \'\'; SET search_path = app', 'mysql'],
+  ["ALTER SYSTEM SET work_mem = '64MB'; SELECT pg_reload_conf()", 'postgres'],
   ["UPDATE t SET a = 'WHERE'", 'postgres'],
   ['UPDATE t SET a = 1 WHERE id = 2', 'postgres'],
   ['DELETE FROM t', 'mysql'],
@@ -395,4 +401,18 @@ test('the performance page only reads, and every section says what its answer is
     }
   }
   assert.equal(drivers.catalog('sqlite').reports('performance', {}), null);
+});
+
+test('a setting for the whole server is a change, and one for the session is not', () => {
+  const kind = (text) => S.classify(S.scan(text, 'mysql')[0].bare).kind;
+  for (const text of ['SET GLOBAL max_connections = 500', 'set  persist x = 1', 'SET PERSIST_ONLY x = 1', 'SET @@global.x = 1', 'SET @@PERSIST.x = 1', 'RESET PERSIST x']) {
+    assert.equal(kind(text), 'ddl', text);
+    assert.equal(S.readsOnly(text, 'mysql'), false, text);
+    assert.deepEqual(H.sqlWrites(text, 'mysql'), ['SET GLOBAL'], text);
+  }
+  for (const text of ['SET sql_mode = 1', 'SET SESSION x = 1', 'SET @a = 1', 'SET names utf8mb4', 'SET globalish = 1', 'RESET ALL']) {
+    assert.equal(kind(text), 'session', text);
+    assert.deepEqual(H.sqlWrites(text, 'mysql'), [], text);
+  }
+  assert.deepEqual(H.sqlWrites("ALTER SYSTEM SET work_mem = '64MB'", 'postgres'), ['ALTER']);
 });

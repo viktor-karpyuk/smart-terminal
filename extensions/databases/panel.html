@@ -306,9 +306,30 @@
       sqlite: [['indexes', 'Indexes'], ['triggers', 'Triggers']]
     },
     database: {
-      postgres: [['extensions', 'Extensions'], ['foreign', 'Foreign data'], ['publications', 'Publications and subscriptions'], ['eventTriggers', 'Event triggers'], ['languages', 'Languages and casts']]
+      postgres: [['extensions', 'Extensions'], ['foreign', 'Foreign data'], ['publications', 'Publications and subscriptions'], ['eventTriggers', 'Event triggers'], ['languages', 'Languages and casts'], ['jobs', 'Scheduled jobs']]
     }
   };
+
+  /**
+   * The statement that changes one setting of the server, or puts it back.
+   *
+   * PostgreSQL writes it to its own file and has to be told to read it again;
+   * MySQL changes the running value and remembers it in one go. A name that is
+   * not a setting's name writes nothing — it goes into the statement unquoted,
+   * because that is the only way either server takes it.
+   */
+  function settingSql(engine, name, value, reset) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/.test(String(name || ''))) return null;
+    var text = String(value === null || value === undefined ? '' : value).trim();
+    if (!reset && text === '' && engine !== 'postgres') return null;
+    if (engine === 'postgres') {
+      return (reset ? 'ALTER SYSTEM RESET ' + name : 'ALTER SYSTEM SET ' + name + " = '" + text.replace(/'/g, "''") + "'") + ';\nSELECT pg_reload_conf();';
+    }
+    if (engine !== 'mysql') return null;
+    if (reset) return 'RESET PERSIST ' + name + ';';
+    var bare = /^-?\d+(\.\d+)?$/.test(text) || /^(ON|OFF|TRUE|FALSE|DEFAULT)$/i.test(text);
+    return 'SET PERSIST ' + name + ' = ' + (bare ? text : "'" + text.replace(/\\/g, '\\\\').replace(/'/g, "''") + "'") + ';';
+  }
 
   /** A row that is a statement the server remembers leads to that statement, in a query tab, to be read and explained. */
   function reportStatement(columns, row) {
@@ -2123,10 +2144,11 @@
     var page = h('div', { class: 'scroll' });
     if (data.supported === false) { page.appendChild(h('div', { class: 'empty', text: 'This engine has nothing to say about that.' })); return page; }
     (data.sections || []).forEach(function (section) {
-      var sect = h('div', { class: 'sect' }, h('h3', {}, section.title + (section.rows && !section.vertical ? ' · ' + section.rows.length + (section.truncated ? '+' : '') : '')));
+      var sect = h('div', { class: 'sect' }, h('h3', {}, section.title + (section.rows && !section.vertical && !section.absent ? ' · ' + section.rows.length + (section.truncated ? '+' : '') : '')));
       if (section.note) sect.appendChild(h('div', { class: 'note', text: section.note }));
       page.appendChild(sect);
       if (section.error) { sect.appendChild(h('div', { class: 'bad', text: section.error })); return; }
+      if (section.absent) { sect.appendChild(h('div', { class: 'faint', text: section.absent })); return; }
       if (!section.rows.length) { sect.appendChild(h('div', { class: 'faint', text: 'Nothing.' })); return; }
       if (section.vertical) {
         var facts = h('div', { class: 'facts tight' });
@@ -3320,7 +3342,13 @@
       return;
     }
     if (data.supported === false) { box.appendChild(h('div', { class: 'empty', text: 'SQLite is a file: there is no server to ask about this.' })); return; }
-    if (data.sections) { box.appendChild(reportView(data)); return; }
+    if (data.sections) {
+      box.appendChild(reportView(data, tab.sub === 'settings' && !conn.readOnly ? { onOpen: function (row, columns) {
+        var at = columns.map(function (column) { return column.name; }).indexOf('name');
+        if (at >= 0 && row[at]) openSetting(conn, tab, String(row[at]));
+      } } : undefined));
+      return;
+    }
     var keyIndex = data.key ? data.columns.map(function (column) { return column.name; }).indexOf(data.key) : -1;
     var keep = tab.pickedPid;
     var cancelBtn = h('button', { class: 'btn', text: 'Cancel its query', disabled: !keep, onclick: function () { kill(false); } });
@@ -3631,6 +3659,63 @@
   // ───────────────────────────────────────────────────────── roles and grants ──
 
   /** A role or a user, made or changed. The app writes the statements — the password is typed here and never drawn again. */
+  /** One setting: what the server says about it, a new value, and the statement that will be sent — read before it goes. */
+  function openSetting(conn, tab, name) {
+    var veil = h('div', { id: 'veil', onmousedown: function (event) { if (event.target === veil) veil.remove(); } });
+    var preview = h('pre', { class: 'code', style: 'padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);white-space:pre-wrap;overflow-wrap:anywhere' });
+    var result = h('div', { class: 'result bad', style: 'white-space:pre-wrap' });
+    var about = h('div', {}, h('div', { class: 'faint', text: 'Reading…' }));
+    var input = h('input', { type: 'text', spellcheck: 'false', placeholder: 'New value', oninput: function () { paint(); } });
+    var reset = false;
+    // What the server has now. Until that is known, and unless what is typed differs from it, there is nothing to send.
+    var current = null;
+    function paint() {
+      var changed = reset || (current !== null && input.value.trim() !== current);
+      var sql = changed ? settingSql(conn.engine, name, input.value, reset) : null;
+      paintSql(preview, sql || '-- Nothing to change yet.');
+      apply.disabled = !sql;
+    }
+    function send() {
+      var sql = settingSql(conn.engine, name, input.value, reset);
+      if (!sql) return;
+      apply.disabled = true;
+      result.textContent = '';
+      call('query', Object.assign(where(conn, tab.database), { tab: 'tree', sql: sql })).then(function (data) {
+        var failed = data.results.filter(function (one) { return one.error; })[0];
+        if (failed) { result.textContent = failed.error.error; apply.disabled = false; return; }
+        veil.remove();
+        say(reset ? name + ' put back' : name + ' saved');
+        loadServer(tab);
+      }, function (error) { result.textContent = error.message; apply.disabled = false; });
+    }
+    var apply = h('button', { class: 'btn primary', text: 'Apply', disabled: true, onclick: send });
+    var box = h('div', { class: 'form' },
+      h('h2', { text: name }),
+      h('div', { class: 'dim', text: 'On ' + conn.name }),
+      about,
+      h('label', { class: 'field' }, h('span', { text: 'New value' }), input),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', onchange: function (event) { reset = event.target.checked; input.disabled = reset; paint(); } }),
+        h('span', {}, 'Put it back instead', h('small', { text: conn.engine === 'mysql' ? 'Forgets what was persisted. The running value stays until the server restarts.' : 'Removes it from postgresql.auto.conf, so the configuration file or the default decides again.' }))),
+      h('label', { class: 'field' }, h('span', { text: 'What will be sent' }), preview), result,
+      h('div', { class: 'foot' }, h('span', { class: 'spacer' }), h('button', { class: 'btn quiet', text: 'Cancel', onclick: function () { veil.remove(); } }), apply));
+    veil.appendChild(box);
+    document.body.appendChild(veil);
+    paint();
+    input.focus();
+    call('report', { id: conn.id, database: tab.database, kind: 'setting', name: name }).then(function (data) {
+      clear(about);
+      var view = reportView(data);
+      view.className = '';
+      about.appendChild(view);
+      var section = (data.sections || [])[0];
+      if (section && section.rows && section.rows[0]) {
+        current = section.rows[0][0] === null ? '' : String(section.rows[0][0]);
+        if (!input.value) { input.value = current; input.select(); }
+        paint();
+      }
+    }, function (error) { clear(about).appendChild(h('div', { class: 'bad', text: error.message })); });
+  }
+
   function openRoleForm(conn, existing, others) {
     var engine = conn.engine;
     var form = existing || (engine === 'mysql'
@@ -4152,8 +4237,8 @@
 
   function openForm(conn) {
     var form = conn
-      ? { id: conn.id, engine: conn.engine, name: conn.name, host: conn.host, port: conn.port, user: conn.user, database: conn.database, file: conn.file, ssl: conn.ssl, readOnly: conn.readOnly, production: conn.production, password: '', hasPassword: conn.hasPassword }
-      : { engine: 'postgres', name: '', host: 'localhost', port: '', user: '', database: '', file: '', ssl: 'off', readOnly: false, production: false, password: '', hasPassword: false };
+      ? { id: conn.id, engine: conn.engine, name: conn.name, host: conn.host, port: conn.port, user: conn.user, database: conn.database, file: conn.file, ssl: conn.ssl, sshHost: conn.sshHost || '', sshPort: conn.sshPort || '', sshUser: conn.sshUser || '', sshKey: conn.sshKey || '', readOnly: conn.readOnly, production: conn.production, password: '', hasPassword: conn.hasPassword }
+      : { engine: 'postgres', name: '', host: 'localhost', port: '', user: '', database: '', file: '', ssl: 'off', sshHost: '', sshPort: '', sshUser: '', sshKey: '', readOnly: false, production: false, password: '', hasPassword: false };
     var veil = h('div', { id: 'veil', onmousedown: function (event) { if (event.target === veil) veil.remove(); } });
     var result = { text: '', bad: false };
     var busy = false;
@@ -4162,7 +4247,7 @@
       return h('label', { class: 'field' }, h('span', { text: label }), h('input', Object.assign({ type: 'text', value: form[key] === null || form[key] === undefined ? '' : form[key], spellcheck: 'false', oninput: function (event) { form[key] = event.target.value; } }, attrs || {})));
     }
     function payload() {
-      return { id: form.id, engine: form.engine, name: form.name, host: form.host, port: form.port, user: form.user, database: form.database, file: form.file, ssl: form.ssl, readOnly: form.readOnly, production: form.production, password: form.password };
+      return { id: form.id, engine: form.engine, name: form.name, host: form.host, port: form.port, user: form.user, database: form.database, file: form.file, ssl: form.ssl, sshHost: form.viaSsh === false ? '' : form.sshHost, sshPort: form.sshPort, sshUser: form.sshUser, sshKey: form.sshKey, readOnly: form.readOnly, production: form.production, password: form.password };
     }
     function draw() {
       clear(veil);
@@ -4192,6 +4277,17 @@
         box.appendChild(h('div', { class: 'two' }, field('Database', 'database', { placeholder: form.engine === 'postgres' ? 'postgres' : 'optional' }),
           h('label', { class: 'field' }, h('span', { text: 'SSL' }), h('select', { onchange: function (event) { form.ssl = event.target.value; } },
             [['off', 'Off'], ['on', 'On, without verifying the certificate'], ['verify', 'On, and verify the certificate']].map(function (one) { return h('option', { value: one[0], text: one[1], selected: form.ssl === one[0] }); })))));
+      }
+      if (form.engine !== 'sqlite') {
+        if (form.viaSsh === undefined) form.viaSsh = Boolean(form.sshHost);
+        box.appendChild(h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: form.viaSsh, onchange: function (event) { form.viaSsh = event.target.checked; draw(); } }),
+          h('span', {}, 'Through SSH', h('small', { text: 'For a database that only another machine can reach. The host above is then the database as that machine sees it.' }))));
+        if (form.viaSsh) {
+          box.appendChild(h('div', { class: 'two' }, field('SSH host', 'sshHost', { placeholder: 'bastion.example.com, or an alias from ~/.ssh/config' }),
+            h('label', { class: 'field', style: 'flex:0 0 110px' }, h('span', { text: 'SSH port' }), h('input', { type: 'number', value: form.sshPort || '', placeholder: '22', oninput: function (event) { form.sshPort = event.target.value; } }))));
+          box.appendChild(h('div', { class: 'two' }, field('SSH user', 'sshUser', { placeholder: 'yours, unless you say' }), field('Key file', 'sshKey', { placeholder: 'optional — your agent and ~/.ssh are used' })));
+          box.appendChild(h('div', { class: 'faint', style: 'margin:-2px 0 6px', text: 'It is your own ssh that is run, with your keys and your known hosts: what works in a terminal works here. It cannot ask for a password or a passphrase.' }));
+        }
       }
       box.appendChild(h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: form.readOnly, onchange: function (event) { form.readOnly = event.target.checked; } }),
         h('span', {}, 'Read-only', h('small', { text: 'Nothing but a read is ever sent through it, and the server is told the same.' }))));

@@ -151,6 +151,9 @@ function inBody(bare) {
   return opens > closes;
 }
 
+/** SET GLOBAL and SET PERSIST in MySQL, in any of the ways they are written. PostgreSQL's ALTER SYSTEM is an ALTER and needs no help. */
+const SERVER_WIDE = /^(SET\s+(GLOBAL|PERSIST|PERSIST_ONLY)\b|SET\s+@@(GLOBAL|PERSIST|PERSIST_ONLY)\.|RESET\s+PERSIST\b)/;
+
 const READS = new Set(['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'VALUES', 'TABLE']);
 const WRITES = /\b(INSERT|UPDATE|DELETE|MERGE|REPLACE)\b/;
 
@@ -182,6 +185,8 @@ function classify(bare) {
     return { verb, kind: 'ddl' };
   }
   if (['BEGIN', 'START', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE', 'END', 'ABORT'].includes(verb)) return { verb, kind: 'tx' };
+  // A setting for this session is the session's own business; one for the whole server changes the server.
+  if (SERVER_WIDE.test(upper)) return { verb: verb === 'SET' ? 'SET GLOBAL' : 'RESET PERSIST', kind: 'ddl' };
   if (['SET', 'RESET', 'USE'].includes(verb)) return { verb, kind: 'session' };
   return { verb, kind: 'other' };
 }

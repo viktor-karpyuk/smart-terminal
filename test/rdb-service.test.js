@@ -547,3 +547,28 @@ test('a file that is not there is not made into an empty database', { skip }, as
   assert.equal(fs.existsSync(missing), false);
   await service.stop();
 });
+
+test('a page about something that is not installed says so, and asks nothing more of the server', { skip }, async () => {
+  const asked = [];
+  const session = {
+    engine: 'postgres', txn: 'idle', closed: false,
+    all: async (text, params) => { asked.push([text, params]); return /to_regclass/.test(text) ? [{ there: params[0] === 'cron.job' ? 't' : 'f' }] : []; },
+    run: async (text) => { asked.push([text]); return { columns: [{ name: 'job' }], rows: [['expire sessions']], truncated: false }; },
+    close: async () => {},
+  };
+  const far = new RdbService({ db: new sqlite.DatabaseSync(':memory:'), secrets, open: async () => session });
+  const saved = await far.call('saveConnection', { connection: { engine: 'postgres', host: 'db', user: 'u', name: 'far' } });
+  const page = await far.call('report', { id: saved.connection.id, database: 'shop', kind: 'jobs' });
+  const agent = page.sections.filter((section) => section.title.startsWith('pgAgent'));
+  const cron = page.sections.filter((section) => section.title.startsWith('pg_cron'));
+  assert.ok(agent.length >= 3 && cron.length >= 1);
+  for (const section of agent) {
+    assert.match(section.absent, /pgAgent is not installed/);
+    assert.equal(section.error, undefined);
+    assert.deepEqual(section.rows, []);
+  }
+  for (const section of cron) assert.deepEqual(section.rows, [['expire sessions']]);
+  // What is not there was never queried: the only thing said about pgagent is the question whether it exists.
+  assert.equal(asked.some(([text]) => /FROM pgagent\./.test(text)), false);
+  await far.stop();
+});

@@ -756,6 +756,11 @@ export function sqlWrites(sql: string, engine?: string): string[] {
       upper = upper.replace(SQL_EXPLAIN_HEAD, '');
     }
     const verb = /^[A-Z]+/.exec(upper)?.[0] ?? '';
+    // A setting for the whole server is a change to the server, however it is spelt. The same test as rdb-sql.js.
+    if (/^(SET\s+(GLOBAL|PERSIST|PERSIST_ONLY)\b|SET\s+@@(GLOBAL|PERSIST|PERSIST_ONLY)\.|RESET\s+PERSIST\b)/.test(upper)) {
+      if (!found.includes('SET GLOBAL')) found.push('SET GLOBAL');
+      continue;
+    }
     if (['SHOW', 'DESCRIBE', 'DESC', 'VALUES', 'TABLE', 'BEGIN', 'START', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE', 'END', 'ABORT', 'SET', 'RESET', 'USE'].includes(verb)) continue;
     if (verb === 'SELECT' && !/\bINTO\s+(?!@|OUTFILE|DUMPFILE)/.test(upper)) continue;
     if (verb === 'WITH' && !/\b(INSERT|UPDATE|DELETE|MERGE|REPLACE)\b/.test(upper)) continue;
