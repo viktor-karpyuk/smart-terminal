@@ -1,0 +1,1937 @@
+<style>
+  /*
+   * Port Forward, drawn in a frame that cannot reach the network or the disk.
+   * What it knows arrives through `host.call('pf.*')`: forwards by id, and
+   * where each one stands. Nothing a cluster says is read as markup — every
+   * name on this page is set as text, and the only markup built from strings
+   * is the icons below, which are this file's own.
+   */
+  html { font-size: 12px; }
+  #app { display: grid; grid-template-columns: 214px minmax(0, 1fr) auto; height: 100%; min-height: 0; position: relative; }
+  body { container: app / inline-size; }
+  .mono { font-family: ui-monospace, Menlo, monospace; }
+  .faint { color: var(--text-faint); }
+  .dim { color: var(--text-dim); }
+  .spacer { flex: 1; }
+  [hidden] { display: none !important; }
+  svg.i { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+  .btn { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 2px 10px; border: 1px solid var(--border-strong); border-radius: var(--radius); color: var(--text); background: transparent; font: inherit; cursor: pointer; white-space: nowrap; transition: background 0.12s, border-color 0.12s, color 0.12s; }
+  .btn:hover { border-color: var(--text-faint); background: var(--bg-elevated); }
+  .btn:focus-visible, .ib:focus-visible, .nav:focus-visible, .sw:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .btn.primary { color: var(--on-accent); border-color: var(--accent); background: var(--accent); font-weight: 600; }
+  .btn.primary:hover { background: color-mix(in srgb, var(--accent) 86%, var(--text)); }
+  .btn.quiet { border-color: transparent; color: var(--text-dim); }
+  .btn.quiet:hover { color: var(--text); background: var(--bg-elevated); }
+  .btn[disabled] { opacity: 0.4; pointer-events: none; }
+  /* An icon alone: the row's own actions. */
+  .ib { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: var(--radius); color: var(--text-dim); transition: background 0.12s, color 0.12s; }
+  .ib:hover { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); }
+  input[type="text"], select { min-height: 28px; padding: 3px 9px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg-input); color: var(--text); font: inherit; min-width: 0; }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  input::placeholder { color: var(--text-faint); }
+  kbd { padding: 0 5px; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 4px; font: 0.85rem/1.5 ui-monospace, Menlo, monospace; color: var(--text-dim); }
+
+  /* ── where you are ── */
+  #side { display: flex; flex-direction: column; min-height: 0; background: var(--bg-panel); border-right: 1px solid var(--border); }
+  .brand { display: flex; align-items: center; gap: 9px; padding: 13px 14px 11px; }
+  .brand .mark { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 7px; color: var(--on-accent); background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 55%, var(--violet, #a78bfa))); }
+  .brand .mark svg { width: 15px; height: 15px; stroke-width: 2.1; }
+  .brand b { font-size: 1.08rem; font-weight: 650; letter-spacing: 0.01em; }
+  #nav { flex: 1; overflow: auto; min-height: 0; padding: 0 8px 12px; }
+  .sec { display: flex; align-items: center; margin: 14px 6px 4px; color: var(--text-faint); font-size: 0.8rem; font-weight: 650; letter-spacing: 0.09em; text-transform: uppercase; }
+  .sec .ib { width: 20px; height: 20px; margin-left: auto; }
+  .nav { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 28px; padding: 0 8px; border-radius: var(--radius); color: var(--text-dim); text-align: left; position: relative; transition: background 0.12s, color 0.12s; }
+  .nav:hover { background: color-mix(in srgb, var(--text) 6%, transparent); color: var(--text); }
+  .nav.on { background: var(--accent-soft); color: var(--text); font-weight: 600; }
+  .nav.on::before { content: ''; position: absolute; left: -8px; top: 6px; bottom: 6px; width: 3px; border-radius: 0 3px 3px 0; background: var(--accent); }
+  .nav.drop { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--accent-soft); }
+  .nav .lb { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nav .n { font-size: 0.86rem; color: var(--text-faint); font-weight: 400; font-variant-numeric: tabular-nums; }
+  .nav .n.live { color: var(--ok); font-weight: 600; }
+  .nav .n.bad { color: var(--danger); font-weight: 600; }
+  .nav .more { display: none; margin-right: -4px; width: 20px; height: 20px; }
+  .nav:hover .more { display: inline-flex; }
+  .nav:hover .n:has(+ .more) { display: none; }
+  .nav .pip { width: 8px; height: 8px; border-radius: 2px; flex: none; margin: 0 3px; }
+  .nav .active-tag { font-size: 0.78rem; padding: 0 6px; border-radius: 999px; color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 50%, var(--border)); font-weight: 600; }
+  .side-foot { display: flex; gap: 4px; padding: 8px; border-top: 1px solid var(--border); }
+  .side-foot .btn { flex: 1; justify-content: center; padding: 2px 6px; }
+
+  /* ── the forwards ── */
+  #main { display: flex; flex-direction: column; min-width: 0; min-height: 0; container: main / inline-size; }
+  .head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); flex: none; min-height: 58px; }
+  .head .ttl { min-width: 60px; flex: 0 1 auto; margin-right: 6px; overflow: hidden; }
+  .head .sub { overflow: hidden; text-overflow: ellipsis; }
+  .head h1 { margin: 0; font-size: 1.22rem; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .head .sub { color: var(--text-faint); white-space: nowrap; }
+  .head .sub b { color: var(--ok); font-weight: 600; }
+  .find { position: relative; display: flex; align-items: center; flex: 0 1 190px; min-width: 90px; }
+  .find svg { position: absolute; left: 8px; color: var(--text-faint); pointer-events: none; }
+  .find input { width: 100%; padding-left: 27px; }
+  .find kbd { position: absolute; right: 7px; pointer-events: none; }
+  .find input:focus + kbd, .find input:not(:placeholder-shown) + kbd { display: none; }
+
+  .alert { display: flex; align-items: center; gap: 10px; margin: 10px 14px 0; padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--warn, #d9a441) 45%, var(--border)); border-radius: var(--radius); background: color-mix(in srgb, var(--warn, #d9a441) 9%, transparent); line-height: 1.45; }
+  .alert > svg { color: var(--warn, #d9a441); width: 16px; height: 16px; }
+  .alert .msg { flex: 1; min-width: 0; }
+
+  #list { flex: 1; overflow: auto; min-height: 0; padding: 4px 0 28px; outline: none; }
+  .ghead { position: sticky; top: -4px; z-index: 2; background: var(--bg); display: flex; align-items: center; gap: 8px; min-height: 30px; margin: 10px 6px 0; padding: 0 6px 0 8px; cursor: pointer; user-select: none; -webkit-user-select: none; border-radius: var(--radius); }
+  .ghead .tw { display: inline-flex; color: var(--text-faint); transition: transform 0.12s; }
+  .ghead .tw.open { transform: rotate(90deg); }
+  .ghead .gn { font-size: 0.86rem; font-weight: 650; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-dim); }
+  .ghead .ct { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+  .ghead .ct.live { color: var(--ok); font-weight: 600; }
+  .ghead .line { flex: 1; height: 1px; background: var(--border); }
+  .ghead .acts { display: flex; gap: 2px; opacity: 0; transition: opacity 0.12s; }
+  .ghead:hover .acts, .ghead:focus-within .acts { opacity: 1; }
+  .ghead.drop { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--accent-soft); }
+
+  .row { display: grid; grid-template-columns: 34px minmax(170px, 1.5fr) minmax(86px, 0.6fr) minmax(150px, 1.1fr) minmax(130px, 1fr) 60px; align-items: center; column-gap: 12px; min-height: 46px; margin: 2px 8px; padding: 4px 8px 4px 12px; border: 1px solid transparent; border-radius: calc(var(--radius) + 1px); cursor: default; position: relative; transition: background 0.12s, border-color 0.12s; }
+  .row:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+  .row.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 38%, transparent); }
+  .row.dragging { opacity: 0.45; }
+  .row::before { content: ''; position: absolute; left: 1px; top: 9px; bottom: 9px; width: 3px; border-radius: 3px; background: transparent; transition: background 0.2s; }
+  .row.s-up::before { background: var(--ok); }
+  .row.s-starting::before, .row.s-reconnecting::before, .row.s-auth::before { background: var(--warn, #d9a441); }
+  .row.s-failed::before { background: var(--danger); }
+  .row > div { min-width: 0; }
+  .who .nm { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+  .who .nm span.t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .who .tg { color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.93rem; }
+  .who .tg .k { opacity: 0.75; }
+  .row.off .who .nm { color: var(--text-dim); font-weight: 500; }
+  .cl { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; color: var(--text-dim); }
+  .cl i { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+  .cl span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .eps { display: flex; flex-wrap: wrap; gap: 4px; }
+  .ep { display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; font: 0.92rem/18px ui-monospace, Menlo, monospace; color: var(--text-faint); white-space: nowrap; }
+  .ep .a { opacity: 0.6; }
+  .ep.live { color: var(--text); border-color: color-mix(in srgb, var(--ok) 50%, var(--border)); background: color-mix(in srgb, var(--ok) 9%, transparent); cursor: pointer; }
+  .ep.live:hover { background: color-mix(in srgb, var(--ok) 20%, transparent); }
+  .ep.live svg { width: 11px; height: 11px; opacity: 0.45; transition: opacity 0.12s; }
+  .ep.live:hover svg { opacity: 1; }
+  .ep.done { background: color-mix(in srgb, var(--ok) 34%, transparent); border-color: var(--ok); }
+  /* Rows that are not there yet: the shape of the list while it is being read. */
+  .skel { height: 46px; margin: 2px 8px; border-radius: calc(var(--radius) + 1px); background: linear-gradient(90deg, color-mix(in srgb, var(--text) 4%, transparent) 25%, color-mix(in srgb, var(--text) 8%, transparent) 37%, color-mix(in srgb, var(--text) 4%, transparent) 63%); background-size: 400% 100%; animation: shimmer 1.3s ease infinite; }
+  @keyframes shimmer { from { background-position: 100% 50%; } to { background-position: 0 50%; } }
+  .st { overflow: hidden; }
+  .st .l1 { display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .st .l2 { color: var(--text-faint); font-size: 0.93rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .st.ok .l1 { color: var(--ok); }
+  .st.warn .l1 { color: var(--warn, #d9a441); }
+  .st.bad .l1 { color: var(--danger); }
+  .st.idle .l1 { color: var(--text-faint); }
+  .beat { width: 7px; height: 7px; border-radius: 50%; flex: none; background: currentColor; }
+  .ok .beat { animation: beat 2.4s ease-out infinite; }
+  .warn .beat { animation: blink 1.1s ease-in-out infinite; }
+  @keyframes beat { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 55%, transparent); } 70%, 100% { box-shadow: 0 0 0 6px transparent; } }
+  @keyframes blink { 50% { opacity: 0.3; } }
+  .acts { display: flex; justify-content: flex-end; gap: 1px; opacity: 0; transition: opacity 0.12s; }
+  .row:hover .acts, .row.on .acts, .row:focus-within .acts { opacity: 1; }
+  .tag { flex: none; padding: 0 6px; border-radius: 999px; font-size: 0.78rem; line-height: 15px; font-weight: 650; letter-spacing: 0.03em; text-transform: uppercase; border: 1px solid var(--border); color: var(--text-dim); }
+  .tag.prod { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, var(--border)); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  .tag.net { color: var(--warn, #d9a441); border-color: color-mix(in srgb, var(--warn, #d9a441) 50%, var(--border)); }
+  .tag.auto { color: var(--text-faint); font-weight: 500; text-transform: none; letter-spacing: 0; }
+
+  /* The switch: the one control a forward is, most of the time. */
+  .sw { position: relative; display: block; width: 32px; height: 18px; border-radius: 999px; background: var(--border-strong); cursor: pointer; flex: none; transition: background 0.16s; }
+  .sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--bg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); transition: transform 0.16s cubic-bezier(0.3, 1.4, 0.5, 1); }
+  .sw:hover { background: color-mix(in srgb, var(--border-strong) 70%, var(--text-dim)); }
+  .sw.on { background: var(--ok); }
+  .sw.on::after, .sw.wait::after { transform: translateX(14px); }
+  .sw.wait { background: var(--warn, #d9a441); }
+  .sw.busy { opacity: 0.6; pointer-events: none; }
+
+  .empty { display: flex; flex-direction: column; align-items: center; padding: 56px 24px; color: var(--text-faint); text-align: center; line-height: 1.7; }
+  .empty.small { padding: 30px 20px; }
+  .empty .art { width: 220px; height: 74px; margin-bottom: 14px; color: var(--text-faint); }
+  .empty .art .flow { stroke-dasharray: 4 5; animation: flow 1.4s linear infinite; stroke: var(--accent); }
+  @keyframes flow { to { stroke-dashoffset: -18; } }
+  .empty b { color: var(--text); font-size: 1.25rem; font-weight: 650; margin-bottom: 4px; }
+  .empty p { margin: 0; max-width: 460px; }
+  .empty .btns { display: flex; gap: 8px; justify-content: center; margin-top: 18px; flex-wrap: wrap; }
+  .foot { display: flex; align-items: center; gap: 14px; padding: 5px 14px; border-top: 1px solid var(--border); color: var(--text-faint); background: var(--bg-panel); flex: none; white-space: nowrap; overflow: hidden; }
+
+  /* ── one of them, looked at ── */
+  #inspect { width: clamp(300px, 31vw, 372px); display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--border); background: var(--bg-panel); }
+  #inspect.in { animation: slide 0.16s ease-out; }
+  @keyframes slide { from { transform: translateX(14px); opacity: 0; } }
+  .ih { padding: 13px 14px 11px; border-bottom: 1px solid var(--border); }
+  .ih .top { display: flex; align-items: flex-start; gap: 8px; }
+  .ih h2 { flex: 1; margin: 0; font-size: 1.16rem; font-weight: 650; overflow-wrap: anywhere; line-height: 1.3; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; margin-top: 7px; padding: 1px 9px; border-radius: 999px; font-weight: 600; border: 1px solid var(--border); color: var(--text-dim); }
+  .pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 45%, var(--border)); background: color-mix(in srgb, var(--ok) 9%, transparent); }
+  .pill.warn { color: var(--warn, #d9a441); border-color: color-mix(in srgb, var(--warn, #d9a441) 45%, var(--border)); background: color-mix(in srgb, var(--warn, #d9a441) 9%, transparent); }
+  .pill.bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); background: color-mix(in srgb, var(--danger) 9%, transparent); }
+  .ih .acts2 { display: flex; gap: 6px; margin-top: 11px; flex-wrap: wrap; }
+  .ib2 { flex: 1; overflow: auto; min-height: 0; }
+  .blk { padding: 11px 14px; border-bottom: 1px solid var(--border); }
+  .blk h3 { margin: 0 0 7px; font-size: 0.8rem; font-weight: 650; letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-faint); display: flex; align-items: center; }
+  .why { padding: 9px 11px; border-radius: var(--radius); border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border)); background: color-mix(in srgb, var(--danger) 8%, transparent); line-height: 1.5; overflow-wrap: anywhere; }
+  .why.warn { border-color: color-mix(in srgb, var(--warn, #d9a441) 40%, var(--border)); background: color-mix(in srgb, var(--warn, #d9a441) 8%, transparent); }
+  .why .btns { display: flex; gap: 6px; margin-top: 8px; }
+  .addr { display: flex; align-items: center; gap: 8px; padding: 6px 4px 6px 10px; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 5px; min-height: 40px; }
+  .addr .v { flex: 1; min-width: 0; font: 1rem/1.4 ui-monospace, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .addr .v small { color: var(--text-faint); font-size: 0.92rem; }
+  .addr.live { border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); }
+  .addr:not(.live) .v { color: var(--text-faint); }
+  .facts { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 5px 10px; margin: 0; }
+  .facts dt { color: var(--text-faint); }
+  .facts dd { margin: 0; overflow-wrap: anywhere; }
+  .nums { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .num { padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius); }
+  .num b { display: block; font-size: 1.25rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .num span { color: var(--text-faint); font-size: 0.9rem; }
+  .cmd { position: relative; padding: 8px 34px 8px 10px; border-radius: var(--radius); background: var(--bg-input); border: 1px solid var(--border); font: 0.93rem/1.5 ui-monospace, Menlo, monospace; color: var(--text-dim); overflow-wrap: anywhere; }
+  .cmd .ib { position: absolute; top: 3px; right: 3px; }
+  pre.log { margin: 0; max-height: 240px; overflow: auto; padding: 8px 10px; border-radius: var(--radius); background: var(--bg-input); border: 1px solid var(--border); font: 0.93rem/1.55 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-dim); }
+
+  /* ── sheets, drawn over everything ── */
+  #veil { position: absolute; inset: 0; z-index: 20; display: flex; align-items: flex-start; justify-content: center; padding: 38px 16px; background: color-mix(in srgb, var(--bg) 66%, transparent); backdrop-filter: blur(2px); overflow: auto; }
+  #veil.in { animation: fade 0.12s ease-out; }
+  #veil.in .card { animation: pop 0.16s cubic-bezier(0.2, 1.2, 0.4, 1); }
+  @keyframes fade { from { opacity: 0; } }
+  @keyframes pop { from { transform: translateY(8px) scale(0.985); opacity: 0; } }
+  .card { width: min(580px, 100%); border: 1px solid var(--border-strong); border-radius: calc(var(--radius) + 4px); background: var(--bg-panel); box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45); }
+  .card.wide { width: min(760px, 100%); }
+  .card .ch { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
+  .card .ch h2 { margin: 0; font-size: 1.16rem; font-weight: 650; }
+  .card .ch p { margin: 2px 0 0; color: var(--text-faint); }
+  .card .body { padding: 14px 16px; display: grid; grid-template-columns: 118px minmax(0, 1fr); gap: 10px 12px; align-items: center; }
+  .card .body > label { color: var(--text-dim); }
+  .card .body .full { grid-column: 1 / -1; }
+  .card .body .top { align-self: start; padding-top: 24px; }
+  .card .body input[type="text"], .card .body select { width: 100%; }
+  .card .cut { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; margin-top: 4px; color: var(--text-faint); font-size: 0.8rem; font-weight: 650; letter-spacing: 0.09em; text-transform: uppercase; cursor: pointer; }
+  .card .cut:hover { color: var(--text-dim); }
+  .card .cut::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+  .card .cf { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-top: 1px solid var(--border); }
+  .err { color: var(--danger); line-height: 1.45; overflow-wrap: anywhere; }
+  .ports { display: flex; flex-direction: column; gap: 6px; }
+  .ports .p { display: flex; align-items: center; gap: 7px; }
+  .card .body .ports .p input { width: 112px; font-family: ui-monospace, Menlo, monospace; }
+  .ports .p .w { color: var(--warn, #d9a441); font-size: 0.93rem; line-height: 1.3; }
+  .ports .cap { display: flex; gap: 7px; color: var(--text-faint); font-size: 0.86rem; }
+  .ports .cap span { width: 112px; }
+  .ports .cap span + span { margin-left: 20px; }
+  .check { display: flex; align-items: center; gap: 8px; color: var(--text); cursor: pointer; }
+  .hint { color: var(--text-faint); line-height: 1.45; }
+  .hint.warn { color: var(--warn, #d9a441); }
+  .paste { grid-column: 1 / -1; position: relative; }
+  .paste input { padding-left: 30px; font-family: ui-monospace, Menlo, monospace; font-size: 0.95rem; border-style: dashed; }
+  .paste svg { position: absolute; left: 9px; top: 7px; color: var(--text-faint); }
+  .paste .ok { color: var(--ok); margin-top: 4px; }
+  .mem { display: flex; align-items: center; gap: 9px; padding: 5px 16px; cursor: pointer; }
+  .mem:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+  .mem .n { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mem .g { color: var(--text-faint); white-space: nowrap; }
+  .memh { padding: 8px 16px 3px; color: var(--text-faint); font-size: 0.8rem; font-weight: 650; letter-spacing: 0.09em; text-transform: uppercase; }
+  .seg { display: inline-flex; justify-self: start; border: 1px solid var(--border-strong); border-radius: var(--radius); overflow: hidden; }
+  .seg button { padding: 4px 12px; color: var(--text-dim); border-right: 1px solid var(--border-strong); white-space: nowrap; }
+  .seg button:last-child { border-right: 0; }
+  .seg button:hover { color: var(--text); background: var(--bg-elevated); }
+  .seg button.on { color: var(--text); background: var(--accent-soft); font-weight: 600; }
+  .pick { height: 44vh; overflow: auto; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .pick .it { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 6px 16px; border-bottom: 1px solid var(--border); }
+  .pick .it:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+  .pick .it .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pick .it .pp { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
+  .pick .pt { display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px; border: 1px solid var(--border-strong); border-radius: 999px; font: 0.92rem/20px ui-monospace, Menlo, monospace; color: var(--text-dim); cursor: pointer; user-select: none; -webkit-user-select: none; }
+  .pick .pt:hover { border-color: var(--text-faint); color: var(--text); }
+  .pick .pt.on { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
+  .pick .pt small { color: var(--text-faint); font-family: inherit; }
+  .pick .pt svg { width: 11px; height: 11px; color: var(--accent); }
+  table.list { border-collapse: collapse; width: 100%; }
+  table.list th { position: sticky; top: 0; text-align: left; padding: 6px 16px; color: var(--text-faint); font-weight: 600; border-bottom: 1px solid var(--border); background: var(--bg-panel); }
+  table.list td { padding: 5px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.list tr.mine td { background: color-mix(in srgb, var(--ok) 7%, transparent); }
+  .tall { max-height: 58vh; overflow: auto; }
+  .keys { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; padding: 14px 16px; align-items: center; }
+
+  #menu { position: absolute; z-index: 30; min-width: 220px; max-height: 70vh; overflow: auto; padding: 5px; border: 1px solid var(--border-strong); border-radius: calc(var(--radius) + 2px); background: var(--bg-elevated); box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4); animation: pop 0.1s ease-out; }
+  #menu button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 5px 10px; text-align: left; border-radius: 5px; white-space: nowrap; }
+  #menu button svg { color: var(--text-faint); }
+  #menu button:hover { background: var(--accent-soft); }
+  #menu button.danger { color: var(--danger); }
+  #menu button.danger svg { color: var(--danger); }
+  #menu button[disabled] { opacity: 0.4; pointer-events: none; }
+  #menu .sep { height: 1px; margin: 5px 0; background: var(--border); }
+  #menu .lbl { padding: 5px 10px 2px; color: var(--text-faint); font-size: 0.8rem; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; }
+
+  /* ── giving way to the width there is. Last, so that these are what is decided when they apply. ── */
+  /*
+   * The list is as wide as what is left: beside an open inspector, in half a
+   * window, it is narrow. It gives up columns rather than scroll sideways —
+   * first the cluster, which moves under the name, then the words on buttons.
+   */
+  .who .tg .c, .who .tg .s { display: none; }
+  .who .tg .s { color: var(--warn, #d9a441); }
+  .row.s-failed .who .tg .s { color: var(--danger); }
+  @container main (max-width: 780px) {
+    .row { grid-template-columns: 34px minmax(130px, 1.5fr) minmax(104px, 1fr) minmax(84px, 0.9fr) 56px; column-gap: 10px; }
+    .row > .ccol { display: none; }
+    .who .tg .c { display: inline; }
+    .head .btn.quiet .t { display: none; }
+    .head .btn.quiet { padding: 2px 7px; }
+    .foot .keys-hint { display: none; }
+  }
+  @container main (max-width: 560px) {
+    .row { grid-template-columns: 34px minmax(110px, 1fr) minmax(96px, auto) 56px; }
+    .row > .st { display: none; }
+    .head .btn:not(.primary) .t { display: none; }
+    .find { flex: 1 1 60px; min-width: 60px; }
+    .find input { width: 100%; }
+    .find kbd { display: none; }
+    .head { gap: 6px; padding: 10px; }
+    /* With no room for a status column, what is wrong is said under the name instead of where it leads. */
+    .row:not(.s-stopped):not(.s-up) .who .tg .w0 { display: none; }
+    .row:not(.s-stopped):not(.s-up) .who .tg .s { display: inline; }
+  }
+  .btn.scope-btn { display: none; }
+  /*
+   * In a narrow pane — half a window, a column of a split — the panel keeps
+   * the list and gives up what is beside it: the inspector is laid over the
+   * list instead of squeezing it, and then the side goes into a menu.
+   */
+  @container app (max-width: 1040px) {
+    #inspect { position: absolute; top: 0; right: 0; bottom: 0; z-index: 10; width: min(372px, 92%); box-shadow: -18px 0 40px rgba(0, 0, 0, 0.35); }
+  }
+  @container app (max-width: 700px) {
+    #app { grid-template-columns: minmax(0, 1fr) auto; }
+    #side { display: none; }
+    .btn.scope-btn { display: inline-flex; }
+    .head .ttl { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div id="app">
+  <aside id="side">
+    <div class="brand"><span class="mark" id="mark"></span><b>Port Forward</b></div>
+    <div id="nav"></div>
+    <div class="side-foot">
+      <button class="btn quiet" id="b-ports" title="Who is listening on which port of this computer"></button>
+      <button class="btn quiet" id="b-more" title="Import, export and keys"></button>
+    </div>
+  </aside>
+  <section id="main">
+    <div class="head" id="head"></div>
+    <div id="alert"></div>
+    <div id="list" tabindex="0" role="list" aria-label="Forwards"></div>
+    <div class="foot" id="foot"></div>
+  </section>
+  <div id="inspect" hidden></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  var KINDS = [
+    ['service', 'Service', 'services'],
+    ['pod', 'Pod', 'pods'],
+    ['deployment', 'Deployment', 'deployments'],
+    ['statefulset', 'StatefulSet', 'statefulsets'],
+    ['daemonset', 'DaemonSet', 'daemonsets'],
+    ['replicaset', 'ReplicaSet', 'replicasets'],
+  ];
+  var TTLS = [[0, 'Never'], [60, 'After 1 hour'], [120, 'After 2 hours'], [480, 'After 8 hours'], [1440, 'After a day']];
+
+  /* This file's own drawings: the only strings ever read as markup. */
+  var ICONS = {
+    swap: '<path d="M4 8h14"/><path d="m14 4 4 4-4 4"/><path d="M20 16H6"/><path d="m10 12-4 4 4 4"/>',
+    all: '<rect x="4" y="4" width="16" height="6" rx="1.5"/><rect x="4" y="14" width="16" height="6" rx="1.5"/>',
+    pulse: '<path d="M3 12h4l2.5-6 4 12 2.5-6H21"/>',
+    alert: '<path d="M12 4 3 19h18z"/><path d="M12 10v4"/><path d="M12 17v.01"/>',
+    folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
+    cluster: '<circle cx="12" cy="12" r="3"/><circle cx="5" cy="6" r="1.6"/><circle cx="19" cy="6" r="1.6"/><circle cx="12" cy="20" r="1.6"/><path d="m6.3 7.2 3.4 2.8M17.7 7.2l-3.4 2.8M12 15v3.4"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    search: '<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4-4"/>',
+    play: '<path d="M7 5v14l12-7z"/>',
+    stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
+    restart: '<path d="M20 11a8 8 0 1 0-2.3 6.3"/><path d="M20 5v6h-6"/>',
+    edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13.5 6.5 4 4"/>',
+    copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/>',
+    dup: '<rect x="4" y="4" width="11" height="11" rx="2"/><path d="M9 20h9a2 2 0 0 0 2-2V9"/>',
+    trash: '<path d="M4 7h16"/><path d="M9 7V4h6v3"/><path d="m6 7 1 13h10l1-13"/>',
+    more: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
+    open: '<path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M19 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h4"/>',
+    x: '<path d="m6 6 12 12M18 6 6 18"/>',
+    chev: '<path d="m9 6 6 6-6 6"/>',
+    key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9"/><path d="m16 7 3 3"/>',
+    ports: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 10v4M11 10v4M15 10v4"/>',
+    file: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/>',
+    wand: '<path d="m5 19 10-10"/><path d="m14 5 .7 1.8L16.5 7.5l-1.8.7L14 10l-.7-1.8-1.8-.7 1.8-.7z"/><path d="M19 13v3M17.5 14.5h3"/>',
+    check: '<path d="m5 12 5 5 9-10"/>',
+    help: '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.5a2.5 2.5 0 1 1 3.6 2.3c-.8.5-1.2 1-1.2 2"/><path d="M12 17v.01"/>',
+  };
+  function icon(name) {
+    var holder = document.createElement('span');
+    holder.innerHTML = '<svg class="i" viewBox="0 0 24 24" aria-hidden="true">' + (ICONS[name] || '') + '</svg>';
+    return holder.firstChild;
+  }
+
+  var state = {
+    groups: [],
+    forwards: [],
+    profiles: [],
+    desktopApp: false,
+    loaded: false,
+    loadError: '',
+    contexts: null,  // what kubeconfig has, once it has been read
+    scope: { kind: 'all', id: null },   // all | running | attention | group | cluster
+    filter: '',
+    closed: {},      // group id → folded away
+    picked: null,    // the forward in the inspector
+    log: [],
+    logKey: '',
+    form: null,      // the forward being written
+    sheet: null,     // 'ports' | 'name' | 'browse' | 'keys'
+    busy: {},        // forward id → a call is on its way
+    dragging: null,
+  };
+
+  // ── small things ──
+  function h(tag, props) {
+    var node = document.createElement(tag);
+    if (props) {
+      for (var key in props) {
+        if (!Object.prototype.hasOwnProperty.call(props, key)) continue;
+        var value = props[key];
+        if (value === null || value === undefined || value === false) continue;
+        if (key === 'class') node.className = value;
+        else if (key === 'text') node.textContent = value;
+        else if (key.slice(0, 2) === 'on') node.addEventListener(key.slice(2), value);
+        else if (key === 'value') node.value = value;
+        else if (key === 'checked' || key === 'disabled' || key === 'selected' || key === 'draggable') node[key] = Boolean(value);
+        else node.setAttribute(key, value === true ? '' : value);
+      }
+    }
+    for (var i = 2; i < arguments.length; i += 1) add(node, arguments[i]);
+    return node;
+  }
+  function add(node, child) {
+    if (child === null || child === undefined || child === false) return;
+    if (Array.isArray(child)) return child.forEach(function (one) { add(node, one); });
+    node.appendChild(typeof child === 'string' || typeof child === 'number' ? document.createTextNode(String(child)) : child);
+  }
+  function fill(node) {
+    node.replaceChildren();
+    for (var i = 1; i < arguments.length; i += 1) add(node, arguments[i]);
+    return node;
+  }
+  function $(id) { return document.getElementById(id); }
+  function ib(name, title, run, extra) {
+    return h('button', { class: 'ib' + (extra ? ' ' + extra : ''), title: title, 'aria-label': title, onclick: function (event) { event.stopPropagation(); run(event); }, ondblclick: function (event) { event.stopPropagation(); } }, icon(name));
+  }
+  function btn(label, name, run, cls, title) {
+    return h('button', { class: 'btn' + (cls ? ' ' + cls : ''), title: title || label, onclick: run }, name ? icon(name) : null, h('span', { class: 't', text: label }));
+  }
+
+  function call(name, args) {
+    return host.call('pf.' + name, args || {}).then(function (result) {
+      if (result && result.ok === false) {
+        var error = new Error(result.error || 'it did not say why');
+        error.cancelled = result.cancelled === true;
+        throw error;
+      }
+      return result || {};
+    });
+  }
+  /** The cluster itself, read through the Kubernetes door: what is there to forward to. */
+  function kube(name, args) {
+    return host.call('kube.' + name, args || {}).then(function (result) {
+      if (result && result.ok === false) throw new Error(result.error || 'the cluster did not answer');
+      return result || {};
+    });
+  }
+  function say(text, bad) { host.emit('notify', { text: String(text).slice(0, 400), kind: bad ? 'bad' : 'ok' }); }
+  function no(error) { return Boolean(error && (error.cancelled || error.message === 'the person said no')); }
+  function fail(error) {
+    if (no(error)) return;
+    say((error && error.message) || String(error), true);
+  }
+  function copy(text, what) { host.emit('copy', { text: String(text) }); say((what || text) + ' copied'); }
+
+  /** A context the way people say it: an EKS one is an ARN, and its last part is the name. */
+  function cluster(context) {
+    var text = String(context || '');
+    if (!text) return 'current context';
+    var eks = /^arn:aws:eks:([^:]+):\d+:cluster\/(.+)$/.exec(text);
+    if (eks) return eks[2];
+    if (text.indexOf('gke_') === 0) return text.split('_').pop() || text;
+    return text;
+  }
+  /** A colour per cluster, the same one every time: two clusters are told apart before either name is read. */
+  function hue(text) {
+    var sum = 7;
+    var name = cluster(text);
+    for (var i = 0; i < name.length; i += 1) sum = (sum * 31 + name.charCodeAt(i)) % 360;
+    return 'hsl(' + sum + ' 58% 60%)';
+  }
+  function isProd(forward) {
+    return /(^|[^A-Za-z0-9])(prod(uction)?|prd|live)([^A-Za-z0-9]|$)/i.test(forward.name + ' ' + forward.namespace + ' ' + cluster(forward.context));
+  }
+  function ago(iso) {
+    var seconds = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+    if (seconds < 60) return seconds + 's';
+    if (seconds < 3600) return Math.floor(seconds / 60) + 'm';
+    if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ' + Math.floor((seconds % 3600) / 60) + 'm';
+    return Math.floor(seconds / 86400) + 'd ' + Math.floor((seconds % 86400) / 3600) + 'h';
+  }
+  function until(iso) {
+    var seconds = Math.max(0, Math.round((Date.parse(iso) - Date.now()) / 1000));
+    if (seconds < 3600) return Math.max(1, Math.round(seconds / 60)) + ' min';
+    return Math.floor(seconds / 3600) + 'h ' + Math.floor((seconds % 3600) / 60) + 'm';
+  }
+  function runOf(forward) { return (forward && forward.run) || { state: 'stopped', ports: [] }; }
+  function active(forward) { var s = runOf(forward).state; return s === 'up' || s === 'starting' || s === 'reconnecting'; }
+  function troubled(forward) { var s = runOf(forward).state; return s === 'failed' || s === 'auth'; }
+  function byId(id) { return state.forwards.filter(function (one) { return one.id === id; })[0] || null; }
+  function groupOf(forward) { return state.groups.filter(function (one) { return one.id === forward.groupId; })[0] || null; }
+  function livePort(forward, index) {
+    var run = runOf(forward);
+    return run.state === 'up' && run.ports && run.ports[index] ? run.ports[index].actual : null;
+  }
+  function bare(forward) {
+    return { id: forward.id, name: forward.name, context: forward.context, namespace: forward.namespace, kind: forward.kind, target: forward.target,
+      ports: forward.ports, address: forward.address, autoStart: forward.autoStart, autoRestart: forward.autoRestart, ttlMinutes: forward.ttlMinutes, groupId: forward.groupId };
+  }
+  function commandOf(forward) {
+    var parts = ['kubectl'];
+    if (forward.context) parts.push('--context', forward.context);
+    parts.push('--namespace', forward.namespace, 'port-forward', '--address', forward.address, forward.kind + '/' + forward.target);
+    forward.ports.forEach(function (one) { parts.push((one.local || '') + ':' + one.remote); });
+    return parts.join(' ');
+  }
+  /**
+   * What a client is given, for the ports everybody knows: a database wants a
+   * URL, not a host and a port to assemble one from.
+   */
+  var SCHEMES = { 27017: 'mongodb', 5432: 'postgresql', 3306: 'mysql', 6379: 'redis', 5672: 'amqp', 1433: 'sqlserver', 9042: 'cassandra',
+    80: 'http', 8080: 'http', 8000: 'http', 3000: 'http', 5000: 'http', 9090: 'http', 9200: 'http', 5601: 'http', 15672: 'http', 8081: 'http', 443: 'https', 8443: 'https' };
+  function urlFor(remote, local) {
+    var scheme = SCHEMES[remote];
+    return scheme && local ? scheme + '://localhost:' + local : null;
+  }
+  function isWeb(remote) { return SCHEMES[remote] === 'http' || SCHEMES[remote] === 'https'; }
+
+  /** The profile whose forwards are exactly the ones running: the one you are "in". */
+  function activeProfile() {
+    var running = state.forwards.filter(active).map(function (one) { return one.id; }).sort().join(',');
+    if (!running) return null;
+    var found = state.profiles.filter(function (one) { return one.forwards.slice().sort().join(',') === running; })[0];
+    return found ? found.id : null;
+  }
+  function remember() { host.emit('remember', { scope: state.scope, picked: state.picked, closed: state.closed }); }
+
+  // ── reading ──
+  function load() {
+    return call('overview').then(function (data) {
+      state.groups = data.groups || [];
+      state.forwards = data.forwards || [];
+      state.profiles = data.profiles || [];
+      state.desktopApp = data.desktopApp === true;
+      state.loaded = true;
+      if (state.picked && !byId(state.picked)) state.picked = null;
+      if (state.scope.kind === 'group' && state.scope.id && !state.groups.some(function (one) { return one.id === state.scope.id; })) state.scope = { kind: 'all', id: null };
+      state.loadError = '';
+      lastRead = JSON.stringify([data.groups, data.forwards, data.profiles]);
+      draw();
+    }, function (error) {
+      // Before anything was ever read there is no list to leave on screen: the page says so, with a way to try again.
+      if (state.loaded) return fail(error);
+      state.loadError = (error && error.message) || 'The forwards could not be read.';
+      drawList();
+    });
+  }
+  /** kubeconfig's own list, read without contacting anything: a forward whose cluster is not in it cannot start, and says so. */
+  function readContexts() {
+    kube('contexts').then(function (data) {
+      var names = (data.contexts || []).map(function (one) { return one.name; });
+      var changed = JSON.stringify(names) !== JSON.stringify(state.contexts);
+      state.contexts = names;
+      if (changed && state.loaded) draw();
+    }, function () { /* no kubectl, no list: the rows are not accused of anything */ });
+  }
+  function orphaned(forward) {
+    return Boolean(forward.context && state.contexts && state.contexts.indexOf(forward.context) === -1);
+  }
+  /**
+   * The clock's reading. Nothing announces a connection going through or a
+   * minute passing, so the list is read again while somebody is looking — but
+   * what is on screen is only rebuilt when something in it is different. When
+   * nothing is, the times are brought up to date where they stand, and a
+   * selection, a tooltip or a scroll position is none the wiser.
+   */
+  var lastRead = '';
+  function refresh() {
+    return call('overview').then(function (data) {
+      var key = JSON.stringify([data.groups, data.forwards, data.profiles]);
+      if (key === lastRead) return tick();
+      lastRead = key;
+      state.groups = data.groups || [];
+      state.forwards = data.forwards || [];
+      state.profiles = data.profiles || [];
+      if (state.picked && !byId(state.picked)) state.picked = null;
+      // Somebody has text selected — a log line, an address: it is not pulled out from under them for a counter.
+      if (String(window.getSelection ? window.getSelection() : '')) { waiting = true; return; }
+      draw();
+    }, function () { /* the next reading will say */ });
+  }
+  function tick() {
+    [].forEach.call(document.querySelectorAll('[data-since]'), function (node) {
+      var text = ago(node.getAttribute('data-since'));
+      var shape = node.getAttribute('data-shape');
+      node.textContent = shape === 'row' ? 'Up ' + text : shape === 'pill' ? 'Up for ' + text : text;
+    });
+  }
+  function loadLog() {
+    if (!state.picked) return;
+    var id = state.picked;
+    call('log', { id: id }).then(function (data) {
+      if (state.picked !== id) return;
+      var forward = byId(id);
+      if (forward && data.run) forward.run = data.run;
+      var lines = data.lines || [];
+      // Nothing new said and nothing moved: what is on screen is left alone, selection and all.
+      var key = id + '\u0001' + lines.length + '\u0001' + (lines[lines.length - 1] || '') + '\u0001' + JSON.stringify(data.run || {});
+      state.log = lines;
+      if (key === state.logKey) return;
+      state.logKey = key;
+      draw();
+    }, function () { /* the row says what is wrong; the log is extra */ });
+  }
+
+  // ── doing ──
+  function toggle(forward) {
+    if (state.busy[forward.id]) return;
+    state.busy[forward.id] = true;
+    draw();
+    call(active(forward) ? 'stop' : 'start', { id: forward.id }).then(function (data) {
+      if (data.run) forward.run = data.run;
+    }, function (error) { fail(error); return load(); }).then(function () {
+      delete state.busy[forward.id];
+      draw();
+      if (state.picked === forward.id) loadLog();
+    });
+  }
+  function restart(forward) {
+    call('restart', { id: forward.id }).then(function (data) { if (data.run) forward.run = data.run; draw(); }, function (error) { fail(error); return load(); });
+  }
+  function told(result, what) {
+    if (result.failed && result.failed.length) say(result.failed.join('\n'), true);
+    else if (what) say(what);
+  }
+  function remove(forward) { call('remove', { id: forward.id, name: forward.name }).then(load, fail); }
+  function open(forward, port) { call('open', { id: forward.id, port: port }).then(null, fail); }
+  function moveTo(forward, groupId) {
+    if ((forward.groupId || null) === (groupId || null)) return;
+    var moved = bare(forward);
+    moved.groupId = groupId || null;
+    call('save', { forward: moved }).then(load, fail);
+  }
+  function signIn(forward) {
+    host.call('pf.signIn', { id: forward.id }).then(function (result) {
+      if (result && result.ok === false) throw new Error(result.error || 'a terminal could not be opened');
+      say('Sign in in the terminal below, then press Try again.');
+    }).then(null, fail);
+  }
+  function retryWaiting() {
+    call('retryWaiting').then(function (result) { told(result); return load(); }, fail);
+  }
+  function scopeTo(kind, id) {
+    state.scope = { kind: kind, id: id === undefined ? null : id };
+    remember();
+    draw();
+    $('list').scrollTop = 0;
+  }
+
+  // ── which of them are on screen ──
+  function inScope(forward) {
+    var scope = state.scope;
+    if (scope.kind === 'running') return active(forward);
+    if (scope.kind === 'attention') return troubled(forward);
+    if (scope.kind === 'group') return scope.id ? forward.groupId === scope.id : !groupOf(forward);
+    if (scope.kind === 'cluster') return forward.context === scope.id;
+    return true;
+  }
+  function matches(forward) {
+    var words = state.filter.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) return true;
+    var group = groupOf(forward);
+    var text = [forward.name, forward.context, forward.namespace, forward.kind, forward.target, group ? group.name : '',
+      forward.ports.map(function (one) { return one.local + ' ' + one.remote; }).join(' ')].join(' ').toLowerCase();
+    return words.every(function (word) { return text.indexOf(word) !== -1; });
+  }
+  function visible() { return state.forwards.filter(inScope).filter(matches); }
+  function sections() {
+    var shown = visible();
+    var out = state.groups.map(function (group) { return { group: group, members: shown.filter(function (one) { return one.groupId === group.id; }) }; });
+    out.push({ group: null, members: shown.filter(function (one) { return !groupOf(one); }) });
+    // An empty group is somewhere to put the next one — but only where everything is shown.
+    var everything = state.scope.kind === 'all' && !state.filter;
+    return out.filter(function (section) { return section.members.length || (everything && section.group); });
+  }
+  /** The same rows in the order they are drawn, minus the ones folded away: what the arrow keys walk. */
+  function walkable() {
+    var out = [];
+    var grouped = state.scope.kind !== 'group';
+    sections().forEach(function (section) {
+      if (!grouped || !state.closed[section.group ? section.group.id : '']) out = out.concat(section.members);
+    });
+    return out;
+  }
+
+  // ── the side: where you are ──
+  function dropTarget(node, drop) {
+    node.addEventListener('dragover', function (event) { if (state.dragging) { event.preventDefault(); node.classList.add('drop'); } });
+    node.addEventListener('dragleave', function () { node.classList.remove('drop'); });
+    node.addEventListener('drop', function (event) { event.preventDefault(); node.classList.remove('drop'); var moving = byId(state.dragging); if (moving) drop(moving); });
+  }
+  function navItem(opts) {
+    var node = h('div', { class: 'nav' + (opts.on ? ' on' : ''), role: 'button', tabindex: '0', title: opts.title || null, onclick: opts.run,
+      onkeydown: function (event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); opts.run(); } } },
+      opts.icon ? icon(opts.icon) : opts.pip ? h('i', { class: 'pip', style: 'background:' + opts.pip }) : null,
+      h('span', { class: 'lb', text: opts.label }),
+      opts.tag ? h('span', { class: 'active-tag', text: opts.tag }) : null,
+      opts.count !== undefined ? h('span', { class: 'n' + (opts.countClass ? ' ' + opts.countClass : ''), text: opts.count }) : null,
+      opts.menu ? ib('more', 'More', function (event) { menu(event.currentTarget, opts.menu()); }, 'more') : null);
+    if (opts.drop) dropTarget(node, opts.drop);
+    return node;
+  }
+  function drawSide() {
+    var scope = state.scope;
+    var running = state.forwards.filter(active).length;
+    var trouble = state.forwards.filter(troubled).length;
+    var nav = $('nav');
+    var top = nav.scrollTop;
+    var current = activeProfile();
+    var contexts = [];
+    state.forwards.forEach(function (one) { if (contexts.indexOf(one.context) === -1) contexts.push(one.context); });
+    var loose = state.forwards.filter(function (one) { return !groupOf(one); });
+
+    fill(nav,
+      navItem({ icon: 'all', label: 'All forwards', count: state.forwards.length, on: scope.kind === 'all', run: function () { scopeTo('all'); } }),
+      navItem({ icon: 'pulse', label: 'Running', count: running, countClass: running ? 'live' : '', on: scope.kind === 'running', run: function () { scopeTo('running'); } }),
+      navItem({ icon: 'alert', label: 'Needs attention', count: trouble, countClass: trouble ? 'bad' : '', on: scope.kind === 'attention', run: function () { scopeTo('attention'); } }),
+
+      h('div', { class: 'sec' }, 'Groups', ib('plus', 'New group', newGroup)),
+      state.groups.map(function (group) {
+        var members = state.forwards.filter(function (one) { return one.groupId === group.id; });
+        var up = members.filter(active).length;
+        return navItem({
+          icon: 'folder', label: group.name, count: up ? up + '/' + members.length : members.length, countClass: up ? 'live' : '',
+          on: scope.kind === 'group' && scope.id === group.id, run: function () { scopeTo('group', group.id); },
+          drop: function (moving) { moveTo(moving, group.id); },
+          menu: function () { return groupMenu(group); },
+        });
+      }),
+      loose.length && state.groups.length ? navItem({
+        icon: 'folder', label: 'No group', count: loose.length, on: scope.kind === 'group' && !scope.id, run: function () { scopeTo('group', null); },
+        drop: function (moving) { moveTo(moving, null); },
+      }) : null,
+      !state.groups.length ? h('div', { class: 'hint', style: 'padding: 2px 8px', text: 'Forwards that start and stop together.' }) : null,
+
+      h('div', { class: 'sec' }, 'Profiles', ib('plus', 'Keep what is running as a profile', keepProfile)),
+      state.profiles.map(function (profile) {
+        return navItem({
+          icon: 'layers', label: profile.name, tag: current === profile.id ? 'on' : null, count: current === profile.id ? undefined : profile.forwards.length,
+          title: 'Switch to ' + profile.name + ': start what is in it, stop everything else',
+          run: function () { applyProfile(profile); },
+          menu: function () {
+            return [
+              { icon: 'play', text: 'Switch to it', run: function () { applyProfile(profile); } },
+              { icon: 'restart', text: 'Replace with what is running', disabled: !running, run: function () { call('saveProfile', { id: profile.id, name: profile.name, running: true }).then(function () { say(profile.name + ' now holds what is running'); return load(); }, fail); } },
+              { icon: 'all', text: 'Choose its forwards…', run: function () { membersSheet(profile); } },
+              { icon: 'edit', text: 'Rename…', run: function () { nameSheet('Rename the profile', profile.name, function (name) { return call('saveProfile', { id: profile.id, name: name, forwards: profile.forwards }); }); } },
+              '-',
+              { icon: 'trash', text: 'Delete', danger: true, run: function () { call('removeProfile', { id: profile.id, name: profile.name }).then(load, fail); } },
+            ];
+          },
+        });
+      }),
+      !state.profiles.length ? h('div', { class: 'hint', style: 'padding: 2px 8px', text: 'A named set of forwards. Switching to one starts it and stops the rest.' }) : null,
+
+      contexts.length > 1 ? h('div', { class: 'sec' }, 'Clusters') : null,
+      contexts.length > 1 ? contexts.map(function (context) {
+        var members = state.forwards.filter(function (one) { return one.context === context; });
+        var up = members.filter(active).length;
+        return navItem({ pip: hue(context), label: cluster(context), title: context || null, count: up ? up + '/' + members.length : members.length, countClass: up ? 'live' : '',
+          on: scope.kind === 'cluster' && scope.id === context, run: function () { scopeTo('cluster', context); } });
+      }) : null);
+    nav.scrollTop = top;
+  }
+  function groupMenu(group) {
+    return [
+      { icon: 'play', text: 'Start all of it', run: function () { call('startGroup', { id: group.id }).then(function (result) { told(result); return load(); }, fail); } },
+      { icon: 'stop', text: 'Stop all of it', run: function () { call('stopGroup', { id: group.id }).then(load, fail); } },
+      '-',
+      { icon: 'plus', text: 'New forward here…', run: function () { edit(null, false, group.id); } },
+      { icon: 'edit', text: 'Rename…', run: function () { nameSheet('Rename the group', group.name, function (name) { return call('saveGroup', { id: group.id, name: name }); }); } },
+      '-',
+      { icon: 'trash', text: 'Delete the group', danger: true, run: function () { call('removeGroup', { id: group.id, name: group.name }).then(load, fail); } },
+    ];
+  }
+  function newGroup() { nameSheet('New group', '', function (name) { return call('saveGroup', { name: name }); }, 'Forwards in a group start and stop together. Drag a forward onto a group to move it.'); }
+  function keepProfile(event) {
+    // With nothing running there is nothing to keep: the other way to make one is to tick its forwards.
+    if (!state.forwards.some(active)) return membersSheet(null);
+    if (event && event.currentTarget) {
+      return menu(event.currentTarget, [
+        { icon: 'pulse', text: 'Keep what is running…', run: function () { keepProfile(); } },
+        { icon: 'all', text: 'Choose forwards…', run: function () { membersSheet(null); } },
+      ]);
+    }
+    nameSheet('Keep what is running as a profile', '', function (name) { return call('saveProfile', { name: name, running: true }); },
+      'Switching to a profile starts what is in it and stops everything else. A name already in use is replaced.');
+  }
+  function applyProfile(profile) {
+    call('applyProfile', { id: profile.id }).then(function (result) {
+      var did = [];
+      if (result.started) did.push('started ' + result.started);
+      if (result.stopped) did.push('stopped ' + result.stopped);
+      told(result, 'Switched to ' + profile.name + (did.length ? ' — ' + did.join(', ') : ' — it was already what is running'));
+      return load();
+    }, fail);
+  }
+
+  // ── the head of the list ──
+  function scopeTitle() {
+    var scope = state.scope;
+    if (scope.kind === 'running') return 'Running';
+    if (scope.kind === 'attention') return 'Needs attention';
+    if (scope.kind === 'cluster') return cluster(scope.id);
+    if (scope.kind === 'group') { var group = state.groups.filter(function (one) { return one.id === scope.id; })[0]; return group ? group.name : 'No group'; }
+    return 'All forwards';
+  }
+  /** The side, as a menu: what a pane too narrow for it offers instead. */
+  function scopeMenu() {
+    var items = [
+      { icon: 'all', text: 'All forwards', run: function () { scopeTo('all'); } },
+      { icon: 'pulse', text: 'Running', run: function () { scopeTo('running'); } },
+      { icon: 'alert', text: 'Needs attention', run: function () { scopeTo('attention'); } },
+    ];
+    if (state.groups.length) items.push('-', { label: 'Groups' });
+    state.groups.forEach(function (group) { items.push({ icon: 'folder', text: group.name, run: function () { scopeTo('group', group.id); } }); });
+    if (state.profiles.length) items.push('-', { label: 'Switch to profile' });
+    state.profiles.forEach(function (profile) { items.push({ icon: 'layers', text: profile.name, run: function () { applyProfile(profile); } }); });
+    items.push('-', { icon: 'plus', text: 'New group…', run: newGroup }, { icon: 'ports', text: 'Ports in use', run: portsSheet });
+    return items;
+  }
+  function startShown() {
+    var shown = visible().filter(function (one) { return !active(one); });
+    // One after another: two of them may want the same local port, and the second has to see the first holding it.
+    var failed = [];
+    return shown.reduce(function (before, one) {
+      return before.then(function () { return call('start', { id: one.id }).then(null, function (error) { if (!no(error)) failed.push(one.name + ': ' + error.message); }); });
+    }, Promise.resolve()).then(function () { return { failed: failed }; });
+  }
+  function drawHead() {
+    var shown = visible();
+    var up = shown.filter(active).length;
+    var scope = state.scope;
+    var search = h('input', { type: 'text', id: 'search', placeholder: 'Find…', spellcheck: 'false', value: state.filter, oninput: function (event) { state.filter = event.target.value; drawList(); drawFoot(); } });
+    var groupId = scope.kind === 'group' ? scope.id : undefined;
+    fill($('head'),
+      h('button', { class: 'btn scope-btn', title: 'Groups, profiles and clusters', onclick: function (event) { menu(event.currentTarget, scopeMenu()); } }, icon('all'), h('span', { text: scopeTitle() }), icon('chev')),
+      h('div', { class: 'ttl' },
+        h('h1', { text: scopeTitle() }),
+        h('div', { class: 'sub' }, up ? h('b', { text: up + ' running' }) : 'None running', ' · ' + shown.length + (shown.length === 1 ? ' forward' : ' forwards'))),
+      h('span', { class: 'spacer' }),
+      shown.length > up ? btn('Start all', 'play', function () { startShown().then(function (result) { told(result); return load(); }, fail); }, 'quiet', 'Start every forward shown here') : null,
+      up ? btn('Stop all', 'stop', function () {
+        Promise.all(shown.filter(active).map(function (one) { return call('stop', { id: one.id }); })).then(load, fail);
+      }, 'quiet', 'Stop every forward shown here') : null,
+      h('label', { class: 'find' }, icon('search'), search, h('kbd', { text: '/' })),
+      btn('From cluster', 'wand', function () { browse(); }, '', 'Pick services and pods out of a cluster, several at once'),
+      btn('New forward', 'plus', function () { edit(null, false, groupId || null); }, 'primary'));
+  }
+  function drawAlert() {
+    var waiting = state.forwards.filter(function (one) { return runOf(one).state === 'auth'; });
+    var box = $('alert');
+    if (!waiting.length) return box.replaceChildren();
+    var names = [];
+    waiting.forEach(function (one) { var name = cluster(one.context); if (names.indexOf(name) === -1) names.push(name); });
+    fill(box, h('div', { class: 'alert' },
+      icon('key'),
+      h('div', { class: 'msg' }, h('b', { text: waiting.length === 1 ? waiting[0].name + ' is waiting for a sign-in' : waiting.length + ' forwards are waiting for a sign-in' }),
+        ' to ' + names.join(', ') + '. The session for the cluster ran out, so nothing is retried until you sign in.'),
+      btn('Sign in', 'key', function () { signIn(waiting[0]); }, '', 'Open a terminal with the sign-in command'),
+      btn('Try again', 'restart', retryWaiting, 'primary')));
+  }
+
+  // ── the list ──
+  function statusOf(forward) {
+    var run = runOf(forward);
+    if (run.state === 'up') {
+      var bits = [];
+      if (run.connections) bits.push(run.connections + (run.connections === 1 ? ' connection' : ' connections'));
+      if (run.reconnects) bits.push('came back ' + run.reconnects + '×');
+      if (run.endsAt) bits.push('stops in ' + until(run.endsAt));
+      if (run.warning) return { cls: 'warn', text: 'Up — nothing answers inside', sub: run.warning, word: 'Up — nothing answers' };
+      return { cls: 'ok', text: 'Up ' + ago(run.upAt), sub: bits.join(' · '), word: 'Up' };
+    }
+    if (run.state === 'starting') return { cls: 'warn', text: 'Starting…', sub: '', word: 'Starting' };
+    if (run.state === 'reconnecting' && run.offline) return { cls: 'warn', text: 'Waiting for the network', sub: 'Tried again every minute', word: 'Waiting for the network' };
+    if (run.state === 'reconnecting') return { cls: 'warn', text: 'Reconnecting…', sub: run.error || 'the connection dropped', word: 'Reconnecting' };
+    if (run.state === 'auth') return { cls: 'warn', text: 'Needs a sign-in', sub: 'The cluster’s session ran out', word: 'Needs a sign-in' };
+    if (run.state === 'failed') return { cls: 'bad', text: 'Failed', sub: run.error || '', word: 'Failed' };
+    if (run.state === 'expired') return { cls: 'idle', text: 'Stopped itself', sub: run.error || '', word: 'Stopped itself' };
+    return { cls: 'idle', text: 'Off', sub: '', word: 'Off' };
+  }
+  function endpoint(forward, index) {
+    var one = forward.ports[index];
+    var live = livePort(forward, index);
+    var local = live || one.local || 'any';
+    return h('span', {
+      class: 'ep' + (live ? ' live' : ''),
+      title: live ? 'Copy localhost:' + live : (one.local ? 'localhost:' + one.local : 'Any free port') + ' → port ' + one.remote + ' inside',
+      onclick: live ? function (event) {
+        event.stopPropagation();
+        var chip = event.currentTarget;
+        copy('localhost:' + live);
+        chip.classList.add('done');
+        setTimeout(function () { chip.classList.remove('done'); }, 700);
+      } : null,
+      ondblclick: live ? function (event) { event.stopPropagation(); } : null,
+    }, ':' + local, h('span', { class: 'a', text: '→' }), String(one.remote), live ? icon('copy') : null);
+  }
+  function rowMenu(forward) {
+    var going = active(forward);
+    var first = livePort(forward, 0);
+    var items = [
+      going ? { icon: 'stop', text: 'Stop', run: function () { toggle(forward); } } : { icon: 'play', text: 'Start', run: function () { toggle(forward); } },
+      { icon: 'restart', text: 'Start again', disabled: !going, run: function () { restart(forward); } },
+      '-',
+      { icon: 'copy', text: 'Copy address', disabled: !first && !forward.ports[0].local, run: function () { copy('localhost:' + (first || forward.ports[0].local)); } },
+      { icon: 'copy', text: 'Copy as kubectl command', run: function () { copy(commandOf(forward), 'Command'); } },
+      { icon: 'open', text: 'Open in the browser', disabled: !first, run: function () { open(forward, first); } },
+      '-',
+      { icon: 'edit', text: 'Change…', run: function () { edit(forward); } },
+      { icon: 'dup', text: 'Make another like it…', run: function () { edit(forward, true); } },
+      { icon: forward.autoStart ? 'check' : 'play', text: forward.autoStart ? 'Starts with the app — stop that' : 'Start it with the app', run: function () {
+        var changed = bare(forward);
+        changed.autoStart = !forward.autoStart;
+        call('save', { forward: changed }).then(function () { say(changed.autoStart ? forward.name + ' will start with the app' : forward.name + ' is started by hand from now on'); return load(); }, fail);
+      } },
+    ];
+    var url = urlFor(forward.ports[0].remote, first || forward.ports[0].local);
+    if (url) items.splice(4, 0, { icon: 'copy', text: 'Copy as ' + url.split('://')[0] + ':// URL', run: function () { copy(url); } });
+    if (state.groups.length) {
+      items.push('-', { label: 'Move to' });
+      state.groups.forEach(function (group) {
+        items.push({ icon: forward.groupId === group.id ? 'check' : 'folder', text: group.name, disabled: forward.groupId === group.id, run: function () { moveTo(forward, group.id); } });
+      });
+      if (groupOf(forward)) items.push({ icon: 'x', text: 'No group', run: function () { moveTo(forward, null); } });
+    }
+    items.push('-', { icon: 'trash', text: 'Delete', danger: true, run: function () { remove(forward); } });
+    return items;
+  }
+  function row(forward) {
+    var run = runOf(forward);
+    var going = active(forward);
+    var status = statusOf(forward);
+    var node = h('div', {
+      class: 'row s-' + run.state + (going ? '' : ' off') + (state.picked === forward.id ? ' on' : ''),
+      'data-id': forward.id, draggable: true, role: 'listitem', 'aria-current': state.picked === forward.id ? 'true' : null,
+      onclick: function () { pick(forward.id, true); },
+      ondblclick: function () { edit(forward); },
+      oncontextmenu: function (event) { event.preventDefault(); menuAt(event.clientX, event.clientY, rowMenu(forward)); },
+      ondragstart: function (event) { state.dragging = forward.id; node.classList.add('dragging'); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', forward.name); },
+      ondragend: function () { state.dragging = null; node.classList.remove('dragging'); },
+    },
+      h('div', null, h('button', {
+        class: 'sw' + (run.state === 'up' ? ' on' : going ? ' wait' : '') + (state.busy[forward.id] ? ' busy' : ''),
+        role: 'switch', 'aria-checked': going ? 'true' : 'false', 'aria-label': (going ? 'Stop ' : 'Start ') + forward.name, title: going ? 'Stop' : 'Start',
+        onclick: function (event) { event.stopPropagation(); toggle(forward); },
+        ondblclick: function (event) { event.stopPropagation(); },
+      })),
+      h('div', { class: 'who' },
+        h('div', { class: 'nm', title: forward.name },
+          h('span', { class: 't', text: forward.name }),
+          isProd(forward) ? h('span', { class: 'tag prod', text: 'prod' }) : null,
+          orphaned(forward) ? h('span', { class: 'tag net', text: 'no cluster', title: 'kubeconfig has no context called ' + forward.context + '. Change the forward to point at one it has.' }) : null,
+          forward.address === '0.0.0.0' ? h('span', { class: 'tag net', text: 'lan', title: 'Listens on every interface: reachable from the network' }) : null,
+          forward.autoStart ? h('span', { class: 'tag auto', text: 'auto', title: 'Starts when the app starts' }) : null),
+        h('div', { class: 'tg', title: forward.kind + '/' + forward.target + ' in ' + forward.namespace },
+          h('span', { class: 'w0' }, h('span', { class: 'k', text: forward.kind + '/' }), forward.target + ' · ' + forward.namespace, h('span', { class: 'c', text: ' · ' + cluster(forward.context) })),
+          h('span', { class: 's', text: status.text + (status.sub ? ' — ' + status.sub : '') }))),
+      h('div', { class: 'ccol' }, h('span', { class: 'cl', title: forward.context || 'the current context of kubeconfig' },
+        h('i', { style: 'background:' + hue(forward.context) }), h('span', { text: cluster(forward.context) }))),
+      h('div', { class: 'eps' }, forward.ports.map(function (one, index) { return endpoint(forward, index); })),
+      h('div', { class: 'st ' + status.cls, title: status.sub || status.text },
+        h('div', { class: 'l1' }, run.state === 'stopped' ? null : h('i', { class: 'beat' }),
+          run.state === 'up' && !run.warning ? h('span', { 'data-since': run.upAt, 'data-shape': 'row', text: status.text }) : status.text),
+        status.sub ? h('div', { class: 'l2', text: status.sub }) : null),
+      h('div', { class: 'acts' },
+        run.state === 'auth' ? ib('key', 'Sign in', function () { signIn(forward); }) : going ? ib('restart', 'Start again', function () { restart(forward); }) : ib('edit', 'Change', function () { edit(forward); }),
+        ib('more', 'More', function (event) { menu(event.currentTarget, rowMenu(forward)); })));
+    return node;
+  }
+  function groupHead(section) {
+    var group = section.group;
+    var id = group ? group.id : null;
+    var key = id || '';
+    var up = section.members.filter(active).length;
+    var node = h('div', { class: 'ghead', onclick: function () { state.closed[key] = !state.closed[key]; remember(); drawList(); } },
+      h('span', { class: 'tw' + (state.closed[key] ? '' : ' open') }, icon('chev')),
+      h('span', { class: 'gn', text: group ? group.name : 'No group' }),
+      h('span', { class: 'ct' + (up ? ' live' : ''), text: up ? up + ' of ' + section.members.length + ' running' : String(section.members.length) }),
+      h('span', { class: 'line' }),
+      h('span', { class: 'acts' },
+        ib('play', 'Start all of these', function () { call('startGroup', { id: id }).then(function (result) { told(result); return load(); }, fail); }),
+        ib('stop', 'Stop all of these', function () { call('stopGroup', { id: id }).then(load, fail); }),
+        group ? ib('more', 'More', function (event) { menu(event.currentTarget, groupMenu(group)); }) : null));
+    dropTarget(node, function (moving) { moveTo(moving, id); });
+    return node;
+  }
+  function art() {
+    var holder = document.createElement('div');
+    holder.innerHTML = '<svg class="art" viewBox="0 0 220 74" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+      + '<rect x="6" y="18" width="58" height="38" rx="5"/><path d="M22 62h26M35 56v6"/><path d="M18 30h14M18 38h22"/>'
+      + '<path class="flow" d="M70 37h80"/>'
+      + '<path d="M186 12l26 13v24l-26 13-26-13V25z"/><path d="M160 25l26 13 26-13M186 38v24"/></svg>';
+    return holder.firstChild;
+  }
+  function drawList() {
+    var list = $('list');
+    var top = list.scrollTop;
+    list.replaceChildren();
+    if (!state.loaded) {
+      if (state.loadError) {
+        list.appendChild(h('div', { class: 'empty' }, h('b', { text: 'The forwards could not be read' }), h('p', { text: state.loadError }),
+          h('div', { class: 'btns' }, btn('Try again', 'restart', function () { state.loadError = ''; drawList(); load(); }, 'primary'))));
+      } else {
+        for (var n = 0; n < 6; n += 1) list.appendChild(h('div', { class: 'skel', style: 'opacity:' + (1 - n * 0.14) }));
+      }
+      return;
+    }
+
+    if (!state.forwards.length) {
+      list.appendChild(h('div', { class: 'empty' }, art(),
+        h('b', { text: 'No forwards yet' }),
+        h('p', { text: 'A forward is a port on this computer that leads to a pod, a service or a workload in one of your clusters. Define it once and it is a switch from then on.' }),
+        h('div', { class: 'btns' },
+          btn('New forward', 'plus', function () { edit(null); }, 'primary'),
+          btn('Pick from a cluster', 'wand', function () { browse(); }),
+          state.desktopApp ? btn('Bring in what K8S Port Forward has', 'file', importDesktop) : null,
+          btn('Import a file…', 'file', importFile))));
+      return;
+    }
+    var shown = visible();
+    if (!shown.length) {
+      var scope = state.scope.kind;
+      list.appendChild(h('div', { class: 'empty' },
+        h('b', { text: state.filter ? 'Nothing matches “' + state.filter + '”' : scope === 'running' ? 'Nothing is running' : scope === 'attention' ? 'Nothing needs you' : 'Nothing here yet' }),
+        h('p', { text: state.filter ? 'The search looks at names, clusters, namespaces, targets and ports.' : scope === 'running' ? 'Switch a forward on and it shows up here.'
+          : scope === 'attention' ? 'A forward that failed, or whose cluster wants a sign-in, is listed here.' : 'Drag a forward onto this group, or add a new one.' }),
+        h('div', { class: 'btns' }, state.filter ? btn('Clear the search', 'x', function () { state.filter = ''; draw(); }) : scope === 'group' ? btn('New forward here', 'plus', function () { edit(null, false, state.scope.id); }, 'primary') : btn('All forwards', 'all', function () { scopeTo('all'); }))));
+      return;
+    }
+    var grouped = state.scope.kind !== 'group';
+    sections().forEach(function (section) {
+      if (grouped && (state.groups.length || section.group)) list.appendChild(groupHead(section));
+      if (grouped && state.closed[section.group ? section.group.id : '']) return;
+      section.members.forEach(function (forward) { list.appendChild(row(forward)); });
+    });
+    list.scrollTop = top;
+  }
+  function drawFoot() {
+    var running = state.forwards.filter(active);
+    var through = running.reduce(function (sum, one) { return sum + (runOf(one).connections || 0); }, 0);
+    fill($('foot'),
+      h('span', null, running.length + ' of ' + state.forwards.length + ' running'),
+      running.length ? h('span', null, through + ' connection' + (through === 1 ? '' : 's') + ' through them') : null,
+      h('span', { class: 'spacer' }),
+      h('span', { class: 'keys-hint' }, h('kbd', { text: '↑↓' }), ' move  ', h('kbd', { text: 'Space' }), ' switch  ', h('kbd', { text: 'N' }), ' new  ', h('kbd', { text: '?' }), ' all keys'));
+  }
+
+  // ── one forward, looked at ──
+  function pick(id, toggleOff) {
+    state.picked = toggleOff && state.picked === id ? null : id;
+    state.log = [];
+    state.logKey = '';
+    remember();
+    draw();
+    loadLog();
+  }
+  var inspected = null;
+  function drawInspect() {
+    var box = $('inspect');
+    var forward = state.picked ? byId(state.picked) : null;
+    box.hidden = !forward;
+    if (!forward) { inspected = null; return box.replaceChildren(); }
+    // It slides in when it opens, not every time what it shows is brought up to date.
+    box.className = inspected ? '' : 'in';
+    var same = inspected === forward.id;
+    inspected = forward.id;
+    var run = runOf(forward);
+    var going = active(forward);
+    var status = statusOf(forward);
+    var group = groupOf(forward);
+    var command = commandOf(forward);
+    var old = box.querySelector('.ib2');
+    var scrolled = old && same ? old.scrollTop : 0;
+    var logWas = same ? box.querySelector('pre.log') : null;
+    var stuck = !logWas || logWas.scrollTop + logWas.clientHeight >= logWas.scrollHeight - 12;
+    var logAt = logWas ? logWas.scrollTop : 0;
+    var log = h('pre', { class: 'log', text: state.log.length ? state.log.join('\n') : 'Nothing yet. What kubectl says while this runs is kept here.' });
+
+    fill(box,
+      h('div', { class: 'ih' },
+        h('div', { class: 'top' }, h('h2', null, forward.name, isProd(forward) ? [' ', h('span', { class: 'tag prod', style: 'vertical-align: 2px', text: 'prod' })] : null), ib('x', 'Close (Esc)', function () { state.picked = null; remember(); draw(); })),
+        h('span', { class: 'pill ' + (status.cls === 'idle' ? '' : status.cls) }, run.state === 'stopped' ? null : h('i', { class: 'beat' }), run.state === 'up' && !run.warning ? h('span', { 'data-since': run.upAt, 'data-shape': 'pill', text: 'Up for ' + ago(run.upAt) }) : status.word),
+        h('div', { class: 'acts2' },
+          going ? btn('Stop', 'stop', function () { toggle(forward); }) : btn('Start', 'play', function () { toggle(forward); }, 'primary'),
+          going ? btn('Again', 'restart', function () { restart(forward); }, '', 'Stop it and start it again') : null,
+          btn('Change', 'edit', function () { edit(forward); }),
+          h('span', { class: 'spacer' }),
+          ib('more', 'More', function (event) { menu(event.currentTarget, rowMenu(forward)); }))),
+      h('div', { class: 'ib2' },
+        run.error && run.state !== 'up' && run.state !== 'stopped' ? h('div', { class: 'blk' },
+          h('div', { class: 'why' + (run.state === 'failed' ? '' : ' warn') }, run.error,
+            run.state === 'auth' ? h('div', { class: 'btns' }, btn('Sign in', 'key', function () { signIn(forward); }), btn('Try again', 'restart', function () { toggle(forward); }, 'primary'))
+              : run.state === 'failed' ? h('div', { class: 'btns' }, btn('Try again', 'restart', function () { toggle(forward); }), /already (in use|used)/.test(run.error) ? btn('Who has the port?', 'ports', portsSheet) : null) : null)) : null,
+        run.state === 'up' && run.warning ? h('div', { class: 'blk' }, h('div', { class: 'why warn', text: run.warning })) : null,
+        orphaned(forward) ? h('div', { class: 'blk' }, h('div', { class: 'why warn' }, 'kubeconfig has no cluster called ' + cluster(forward.context) + ' any more, so this cannot start.',
+          h('div', { class: 'btns' }, btn('Point it at another', 'edit', function () { edit(forward); })))) : null,
+
+        h('div', { class: 'blk' },
+          h('h3', { text: going ? 'Connect to' : 'Will listen on' }),
+          forward.ports.map(function (one, index) {
+            var live = livePort(forward, index);
+            var address = 'localhost:' + (live || one.local || '…');
+            var url = urlFor(one.remote, live || one.local);
+            return h('div', { class: 'addr' + (live ? ' live' : '') },
+              h('span', { class: 'v', title: address + ' leads to port ' + one.remote + ' inside the cluster' }, address, h('small', { text: '  →  ' + one.remote })),
+              url && !isWeb(one.remote) ? h('button', { class: 'btn quiet', style: 'min-height: 22px; padding: 0 6px', title: 'Copy ' + url, text: url.split('://')[0] + '://', onclick: function () { copy(url); } }) : null,
+              live || one.local ? ib('copy', 'Copy ' + address, function () { copy(address); }) : null,
+              live && (isWeb(one.remote) || !url) ? ib('open', 'Open in the browser', function () { open(forward, live); }) : null);
+          })),
+
+        going || run.connections || run.reconnects ? h('div', { class: 'blk' },
+          h('div', { class: 'nums' },
+            h('div', { class: 'num' }, run.state === 'up' ? h('b', { 'data-since': run.upAt, 'data-shape': 'num', text: ago(run.upAt) }) : h('b', { text: '—' }), h('span', { text: 'up' })),
+            h('div', { class: 'num' }, h('b', { text: run.connections || 0 }), h('span', { text: 'connections' })),
+            h('div', { class: 'num' }, h('b', { text: run.reconnects || 0 }), h('span', { text: 'came back' })))) : null,
+
+        h('div', { class: 'blk' },
+          h('h3', { text: 'Where it leads' }),
+          h('dl', { class: 'facts' },
+            h('dt', { text: 'Cluster' }), h('dd', { title: forward.context || null }, h('span', { class: 'cl' }, h('i', { style: 'background:' + hue(forward.context) }), h('span', { text: cluster(forward.context) }))),
+            h('dt', { text: 'Namespace' }), h('dd', { text: forward.namespace }),
+            h('dt', { text: 'Target' }), h('dd', { class: 'mono', text: forward.kind + '/' + forward.target }),
+            h('dt', { text: 'Group' }), h('dd', { text: group ? group.name : '—' }),
+            h('dt', { text: 'Reachable' }), h('dd', { text: forward.address === '0.0.0.0' ? 'From the whole network' : forward.address === '127.0.0.1' || forward.address === 'localhost' ? 'This computer only' : forward.address }),
+            h('dt', { text: 'If it drops' }), h('dd', { text: forward.autoRestart ? 'Started again, on the same port' : 'Left stopped' }),
+            h('dt', { text: 'Stops itself' }), h('dd', { text: forward.ttlMinutes ? 'After ' + (forward.ttlMinutes % 60 ? forward.ttlMinutes + ' min' : forward.ttlMinutes / 60 + ' h') + (run.endsAt ? ' — in ' + until(run.endsAt) : '') : 'Never' }),
+            h('dt', { text: 'With the app' }), h('dd', { text: forward.autoStart ? 'Starts when the app starts' : 'Started by hand' }))),
+
+        h('div', { class: 'blk' },
+          h('h3', { text: 'The same thing, typed' }),
+          h('div', { class: 'cmd' }, command, ib('copy', 'Copy the command', function () { copy(command, 'Command'); }))),
+
+        h('div', { class: 'blk', style: 'border-bottom: 0' },
+          h('h3', null, 'What kubectl said', h('span', { class: 'spacer' }),
+            state.log.length ? ib('copy', 'Copy all of it', function () { copy(state.log.join('\n'), 'What kubectl said') }) : null),
+          log)));
+    box.querySelector('.ib2').scrollTop = scrolled;
+    log.scrollTop = stuck ? log.scrollHeight : logAt;
+  }
+
+  // ── the form ──
+  function edit(forward, copyOf, groupId) {
+    var from = forward || { name: '', context: '', namespace: 'default', kind: 'service', target: '', ports: [{ local: '', remote: '' }], address: '127.0.0.1', autoStart: false, autoRestart: true, ttlMinutes: 0, groupId: groupId || null };
+    state.sheet = null;
+    state.form = {
+      id: forward && !copyOf ? forward.id : null,
+      name: copyOf ? from.name + ' copy' : from.name,
+      context: from.context, namespace: from.namespace, kind: from.kind, target: from.target,
+      ports: from.ports.map(function (one) { return { local: copyOf ? '' : one.local || '', remote: one.remote || '' }; }),
+      address: from.address, autoStart: from.autoStart, autoRestart: from.autoRestart, ttlMinutes: from.ttlMinutes, groupId: from.groupId || '',
+      contexts: null, namespaces: [], targets: [], error: '', looking: '', saving: false,
+      more: Boolean(forward && (from.address !== '127.0.0.1' || from.ttlMinutes || from.autoStart || !from.autoRestart)),
+    };
+    var form = state.form;
+    form.initial = typed(form);
+    drawSheet();
+    kube('contexts').then(function (data) {
+      if (state.form !== form) return;
+      form.contexts = data.contexts || [];
+      // A new forward starts on the cluster kubectl is pointed at, named: what is saved does not move when that does.
+      if (!forward && !form.context) {
+        var untouched = typed(form) === form.initial;
+        form.context = data.current || '';
+        if (untouched) form.initial = typed(form);
+      }
+      drawSheet();
+      lookNamespaces();
+      lookTargets();
+    }, function (error) { if (state.form === form) { form.contexts = []; form.looking = error.message; drawSheet(); } });
+  }
+  function lookNamespaces() {
+    var form = state.form;
+    var context = form.context;
+    kube('list', { kind: 'namespaces', context: context }).then(function (data) {
+      if (state.form !== form || form.context !== context) return;
+      form.namespaces = (data.rows || []).map(function (one) { return one.name; });
+      form.looking = '';
+      fillLists();
+    }, function (error) { if (state.form === form && form.context === context) { form.namespaces = []; form.looking = error.message; fillLists(); } });
+  }
+  function lookTargets() {
+    var form = state.form;
+    var context = form.context;
+    var namespace = form.namespace;
+    var kind = form.kind;
+    var plural = KINDS.filter(function (one) { return one[0] === kind; })[0][2];
+    if (!namespace) return;
+    function mine() { return state.form === form && form.context === context && form.namespace === namespace && form.kind === kind; }
+    kube('list', { kind: plural, context: context, namespace: namespace }).then(function (data) {
+      if (!mine()) return;
+      form.targets = (data.rows || []).map(function (one) { return { name: one.name, ports: one.forwardPorts || [] }; });
+      form.looking = '';
+      fillLists();
+    }, function (error) { if (mine()) { form.targets = []; form.looking = error.message; fillLists(); } });
+  }
+  /** The suggestions, replaced where they stand: redrawing the form would take the caret out of the field being typed in. */
+  function fillLists() {
+    var form = state.form;
+    var ns = $('dl-ns');
+    if (!form || !ns) return;
+    fill(ns, form.namespaces.map(function (name) { return h('option', { value: name }); }));
+    fill($('dl-target'), form.targets.map(function (one) { return h('option', { value: one.name }); }));
+    var known = form.targets.filter(function (one) { return one.name === form.target; })[0];
+    fill($('dl-port'), (known ? known.ports : []).map(function (one) { return h('option', { value: one.port, label: one.name || null }); }));
+    $('f-looking').textContent = form.looking ? 'Could not read the cluster: ' + form.looking
+      : known && known.ports.length ? 'It declares ' + known.ports.map(function (one) { return one.port + (one.name ? ' (' + one.name + ')' : ''); }).join(', ') + '.'
+      : form.target && form.targets.length && !known ? 'Nothing called that in ' + form.namespace + ' right now. It can still be saved.' : '';
+  }
+  /** What it declares, offered once: a target chosen while the ports are still empty. */
+  function offerPorts() {
+    var form = state.form;
+    var known = form.targets.filter(function (one) { return one.name === form.target; })[0];
+    fillLists();
+    if (!known || !known.ports.length || form.ports.some(function (one) { return String(one.remote) !== '' || String(one.local) !== ''; })) return;
+    var taken = {};
+    form.ports = known.ports.slice(0, 4).map(function (one) { var local = freeLocal(one.port, form.id, taken); if (local) taken[local] = true; return { local: local, remote: one.port }; });
+    redrawPorts();
+  }
+  var KIND_WORDS = { po: 'pod', pod: 'pod', pods: 'pod', svc: 'service', service: 'service', services: 'service', deploy: 'deployment', deployment: 'deployment', deployments: 'deployment',
+    sts: 'statefulset', statefulset: 'statefulset', statefulsets: 'statefulset', ds: 'daemonset', daemonset: 'daemonset', daemonsets: 'daemonset', rs: 'replicaset', replicaset: 'replicaset', replicasets: 'replicaset' };
+  /**
+   * A `kubectl port-forward` line somebody already has — in a README, in their
+   * shell history — read into the fields of the form. Only read: nothing in
+   * it is run, and what it yields is checked like anything typed.
+   */
+  function parseKubectl(text) {
+    var words = String(text || '').trim().match(/"[^"]*"|'[^']*'|\S+/g) || [];
+    words = words.map(function (word) { return word.replace(/^(["'])(.*)\1$/, '$2'); });
+    var at = words.indexOf('port-forward');
+    if (at === -1) return null;
+    var out = { ports: [] };
+    var flags = { '-n': 'namespace', '--namespace': 'namespace', '--context': 'context', '--address': 'address' };
+    var skip = { '--kubeconfig': 1, '--cluster': 1, '--user': 1, '--pod-running-timeout': 1, '--request-timeout': 1, '-s': 1, '--server': 1, '--as': 1 };
+    for (var i = 0; i < words.length; i += 1) {
+      var word = words[i];
+      if (i === at || word === 'kubectl' || word === 'k') continue;
+      var eq = word.indexOf('=');
+      var name = eq > 0 && word.charAt(0) === '-' ? word.slice(0, eq) : word;
+      if (flags[name]) { out[flags[name]] = eq > 0 && word.charAt(0) === '-' ? word.slice(eq + 1) : words[i += 1]; continue; }
+      if (skip[name]) { if (!(eq > 0)) i += 1; continue; }
+      if (word.charAt(0) === '-') continue;
+      if (i < at) continue;
+      var port = /^(\d*):(\d+)$/.exec(word) || /^(\d+)$/.exec(word);
+      // A port on its own means the same number on both sides to kubectl; `bare` says the local one was never chosen.
+      if (port && out.target) { out.ports.push(port[2] ? { local: port[1], remote: port[2] } : { local: port[1], remote: port[1], bare: true }); continue; }
+      if (out.target) continue;
+      var cut = word.indexOf('/');
+      if (cut > 0) { out.kind = KIND_WORDS[word.slice(0, cut).toLowerCase()] || null; out.target = word.slice(cut + 1); }
+      else if (KIND_WORDS[word.toLowerCase()] && words[i + 1] && words[i + 1].charAt(0) !== '-' && !/^\d*:?\d+$/.test(words[i + 1])) { out.kind = KIND_WORDS[word.toLowerCase()]; out.target = words[i += 1]; }
+      else { out.kind = 'pod'; out.target = word; }
+    }
+    if (!out.target || !out.kind || !out.ports.length) return null;
+    if (out.address) out.address = out.address.split(',')[0];
+    return out;
+  }
+  function applyKubectl(text) {
+    var form = state.form;
+    var found = parseKubectl(text);
+    if (!found) { form.pasted = /port-forward/.test(text) ? 'That line could not be read. It needs a target and at least one port.' : ''; var note = $('f-pasted'); if (note) { note.textContent = form.pasted; note.className = 'hint warn'; } return; }
+    if (found.context) form.context = found.context;
+    if (found.namespace) form.namespace = found.namespace;
+    form.kind = found.kind;
+    form.target = found.target;
+    // One that was not chosen is chosen here: the same number when that can work, 8080 for 80 when it cannot.
+    var taken = {};
+    form.ports = found.ports.map(function (one) {
+      var local = one.bare ? freeLocal(one.remote, form.id, taken) : one.local;
+      if (local) taken[local] = true;
+      return { local: local, remote: one.remote };
+    });
+    if (found.address && found.address !== '127.0.0.1' && found.address !== 'localhost') { form.address = found.address; form.more = true; }
+    form.pasted = 'Read: ' + found.kind + '/' + found.target + (found.namespace ? ' in ' + found.namespace : '') + ', ' + found.ports.length + (found.ports.length === 1 ? ' port.' : ' ports.');
+    form.pastedOk = true;
+    form.namespaces = [];
+    form.targets = [];
+    drawSheet();
+    lookNamespaces();
+    lookTargets();
+  }
+
+  /** Who else, among the saved forwards, asks for this local port. */
+  function holder(port, exceptId) {
+    var number = Number(port);
+    if (!number) return null;
+    return state.forwards.filter(function (one) { return one.id !== exceptId && one.ports.some(function (p) { return p.local === number; }); })[0] || null;
+  }
+  /**
+   * A local port to suggest for one inside. The same number when it can be —
+   * but not below 1024, which this computer will not let an ordinary program
+   * open (80 becomes 8080), and not one a saved forward already asks for.
+   */
+  function freeLocal(port, exceptId, taken) {
+    var candidate = Number(port);
+    if (!candidate) return '';
+    if (candidate < 1024) candidate += 8000;
+    var used = taken || {};
+    var tries = 0;
+    while ((holder(candidate, exceptId) || used[candidate]) && tries < 200) { candidate += 1; tries += 1; }
+    return candidate > 65535 ? '' : candidate;
+  }
+  function save() {
+    var form = state.form;
+    if (form.saving) return;
+    form.error = '';
+    var rows = form.ports.filter(function (one) { return String(one.remote).trim() !== '' || String(one.local).trim() !== ''; });
+    var wrong = rows.filter(function (one) { return !/^\d+$/.test(String(one.remote).trim()) || (String(one.local).trim() !== '' && !/^\d+$/.test(String(one.local).trim())); })[0];
+    if (wrong) { form.error = 'A port is a number between 1 and 65535. Leave the local one empty to be given any free port.'; return drawSheet(); }
+    if (!form.target.trim()) { form.error = 'Say what to forward to: the name of a ' + form.kind + '.'; drawSheet(); var field = $('f-target'); if (field) field.focus(); return; }
+    if (!rows.length) { form.error = 'A forward needs at least one port: the one inside the cluster.'; return drawSheet(); }
+    var forward = {
+      id: form.id, name: form.name, context: form.context, namespace: form.namespace.trim(), kind: form.kind, target: form.target.trim(),
+      ports: rows.map(function (one) { return { local: String(one.local).trim() === '' ? 0 : Number(one.local), remote: Number(one.remote) }; }),
+      address: form.address, autoStart: form.autoStart, autoRestart: form.autoRestart, ttlMinutes: Number(form.ttlMinutes) || 0, groupId: form.groupId || null,
+    };
+    // The same place, the same ports, a second time: usually a slip. Said once; pressing again keeps both.
+    var same = forward.ports.map(function (one) { return one.local + ':' + one.remote; }).join(',');
+    var twin = state.forwards.filter(function (one) {
+      return one.id !== forward.id && one.context === forward.context && one.namespace === forward.namespace && one.kind === forward.kind && one.target === forward.target
+        && one.ports.map(function (p) { return p.local + ':' + p.remote; }).join(',') === same;
+    })[0];
+    if (twin && form.twin !== twin.id) {
+      form.twin = twin.id;
+      form.error = '“' + twin.name + '” already leads there with the same ports. Press ' + (form.id ? 'Save' : 'Add forward') + ' again to keep both.';
+      return drawSheet();
+    }
+    form.saving = true;
+    call('save', { forward: forward }).then(function (result) {
+      state.form = null;
+      drawSheet();
+      if (result.restarted) say(result.forward.name + ' was started again with what you changed');
+      if (!forward.id && result.forward) { state.picked = result.forward.id; state.log = []; state.logKey = ''; }
+      return load();
+    }, function (error) {
+      form.saving = false;
+      if (no(error)) return;
+      form.error = error.message;
+      drawSheet();
+    });
+  }
+  /**
+   * The port rows, rebuilt on their own. Leaving a port field rebuilds only
+   * these — the buttons under the form stay the same nodes, so a click on Add
+   * that is what took the focus away still lands on a button that exists.
+   */
+  function portsNode() {
+    var form = state.form;
+    return h('div', { class: 'ports', id: 'f-ports' },
+      h('div', { class: 'cap' }, h('span', { text: 'On this computer' }), h('span', { text: 'Inside the cluster' })),
+      form.ports.map(function (one, index) {
+        var warn = h('span', { class: 'w' });
+        function check() {
+          var clash = holder(one.local, form.id);
+          warn.textContent = clash ? clash.name + ' also asks for ' + one.local : Number(one.local) > 0 && Number(one.local) < 1024 ? 'Below 1024 needs administrator rights' : '';
+        }
+        var remote = h('input', { type: 'text', inputmode: 'numeric', placeholder: 'port', list: 'dl-port', value: one.remote, 'aria-label': 'Port inside the cluster', oninput: function (event) { one.remote = event.target.value.trim(); },
+          onchange: function () { if (String(one.local) === '' && /^\d+$/.test(String(one.remote))) { one.local = freeLocal(one.remote, form.id); local.value = one.local; check(); } } });
+        var local = h('input', { type: 'text', inputmode: 'numeric', placeholder: 'any free', value: one.local, 'aria-label': 'Local port', oninput: function (event) {
+          // `8080:80`, the way kubectl is told, typed or pasted into one field: it is both.
+          var pair = /^(\d*)\s*:\s*(\d+)$/.exec(event.target.value.trim());
+          if (pair) { one.local = pair[1]; one.remote = pair[2]; local.value = one.local; remote.value = one.remote; remote.focus(); }
+          else one.local = event.target.value.trim();
+          check();
+        } });
+        check();
+        return h('div', { class: 'p' },
+          local,
+          h('span', { class: 'faint', text: '→' }),
+          remote,
+          form.ports.length > 1 ? ib('x', 'Remove this port', function () { form.ports.splice(index, 1); redrawPorts(); }) : null,
+          warn);
+      }),
+      h('div', null, h('button', { class: 'btn quiet', onclick: function () { form.ports.push({ local: '', remote: '' }); redrawPorts(); } }, icon('plus'), 'Another port of the same target')));
+  }
+  function redrawPorts() {
+    var old = $('f-ports');
+    if (old) old.replaceWith(portsNode());
+  }
+  function formCard() {
+    var form = state.form;
+    var names = (form.contexts || []).map(function (one) { return one.name; });
+    // One that kubeconfig no longer has is still what this forward says; and none at all means whichever kubectl is pointed at.
+    if (names.indexOf(form.context) === -1 && form.contexts !== null) names.unshift(form.context);
+    function field(key, extra) {
+      var props = { type: 'text', value: form[key], spellcheck: 'false', autocomplete: 'off', oninput: function (event) { form[key] = event.target.value; } };
+      for (var name in extra || {}) props[name] = extra[name];
+      return h('input', props);
+    }
+    var existing = form.id ? byId(form.id) : null;
+    var podNote = h('div', { id: 'f-pod', hidden: form.kind !== 'pod', text: 'A pod is forwarded to by name, and a pod that is replaced gets a new one. A service or a workload is followed to whichever pod it has.' });
+
+    return h('div', { class: 'card' },
+      h('div', { class: 'ch' }, h('div', null, h('h2', { text: form.id ? 'Change the forward' : 'New forward' }),
+        h('p', { text: 'A port on this computer that leads into a cluster.' }))),
+      h('div', { class: 'body', onkeydown: function (event) {
+        if (event.key !== 'Enter' || event.target.tagName !== 'INPUT' || event.target.type !== 'text') return;
+        // In a field that suggests, Enter belongs to the suggestion; with ⌘ or Ctrl it always means "done".
+        if (event.metaKey || event.ctrlKey || (!event.target.getAttribute('list') && event.target.id !== 'f-paste')) { event.preventDefault(); save(); }
+      } },
+        !form.id ? h('div', { class: 'paste' }, icon('file'),
+          h('input', { type: 'text', id: 'f-paste', spellcheck: 'false', autocomplete: 'off', placeholder: 'Have the kubectl port-forward line already? Paste it here.', 'aria-label': 'Paste a kubectl port-forward command',
+            value: form.pasteText || '', oninput: function (event) { form.pasteText = event.target.value; applyKubectl(event.target.value); } }),
+          h('div', { id: 'f-pasted', class: 'hint' + (form.pastedOk ? ' ok' : ' warn'), text: form.pasted || '' })) : null,
+        h('label', { text: 'Cluster' }),
+        h('select', { 'aria-label': 'Cluster', onchange: function (event) { form.context = event.target.value; form.namespaces = []; form.targets = []; fillLists(); lookNamespaces(); lookTargets(); } },
+          form.contexts === null ? h('option', { value: form.context, text: form.context ? cluster(form.context) : 'Reading kubeconfig…' }) : null,
+          names.map(function (name) { return h('option', { value: name, text: name ? cluster(name) + (cluster(name) !== name ? '  —  ' + name : '') : 'Whichever kubectl is pointed at', selected: name === form.context }); })),
+        h('label', { text: 'Namespace' }),
+        field('namespace', { list: 'dl-ns', onchange: function () { form.targets = []; fillLists(); lookTargets(); } }),
+        h('label', { text: 'Forward to' }),
+        h('div', { style: 'display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 6px;' },
+          h('select', { 'aria-label': 'Kind', onchange: function (event) { form.kind = event.target.value; form.targets = []; podNote.hidden = form.kind !== 'pod'; fillLists(); lookTargets(); } },
+            KINDS.map(function (one) { return h('option', { value: one[0], text: one[1], selected: one[0] === form.kind }); })),
+          field('target', { list: 'dl-target', placeholder: 'its name', id: 'f-target', oninput: function (event) { form.target = event.target.value; fillLists(); }, onchange: offerPorts })),
+        h('div'),
+        h('div', { class: 'hint' }, h('span', { id: 'f-looking' }), podNote),
+        h('label', { class: 'top', text: 'Ports' }),
+        portsNode(),
+        h('label', { text: 'Name' }),
+        field('name', { placeholder: 'what you call it — its target’s name if empty' }),
+        h('label', { text: 'Group' }),
+        h('select', { 'aria-label': 'Group', onchange: function (event) { form.groupId = event.target.value; } },
+          h('option', { value: '', text: 'No group' }),
+          state.groups.map(function (group) { return h('option', { value: group.id, text: group.name, selected: group.id === form.groupId }); })),
+
+        h('div', { class: 'cut', role: 'button', tabindex: '0', onclick: function () { form.more = !form.more; drawSheet(); }, onkeydown: function (event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); form.more = !form.more; drawSheet(); } } }, (form.more ? '− ' : '+ ') + 'How it behaves'),
+        form.more ? [
+          h('label', { text: 'Reachable from' }),
+          h('select', { 'aria-label': 'Reachable from', onchange: function (event) { form.address = event.target.value; } },
+            [['127.0.0.1', 'This computer only'], ['0.0.0.0', 'Everybody on the network (0.0.0.0)']].concat(
+              form.address !== '127.0.0.1' && form.address !== '0.0.0.0' ? [[form.address, form.address]] : []).map(function (one) {
+              return h('option', { value: one[0], text: one[1], selected: one[0] === form.address });
+            })),
+          h('label', { text: 'Stop by itself' }),
+          h('select', { 'aria-label': 'Stop by itself', onchange: function (event) { form.ttlMinutes = Number(event.target.value); } },
+            TTLS.concat(TTLS.some(function (one) { return one[0] === form.ttlMinutes; }) ? [] : [[form.ttlMinutes, 'After ' + form.ttlMinutes + ' minutes']]).map(function (one) {
+              return h('option', { value: one[0], text: one[1], selected: one[0] === form.ttlMinutes });
+            })),
+          h('div'),
+          h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: form.autoRestart, onchange: function (event) { form.autoRestart = event.target.checked; } }), 'Start it again when the connection drops'),
+          h('div'),
+          h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: form.autoStart, onchange: function (event) { form.autoStart = event.target.checked; } }), 'Start it when the app starts'),
+        ] : null,
+        form.error ? h('div', { class: 'full err', text: form.error }) : null,
+        h('datalist', { id: 'dl-ns' }), h('datalist', { id: 'dl-target' }), h('datalist', { id: 'dl-port' })),
+      h('div', { class: 'cf' },
+        form.leaving ? h('span', { class: 'hint warn', text: 'Not saved yet. Esc again throws it away.' })
+          : existing && active(existing) ? h('span', { class: 'hint', text: 'It is running: a change to where it leads starts it again.' })
+          : h('span', { class: 'hint' }, h('kbd', { text: '⌘' }), ' ', h('kbd', { text: '↵' }), ' saves'),
+        h('span', { class: 'spacer' }),
+        btn('Cancel', null, function () { closeSheet(true); }),
+        btn(form.id ? 'Save' : 'Add forward', null, save, 'primary')));
+  }
+
+  // ── out of a cluster, several at once ──
+  function browse() {
+    state.form = null;
+    state.sheet = { kind: 'browse', contexts: null, context: '', namespaces: [], namespace: '', what: 'services', rows: null, picked: {}, groupId: state.scope.kind === 'group' ? state.scope.id || '' : '', error: '', find: '', saving: false };
+    var sheet = state.sheet;
+    drawSheet();
+    kube('contexts').then(function (data) {
+      if (state.sheet !== sheet) return;
+      sheet.contexts = data.contexts || [];
+      var names = sheet.contexts.map(function (one) { return one.name; });
+      sheet.context = state.scope.kind === 'cluster' && names.indexOf(state.scope.id) !== -1 ? state.scope.id : data.current || names[0] || '';
+      drawSheet();
+      browseNamespaces();
+    }, function (error) { if (state.sheet === sheet) { sheet.contexts = []; sheet.error = error.message; drawSheet(); } });
+  }
+  function browseNamespaces() {
+    var sheet = state.sheet;
+    var context = sheet.context;
+    sheet.namespaces = [];
+    sheet.rows = null;
+    sheet.error = '';
+    kube('list', { kind: 'namespaces', context: context }).then(function (data) {
+      if (state.sheet !== sheet || sheet.context !== context) return;
+      sheet.namespaces = (data.rows || []).map(function (one) { return one.name; });
+      var known = (sheet.contexts.filter(function (one) { return one.name === context; })[0] || {}).namespace;
+      sheet.namespace = sheet.namespaces.indexOf(sheet.namespace) !== -1 ? sheet.namespace : sheet.namespaces.indexOf(known) !== -1 ? known : sheet.namespaces[0] || '';
+      drawSheet();
+      browseRows();
+    }, function (error) { if (state.sheet === sheet && sheet.context === context) { sheet.error = error.message; sheet.rows = []; drawSheet(); } });
+  }
+  function browseRows() {
+    var sheet = state.sheet;
+    var context = sheet.context;
+    var namespace = sheet.namespace;
+    var what = sheet.what;
+    sheet.rows = null;
+    sheet.error = '';
+    drawSheet();
+    if (!namespace) { sheet.rows = []; return drawSheet(); }
+    function mine() { return state.sheet === sheet && sheet.context === context && sheet.namespace === namespace && sheet.what === what; }
+    kube('list', { kind: what, context: context, namespace: namespace }).then(function (data) {
+      if (!mine()) return;
+      sheet.rows = (data.rows || []).map(function (one) { return { name: one.name, ports: one.forwardPorts || [] }; });
+      drawSheet();
+    }, function (error) { if (mine()) { sheet.error = error.message; sheet.rows = []; drawSheet(); } });
+  }
+  function browseAdd() {
+    var sheet = state.sheet;
+    if (sheet.saving) return;
+    var taken = {};
+    var byTarget = {};
+    var order = [];
+    Object.keys(sheet.picked).forEach(function (key) {
+      var one = sheet.picked[key];
+      var id = [one.context, one.namespace, one.kind, one.name].join('\u0001');
+      if (!byTarget[id]) { byTarget[id] = { name: one.name, context: one.context, namespace: one.namespace, kind: one.kind, target: one.name, ports: [], address: '127.0.0.1', autoRestart: true, groupId: sheet.groupId || null }; order.push(id); }
+      var local = freeLocal(one.port, null, taken);
+      if (local) taken[local] = true;
+      byTarget[id].ports.push({ local: local || 0, remote: one.port });
+    });
+    sheet.saving = true;
+    call('saveMany', { forwards: order.map(function (id) { return byTarget[id]; }) }).then(function (result) {
+      state.sheet = null;
+      drawSheet();
+      say(result.forwards.length + ' forward' + (result.forwards.length === 1 ? '' : 's') + ' added');
+      return load();
+    }, function (error) { sheet.saving = false; if (no(error)) return; sheet.error = error.message; drawSheet(); });
+  }
+  function browseCard() {
+    var sheet = state.sheet;
+    var kind = KINDS.filter(function (one) { return one[2] === sheet.what; })[0][0];
+    var count = Object.keys(sheet.picked).length;
+    var words = sheet.find.toLowerCase();
+    var rows = (sheet.rows || []).filter(function (one) { return !words || one.name.toLowerCase().indexOf(words) !== -1; });
+    var body = sheet.error ? h('div', { class: 'empty small' }, h('b', { text: 'The cluster could not be read' }), h('p', { text: sheet.error }))
+      : sheet.rows === null ? h('div', { class: 'empty small', text: 'Reading ' + cluster(sheet.context) + '…' })
+      : !rows.length ? h('div', { class: 'empty small', text: sheet.find ? 'Nothing matches “' + sheet.find + '”.' : 'No ' + sheet.what + ' in ' + (sheet.namespace || 'this cluster') + '.' })
+      : rows.map(function (one) {
+          return h('div', { class: 'it' },
+            h('span', { class: 'faint' }, icon(sheet.what === 'services' ? 'swap' : 'cluster')),
+            h('div', { class: 'n', title: one.name, text: one.name }),
+            h('div', { class: 'pp' }, one.ports.length ? one.ports.map(function (port) {
+              var key = [sheet.context, sheet.namespace, sheet.what, one.name, port.port].join('\u0001');
+              var on = Boolean(sheet.picked[key]);
+              function flip() {
+                if (on) delete sheet.picked[key]; else sheet.picked[key] = { context: sheet.context, namespace: sheet.namespace, kind: kind, name: one.name, port: port.port };
+                drawSheet();
+              }
+              return h('span', { class: 'pt' + (on ? ' on' : ''), role: 'checkbox', 'aria-checked': on ? 'true' : 'false', tabindex: '0', onclick: flip,
+                onkeydown: function (event) { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); flip(); } } },
+                on ? icon('check') : null, String(port.port), port.name ? h('small', { text: port.name }) : null);
+            }) : h('span', { class: 'faint', text: 'declares no ports' })));
+        });
+    return h('div', { class: 'card wide' },
+      h('div', { class: 'ch' }, h('div', null, h('h2', { text: 'Pick from a cluster' }), h('p', { text: 'Tick the ports you want. Each thing ticked becomes one forward, and the local ports are chosen so none clash.' }))),
+      h('div', { class: 'body', style: 'grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); padding-bottom: 12px' },
+        h('select', { 'aria-label': 'Cluster', onchange: function (event) { sheet.context = event.target.value; drawSheet(); browseNamespaces(); } },
+          sheet.contexts === null ? h('option', { text: 'Reading kubeconfig…' }) : sheet.contexts.map(function (one) { return h('option', { value: one.name, text: cluster(one.name), selected: one.name === sheet.context }); })),
+        h('select', { 'aria-label': 'Namespace', onchange: function (event) { sheet.namespace = event.target.value; browseRows(); } },
+          sheet.namespaces.length ? sheet.namespaces.map(function (name) { return h('option', { value: name, text: name, selected: name === sheet.namespace }); }) : h('option', { text: sheet.error ? '—' : 'Reading namespaces…' })),
+        h('div', { class: 'seg' }, [['services', 'Services'], ['pods', 'Pods'], ['deployments', 'Deployments'], ['statefulsets', 'StatefulSets']].map(function (one) {
+          return h('button', { class: sheet.what === one[0] ? 'on' : '', text: one[1], onclick: function () { sheet.what = one[0]; browseRows(); } });
+        })),
+        h('input', { type: 'text', id: 'browse-find', placeholder: 'Find by name…', spellcheck: 'false', value: sheet.find, oninput: function (event) { sheet.find = event.target.value; var at = event.target.selectionStart; drawSheet(); var again = $('browse-find'); again.focus(); again.setSelectionRange(at, at); } })),
+      h('div', { class: 'pick' }, body),
+      h('div', { class: 'cf' },
+        h('span', { class: 'dim', text: 'Into' }),
+        h('select', { 'aria-label': 'Group', onchange: function (event) { sheet.groupId = event.target.value; } },
+          h('option', { value: '', text: 'No group' }),
+          state.groups.map(function (group) { return h('option', { value: group.id, text: group.name, selected: group.id === sheet.groupId }); })),
+        h('span', { class: 'spacer' }),
+        btn('Cancel', null, function () { closeSheet(true); }),
+        h('button', { class: 'btn primary', disabled: !count, onclick: browseAdd, text: count ? 'Add ' + count + ' port' + (count === 1 ? '' : 's') : 'Add' })));
+  }
+
+  // ── the smaller sheets ──
+  function nameSheet(title, value, done, note) {
+    state.form = null;
+    state.sheet = { kind: 'name', title: title, value: value || '', done: done, error: '', note: note || '', saving: false };
+    drawSheet();
+  }
+  function nameCard() {
+    var sheet = state.sheet;
+    function go() {
+      if (sheet.saving) return;
+      sheet.saving = true;
+      sheet.done(sheet.value).then(function () { state.sheet = null; drawSheet(); return load(); }, function (error) {
+        sheet.saving = false;
+        if (no(error)) return;
+        sheet.error = error.message;
+        drawSheet();
+      });
+    }
+    return h('div', { class: 'card' },
+      h('div', { class: 'ch' }, h('h2', { text: sheet.title })),
+      h('div', { class: 'body' },
+        h('label', { text: 'Name' }),
+        h('input', { type: 'text', id: 'name-field', value: sheet.value, oninput: function (event) { sheet.value = event.target.value; }, onkeydown: function (event) { if (event.key === 'Enter') go(); } }),
+        sheet.note ? h('div', { class: 'full hint', text: sheet.note }) : null,
+        sheet.error ? h('div', { class: 'full err', text: sheet.error }) : null),
+      h('div', { class: 'cf' }, h('span', { class: 'spacer' }), btn('Cancel', null, function () { closeSheet(true); }), btn('Save', null, go, 'primary')));
+  }
+  /** A profile's forwards, ticked. `profile` is null for a new one. */
+  function membersSheet(profile) {
+    state.form = null;
+    var picked = {};
+    (profile ? profile.forwards : []).forEach(function (id) { picked[id] = true; });
+    state.sheet = { kind: 'members', id: profile ? profile.id : null, name: profile ? profile.name : '', picked: picked, error: '', saving: false };
+    drawSheet();
+  }
+  function membersCard() {
+    var sheet = state.sheet;
+    var count = Object.keys(sheet.picked).length;
+    function go() {
+      if (sheet.saving) return;
+      if (!sheet.name.trim()) { sheet.error = 'A profile needs a name'; return drawSheet(); }
+      sheet.saving = true;
+      call('saveProfile', { id: sheet.id, name: sheet.name, forwards: Object.keys(sheet.picked) }).then(function () { state.sheet = null; drawSheet(); return load(); }, function (error) {
+        sheet.saving = false;
+        if (no(error)) return;
+        sheet.error = error.message;
+        drawSheet();
+      });
+    }
+    var blocks = state.groups.map(function (group) { return { name: group.name, members: state.forwards.filter(function (one) { return one.groupId === group.id; }) }; });
+    blocks.push({ name: 'No group', members: state.forwards.filter(function (one) { return !groupOf(one); }) });
+    return h('div', { class: 'card' },
+      h('div', { class: 'ch' }, h('div', null, h('h2', { text: sheet.id ? 'The forwards of this profile' : 'New profile' }), h('p', { text: 'Switching to a profile starts these and stops everything else.' }))),
+      h('div', { class: 'body', style: 'padding-bottom: 10px' },
+        h('label', { text: 'Name' }),
+        h('input', { type: 'text', id: 'name-field', value: sheet.name, placeholder: 'the project, the task, the morning', oninput: function (event) { sheet.name = event.target.value; }, onkeydown: function (event) { if (event.key === 'Enter') go(); } }),
+        sheet.error ? h('div', { class: 'full err', text: sheet.error }) : null),
+      h('div', { class: 'pick', style: 'height: 40vh' }, blocks.filter(function (block) { return block.members.length; }).map(function (block) {
+        return [h('div', { class: 'memh', text: block.name }), block.members.map(function (forward) {
+          return h('label', { class: 'mem' },
+            h('input', { type: 'checkbox', checked: Boolean(sheet.picked[forward.id]), onchange: function (event) { if (event.target.checked) sheet.picked[forward.id] = true; else delete sheet.picked[forward.id]; drawSheet(); } }),
+            h('span', { class: 'n', text: forward.name }),
+            h('span', { class: 'g', text: cluster(forward.context) + ' · ' + forward.ports.map(function (one) { return ':' + (one.local || 'any'); }).join(' ') }));
+        })];
+      })),
+      h('div', { class: 'cf' }, h('span', { class: 'hint', text: count + ' chosen' }), h('span', { class: 'spacer' }), btn('Cancel', null, function () { closeSheet(true); }), btn('Save', null, go, 'primary')));
+  }
+  function portsSheet() {
+    state.form = null;
+    state.sheet = { kind: 'ports', ports: null, error: '', mine: false, find: '' };
+    drawSheet();
+    readPorts();
+  }
+  function readPorts() {
+    var sheet = state.sheet;
+    call('ports').then(function (data) {
+      if (state.sheet !== sheet) return;
+      sheet.ports = data.ports || [];
+      drawSheet();
+    }, function (error) {
+      if (state.sheet !== sheet) return;
+      sheet.error = error.message;
+      drawSheet();
+    });
+  }
+  function portsCard() {
+    var sheet = state.sheet;
+    var wanted = {};
+    state.forwards.forEach(function (forward) { forward.ports.forEach(function (one) { if (one.local) wanted[one.local] = forward.name; }); });
+    var words = sheet.find.toLowerCase().trim();
+    var rows = (sheet.ports || []).filter(function (one) { return !sheet.mine || one.forward || wanted[one.port]; })
+      .filter(function (one) { return !words || (one.port + ' ' + one.process + ' ' + one.pid + ' ' + (one.forward || '')).toLowerCase().indexOf(words) !== -1; });
+    var body = sheet.error ? h('div', { class: 'empty small', text: sheet.error })
+      : sheet.ports === null ? h('div', { class: 'empty small', text: 'Looking…' })
+      : !rows.length ? h('div', { class: 'empty small', text: words ? 'Nothing listening matches “' + sheet.find + '”.' : sheet.mine ? 'None of the ports your forwards ask for is in use.' : 'Nothing on this computer is listening.' })
+      : h('table', { class: 'list' },
+          h('tr', null, h('th', { text: 'Port' }), h('th', { text: 'Listening on' }), h('th', { text: 'Process' }), h('th', { text: 'PID' }), h('th', { text: '' })),
+          rows.map(function (one) {
+            var blocked = !one.forward && wanted[one.port];
+            return h('tr', { class: one.forward ? 'mine' : '' },
+              h('td', { class: 'mono', text: one.port }),
+              h('td', { class: 'mono dim', text: one.address === '*' ? 'every interface' : one.address }),
+              h('td', { text: one.process }),
+              h('td', { class: 'mono dim', text: one.pid }),
+              h('td', { style: one.forward ? 'color: var(--ok)' : blocked ? 'color: var(--warn, #d9a441)' : null, text: one.forward ? 'forward: ' + one.forward : blocked ? 'in the way of ' + blocked : '' }));
+          }));
+    return h('div', { class: 'card wide' },
+      h('div', { class: 'ch' }, h('div', null, h('h2', { text: 'Who is listening on this computer' }), h('p', { text: 'A forward that cannot start because its port is taken: this is who has it.' })),
+        h('span', { class: 'spacer' }),
+        h('input', { type: 'text', id: 'ports-find', placeholder: 'A port or a process…', style: 'width: 170px', spellcheck: 'false', value: sheet.find, oninput: function (event) { sheet.find = event.target.value; var at = event.target.selectionStart; drawSheet(); var again = $('ports-find'); again.focus(); again.setSelectionRange(at, at); } }),
+        h('div', { class: 'seg' },
+          h('button', { class: sheet.mine ? '' : 'on', text: 'Everything', onclick: function () { sheet.mine = false; drawSheet(); } }),
+          h('button', { class: sheet.mine ? 'on' : '', text: 'My forwards’ ports', onclick: function () { sheet.mine = true; drawSheet(); } }))),
+      h('div', { class: 'tall' }, body),
+      h('div', { class: 'cf' }, h('span', { class: 'spacer' }),
+        btn('Look again', 'restart', function () { sheet.ports = null; sheet.error = ''; drawSheet(); readPorts(); }),
+        btn('Close', null, function () { closeSheet(true); }, 'primary')));
+  }
+  function keysCard() {
+    var keys = [['↑ ↓', 'Move through the forwards'], ['Space', 'Switch the one you are on'], ['E ↵', 'Change it'], ['R', 'Start it again'], ['C', 'Copy its address'], ['⌫', 'Delete it — it asks first'],
+      ['N', 'New forward'], ['B', 'Pick from a cluster'], ['/', 'Find'], ['Esc', 'Close whatever is open']];
+    return h('div', { class: 'card' },
+      h('div', { class: 'ch' }, h('h2', { text: 'Keys' })),
+      h('div', { class: 'keys' }, keys.map(function (one) { return [h('span', null, one[0].split(' ').map(function (key) { return [h('kbd', { text: key }), ' ']; })), h('span', { text: one[1] })]; })),
+      h('div', { class: 'cf' }, h('span', { class: 'hint', text: 'Double-click a forward to change it; right-click for everything else. Drag one onto a group to move it.' }), h('span', { class: 'spacer' }), btn('Close', null, function () { closeSheet(true); }, 'primary')));
+  }
+  /** What somebody typed into the form, as one string: two of these differing is "there is something to lose". */
+  function typed(form) {
+    return JSON.stringify([form.name, form.context, form.namespace, form.kind, form.target, form.ports, form.address, form.autoStart, form.autoRestart, form.ttlMinutes, form.groupId]);
+  }
+  /**
+   * Close whatever is over the list. Escape on a form somebody has typed into
+   * asks once before throwing it away — said in the form, not in a dialog —
+   * and Cancel, which is a decision, does not ask.
+   */
+  function closeSheet(sure) {
+    var form = state.form;
+    if (form && sure !== true && !form.leaving && typed(form) !== form.initial) {
+      form.leaving = true;
+      return drawSheet();
+    }
+    state.form = null;
+    state.sheet = null;
+    drawSheet();
+    $('list').focus();
+  }
+  function drawSheet() {
+    var old = $('veil');
+    var at = old ? old.scrollTop : 0;
+    var inner = old ? old.querySelector('.pick, .tall') : null;
+    var innerAt = inner ? inner.scrollTop : 0;
+    var focused = document.activeElement && old && old.contains(document.activeElement) ? document.activeElement.id : '';
+    var caret = focused && document.activeElement.type === 'text' ? document.activeElement.selectionStart : null;
+    if (old) old.remove();
+    var card = state.form ? formCard() : state.sheet ? ({ ports: portsCard, name: nameCard, browse: browseCard, keys: keysCard, members: membersCard })[state.sheet.kind]() : null;
+    if (!card) return;
+    // It arrives once; being brought up to date is not arriving again.
+    var veil = h('div', { id: 'veil', class: old ? '' : 'in', role: 'dialog', 'aria-modal': 'true',
+      onmousedown: function (event) { if (event.target === veil && !state.form) closeSheet(); },
+      // Tab stays in what is open: the list behind it is not somewhere to end up by accident.
+      onkeydown: function (event) {
+        if (event.key !== 'Tab') return;
+        var stops = [].slice.call(veil.querySelectorAll('button, input, select, [tabindex="0"]')).filter(function (node) { return !node.disabled && node.offsetParent !== null; });
+        if (!stops.length) return;
+        var first = stops[0];
+        var last = stops[stops.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      } }, card);
+    document.body.appendChild(veil);
+    veil.scrollTop = at;
+    var again = veil.querySelector('.pick, .tall');
+    if (again) again.scrollTop = innerAt;
+    if (state.form) fillLists();
+    var first = (focused && $(focused)) || (!old && ($('name-field') || $('f-target')));
+    if (first) {
+      first.focus();
+      if (first.id === 'name-field' && !old) first.select();
+      else if (caret !== null && first.setSelectionRange) first.setSelectionRange(caret, caret);
+    }
+  }
+
+  // ── menus ──
+  function closeMenu() {
+    var shown = $('menu');
+    if (shown) shown.remove();
+    if (waiting) { waiting = false; draw(); }
+  }
+  function menuBox(items) {
+    closeMenu();
+    var box = h('div', { id: 'menu', role: 'menu' }, items.map(function (item) {
+      if (item === '-') return h('div', { class: 'sep' });
+      if (item.label) return h('div', { class: 'lbl', text: item.label });
+      return h('button', { class: item.danger ? 'danger' : '', role: 'menuitem', disabled: item.disabled, onclick: function () { closeMenu(); item.run(); } }, icon(item.icon || 'chev'), item.text);
+    }));
+    document.body.appendChild(box);
+    return box;
+  }
+  function place(box, left, top) {
+    var wide = document.documentElement.clientWidth;
+    var tall = document.documentElement.clientHeight;
+    box.style.left = Math.max(6, Math.min(left, wide - box.offsetWidth - 6)) + 'px';
+    box.style.top = Math.max(6, Math.min(top, tall - box.offsetHeight - 6)) + 'px';
+  }
+  function menu(anchor, items) {
+    var at = anchor.getBoundingClientRect();
+    place(menuBox(items), at.left, at.bottom + 4);
+  }
+  function menuAt(x, y, items) { place(menuBox(items), x, y); }
+  window.addEventListener('blur', closeMenu);
+
+  /*
+   * Nothing is redrawn under a hand. A click is a press and a release on the
+   * same node; a row rebuilt in between — by a forward coming up, or by the
+   * clock — would swallow it. So while a button is down, or a menu is open, or
+   * something is being dragged, what wants drawing waits for that to end.
+   */
+  var pressing = false;
+  var pressedAt = 0;
+  var waiting = false;
+  document.addEventListener('mousedown', function (event) {
+    // Down first: closing a menu may want a redraw, and that must not happen under this very press.
+    pressing = true;
+    pressedAt = Date.now();
+    if (!event.target.closest || !event.target.closest('#menu')) closeMenu();
+  }, true);
+  document.addEventListener('mouseup', function () {
+    setTimeout(function () { pressing = false; if (waiting && !$('menu') && !state.dragging) { waiting = false; draw(); } }, 0);
+  }, true);
+  document.addEventListener('dragend', function () { pressing = false; setTimeout(function () { if (waiting) { waiting = false; draw(); } }, 0); }, true);
+
+  // ── keys ──
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') {
+      if ($('menu')) return closeMenu();
+      if (state.form || state.sheet) return closeSheet();
+      if (document.activeElement && document.activeElement.id === 'search') {
+        if (state.filter) { state.filter = ''; return draw(); }
+        return $('list').focus();
+      }
+      if (state.picked) { state.picked = null; remember(); return draw(); }
+      return;
+    }
+    var typing = /^(INPUT|SELECT|TEXTAREA)$/.test((event.target && event.target.tagName) || '');
+    if (state.form || state.sheet || $('menu') || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (typing) {
+      if (event.target.id === 'search' && (event.key === 'ArrowDown' || event.key === 'Enter')) { event.preventDefault(); $('list').focus(); step(1, true); }
+      return;
+    }
+    // A button that has the focus answers Space and Enter itself.
+    var onButton = event.target && event.target.closest && event.target.closest('button, [role="button"], [role="checkbox"]');
+    var forward = state.picked ? byId(state.picked) : null;
+    var key = event.key;
+    if (key === '/') { event.preventDefault(); $('search').focus(); $('search').select(); }
+    else if (key === 'ArrowDown' || key === 'j') { event.preventDefault(); step(1); }
+    else if (key === 'ArrowUp' || key === 'k') { event.preventDefault(); step(-1); }
+    else if (key === 'n' || key === 'N') { event.preventDefault(); edit(null, false, state.scope.kind === 'group' ? state.scope.id : null); }
+    else if (key === 'b' || key === 'B') { event.preventDefault(); browse(); }
+    else if (key === '?') { state.sheet = { kind: 'keys' }; drawSheet(); }
+    else if (!forward) return;
+    else if (key === ' ' && !onButton) { event.preventDefault(); toggle(forward); }
+    else if (key === 'e' || key === 'E' || (key === 'Enter' && !onButton)) { event.preventDefault(); edit(forward); }
+    else if ((key === 'Delete' || key === 'Backspace') && !onButton) { event.preventDefault(); remove(forward); }
+    else if (key === 'r' || key === 'R') { if (active(forward)) restart(forward); }
+    else if (key === 'c' || key === 'C') { var port = livePort(forward, 0) || forward.ports[0].local; if (port) copy('localhost:' + port); }
+  });
+  function step(by, first) {
+    var rows = walkable();
+    if (!rows.length) return;
+    var at = rows.map(function (one) { return one.id; }).indexOf(state.picked);
+    var next = first || at === -1 ? (by > 0 ? 0 : rows.length - 1) : Math.max(0, Math.min(rows.length - 1, at + by));
+    if (rows[next].id === state.picked) return;
+    pick(rows[next].id);
+    var node = $('list').querySelector('.row.on');
+    if (node && node.scrollIntoView) node.scrollIntoView({ block: 'nearest' });
+  }
+
+  // ── in and out ──
+  function importDesktop() { call('importDesktopApp').then(function (result) { broughtIn(result, 'K8S Port Forward'); }, fail); }
+  function importFile() { call('importFile').then(function (result) { broughtIn(result, 'the file'); }, fail); }
+  function broughtIn(result, from) {
+    var added = result.added || 0;
+    var parts = [added ? added + ' forward' + (added === 1 ? '' : 's') + ' brought in from ' + from : 'Nothing new in ' + from];
+    if (result.skipped) parts.push(result.skipped + ' already here');
+    if (result.profiles) parts.push(result.profiles + ' profile' + (result.profiles === 1 ? '' : 's'));
+    var notes = (result.notes || []).concat((result.refused || []).length ? ['Left out: ' + result.refused.join('; ')] : []);
+    say(parts.join(' · ') + (notes.length ? '\n' + notes.join('\n') : ''), (result.refused || []).length > 0 && !added);
+    load();
+  }
+
+  fill($('mark'), icon('swap'));
+  fill($('b-ports'), icon('ports'), 'Ports in use');
+  fill($('b-more'), icon('more'), 'More');
+  $('b-ports').onclick = portsSheet;
+  $('b-more').onclick = function (event) {
+    menu(event.currentTarget, [
+      { icon: 'file', text: 'Bring in from K8S Port Forward', disabled: !state.desktopApp, run: importDesktop },
+      { icon: 'file', text: 'Import a file…', run: importFile },
+      { icon: 'open', text: 'Export everything to a file…', disabled: !state.forwards.length, run: function () {
+        call('exportText').then(function (data) { host.emit('save', { name: data.name, text: data.text }); }, fail);
+      } },
+      '-',
+      { icon: 'help', text: 'Keys', run: function () { state.sheet = { kind: 'keys' }; drawSheet(); } },
+    ]);
+  };
+
+  function draw() {
+    // A button released outside this frame never says so here; a press older than a moment is over.
+    if (pressing && Date.now() - pressedAt > 1500 && !state.dragging) pressing = false;
+    if (pressing || $('menu') || state.dragging) { waiting = true; return; }
+    // The search field is rebuilt with the head; what was being typed in it keeps its caret.
+    var search = $('search');
+    var typing = search && document.activeElement === search ? search.selectionStart : null;
+    drawSide();
+    drawHead();
+    drawAlert();
+    drawList();
+    drawFoot();
+    drawInspect();
+    if (typing !== null) { var again = $('search'); again.focus(); again.setSelectionRange(typing, typing); }
+  }
+
+  // ── what the app says by itself ──
+  host.on('pf', function (event) {
+    if (!event) return;
+    if (event.type === 'state' && event.state) {
+      var forward = byId(event.state.id);
+      if (!forward) return;
+      forward.run = event.state;
+      draw();
+      if (state.picked === forward.id) loadLog();
+      return;
+    }
+    // The lists changed, here or in another window.
+    if (event.type === 'changed') load();
+  });
+
+  var showing = true;
+  host.on('showing', function (payload) {
+    showing = !payload || payload.showing !== false;
+    if (showing && state.loaded) { load(); readContexts(); }
+  });
+  // Uptimes move, and so do the connection counts, which nothing announces: read again while somebody is looking.
+  setInterval(function () {
+    if (!showing || !state.loaded || state.form || state.sheet) return;
+    if (!state.forwards.some(active)) return;
+    refresh().then(function () { if (state.picked) loadLog(); });
+  }, 5000);
+
+  host.on('context', function (payload) {
+    var resume = payload && payload.resume;
+    if (resume && typeof resume === 'object') {
+      if (resume.scope && typeof resume.scope.kind === 'string') state.scope = { kind: resume.scope.kind, id: resume.scope.id === undefined ? null : resume.scope.id };
+      if (typeof resume.picked === 'string') state.picked = resume.picked;
+      if (resume.closed && typeof resume.closed === 'object') state.closed = resume.closed;
+    }
+    load().then(function () { if (state.picked) loadLog(); });
+    readContexts();
+  });
+  host.ready();
+})();
+</script>

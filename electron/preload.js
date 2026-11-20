@@ -307,6 +307,11 @@ contextBridge.exposeInMainWorld('api', {
   rdb: {
     call: (name, args) => ipcRenderer.invoke('rdb:call', { name, args }),
   },
+  /** Port Forward: saved forwards, and one stream of "this one changed state". */
+  pf: {
+    call: (name, args) => ipcRenderer.invoke('pf:call', { name, args }),
+    onEvent: (handler) => on('pf:event', handler),
+  },
   jenkins: {
     call: (name, args) => ipcRenderer.invoke('jenkins:call', { name, args }),
     onEvent: (handler) => on('jenkins:event', handler),

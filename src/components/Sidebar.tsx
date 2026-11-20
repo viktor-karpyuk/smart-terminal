@@ -1979,7 +1979,7 @@ function LauncherButton({ viewId, title, icon }: { viewId: string; title: string
       aria-pressed={showing}
       onClick={() => useStore.getState().launchExtensionView(viewId)}
     >
-      {icon === 'review' ? <ReviewIcon /> : icon === 'teams' ? <TeamsIcon /> : icon === 'send' ? <SendIcon /> : icon === 'jenkins' ? <JenkinsIcon /> : icon === 'remote' ? <RemoteIcon /> : icon === 'timelogbook' ? <TimelogbookIcon /> : icon === 'kubrik' ? <KubrikIcon /> : icon === 'database' ? <DatabaseIcon /> : <ExtensionsIcon />}
+      {icon === 'review' ? <ReviewIcon /> : icon === 'teams' ? <TeamsIcon /> : icon === 'send' ? <SendIcon /> : icon === 'jenkins' ? <JenkinsIcon /> : icon === 'remote' ? <RemoteIcon /> : icon === 'timelogbook' ? <TimelogbookIcon /> : icon === 'kubrik' ? <KubrikIcon /> : icon === 'database' ? <DatabaseIcon /> : icon === 'forward' ? <ForwardIcon /> : <ExtensionsIcon />}
       {remoteDot ? <span className={`activity-dot is-${remoteDot}`} aria-hidden="true" /> : null}
       {remote && remote.viewers.length > 0 && !remote.error ? <span className="remote-count" aria-hidden="true">{remote.viewers.length}</span> : null}
     </button>
@@ -2066,6 +2066,18 @@ function DatabaseIcon() {
       <ellipse cx="12" cy="5.5" rx="7.5" ry="3" />
       <path d="M4.5 5.5v13c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3v-13" />
       <path d="M4.5 12c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3" />
+    </svg>
+  );
+}
+
+/** Two ports joined both ways: one here, one in a cluster. */
+function ForwardIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.95" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 8h14" />
+      <path d="m14 4 4 4-4 4" />
+      <path d="M20 16H6" />
+      <path d="m10 12-4 4 4 4" />
     </svg>
   );
 }

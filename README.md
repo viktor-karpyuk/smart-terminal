@@ -313,6 +313,8 @@ electron/
   updates.js      which version is published, and replacing this one with it
   kube.js         Kubernetes, through kubectl; helm.js for Helm
   jenkins-*.js    Jenkins: the client, the poller that tells panels what changed, the servers kept
+  pf-*.js         Port Forward: saved `kubectl port-forward`s the app keeps running — the engine that
+                  starts them again when they drop, the groups and profiles, and what K8S Port Forward saved
   rdb-*.js        Databases: PostgreSQL, MySQL and SQLite behind one set of calls — the SQL that is
                   read and written (sql), the three engines (drivers), saved connections (store),
                   and the verbs a panel may ask for (service)

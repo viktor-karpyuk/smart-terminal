@@ -1119,6 +1119,11 @@ declare global {
       rdb: {
         call(name: string, args?: unknown): Promise<{ ok?: boolean; error?: string; [key: string]: unknown }>;
       };
+      /** Port Forward: saved forwards the app keeps running, and their changes of state. */
+      pf: {
+        call(name: string, args?: unknown): Promise<{ ok?: boolean; error?: string; [key: string]: unknown }>;
+        onEvent(handler: (event: { type: string; [key: string]: unknown }) => void): () => void;
+      };
       /** Jenkins: every verb through one call, and one event for "something changed, read it again". */
       jenkins: {
         call(name: string, args?: unknown): Promise<{ ok?: boolean; error?: string; [key: string]: unknown }>;

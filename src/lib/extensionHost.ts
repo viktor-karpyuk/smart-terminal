@@ -383,6 +383,28 @@ const DB_VERBS = new Map<string, Channel>([
   ...DB_APP.map((name) => [name, 'app'] as [string, Channel]),
 ]);
 
+/**
+ * Port Forward: forwards somebody saved, which the app keeps running.
+ *
+ * Reading is the list and where each one stands. Everything else opens a port
+ * into a cluster, closes one, or changes what is saved — and `importFile`
+ * reads a file, which the system's own dialog chooses. No verb takes an
+ * address or a command: a forward is named by id and kubectl's line is
+ * written by the app.
+ */
+const PF_READ = ['overview', 'log', 'ports', 'exportText'] as const;
+const PF_WRITE = [
+  'save', 'remove', 'saveGroup', 'removeGroup', 'saveProfile', 'removeProfile', 'applyProfile',
+  'start', 'stop', 'restart', 'startGroup', 'stopGroup', 'stopAll', 'open',
+  'importDesktopApp', 'importFile', 'saveMany', 'retryWaiting',
+] as const;
+/** A terminal with the cloud's own sign-in in it, for a forward whose session ran out. The app writes the line. */
+const PF_APP = ['signIn'] as const;
+const PF_VERBS = new Map<string, Channel>([
+  ...[...PF_READ, ...PF_WRITE].map((name) => [name, 'pf'] as [string, Channel]),
+  ...PF_APP.map((name) => [name, 'app'] as [string, Channel]),
+]);
+
 const REVIEW_VERBS = new Map<string, Channel>([
   ...REVIEW_READ.map((name) => [name, 'review'] as [string, Channel]),
   ...REVIEW_WRITE.map((name) => [name, 'review'] as [string, Channel]),
@@ -397,7 +419,7 @@ const KUBE_VERBS = new Map<string, Channel>([
   ...KUBE_APP.map((name) => [name, 'app'] as [string, Channel]),
 ]);
 
-export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review' | 'teams' | 'jenkins' | 'remote' | 'timelogbook' | 'kubrik' | 'db';
+export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review' | 'teams' | 'jenkins' | 'remote' | 'timelogbook' | 'kubrik' | 'db' | 'pf';
 
 /**
  * Which door a call goes through, or none.
@@ -421,6 +443,7 @@ export function route(name: string): Channel | null {
   if (name.startsWith('timelogbook.')) return TIMELOGBOOK_VERBS.get(name.slice(12)) ?? null;
   if (name.startsWith('kubrik.')) return KUBRIK_VERBS.get(name.slice(7)) ?? null;
   if (name.startsWith('db.')) return DB_VERBS.get(name.slice(3)) ?? null;
+  if (name.startsWith('pf.')) return PF_VERBS.get(name.slice(3)) ?? null;
   return null;
 }
 
@@ -449,6 +472,8 @@ export const PERMISSIONS: Record<string, string> = {
   'kubrik.write': 'Change the Kubrik OS connection, and run tools that change things in Kubrik OS (each one asks you first)',
   'db.read': 'Read the databases you connected: their tables, rows and structure',
   'db.write': 'Run SQL on your databases, change rows, and change the connections this app knows',
+  'pf.read': 'See the port forwards you saved, and which are running',
+  'pf.write': 'Start, stop, add and remove port forwards into your clusters',
   terminal: 'Open terminals and Claude sessions about what it shows',
 };
 
@@ -475,6 +500,7 @@ export function permissionFor(name: string): string | null {
   // Opening a port on this computer is nothing an installed extension gets to ask for.
   if (channel === 'remote') return null;
   if (channel === 'db') return (DB_READ as readonly string[]).includes(name.slice(3)) ? 'db.read' : 'db.write';
+  if (channel === 'pf') return (PF_READ as readonly string[]).includes(name.slice(3)) ? 'pf.read' : 'pf.write';
   return channel;
 }
 
@@ -515,7 +541,7 @@ export function permitted(view: { trusted?: boolean; permissions?: string[] }, n
  * do by asking for a terminal.
  */
 // A shell in a database can do anything a query can, so it needs what a query needs.
-const ALSO_NEEDS: Record<string, string[]> = { 'jenkins.ask': ['jenkins.read'], 'timelogbook.ask': ['timelogbook.read'], 'db.ask': ['db.read'], 'db.shell': ['db.write'] };
+const ALSO_NEEDS: Record<string, string[]> = { 'jenkins.ask': ['jenkins.read'], 'timelogbook.ask': ['timelogbook.read'], 'db.ask': ['db.read'], 'db.shell': ['db.write'], 'pf.signIn': ['pf.write'] };
 
 export function allowed(name: string): boolean {
   return route(name) !== null;
@@ -932,6 +958,25 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
     return 'Disconnect Kubrik OS?\n\nThe API key is removed from this app. It keeps working in Kubrik OS until you revoke it there.';
   }
   if (name.startsWith('db.')) return dbConsent(name, args);
+  /*
+   * A saved forward is a few fields and is typed again in a minute, so most of
+   * this asks nothing. Two things do: taking away what somebody set up, and a
+   * forward that listens on every interface — which hands a port inside a
+   * cluster to everybody on the same network, and reads as one dropdown.
+   */
+  if (name === 'pf.remove') return `Delete the forward ${shown(args.name ?? 'this one', 80)}?\n\nIt is stopped if it is running.`;
+  if (name === 'pf.removeGroup') return `Delete the group ${shown(args.name ?? 'this one', 80)}?\n\nIts forwards stay, in no group.`;
+  if (name === 'pf.removeProfile') return `Delete the profile ${shown(args.name ?? 'this one', 80)}?\n\nNo forward is removed or stopped.`;
+  if (name === 'pf.save' || name === 'pf.saveMany') {
+    // Read the way the app will read it — trimmed, as text — and anything that is not this computer alone is asked about.
+    const list = (name === 'pf.save' ? [args.forward] : Array.isArray(args.forwards) ? args.forwards : []) as { name?: unknown; target?: unknown; address?: unknown }[];
+    const open = list.filter((one) => one && one.address != null && !/^(127\.|localhost$)/.test(String(one.address).trim()) && String(one.address).trim() !== '');
+    if (open.length) {
+      const what = open.length === 1 ? shown(open[0].name || open[0].target || 'this forward', 80) : `${open.length} forwards`;
+      const where = open.every((one) => String(one.address).trim() === '0.0.0.0') ? 'on every network interface' : `on ${shown(open[0].address, 40)}`;
+      return `Save ${what} listening ${where}?\n\nWhile ${open.length === 1 ? 'it runs' : 'they run'}, anybody on the same network as this computer can reach that port of the cluster.`;
+    }
+  }
 
   if (name.startsWith('kube.')) {
     const where = whereItIs(args);
