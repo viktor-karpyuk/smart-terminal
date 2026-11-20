@@ -972,6 +972,10 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
         ? `\n\nThis text is ${kindNow ?? String(args.kind)} ${named ?? String(args.name)}, not ${what}. ` +
           `Applying it makes or changes that one and leaves ${String(args.name)} as it is.`
         : '';
+      if (args.replace === true) {
+        return `Replace ${what}${where} with this manifest?\n\nIt is sent whole: anything that is not in the text is taken off it, ` +
+          `including what somebody else changed since you read it.${other}${managed}${synced}`;
+      }
       return `Apply this manifest${where}?${size}${other}${managed}${synced}`;
     }
     /*

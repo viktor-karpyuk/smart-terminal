@@ -1147,17 +1147,21 @@
   function editsToKeep() {
     var drafts = {};
     var room = 200000;
+    // Newest first when there is not room for all, and written back in the order they were made:
+    // reversing them on every save made the next restart drop the newest instead of the oldest.
+    var fits = {};
     Object.keys(state.drafts).reverse().forEach(function (uid) {
       var draft = state.drafts[uid];
       var size = draft.text.length + draft.base.length;
       if (draft.kind === 'Secret' || size > room) return;
       room -= size;
-      drafts[uid] = draft;
+      fits[uid] = true;
     });
+    Object.keys(state.drafts).forEach(function (uid) { if (fits[uid]) drafts[uid] = state.drafts[uid]; });
     var configs = {};
     Object.keys(state.configs).forEach(function (key) {
       var config = state.configs[key];
-      if (configChanges(config).length) configs[key] = { key: key, kind: config.kind, live: config.live, draft: config.draft };
+      if (configChanges(config).length) configs[key] = { key: key, kind: config.kind, namespace: config.namespace, name: config.name, live: config.live, draft: config.draft };
     });
     var history = state.history.filter(function (entry) { return entry.kind !== 'Secret'; }).slice(0, 20).filter(function (entry) {
       var size = (entry.before || '').length + (entry.after || '').length;
@@ -1198,7 +1202,6 @@
     }
     if (saved.edits && typeof saved.edits === 'object') {
       // For the cluster they were made on: a uid means nothing on another one.
-      state.editsFor = saved.edits.context || null;
       state.drafts = saved.edits.drafts || {};
       state.configs = saved.edits.configs || {};
       state.history = Array.isArray(saved.edits.history) ? saved.edits.history : [];
@@ -2770,6 +2773,7 @@
     state.revertArmed = 0;
     state.showSecret = false;
     shownEnv = {};
+    applySitting += 1;
   }
 
   /** Write down something that was applied. Newest first, and not for ever. */
@@ -2809,7 +2813,9 @@
     var entry = state.history[at];
     if (!entry) return;
     var body = '<div class="dim sheet-sub">' + esc(entry.kind + ' ' + (entry.namespace ? entry.namespace + '/' : '') + entry.name + ' · ' + historyLine(entry) + ' · ' + new Date(entry.at).toLocaleString()) + '</div>' +
-      (entry.before != null
+      (entry.before != null && entry.kind === 'Secret'
+        ? '<div class="dim">A Secret: what changed is its values, and they are not shown here.</div>'
+        : entry.before != null
         ? '<div class="diff">' + (diffHtml(lineDiff(entry.before, entry.after)) || '<div class="dim">Nothing changed.</div>') + '</div>' +
           '<div class="sheet-foot"><span class="dim">Putting it back opens the editor with the text as it was. Nothing is applied until you apply it.</span>' +
           '<span class="spacer"></span><button class="btn" data-history-copy="' + at + '">Copy diff</button><button class="btn go" data-history-back="' + at + '">Put it back…</button></div>'
@@ -2819,6 +2825,7 @@
       if (event.target.closest('[data-history-copy]')) { copyText(diffText(lineDiff(entry.before, entry.after)), 'the changes'); return; }
       var back = event.target.closest('[data-history-back]');
       if (!back) return;
+      if (state.drafts[entry.uid]) { say('There is an edit of ' + entry.name + ' not applied yet. Apply it or discard it first.', true); return; }
       box.remove();
       // As an edit like any other: the text as it was, measured against what was applied over it.
       state.drafts[entry.uid] = { text: entry.before, base: entry.after, name: entry.name, kind: entry.kind, namespace: entry.namespace };
@@ -2866,8 +2873,9 @@
     Object.keys(state.configs).forEach(function (key) {
       var config = state.configs[key];
       if (!configChanges(config).length) return;
-      var parts = key.split('/');
-      out.push({ tab: 'configure', kind: parts[0], namespace: parts[1], name: parts.slice(2).join('/'), key: key });
+      // Another cluster's are kept, and are not this one's to offer.
+      if (key.indexOf((state.context || '') + '\n') !== 0) return;
+      out.push({ tab: 'configure', kind: config.kind, namespace: config.namespace || '', name: config.name || '', key: key });
     });
     return out;
   }
@@ -2902,6 +2910,7 @@
     items.push({ label: 'Discard all of them', run: function () {
       state.drafts = {};
       state.configs = {};
+      rememberSoon();
       if (state.selected) { stopEditing(); state.config = null; drawDetail(true); loadDetail(); }
       drawCrumb();
       say(edits.length === 1 ? 'The edit was dropped.' : 'All ' + edits.length + ' edits were dropped.');
@@ -3150,7 +3159,7 @@
     var command = event.metaKey || event.ctrlKey;
     if (command && event.key === 'f' && state.selected && !document.getElementById('prompt')) {
       // Not from the log's own search or the table's filter: those are finds of their own.
-      if (event.target && (event.target.id === 'log-search' || event.target.closest('.dock'))) return;
+      if (event.target && (event.target.id === 'log-search' || event.target.id === 'search' || event.target.closest('.dock'))) return;
       event.preventDefault();
       findOpen();
       return;
@@ -3264,9 +3273,17 @@
     var row = null;
     for (var i = 0; i < rows.length; i += 1) if (rows[i].uid === uid) row = rows[i];
     if (!row) return;
+    /*
+     * Over an open edit of something else, this is leaving it: the selection
+     * moved to the menu's row while the editor stayed on screen, and what was
+     * typed next was kept against the wrong object.
+     */
+    var leaving = state.selected && state.selected !== row && (holdingEdit() || state.editing);
+    if (leaving) { sayKept(row.uid); stopEditing(); letConfigGo(); state.detail = { tab: 'overview' }; state.detailData = {}; prior = row; }
     menuWas = prior;
     menuRow = row;
     state.selected = row;
+    if (leaving) { draw(); loadDetail(); }
 
     var box = document.createElement('div');
     box.className = 'row-menu';
@@ -5743,7 +5760,7 @@
   // An open list shuts on Escape, and on a click anywhere outside the map: it is in the way of everything else.
   document.addEventListener('keydown', function (event) {
     if (event.key === 'Escape' && mapMenuOpen && !document.getElementById('map-form')) { mapMenuOpen = false; mapRedraw(); }
-    if (event.key === 'Enter' && event.target.closest && event.target.closest('#map-form') && event.target.tagName !== 'TEXTAREA') {
+    if (event.key === 'Enter' && !event.isComposing && event.target.closest && event.target.closest('#map-form') && event.target.tagName === 'INPUT') {
       event.preventDefault();
       mapSendPlan(document.getElementById('map-form').dataset.op);
     }
@@ -6759,7 +6776,7 @@
   function copyOf(value) { return JSON.parse(JSON.stringify(value)); }
 
   /** The draft for this object, kept across redraws and across tabs. */
-  function configKey(row) { return row.kind + '/' + (row.namespace || '') + '/' + row.name; }
+  function configKey(row) { return (state.context || '') + '\n' + row.kind + '/' + (row.namespace || '') + '/' + row.name; }
 
   /**
    * Kept against the object, so it is still here after a look at another one.
@@ -6775,18 +6792,46 @@
       var names = function (config) { return config.containers.map(function (c) { return c.name; }).join('\n'); };
       if (names(live) !== names(kept.draft)) kept = null;
       else {
-        if (JSON.stringify(live) !== JSON.stringify(kept.live) && configChanges(kept).length) kept.moved = true;
+        if (JSON.stringify(live) !== JSON.stringify(kept.live)) {
+          if (configChanges(kept).length) kept.moved = true;
+          kept.draft = configRebase(kept.draft, kept.live, live);
+        }
         kept.live = live;
         kept.object = object;
       }
     }
     if (!kept) {
       var fresh = configOf(object, row.kind);
-      kept = { key: key, kind: row.kind, live: fresh, draft: copyOf(fresh), object: object };
+      kept = { key: key, kind: row.kind, namespace: row.namespace || '', name: row.name, live: fresh, draft: copyOf(fresh), object: object };
     }
     state.configs[key] = kept;
     state.config = kept;
     return kept;
+  }
+
+  /**
+   * What was edited stays edited; what was not is what the cluster has now.
+   *
+   * The draft is a copy of the whole form, so a field nobody touched held the
+   * value it had when the form was opened — and after an autoscaler moved the
+   * replicas from 3 to 5, the form offered "5 → 3" as if somebody had asked.
+   */
+  function configRebase(draft, was, now) {
+    var out = copyOf(draft);
+    if (same(draft.replicas, was.replicas)) out.replicas = now.replicas;
+    out.containers.forEach(function (container, at) {
+      var before = was.containers[at];
+      var after = now.containers[at];
+      if (!before || !after) return;
+      if (same(container.image, before.image)) container.image = after.image;
+      ['requests', 'limits'].forEach(function (which) {
+        ['cpu', 'memory'].forEach(function (what) {
+          if (same(container[which][what], before[which][what])) container[which][what] = after[which][what];
+        });
+      });
+      if (JSON.stringify(container.env) === JSON.stringify(before.env)) container.env = copyOf(after.env);
+    });
+    return out;
   }
 
   var QUANTITY = /^\d+(\.\d+)?([eE]\d+)?(m|k|M|G|T|P|E|Ki|Mi|Gi|Ti|Pi|Ei)?$/;
@@ -6807,6 +6852,7 @@
    */
   function configProblems(config) {
     var out = [];
+    if (config.draft.replicas === '') out.push({ key: 'undefined|replicas', text: 'replicas is empty: say how many' });
     config.draft.containers.forEach(function (container, at) {
       var of = ' of ' + container.name;
       if (!String(container.image).trim()) out.push({ key: at + '|image', text: 'image' + of + ' is empty' });
@@ -6934,6 +6980,7 @@
       '<div class="edit-note-text">' + esc(note.text) + '</div>' +
       '<div class="edit-note-tools">' +
       (note.line ? '<button class="btn" data-do="yaml-goto" title="Put the caret there">Go to line ' + note.line + '</button>' : '') +
+      (note.left ? '<button class="btn bad" data-do="yaml-replace" title="Send the manifest whole: what is not in the text is taken off the object">Replace…</button>' : '') +
       (note.moved ? '<button class="btn" data-do="yaml-theirs" title="What is different in the cluster now, against what you started from">See what changed</button>' +
         '<button class="btn" data-do="yaml-take" title="Drop your edit and start again from what the cluster has now">Take the cluster\u2019s</button>' +
         '<button class="btn go" data-do="yaml-force" title="Apply your text over what the cluster has now">Apply mine anyway</button>' : '') +
@@ -7186,7 +7233,8 @@
     var value = field.value;
     var what = field.dataset.config;
     if (what === 'replicas') {
-      config.draft.replicas = value === '' ? 0 : Math.max(0, Number(value) || 0);
+      // Emptied is not zero: it is nothing yet, and it is said to be wrong rather than sent as "stop everything".
+      config.draft.replicas = value === '' ? '' : Math.max(0, Number(value) || 0);
     } else {
       var container = config.draft.containers[Number(field.dataset.at)];
       if (!container) return;
@@ -7693,7 +7741,10 @@
   function yamlBody(row) {
     var draft = draftFor(row);
     // Typing that survived a trip to another tab, or to another object, comes back with the editor open.
-    if (draft != null) state.editingYaml = true;
+    // Not a Secret's: its editor is its values, and they are shown when somebody asks, not when a tab is opened.
+    var covered = row.kind === 'Secret' && !state.showSecret;
+    if (draft != null && !covered) state.editingYaml = true;
+    if (covered) state.editingYaml = false;
     var editing = state.editingYaml;
     var base = baseFor(row);
     var body = draft == null ? base : draft;
@@ -7724,6 +7775,7 @@
       '<button class="btn" data-do="copy-detail" title="Copy the whole manifest">Copy</button>' +
       '</div>' +
       editNoteHtml() + (editing ? managedNote() : '') +
+      (covered && draft != null ? '<div class="edit-note" role="note"><div class="edit-note-text">An edit of this Secret is kept and not applied. Edit shows it, with the values.</div></div>' : '') +
       (theirs
         ? '<div class="diff-title dim">What changed in the cluster since you started <button class="btn" data-do="yaml-diff-close">Back to the edit</button></div>' +
           '<div class="diff">' + (diffHtml(lineDiff(base, state.detailData.theirs)) || '<div class="dim">Nothing you would see in this text.</div>') + '</div>'
@@ -9313,6 +9365,11 @@
     if (what === 'yaml-theirs') { state.yamlView = 'theirs'; drawDetail(true); return; }
     if (what === 'yaml-goto') { if (state.editNote && state.editNote.line) yamlGoTo(state.editNote.line); return; }
     if (what === 'note-close') { state.editNote = null; redrawEditor(); return; }
+    if (what === 'yaml-replace') {
+      var whole = draftFor(row);
+      if (whole != null) applyYaml(whole, false, true, true);
+      return;
+    }
     if (what === 'yaml-force') {
       var mineText = draftFor(row);
       if (mineText != null) applyYaml(mineText, false, true);
@@ -9407,8 +9464,10 @@
       }
       dropDraft(row);
       stopEditing();
+      rememberSoon();
       state.detailData.theirs = null;
       drawDetail(true);
+      drawCrumb();
       return;
     }
     if (what === 'yaml-check' || what === 'yaml-apply') {
@@ -9438,6 +9497,7 @@
       state.revertArmed = 0;
       state.config.draft = copyOf(state.config.live);
       state.config.moved = false;
+      rememberSoon();
       state.editing = false;
       state.editNote = null;
       drawDetail(true);
@@ -9546,6 +9606,7 @@
    * box loses it — and measured against what the edit started from, so text
    * typed back to how it was is no longer an edit, and the bar says so.
    */
+  var applySitting = 0;
   var yamlCount = 0;
   function yamlTyped(box) {
     var row = state.selected;
@@ -9615,8 +9676,13 @@
     var command = event.metaKey || event.ctrlKey;
     if (command && event.key === 's' && state.selected && (state.detail.tab === 'yaml' || state.detail.tab === 'configure')) {
       // ⌘S anywhere in the pane: the app's own Save has nothing of this frame's to save.
-      if (state.detail.tab === 'configure') { event.preventDefault(); act('config-apply'); return; }
-      if (state.editingYaml) { event.preventDefault(); act('yaml-apply'); return; }
+      var saveWith = document.querySelector('[data-do="' + (state.detail.tab === 'configure' ? 'config-apply' : 'yaml-apply') + '"]');
+      // The key is the button: switched off — nothing changed, something wrong, not allowed — it does nothing.
+      if (state.detail.tab === 'configure' || state.editingYaml) {
+        event.preventDefault();
+        if (saveWith && !saveWith.disabled) act(saveWith.dataset.do);
+        return;
+      }
     }
     if (command && event.key === 'Enter' && state.selected) {
       if (state.detail.tab === 'configure' && event.target.closest && event.target.closest('[data-config]')) { event.preventDefault(); act('config-check'); return; }
@@ -9650,6 +9716,14 @@
       }).join('\n');
       var grew = moved.length - (lineTo - lineFrom);
       yamlInsert(box, lineFrom, lineTo, moved, Math.max(lineFrom, from + firstShift), from === to ? Math.max(lineFrom, from + firstShift) : to + grew);
+      return;
+    }
+    if (event.key === 'Enter' && !command && !event.altKey && !event.isComposing && state.find.open && state.find.text &&
+        to > from && value.slice(from, to).toLowerCase() === state.find.text.toLowerCase()) {
+      // Find put the caret here to show its match. Enter is still "next" — it was replacing the match with a new line.
+      event.preventDefault();
+      state.find.at += event.shiftKey ? -1 : 1;
+      findApply(true);
       return;
     }
     if (event.key === 'Enter' && !command && !event.shiftKey && !event.altKey && !event.isComposing) {
@@ -9694,7 +9768,7 @@
    * and throws it away, which is the difference between learning about a bad
    * indent and learning about an outage. Only then the real one.
    */
-  function applyYaml(text, checkOnly, force) {
+  function applyYaml(text, checkOnly, force, replace) {
     var row = state.selected;
     if (!row || state.applying) return;
     var base = baseFor(row);
@@ -9702,7 +9776,9 @@
     if (!checkOnly && !diff.added && !diff.removed) { state.editNote = { text: 'Nothing is different from what the cluster has.' }; redrawEditor(); return; }
     var where = { context: state.context, kind: row.kind, name: row.name };
     if (row.namespace) where.namespace = row.namespace;
-    var mine = function () { return state.selected === row; };
+    // Left and come back to, the editor is a new sitting: an answer to the old one does not close it or take its text.
+    var sitting = (applySitting += 1);
+    var mine = function () { return state.selected === row && sitting === applySitting; };
     var settle = function (note) {
       if (!mine()) { if (note) say(row.name + ': ' + note.text, note.bad); return; }
       state.applying = null;
@@ -9729,28 +9805,66 @@
       }
       var send = { context: state.context, yaml: text, kind: row.kind, name: row.name, added: diff.added, removed: diff.removed };
       if (row.namespace) send.namespace = row.namespace;
+      if (replace) send.replace = true;
       return call('kube.apply', assign({ dryRun: true }, send)).then(function (dry) {
         if (checkOnly) {
           settle({ text: 'The server accepted it. Nothing was changed.' + (dry.text ? '\n' + dry.text : '') });
           return null;
         }
         return call('kube.apply', send).then(function (done) {
-          dropDraft(row);
-          recordApplied(row, 'YAML', { before: base, after: text, added: diff.added, removed: diff.removed });
+          // Only the edit that was sent: text typed since, in a later sitting, is another edit and stays.
+          if (draftFor(row) === text) dropDraft(row);
+          recordApplied(row, replace ? 'YAML, replaced' : 'YAML', { before: base, after: text, added: diff.added, removed: diff.removed });
           say(done.text || 'Applied.');
-          if (!mine()) return null;
-          stopEditing();
-          // Said where the edit was, and left there: a toast is gone by the time the eye is back from the button.
-          state.editNote = { text: 'Applied. ' + (done.text || '') };
-          drawCrumb();
-          state.detailData.yaml = null;
-          state.detailData.editable = null;
-          state.detailData.theirs = null;
-          state.detailData.object = null;
-          drawDetail(true);
-          loadDetail();
-          setTimeout(function () { load(true); }, 900);
-          return null;
+          var finish = function (left, now) {
+            if (!mine()) {
+              if (left.length) say(row.name + ': applied, but ' + left.length + ' line' + (left.length === 1 ? '' : 's') + ' you removed ' + (left.length === 1 ? 'is' : 'are') + ' still there. Open its YAML to see.', true);
+              return;
+            }
+            stopEditing();
+            drawCrumb();
+            state.detailData.theirs = null;
+            state.detailData.object = null;
+            if (left.length) {
+              /*
+               * It said "configured" and the lines are still there. Said, with
+               * the lines, and the edit left open on what remains — measured
+               * now against what the cluster has, so the bar counts exactly
+               * what did not happen.
+               */
+              state.detailData.editable = now;
+              state.drafts[row.uid] = { text: text, base: now, name: row.name, kind: row.kind, namespace: row.namespace || '' };
+              state.editingYaml = true;
+              state.editing = true;
+              state.editNote = {
+                bad: true, left: !replace,
+                text: (replace ? 'Replaced, and ' : 'Applied, but ') + left.length + ' line' + (left.length === 1 ? '' : 's') + ' you removed ' + (left.length === 1 ? 'is' : 'are') + ' still there:\n' +
+                  left.slice(0, 6).join('\n') + (left.length > 6 ? '\n…' : '') + '\n\n' +
+                  (replace ? 'The cluster put them back itself: they are defaults, or something else manages them.'
+                    : 'Apply only takes off what an earlier apply put there, and this was not made that way. Replace sends the manifest whole, and what is not in it goes.'),
+              };
+              drawDetail(true);
+              setTimeout(function () { load(true); }, 900);
+              return;
+            }
+            // Said where the edit was, and left there: a toast is gone by the time the eye is back from the button.
+            state.editNote = { text: (replace ? 'Replaced. ' : 'Applied. ') + (done.text || '') };
+            state.detailData.yaml = null;
+            state.detailData.editable = null;
+            drawDetail(true);
+            loadDetail();
+            setTimeout(function () { load(true); }, 900);
+          };
+          var gone = {};
+          diff.ops.forEach(function (entry) { if (entry.op === '-' && entry.text.trim()) gone[entry.text] = true; });
+          if (!Object.keys(gone).length) { finish([], null); return null; }
+          // Read back: did what was taken out actually go?
+          return call('kube.manifest', where).then(function (now) {
+            var after = now.editable == null ? '' : now.editable;
+            var left = lineDiff(text, after).ops.filter(function (entry) { return entry.op === '+' && gone[entry.text]; }).map(function (entry) { return entry.text; });
+            finish(left, after);
+            return null;
+          }).catch(function () { finish([], null); return null; });
         });
       });
     }).catch(function (error) {
@@ -10242,6 +10356,10 @@
     }
     if (event.key === 'Escape') {
       // The question closes itself; this is only for what is behind it.
+      if (state.selected && state.detail.tab === 'yaml' && state.editingYaml && state.yamlView !== 'edit' && !document.getElementById('prompt')) {
+        act('yaml-diff-close');
+        return;
+      }
       if (document.getElementById('prompt') || state.editing || state.applying) return;
       // Looking at the changes, Escape goes back to the edit; in an editor nothing was typed into, out of it.
       if (state.selected && state.detail.tab === 'yaml' && state.editingYaml) {

@@ -289,7 +289,10 @@ function graphFrom(lists, helpers, now = Date.now()) {
   const hpas = all('hpas');
   /** What an autoscaler measures: v2 lists its metrics, v1 only ever meant CPU. */
   const measuredBy = (hpa) => {
-    const listed = (hpa?.spec?.metrics ?? []).filter((metric) => metric.type === 'Resource').map((metric) => metric.resource?.name).filter(Boolean);
+    // Only a share of the request needs a request: an autoscaler told an amount — 200m on average — measures without one.
+    const listed = (hpa?.spec?.metrics ?? [])
+      .filter((metric) => metric.type === 'Resource' && (metric.resource?.target?.type ?? 'Utilization') === 'Utilization')
+      .map((metric) => metric.resource?.name).filter(Boolean);
     if (listed.length) return listed;
     return hpa?.spec?.targetCPUUtilizationPercentage != null ? ['cpu'] : [];
   };
@@ -788,7 +791,9 @@ function findingsFrom(nodes, edges) {
         ids: [],
       });
     }
-    if (workload.hpa && (workload.hpaOn ?? []).includes('cpu') && (workload.unrequested ?? []).length) {
+    // The template asking for nothing is not the last word: a LimitRange gives a pod a request it did not write.
+    const unasked = pods.length ? pods.every((pod) => !(pod.cpuReq > 0)) : true;
+    if (workload.hpa && (workload.hpaOn ?? []).includes('cpu') && (workload.unrequested ?? []).length && unasked) {
       list.push({
         level: 'now',
         title: 'Its autoscaler cannot measure it',

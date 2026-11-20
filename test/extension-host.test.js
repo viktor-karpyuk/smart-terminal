@@ -109,6 +109,11 @@ test('the questions asked before changing a cluster name where, not just what', 
   assert.match(synced, /Argo CD manages this, as part of the application "shop-app"/);
   // Asking what the account may do changes nothing and is never a question.
   assert.equal(H.needsConsent('kube.can', { kind: 'deployments' }), null);
+  // Replacing is said as what it is: the object whole, and what is not in the text gone.
+  const replaced = H.needsConsent('kube.apply', { kind: 'Deployment', name: 'web', namespace: 'shop', replace: true, yaml: 'kind: Deployment\nmetadata:\n  name: web\n' });
+  assert.match(replaced, /Replace Deployment web in namespace shop with this manifest/);
+  assert.match(replaced, /anything that is not in the text is taken off it/);
+  assert.equal(H.needsConsent('kube.apply', { replace: true, dryRun: true, yaml: 'x' }), null);
   /*
    * A patch says what it will change, because it can. "Apply this manifest?" is
    * a question nobody can answer without reading the manifest; a list of four

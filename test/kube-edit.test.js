@@ -69,16 +69,29 @@ test('annotations that held only the cluster\'s own do not stay behind as an emp
 test('a workload\'s events include those of what it made, and say they were found by name', () => {
   const rows = [
     { uid: '1', objectKind: 'Deployment', objectName: 'web' },
-    { uid: '2', objectKind: 'Pod', objectName: 'web-7d9f-abc12' },
+    { uid: '2', objectKind: 'Pod', objectName: 'web-7d9f8c6b5-abc12' },
     { uid: '3', objectKind: 'Pod', objectName: 'webhook-1' },
     { uid: '4', objectKind: 'Deployment', objectName: 'web-admin' },
-    { uid: '5', objectKind: 'ReplicaSet', objectName: 'web-7d9f' },
+    { uid: '5', objectKind: 'ReplicaSet', objectName: 'web-7d9f8c6b5' },
     { uid: '6', objectKind: 'Node', objectName: 'web-node' },
     { uid: '7', objectKind: 'HorizontalPodAutoscaler', objectName: 'web' },
     { uid: '8', objectKind: 'HorizontalPodAutoscaler', objectName: 'web-admin' },
   ];
   const about = eventsAbout(rows, 'Deployment', 'web');
   assert.deepEqual(about.map((row) => row.uid), ['1', '2', '5', '7']);
+  // A neighbour whose name only begins the same way is not its child.
+  const near = eventsAbout([
+    { uid: 'a', objectKind: 'Pod', objectName: 'web-api-7d9f8c6b5-abc12' },
+    { uid: 'b', objectKind: 'Pod', objectName: 'web-7d9f8c6b5-abc12' },
+  ], 'Deployment', 'web');
+  assert.deepEqual(near.map((row) => row.uid), ['b']);
+  // A StatefulSet's pods end in a number, and its claims carry its name in the middle.
+  const set = eventsAbout([
+    { uid: 'p', objectKind: 'Pod', objectName: 'db-0' },
+    { uid: 'c', objectKind: 'PersistentVolumeClaim', objectName: 'data-db-0' },
+    { uid: 'x', objectKind: 'Pod', objectName: 'db-backup-29384-xk2p9' },
+  ], 'StatefulSet', 'db');
+  assert.deepEqual(set.map((row) => row.uid), ['p', 'c']);
   assert.equal(about[0].related, undefined);
   assert.equal(about[1].related, true);
 });
