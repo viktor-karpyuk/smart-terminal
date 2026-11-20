@@ -2102,7 +2102,33 @@
    * why the timer used to stop altogether while a log was followed — and a
    * dashboard that stops being true because you opened a log is the wrong trade.
    */
+  /*
+   * Nothing is redrawn under a held button.
+   *
+   * A click is a press and a release on the same element. A table kept true by
+   * a watch, or a map by its refresh, can rebuild that element between the two,
+   * and then the browser sends no click: the button looks pressed and nothing
+   * happens. The draw is owed instead, and paid when the pointer is let go.
+   */
+  var drawHeld = false;
+  var drawOwed = null;
+  function drawLetGo() {
+    if (!drawHeld) return;
+    drawHeld = false;
+    if (!drawOwed) return;
+    var owed = drawOwed;
+    drawOwed = null;
+    // After the click this release is about to become, not before it.
+    setTimeout(function () { draw(owed.options); }, 0);
+  }
+  document.addEventListener('pointerdown', function (event) { if (event.button === 0) drawHeld = true; }, true);
+  document.addEventListener('pointerup', drawLetGo, true);
+  document.addEventListener('pointercancel', drawLetGo, true);
+  window.addEventListener('blur', drawLetGo);
+
   function draw(options) {
+    // A draw that would have left the dock alone and one that would not: owed together, the dock is drawn.
+    if (drawHeld) { drawOwed = { options: drawOwed && !drawOwed.options ? null : options }; return; }
     drawCrumb();
     if (state.view.type === 'overview') drawOverview();
     else if (state.view.type === 'stats') drawStats();
@@ -3834,7 +3860,8 @@
   function mapRedraw() {
     var view = document.getElementById('map-view');
     if (view) view.dataset.drawn = '';
-    if (state.view.type === 'map') drawMap();
+    // Through `draw`, so that it too waits for a held button to be let go.
+    if (state.view.type === 'map') draw({ keepDock: true });
   }
 
   function mapAct(what) {
