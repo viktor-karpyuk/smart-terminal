@@ -334,6 +334,42 @@ const JENKINS_VERBS = new Map<string, Channel>([
   ...JENKINS_APP.map((name) => [name, 'app'] as [string, Channel]),
 ]);
 
+/**
+ * Databases. Reading is the catalog and a table's rows, through connections
+ * the person already saved. Everything that sends SQL of the panel's writing
+ * is a change, and so is anything that names an address: `testConnection`
+ * opens a connection to whatever host it is given, exactly like Jenkins'
+ * `testServer`.
+ */
+const DB_READ = [
+  'overview', 'parseUrl', 'databases', 'schemas', 'objects', 'table', 'routine', 'info', 'rows', 'count', 'history', 'activity', 'roles',
+  // Pages that are only read — statistics, dependencies, privileges, locks, configuration — and the dashboard's counters.
+  'report', 'metrics',
+  // Everything a schema defines, to compare it with another.
+  'snapshot',
+] as const;
+const DB_WRITE = [
+  'saveConnection', 'testConnection', 'deleteConnection', 'disconnect', 'pickFile',
+  'query', 'cancel', 'closeTab', 'applyChanges', 'export', 'kill',
+  'clearHistory', 'saveQuery', 'deleteQuery',
+  // pg_dump, mysqldump and the way back. The file is chosen in the system's own dialog, never named by a panel.
+  'backup', 'restore',
+  // Rows from a file the person picks in the system's dialog: a preview first, then the import, all of it or none.
+  'importPreview', 'importRun',
+  // A script read from, and written to, a file chosen in the system's dialog.
+  'openScript', 'saveScript',
+  // Roles and users: made, changed and dropped by the app, which is the only place their password is ever written out.
+  'role',
+] as const;
+/** A Claude session handed a table's definition, or the statement that just failed. The app gathers both. */
+/** And a real terminal running the database's own client — psql, mysql, sqlite3 — already connected. The app writes the command line. */
+const DB_APP = ['ask', 'shell'] as const;
+const DB_VERBS = new Map<string, Channel>([
+  ...DB_READ.map((name) => [name, 'db'] as [string, Channel]),
+  ...DB_WRITE.map((name) => [name, 'db'] as [string, Channel]),
+  ...DB_APP.map((name) => [name, 'app'] as [string, Channel]),
+]);
+
 const REVIEW_VERBS = new Map<string, Channel>([
   ...REVIEW_READ.map((name) => [name, 'review'] as [string, Channel]),
   ...REVIEW_WRITE.map((name) => [name, 'review'] as [string, Channel]),
@@ -348,7 +384,7 @@ const KUBE_VERBS = new Map<string, Channel>([
   ...KUBE_APP.map((name) => [name, 'app'] as [string, Channel]),
 ]);
 
-export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review' | 'teams' | 'jenkins' | 'remote' | 'timelogbook' | 'kubrik';
+export type Channel = 'git' | 'kube' | 'kube-stream' | 'app' | 'helm' | 'spring' | 'build' | 'review' | 'teams' | 'jenkins' | 'remote' | 'timelogbook' | 'kubrik' | 'db';
 
 /**
  * Which door a call goes through, or none.
@@ -371,6 +407,7 @@ export function route(name: string): Channel | null {
   if (name.startsWith('remote.')) return REMOTE_VERBS.get(name.slice(7)) ?? null;
   if (name.startsWith('timelogbook.')) return TIMELOGBOOK_VERBS.get(name.slice(12)) ?? null;
   if (name.startsWith('kubrik.')) return KUBRIK_VERBS.get(name.slice(7)) ?? null;
+  if (name.startsWith('db.')) return DB_VERBS.get(name.slice(3)) ?? null;
   return null;
 }
 
@@ -397,6 +434,8 @@ export const PERMISSIONS: Record<string, string> = {
   'timelogbook.write': 'Change the Timelogbook connection, and run tools that change things in Timelogbook (each one asks you first)',
   'kubrik.read': 'Read Kubrik OS as you: the ERP modules your API key reaches',
   'kubrik.write': 'Change the Kubrik OS connection, and run tools that change things in Kubrik OS (each one asks you first)',
+  'db.read': 'Read the databases you connected: their tables, rows and structure',
+  'db.write': 'Run SQL on your databases, change rows, and change the connections this app knows',
   terminal: 'Open terminals and Claude sessions about what it shows',
 };
 
@@ -422,6 +461,7 @@ export function permissionFor(name: string): string | null {
   if (channel === 'kubrik') return (KUBRIK_READ as readonly string[]).includes(name.slice(7)) ? 'kubrik.read' : 'kubrik.write';
   // Opening a port on this computer is nothing an installed extension gets to ask for.
   if (channel === 'remote') return null;
+  if (channel === 'db') return (DB_READ as readonly string[]).includes(name.slice(3)) ? 'db.read' : 'db.write';
   return channel;
 }
 
@@ -461,7 +501,8 @@ export function permitted(view: { trusted?: boolean; permissions?: string[] }, n
  * briefing, which an extension with no word about Jenkins must not be able to
  * do by asking for a terminal.
  */
-const ALSO_NEEDS: Record<string, string[]> = { 'jenkins.ask': ['jenkins.read'], 'timelogbook.ask': ['timelogbook.read'] };
+// A shell in a database can do anything a query can, so it needs what a query needs.
+const ALSO_NEEDS: Record<string, string[]> = { 'jenkins.ask': ['jenkins.read'], 'timelogbook.ask': ['timelogbook.read'], 'db.ask': ['db.read'], 'db.shell': ['db.write'] };
 
 export function allowed(name: string): boolean {
   return route(name) !== null;
@@ -594,6 +635,199 @@ function jenkinsConsent(name: string, args: Record<string, unknown>): string | n
 }
 
 /**
+ * A script cut into statements, each with its comments gone and everything
+ * quoted replaced by a placeholder — so a `WHERE` inside a string is not taken
+ * for a `WHERE`, and a semicolon inside a function body ends nothing.
+ *
+ * The same reading as electron/rdb-sql.js, which decides what is sent; a test
+ * holds the two together. This one decides what a person is asked.
+ */
+export function sqlStatements(sql: string, engine?: string): string[] {
+  const source = String(sql ?? '');
+  const mysql = engine === 'mysql';
+  const out: string[] = [];
+  let bare = '';
+  let i = 0;
+  const push = () => {
+    const plain = bare.replace(/\s+/g, ' ').trim();
+    if (plain) out.push(plain);
+    bare = '';
+  };
+  while (i < source.length) {
+    const ch = source[i];
+    const two = source.slice(i, i + 2);
+    if (two === '--' || (ch === '#' && mysql)) {
+      const end = source.indexOf('\n', i);
+      bare += ' ';
+      i = end === -1 ? source.length : end;
+      continue;
+    }
+    if (two === '/*') {
+      const end = source.indexOf('*/', i + 2);
+      bare += ' ';
+      i = end === -1 ? source.length : end + 2;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      let end = i + 1;
+      while (end < source.length) {
+        if (mysql && source[end] === '\\' && ch !== '`' && end + 1 < source.length) { end += 2; continue; }
+        if (source[end] === ch) {
+          if (source[end + 1] === ch) { end += 2; continue; }
+          break;
+        }
+        end += 1;
+      }
+      bare += ch === "'" ? "''" : 'q';
+      i = Math.min(source.length, end + 1);
+      continue;
+    }
+    if (ch === '$') {
+      const tag = /^\$[A-Za-z_]*\$/.exec(source.slice(i, i + 64));
+      if (tag) {
+        const end = source.indexOf(tag[0], i + tag[0].length);
+        bare += "''";
+        i = end === -1 ? source.length : end + tag[0].length;
+        continue;
+      }
+    }
+    if (ch === ';') {
+      i += 1;
+      // Inside the body of a trigger or a routine a semicolon ends a line of it, not the statement.
+      if (sqlInBody(bare)) {
+        bare += ch;
+        continue;
+      }
+      push();
+      continue;
+    }
+    bare += ch;
+    i += 1;
+  }
+  push();
+  return out;
+}
+
+/** A CREATE TRIGGER / PROCEDURE / FUNCTION / EVENT whose BEGIN has not met its END. The same counting as electron/rdb-sql.js. */
+function sqlInBody(bare: string): boolean {
+  if (!/^\s*CREATE\b[\s\S]*?\b(TRIGGER|PROCEDURE|FUNCTION|EVENT)\b/i.test(bare)) return false;
+  const opens = (bare.match(/\b(BEGIN|CASE)\b/gi) ?? []).length;
+  const closes = (bare.match(/\bEND\b(?!\s+(IF|LOOP|WHILE|REPEAT)\b)/gi) ?? []).length;
+  return opens > closes;
+}
+
+const SQL_EXPLAIN_ANALYZE = /^EXPLAIN\s*(\([^)]*\bANALYZE\b[^)]*\)|ANALYZE\b)/;
+const SQL_EXPLAIN_HEAD = /^EXPLAIN\s*((\([^)]*\)|ANALYZE\b|VERBOSE\b)\s*)*/;
+
+/**
+ * The statements in a script that take something away, each in a few words: a
+ * DROP, a TRUNCATE, and a DELETE or UPDATE with no WHERE. The four that are
+ * typed by accident and regretted at once.
+ */
+export function sqlRisks(sql: string, engine?: string): string[] {
+  const found: string[] = [];
+  for (const bare of sqlStatements(sql, engine)) {
+    let upper = bare.toUpperCase();
+    if (/^EXPLAIN\b/.test(upper)) {
+      // Plain EXPLAIN only plans; EXPLAIN ANALYZE runs what it explains.
+      if (!SQL_EXPLAIN_ANALYZE.test(upper)) continue;
+      upper = upper.replace(SQL_EXPLAIN_HEAD, '');
+    }
+    const words = upper.split(' ');
+    if (words[0] === 'DROP') found.push(words.slice(0, 2).join(' ').slice(0, 40));
+    else if (words[0] === 'TRUNCATE') found.push('TRUNCATE');
+    else if (/^ALTER\b.*\bDROP\b(?!\s+(NOT\s+NULL|DEFAULT|IDENTITY|EXPRESSION)\b)/.test(upper)) found.push(`${words.slice(0, 2).join(' ')} … DROP`.slice(0, 40));
+    else if (/\bDELETE\s+FROM\b/.test(upper) && !/\bWHERE\b/.test(upper)) found.push('DELETE with no WHERE');
+    else if ((words[0] === 'UPDATE' || /^WITH\b.*\bUPDATE\b/.test(upper)) && /\bSET\b/.test(upper) && !/\bWHERE\b/.test(upper)) found.push('UPDATE with no WHERE');
+  }
+  return found;
+}
+
+/** The first words of every statement in a script that is not plainly a read — what a production connection is asked about. */
+export function sqlWrites(sql: string, engine?: string): string[] {
+  const found: string[] = [];
+  for (const bare of sqlStatements(sql, engine)) {
+    let upper = bare.toUpperCase().replace(/^[\s(]+/, '');
+    if (/^EXPLAIN\b/.test(upper)) {
+      if (!SQL_EXPLAIN_ANALYZE.test(upper)) continue;
+      upper = upper.replace(SQL_EXPLAIN_HEAD, '');
+    }
+    const verb = /^[A-Z]+/.exec(upper)?.[0] ?? '';
+    if (['SHOW', 'DESCRIBE', 'DESC', 'VALUES', 'TABLE', 'BEGIN', 'START', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'RELEASE', 'END', 'ABORT', 'SET', 'RESET', 'USE'].includes(verb)) continue;
+    if (verb === 'SELECT' && !/\bINTO\s+(?!@|OUTFILE|DUMPFILE)/.test(upper)) continue;
+    if (verb === 'WITH' && !/\b(INSERT|UPDATE|DELETE|MERGE|REPLACE)\b/.test(upper)) continue;
+    if (verb && !found.includes(verb)) found.push(verb);
+  }
+  return found;
+}
+
+/**
+ * Databases. A query tool that asked before every statement would be one
+ * nobody could work in, so it asks about two things only: what takes data away
+ * for good, wherever it is — and anything that changes a connection the person
+ * marked as production, or named like one. The question says which connection,
+ * because the same DELETE is nothing on a laptop and an incident on the other tab.
+ */
+function dbConsent(name: string, args: Record<string, unknown>): string | null {
+  const connection = shown(args.connectionName ?? 'this connection', 60);
+  const database = args.database ? `, database ${shown(args.database, 60)}` : '';
+  const production = args.production === true || looksLikeProduction(String(args.connectionName ?? ''));
+  const marked = production ? '\n\nThis is production.' : '';
+  if (name === 'db.query') {
+    const sql = String(args.sql ?? '');
+    const engine = String(args.engine ?? '');
+    const risks = sqlRisks(sql, engine);
+    if (risks.length) {
+      const list = risks.slice(0, 8).map((one) => `• ${shown(one, 60)}`).join('\n');
+      const more = risks.length > 8 ? `\n… and ${risks.length - 8} more` : '';
+      // The statement itself when it is short enough to read: "DROP TABLE" does not say which table.
+      const said = sql.trim().length <= 240 ? `\n\n${shown(sql, 240)}` : '';
+      return `Run this on ${connection}${database}?\n\n${list}${more}${said}\n\nNothing brings back what ${risks.length === 1 ? 'this takes' : 'these take'} away.${marked}`;
+    }
+    if (production) {
+      const writes = sqlWrites(sql, engine);
+      if (writes.length) return `Run this on ${connection}${database}?\n\nIt changes things: ${writes.slice(0, 8).join(', ')}.${marked}`;
+    }
+    return null;
+  }
+  if (name === 'db.applyChanges') {
+    const changes = (args.changes ?? {}) as { inserts?: unknown[]; updates?: unknown[]; deletes?: unknown[] };
+    const count = (list: unknown) => (Array.isArray(list) ? list.length : 0);
+    const deletes = count(changes.deletes);
+    const others = count(changes.inserts) + count(changes.updates);
+    const table = shown(args.name ?? 'this table', 80);
+    if (deletes) {
+      const also = others ? ` It also saves ${others} other change${others === 1 ? '' : 's'}.` : '';
+      return `Delete ${deletes} row${deletes === 1 ? '' : 's'} from ${table} on ${connection}${database}?\n\nNothing brings ${deletes === 1 ? 'it' : 'them'} back.${also}${marked}`;
+    }
+    if (production && others) return `Save ${others} change${others === 1 ? '' : 's'} to ${table} on ${connection}${database}?${marked}`;
+    return null;
+  }
+  if (name === 'db.kill' && args.hard === true) {
+    return `Terminate session ${shown(args.pid ?? '', 20)} on ${connection}?\n\nIts connection is closed, and whatever it had not committed is rolled back.${marked}`;
+  }
+  if (name === 'db.role' && args.preview !== true) {
+    const role = (args.role ?? {}) as { name?: unknown; host?: unknown };
+    const who = shown(role.name ?? 'this role', 80) + (role.host ? `@${shown(role.host, 60)}` : '');
+    if (args.action === 'drop') {
+      return `Drop the role ${who} on ${connection}?\n\nNobody signs in as it again, and whatever it was granted goes with it.${marked}`;
+    }
+    if (production) return `${args.action === 'create' ? 'Create' : 'Change'} the role ${who} on ${connection}?${marked}`;
+    return null;
+  }
+  if (name === 'db.importRun' && production) {
+    return `Import rows into ${shown(args.name ?? 'this table', 80)} on ${connection}${database}?${marked}`;
+  }
+  if (name === 'db.restore') {
+    return `Restore a backup into ${connection}${database}?\n\nYou choose the file next. What it defines is created, and what is already there under the same names is replaced or collides with it.${marked}`;
+  }
+  if (name === 'db.deleteConnection') {
+    return `Forget ${connection}?\n\nIts password is removed from this app, with the history kept for it. The database itself is not touched.`;
+  }
+  return null;
+}
+
+/**
  * One line of something that came from outside, fit to sit in a question.
  *
  * Job names, pipeline messages and server labels are other people's words, and
@@ -675,6 +909,7 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
   if (name === 'kubrik.disconnect') {
     return 'Disconnect Kubrik OS?\n\nThe API key is removed from this app. It keeps working in Kubrik OS until you revoke it there.';
   }
+  if (name.startsWith('db.')) return dbConsent(name, args);
 
   if (name.startsWith('kube.')) {
     const where = whereItIs(args);

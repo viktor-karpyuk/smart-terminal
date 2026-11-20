@@ -313,6 +313,9 @@ electron/
   updates.js      which version is published, and replacing this one with it
   kube.js         Kubernetes, through kubectl; helm.js for Helm
   jenkins-*.js    Jenkins: the client, the poller that tells panels what changed, the servers kept
+  rdb-*.js        Databases: PostgreSQL, MySQL and SQLite behind one set of calls — the SQL that is
+                  read and written (sql), the three engines (drivers), saved connections (store),
+                  and the verbs a panel may ask for (service)
   spring.js       Spring Boot applications: found, run, debugged, read
   review-*.js     Code Reviewer: GitHub/Bitbucket PRs reviewed with your own Claude Code
                   (rules, prompts, forge, CLI runner, git, store, engine, fixes, sweep, import)

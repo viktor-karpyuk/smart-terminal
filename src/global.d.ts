@@ -1081,6 +1081,10 @@ declare global {
         call(name: string, args?: unknown): Promise<{ ok?: boolean; error?: string; [key: string]: unknown }>;
         onEvent(handler: (event: { type: string; sessionId?: string | null; from?: string | null }) => void): () => void;
       };
+      /** Databases: every verb through one call. A panel names a connection by id and never holds its password. */
+      rdb: {
+        call(name: string, args?: unknown): Promise<{ ok?: boolean; error?: string; [key: string]: unknown }>;
+      };
       /** Jenkins: every verb through one call, and one event for "something changed, read it again". */
       jenkins: {
         call(name: string, args?: unknown): Promise<{ ok?: boolean; error?: string; [key: string]: unknown }>;
