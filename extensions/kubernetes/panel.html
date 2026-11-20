@@ -300,6 +300,7 @@
   #yaml-pos { font-variant-numeric: tabular-nums; }
   .btn[data-armed="1"] { color: var(--danger); border-color: var(--danger); }
   #yaml-edit[readonly] { opacity: 0.7; }
+  #yaml-edit.is-wrapped { white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: hidden; }
 
   /* What the server said, where the edit is: a toast is gone before a long error has been read. */
   .edit-note {
@@ -318,6 +319,13 @@
     position: absolute; top: 2px; right: 3px; min-width: 14px; height: 14px; padding: 0 4px; border-radius: 7px;
     font-size: 9px; line-height: 14px; font-weight: 700; text-align: center; color: #fff; background: var(--danger);
   }
+  .block-note { margin-left: 8px; font-weight: 400; letter-spacing: 0; text-transform: none; }
+  .row-warn, .mcard .mwarn, .mtile .mwarn { cursor: pointer; }
+  .row-warn {
+    margin-left: 6px; padding: 0 5px; border-radius: 7px; font-size: 9.5px; font-weight: 700; line-height: 14px;
+    color: var(--danger); background: color-mix(in srgb, var(--danger) 20%, transparent);
+  }
+  .mwarn.is-inline { position: static; flex: none; }
   .edit-note.is-owned { border-left-color: var(--warn, #e0af68); }
   .btn[data-cannot="1"] { text-decoration: line-through; }
   #sheet { position: fixed; inset: 0; z-index: 12; display: grid; place-items: center; background: rgba(0, 0, 0, 0.45); animation: note-in 0.14s ease-out; }
@@ -665,7 +673,8 @@
   }
   .config-field input:focus, .config-env input:focus { outline: none; border-color: var(--accent); }
   .config-envs { display: grid; gap: 4px; padding: 4px 2px 2px; }
-  .config-env { display: grid; grid-template-columns: minmax(90px, 34%) 1fr auto; gap: 5px; align-items: center; }
+  .config-env { display: grid; grid-template-columns: minmax(90px, 34%) 1fr auto auto; gap: 5px; align-items: center; }
+  .config-env.is-from { grid-template-columns: minmax(90px, 34%) 1fr auto; }
   .config-env.is-from { font-size: 11px; }
   .config-env .env-name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .config-env .btn { padding: 2px 6px; opacity: 0.5; }
@@ -814,6 +823,9 @@
   }
   .map-row { display: flex; align-items: center; gap: 8px; padding: 1px 4px; }
   .map-row.in { padding-left: 22px; }
+  .map-row.map-head.in { padding: 5px 0 1px; }
+  .map-row.map-head .map-tick span { font-weight: 600; letter-spacing: 0.08em; }
+  .map-tick.some i { border-color: var(--accent); color: var(--accent); }
   .map-row.map-head { padding: 6px 4px 2px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
   .map-row:first-child { justify-content: space-between; padding: 3px 4px 6px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
   .map-tick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 3px 4px; text-align: left; border-radius: calc(var(--radius) / 2); color: var(--text-dim); font-size: 11.5px; }
@@ -1134,18 +1146,22 @@
    */
   function editsToKeep() {
     var drafts = {};
-    var room = 400000;
+    var room = 200000;
+    // Newest first when there is not room for all, and written back in the order they were made:
+    // reversing them on every save made the next restart drop the newest instead of the oldest.
+    var fits = {};
     Object.keys(state.drafts).reverse().forEach(function (uid) {
       var draft = state.drafts[uid];
       var size = draft.text.length + draft.base.length;
       if (draft.kind === 'Secret' || size > room) return;
       room -= size;
-      drafts[uid] = draft;
+      fits[uid] = true;
     });
+    Object.keys(state.drafts).forEach(function (uid) { if (fits[uid]) drafts[uid] = state.drafts[uid]; });
     var configs = {};
     Object.keys(state.configs).forEach(function (key) {
       var config = state.configs[key];
-      if (configChanges(config).length) configs[key] = { key: key, kind: config.kind, live: config.live, draft: config.draft };
+      if (configChanges(config).length) configs[key] = { key: key, kind: config.kind, namespace: config.namespace, name: config.name, live: config.live, draft: config.draft };
     });
     var history = state.history.filter(function (entry) { return entry.kind !== 'Secret'; }).slice(0, 20).filter(function (entry) {
       var size = (entry.before || '').length + (entry.after || '').length;
@@ -1186,7 +1202,6 @@
     }
     if (saved.edits && typeof saved.edits === 'object') {
       // For the cluster they were made on: a uid means nothing on another one.
-      state.editsFor = saved.edits.context || null;
       state.drafts = saved.edits.drafts || {};
       state.configs = saved.edits.configs || {};
       state.history = Array.isArray(saved.edits.history) ? saved.edits.history : [];
@@ -1563,8 +1578,8 @@
       if (group) openGroups()[group] = true;
     }
     leaveDetail();
-    state.search = '';
-    $('search').value = '';
+    state.search = extras.search || '';
+    $('search').value = state.search;
     state.sort = extras.sort || { column: null, dir: 1 };
     state.wanted = extras.wanted || null;
     state.wantedTab = extras.wantedTab || null;
@@ -1687,7 +1702,8 @@
       delete mapFetching[key];
       mapKeep(key, result, JSON.stringify([result.nodes, result.edges, result.findings, result.missing]));
       // The form may be waiting to know whether an autoscaler is watching what it edits.
-      if (state.selected && state.detail.tab === 'configure' && !state.editing) drawDetail();
+      if (state.view.type === 'kind' && key === mapKey()) { drawTable(); if (state.selected && !holdingEdit()) drawDetail(); }
+      if (state.view.type === 'overview' && state.overview) drawOverview();
     }).catch(function () { delete mapFetching[key]; });
   }
   /** What the map knows about a row of a table, if the map has been read. */
@@ -1796,9 +1812,11 @@
         var inNamespace = state.wantedNamespace;
         var found = state.table.rows.filter(function (row) { return row.name === state.wanted && (!inNamespace || row.namespace === inNamespace); })[0];
         var onTab = state.wantedTab;
+        state.wantedName = state.wanted;
         state.wanted = null;
         state.wantedTab = null;
         state.wantedNamespace = null;
+        if (!found && state.view.type === 'kind') say(state.wantedName + ' is not in this list. It may be gone, or in another namespace.', true);
         if (found) {
           select(found.uid);
           if (onTab) { var goTo = document.querySelector('.tabs [data-tab="' + onTab + '"]'); if (goTo) goTo.click(); }
@@ -2473,9 +2491,13 @@
      * to a table that had lost most of its rows: "3 of 171" and no word about
      * a filter anywhere. The filter says its own name now, and takes it off.
      */
+    if (state.view.type === 'kind' && state.view.name === 'events' && state.only !== 'bad' && state.table &&
+        (state.table.rows || []).some(function (row) { return row.health === 'bad'; })) {
+      bits.push('<button class="link" data-do="only-bad" title="Leave out what is only being reported">warnings only</button>');
+    }
     if (state.only === 'bad' && listing) {
       bits.push('<button class="link" data-do="show-all" title="Show all of them again">' +
-        'only the ones that are failing ✕</button>');
+        (state.view.name === 'events' ? 'warnings only ✕' : 'only the ones that are failing ✕') + '</button>');
     }
     /*
      * Edits are kept against their objects, which is only a kindness if they
@@ -2644,7 +2666,7 @@
   function cell(row, column) {
     var value = row[column];
     if (column === 'name') {
-      return '<td class="name" title="' + esc(value) + '"><span class="dot ' + esc(row.health || 'idle') + '"></span><span class="label">' + esc(value) + '</span>' + forwardMark(row) + '</td>';
+      return '<td class="name" title="' + esc(value) + '"><span class="dot ' + esc(row.health || 'idle') + '"></span><span class="label">' + esc(value) + '</span>' + forwardMark(row) + warnMark(row) + '</td>';
     }
     if (column === 'status') {
       var klass = row.health === 'bad' ? 'bad-text' : row.health === 'warn' ? 'warn-text' : 'dim';
@@ -2706,6 +2728,7 @@
     // The end of dragging across a name to copy it, not a click on the row.
     if (selectingIn(row)) return;
     select(row.dataset.uid);
+    if (event.target.closest('.row-warn')) { var toEvents = document.querySelector('aside .tabs [data-tab="events"]'); if (toEvents) toEvents.click(); }
   });
 
   /**
@@ -2749,6 +2772,8 @@
     state.yamlView = 'edit';
     state.revertArmed = 0;
     state.showSecret = false;
+    shownEnv = {};
+    applySitting += 1;
   }
 
   /** Write down something that was applied. Newest first, and not for ever. */
@@ -2770,6 +2795,8 @@
     box.addEventListener('click', function (event) {
       if (event.target === box || event.target.closest('[data-sheet-close]')) box.remove();
     });
+    var shut = box.querySelector('[data-sheet-close]');
+    if (shut) shut.focus();
     return box;
   }
   document.addEventListener('keydown', function (event) {
@@ -2786,15 +2813,19 @@
     var entry = state.history[at];
     if (!entry) return;
     var body = '<div class="dim sheet-sub">' + esc(entry.kind + ' ' + (entry.namespace ? entry.namespace + '/' : '') + entry.name + ' · ' + historyLine(entry) + ' · ' + new Date(entry.at).toLocaleString()) + '</div>' +
-      (entry.before != null
+      (entry.before != null && entry.kind === 'Secret'
+        ? '<div class="dim">A Secret: what changed is its values, and they are not shown here.</div>'
+        : entry.before != null
         ? '<div class="diff">' + (diffHtml(lineDiff(entry.before, entry.after)) || '<div class="dim">Nothing changed.</div>') + '</div>' +
           '<div class="sheet-foot"><span class="dim">Putting it back opens the editor with the text as it was. Nothing is applied until you apply it.</span>' +
-          '<span class="spacer"></span><button class="btn go" data-history-back="' + at + '">Put it back…</button></div>'
+          '<span class="spacer"></span><button class="btn" data-history-copy="' + at + '">Copy diff</button><button class="btn go" data-history-back="' + at + '">Put it back…</button></div>'
         : '<ul class="config-diff">' + (entry.lines || []).map(function (line) { return '<li>' + esc(line) + '</li>'; }).join('') + '</ul>');
     var box = sheet('Applied from here', body);
     box.addEventListener('click', function (event) {
+      if (event.target.closest('[data-history-copy]')) { copyText(diffText(lineDiff(entry.before, entry.after)), 'the changes'); return; }
       var back = event.target.closest('[data-history-back]');
       if (!back) return;
+      if (state.drafts[entry.uid]) { say('There is an edit of ' + entry.name + ' not applied yet. Apply it or discard it first.', true); return; }
       box.remove();
       // As an edit like any other: the text as it was, measured against what was applied over it.
       state.drafts[entry.uid] = { text: entry.before, base: entry.after, name: entry.name, kind: entry.kind, namespace: entry.namespace };
@@ -2805,7 +2836,7 @@
 
   var KEYS = [
     ['Anywhere', [['/', 'Filter the table'], ['↑ ↓', 'The row above or below'], ['Esc', 'Close what is open'], ['⌘C', 'Copy what is selected'], ['?', 'This list']]],
-    ['In the pane', [['⌘F', 'Find in the tab that is showing'], ['↵ / ⇧↵ or ⌘G / ⇧⌘G', 'Next and previous match'], ['A− A+', 'Smaller or larger text']]],
+    ['In the pane', [['1 – 9', 'The first to the ninth tab'], ['e', 'Edit the manifest'], ['⌘F', 'Find in the tab that is showing'], ['↵ / ⇧↵ or ⌘G / ⇧⌘G', 'Next and previous match'], ['A− A+', 'Smaller or larger text']]],
     ['Editing a manifest', [['⌘S', 'Apply'], ['⌘↵', 'Dry run: ask the server, change nothing'], ['⌘D', 'What you changed'], ['Tab / ⇧Tab', 'Indent or outdent the lines selected'], ['Esc', 'Leave the editor, when nothing was typed']]],
     ['Configure', [['⌘S', 'Apply'], ['⌘↵', 'Dry run']]],
     ['A log', [['↵ / ⇧↵', 'Next and previous match'], ['Esc', 'Let go of the search']]],
@@ -2828,7 +2859,8 @@
     event.stopPropagation();
     menuAt(state.history.slice(0, 15).map(function (entry, i) {
       return { label: entry.name, hint: historyLine(entry), run: function () { showHistory(i); } };
-    }), { clientX: at.left, clientY: at.bottom + 2 });
+    }).concat(['-', { label: 'Forget these', hint: 'the cluster keeps what was applied', run: function () { state.history = []; remember(); drawCrumb(); } }]),
+    { clientX: at.left, clientY: at.bottom + 2 });
   });
 
   /** Every edit that is waiting, in YAML or in the form, with enough to get back to it. */
@@ -2841,8 +2873,9 @@
     Object.keys(state.configs).forEach(function (key) {
       var config = state.configs[key];
       if (!configChanges(config).length) return;
-      var parts = key.split('/');
-      out.push({ tab: 'configure', kind: parts[0], namespace: parts[1], name: parts.slice(2).join('/'), key: key });
+      // Another cluster's are kept, and are not this one's to offer.
+      if (key.indexOf((state.context || '') + '\n') !== 0) return;
+      out.push({ tab: 'configure', kind: config.kind, namespace: config.namespace || '', name: config.name || '', key: key });
     });
     return out;
   }
@@ -2877,6 +2910,7 @@
     items.push({ label: 'Discard all of them', run: function () {
       state.drafts = {};
       state.configs = {};
+      rememberSoon();
       if (state.selected) { stopEditing(); state.config = null; drawDetail(true); loadDetail(); }
       drawCrumb();
       say(edits.length === 1 ? 'The edit was dropped.' : 'All ' + edits.length + ' edits were dropped.');
@@ -3009,6 +3043,15 @@
     return out.join('');
   }
 
+  /** The same changes as text, for a message or a ticket: the form every tool that shows a diff understands. */
+  function diffText(diff) {
+    var lines = [];
+    diff.head.slice(-3).forEach(function (text) { lines.push('  ' + text); });
+    diff.ops.forEach(function (entry) { lines.push((entry.op === ' ' ? ' ' : entry.op) + ' ' + entry.text); });
+    diff.tail.slice(0, 3).forEach(function (text) { lines.push('  ' + text); });
+    return lines.join('\n');
+  }
+
   function linesText(diff) {
     var parts = [];
     if (diff.added) parts.push('+' + diff.added);
@@ -3116,7 +3159,7 @@
     var command = event.metaKey || event.ctrlKey;
     if (command && event.key === 'f' && state.selected && !document.getElementById('prompt')) {
       // Not from the log's own search or the table's filter: those are finds of their own.
-      if (event.target && (event.target.id === 'log-search' || event.target.closest('.dock'))) return;
+      if (event.target && (event.target.id === 'log-search' || event.target.id === 'search' || event.target.closest('.dock'))) return;
       event.preventDefault();
       findOpen();
       return;
@@ -3230,13 +3273,23 @@
     var row = null;
     for (var i = 0; i < rows.length; i += 1) if (rows[i].uid === uid) row = rows[i];
     if (!row) return;
+    /*
+     * Over an open edit of something else, this is leaving it: the selection
+     * moved to the menu's row while the editor stayed on screen, and what was
+     * typed next was kept against the wrong object.
+     */
+    var leaving = state.selected && state.selected !== row && (holdingEdit() || state.editing);
+    if (leaving) { sayKept(row.uid); stopEditing(); letConfigGo(); state.detail = { tab: 'overview' }; state.detailData = {}; prior = row; }
     menuWas = prior;
     menuRow = row;
     state.selected = row;
+    if (leaving) { draw(); loadDetail(); }
 
     var box = document.createElement('div');
     box.className = 'row-menu';
     box.innerHTML = actionsFor(row);
+    applyCan(box);
+    askCan(row);
     document.body.appendChild(box);
 
     var at = near.getBoundingClientRect();
@@ -3590,6 +3643,12 @@
     return unit.text;
   }
 
+  /** Whether the cluster has complained lately about a unit or anything of it. */
+  function mapUnitWarned(unit) {
+    if (unit.root.warnings || unit.root.podWarnings) return true;
+    return unit.pods.some(function (pod) { return pod.warnings > 0; });
+  }
+
   function mapUnitBad(unit) {
     if (unit.root.health === 'warn' || unit.root.health === 'bad') return true;
     return unit.pods.some(function (pod) {
@@ -3636,7 +3695,7 @@
     spaces.forEach(function (ns) {
       var mine = (units[ns.name] || []).filter(function (unit) {
         if (text && ns.name.toLowerCase().indexOf(text) < 0 && mapUnitText(unit).indexOf(text) < 0) return false;
-        if (ui.bad && !mapUnitBad(unit)) return false;
+        if (ui.bad && !mapUnitBad(unit) && !mapUnitWarned(unit)) return false;
         return true;
       });
       if (!mine.length) return;
@@ -3644,10 +3703,12 @@
       var open = text || ui.bad ? true : ui.open[ns.name] != null ? ui.open[ns.name] : small && !ns.system;
       var pods = 0;
       var troubled = 0;
+      var warnedHere = 0;
       var techs = {};
       mine.forEach(function (unit) {
         pods += unit.pods.length;
         if (mapUnitBad(unit)) troubled += 1;
+        if (mapUnitWarned(unit)) warnedHere += 1;
         if (unit.root.tech) techs[unit.root.tech] = true;
       });
       var top = y;
@@ -3655,7 +3716,8 @@
         '<span class="twist">' + (open ? '▾' : '▸') + '</span><b>' + esc(ns.name) + '</b>' +
         '<span>' + mapPlural(mine.length, 'workload') + ' · ' + mapPlural(pods, 'pod') + '</span>' +
         Object.keys(techs).map(function (tech) { return '<span class="mtag inf">' + esc(tech) + '</span>'; }).join('') +
-        (troubled ? '<span class="mtag bad">' + troubled + ' not well</span>' : '') + '</button>';
+        (troubled ? '<span class="mtag bad">' + troubled + ' not well</span>' : '') +
+        (warnedHere ? '<span class="mtag warn" title="Workloads the cluster has raised warnings about lately">' + warnedHere + ' with warnings</span>' : '') + '</button>';
       y += 32;
 
       if (open) {
@@ -3874,13 +3936,14 @@
   function mapTile(pod, ui, text) {
     var claims = mapTo(pod.id, 'mounts');
     var off = (text && (pod.name + ' ' + pod.namespace + ' ' + pod.owner).toLowerCase().indexOf(text) < 0) ||
-      (ui.bad && pod.health !== 'warn' && pod.health !== 'bad');
+      (ui.bad && pod.health !== 'warn' && pod.health !== 'bad' && !pod.warnings);
     var size = [mapCpu(pod.cpuReq), mapMem(pod.memReq)].filter(Boolean).join(' · ');
     return '<button class="mtile h-' + pod.health + (ui.hl && pod.owner === ui.hl ? ' hl' : '') + (ui.sel === pod.id ? ' sel' : '') +
       (off ? ' off' : '') + '" data-map-id="' + esc(pod.id) + '" title="' + esc(mapTip(pod)) + '">' +
       '<i class="mdot"></i><span class="mtext"><b>' + esc(pod.name) + '</b><small>' +
       esc(pod.health === 'ok' ? pod.namespace + (size ? ' · ' + size : '') : pod.status + (pod.restarts ? ' · ' + mapPlural(pod.restarts, 'restart') : '')) +
-      '</small></span>' + (claims.length ? '<i class="mplug" title="Mounts ' + esc(claims.map(function (c) { return c.name; }).join(', ')) + '"></i>' : '') +
+      '</small></span>' + (pod.warnings ? '<span class="mwarn is-inline" title="' + esc(pod.warning || '') + '">' + (pod.warnings > 99 ? '99+' : pod.warnings) + '</span>' : '') +
+      (claims.length ? '<i class="mplug" title="Mounts ' + esc(claims.map(function (c) { return c.name; }).join(', ')) + '"></i>' : '') +
       '</button>';
   }
 
@@ -3925,6 +3988,7 @@
       row('<svg width="34" height="8"><path class="medge" d="M0 4H34"/></svg>', 'Stated by the Kubernetes API: an owner, a selector, a binding') +
       row('<svg width="34" height="8"><path class="medge inf" d="M0 4H34"/></svg>', 'Inferred: a service named in a pod template, a data service known by its image') +
       row('<svg width="34" height="8"><path class="medge vol on" d="M0 4H34"/></svg>', 'A pod mounting a volume that lives in the storage backend') +
+      row('<span class="mwarn is-inline">3</span>', 'Warnings the cluster raised about it lately. Click the number for its events') +
       row('<span class="mtag warn">spof</span>', 'Amber, thick border: every replica depends on it') +
       row('<span class="mtag bad">lost</span>', 'Red fill: gone in the failure being tried') +
       '<div class="mleg dim" style="margin-top:6px">Point at a card to light everything it reaches and everything that reaches it. Right-click a card for more. ⌘ and the wheel zooms.</div>' +
@@ -4043,6 +4107,7 @@
           esc([node.status, node.instance, byZone ? node.pool : node.zone].filter(Boolean).join(' · ')) + '</small>' +
           '<span class="mnode-tags">' + (node.capacity === 'spot' ? '<span class="mtag warn" title="A spot machine: the cloud can take it back at short notice">spot</span>' : '') +
           (node.taintList && node.taintList.length ? '<span class="mtag" title="' + esc(node.taintList.join('\n')) + '">' + mapPlural(node.taintList.length, 'taint') + '</span>' : '') +
+          (node.warnings ? '<span class="mtag bad" title="' + esc(node.warning || '') + '">' + mapPlural(node.warnings, 'warning') + '</span>' : '') +
           '<span class="mtag" title="Pods running on it">' + pods.length + '</span></span></span>' +
           '<span class="mbars" title="' + esc(askedWhy + '\nCPU: ' + cpuSays + '\nMemory: ' + memSays) + '"><span>' + asked + 'CPU ' + cpu.pct + '%</span><span>' + asked + 'memory ' + mem.pct + '%</span>' +
           cpu.html + mem.html + used + '</span></button><div class="mtiles">' +
@@ -4250,7 +4315,17 @@
       if (text && (root.name + ' ' + root.namespace + ' ' + (root.tech || '')).toLowerCase().indexOf(text) < 0) return;
       if (root.namespace !== last) {
         last = root.namespace;
-        html += '<div class="map-row map-head">' + esc(root.namespace) + '</div>';
+        /*
+         * A namespace is ticked as one: its heading is a tick for everything
+         * under it, half-filled when only some are in. Forty names in `prod`
+         * were forty clicks.
+         */
+        var inNs = roots.filter(function (other) { return other.namespace === root.namespace; });
+        var ticked = inNs.filter(function (other) { return chosen[other.id]; }).length;
+        html += '<div class="map-row map-head in"><button class="map-tick' + (ticked === inNs.length ? ' on' : ticked ? ' some' : '') + '" data-map-pick-ns="' + esc(root.namespace) + '" ' +
+          'title="' + (ticked === inNs.length ? 'Take all of ' : 'Tick all of ') + esc(root.namespace) + '">' +
+          '<i>' + (ticked === inNs.length ? '✓' : ticked ? '–' : '') + '</i><span>' + esc(root.namespace) + '</span><small>' + ticked + '/' + inNs.length + '</small></button>' +
+          '<button class="link" data-map-pick-ns-only="' + esc(root.namespace) + '" title="Draw this namespace alone">only</button></div>';
       }
       html += '<div class="map-row in"><button class="map-tick' + (chosen[root.id] ? ' on' : '') + '" data-map-pick="' + esc(root.id) + '" title="' + esc(root.name) + '">' +
         '<i>' + (chosen[root.id] ? '✓' : '') + '</i><span>' + esc(root.name) + '</span><small>' + esc(root.tech || root.kind) + '</small></button>' +
@@ -4629,8 +4704,58 @@
     }).join('');
   }
 
+  /** In a table: the same count the map puts on a card, for the same reason. */
+  function warnMark(row) {
+    if (!row || !row.kind || row.kind === 'Event') return '';
+    var node = mapKnown(row);
+    var count = node ? (node.warnings || 0) + (node.podWarnings || 0) : 0;
+    return count ? '<span class="row-warn" title="' + esc(node.warning || '') + '">' + (count > 99 ? '99+' : count) + '</span>' : '';
+  }
+
+  function mapWarned(node) {
+    var count = (node.warnings || 0) + (node.podWarnings || 0);
+    if (!count) return '';
+    return block('Warnings', '<div class="events"><div class="event is-warn"><div class="event-head"><span class="dot bad"></span><b>' +
+      count + ' lately</b><span class="spacer"></span>' +
+      '<button class="btn" data-tab="events">Open Events</button></div><div class="event-text">' + esc(node.warning || '') + '</div></div></div>');
+  }
+
+  /**
+   * What the map knows about a row of a table.
+   *
+   * The map is read behind everything now, so a Deployment opened from its
+   * table need not be less well known than one opened from a card: what it is
+   * complaining about, what is fragile about it, what scales it. Said in
+   * words only — the cards and lines are the map's, one click away.
+   */
+  function mapBrief(row) {
+    var node = mapKnown(row);
+    if (!node) return '';
+    var kept = state.map && state.mapFor === mapKey() ? state.map : (mapCache[mapKey()] || mapCache[(state.context || '') + '/'] || {}).result;
+    var findings = ((kept && kept.findings) || {})[node.id] || [];
+    var tags = { now: ['bad', 'now'], spof: ['warn', 'single point of failure'], risk: ['', 'risk'] };
+    var html = mapWarned(node);
+    if (findings.length) {
+      html += block('Risks', findings.map(function (finding) {
+        var tag = tags[finding.level] || tags.risk;
+        return '<div class="mrisk"><span class="mtag ' + tag[0] + '">' + tag[1] + '</span> <b>' + esc(finding.title) + '</b><p>' + esc(finding.text) + '</p></div>';
+      }).join(''));
+    }
+    var facts = [];
+    if (node.hpa) facts.push(['Autoscaler', node.hpa + ' · ' + node.hpaRange + ' replicas' + ((node.hpaOn || []).length ? ', on ' + node.hpaOn.join(' and ') : '')]);
+    if (node.pdb) facts.push(['Disruption budget', node.pdb + (node.pdbAllowed != null ? ' · ' + node.pdbAllowed + ' may go right now' : '')]);
+    if (node.tech) facts.push(['Runs', node.tech + (node.techVersion ? ' ' + node.techVersion : '') + ' (by its image)']);
+    if (node.helm) facts.push(['Installed by', node.helm]);
+    if (node.kind === 'Pod' && node.node) facts.push(['On', node.node]);
+    if (facts.length) {
+      html += block('From the map', '<dl class="facts">' + facts.map(function (fact) { return '<dt>' + esc(fact[0]) + '</dt><dd>' + esc(fact[1]) + '</dd>'; }).join('') + '</dl>');
+    }
+    return html;
+  }
+
   function mapInfo(row) {
-    if (state.view.type !== 'map' || !state.mapIndex) return '';
+    if (state.view.type !== 'map') return mapBrief(row);
+    if (!state.mapIndex) return '';
     var node = state.mapIndex.byId[mapUi().sel];
     if (!node || node.name !== row.name || (node.namespace || '') !== (row.namespace || '')) return '';
     var ix = state.mapIndex;
@@ -4660,6 +4785,8 @@
           (node.custom ? 'Made by an operator from a ' + esc(node.kind) + '; known here through its pods. ' : '') +
           'Roles and replication are the database’s own business: they show only where a pod’s labels say so.</p>';
       }
+      // What it is complaining about now comes before what might go wrong one day.
+      html += mapWarned(node);
       var findings = (state.map.findings || {})[node.id] || [];
       if (findings.length) {
         var tags = { now: ['bad', 'now'], spof: ['warn', 'single point of failure'], risk: ['', 'risk'] };
@@ -4696,14 +4823,9 @@
           (users.length ? '<h5 class="msub">Used by <span class="mtag inf">inferred</span></h5><div class="mgos">' + users.map(function (user) { return mapGo(user.node, user.via); }).join('') + '</div>' : '') +
           (needs.length ? '<h5 class="msub">Uses <span class="mtag inf">inferred</span></h5><div class="mgos">' + needs.map(function (need) { return mapGo(need.node, need.via); }).join('') + '</div>' : ''));
       }
-      if (node.warnings || node.podWarnings) {
-        html += block('Warnings', '<div class="events"><div class="event is-warn"><div class="event-head"><span class="dot bad"></span><b>' +
-          ((node.warnings || 0) + (node.podWarnings || 0)) + ' lately</b><span class="spacer"></span>' +
-          '<button class="btn" data-tab="events">Open Events</button></div><div class="event-text">' + esc(node.warning || '') + '</div></div></div>');
-      }
       html += block('Placement', '<dl class="facts">' +
         (node.hpa ? '<dt>Autoscaler</dt><dd>' + esc(node.hpa + ' · ' + node.hpaRange + ' replicas' + ((node.hpaOn || []).length ? ', on ' + node.hpaOn.join(' and ') : '')) +
-          ((node.hpaOn || []).indexOf('cpu') >= 0 && (node.unrequested || []).length ? ' <span class="bad-text">· cannot measure: ' + esc(node.unrequested.join(', ')) + ' requests no CPU</span>' : '') + '</dd>' : '') +
+          ((node.hpaOn || []).indexOf('cpu') >= 0 && (node.unrequested || []).length ? ' <span class="bad-text">· cannot measure: container ' + esc(node.unrequested.join(', ')) + ' requests no CPU</span>' : '') + '</dd>' : '') +
         '<dt>Kept apart</dt><dd>' +
         esc(node.spread ? node.spread.mode + (node.spread.key ? ', by ' + node.spread.key : '') : 'nothing keeps replicas on different nodes') + '</dd>' +
         '<dt>Disruption budget</dt><dd>' + esc(node.pdb ? node.pdb + (node.pdbAllowed != null ? ' · ' + node.pdbAllowed + ' may go right now' : '') : 'none') + '</dd>' +
@@ -5079,7 +5201,26 @@
   var mapDescribed = {};
   var mapCacheFor = '';
 
+  /**
+   * Draw the map, and leave an open list where the reader had it.
+   *
+   * A tick in the list of workloads or of nodes redraws the map, and the list
+   * is part of what is redrawn — so it came back at its top, and ticking the
+   * fortieth name meant scrolling to it again after every tick. Its scroll is
+   * read before and put back after, and it does not drop in a second time.
+   */
   function drawMap() {
+    var open = document.querySelector('#table .map-menu');
+    var at = open ? { top: open.scrollTop, right: open.classList.contains('right') } : null;
+    drawMapNow();
+    var again = at ? document.querySelector('#table .map-menu') : null;
+    if (again && again.classList.contains('right') === at.right) {
+      again.style.animation = 'none';
+      again.scrollTop = at.top;
+    }
+  }
+
+  function drawMapNow() {
     var box = $('table');
     if (state.error && !state.map) {
       box.innerHTML = '<div class="note error">' + esc(state.error) + '</div>' + advice(state.error);
@@ -5319,7 +5460,7 @@
   $('table').addEventListener('click', function (event) {
     if (state.view.type !== 'map') return;
     var ui = mapUi();
-    var el = event.target.closest('[data-map-by], [data-map-act], [data-map-plan], [data-map-pick], [data-map-pick-only], [data-map-pick-all], [data-map-pool], [data-map-menu], [data-map-off], [data-map-only], [data-map-all], [data-map-mode], [data-map-toggle], [data-map-fold], [data-map-zoom], [data-map-ns], [data-map-more], [data-map-sys], [data-map-sim], [data-map-focus-on], [data-map-id]');
+    var el = event.target.closest('[data-map-by], [data-map-act], [data-map-plan], [data-map-pick-ns], [data-map-pick-ns-only], [data-map-pick], [data-map-pick-only], [data-map-pick-all], [data-map-pool], [data-map-menu], [data-map-off], [data-map-only], [data-map-all], [data-map-mode], [data-map-toggle], [data-map-fold], [data-map-zoom], [data-map-ns], [data-map-more], [data-map-sys], [data-map-sim], [data-map-focus-on], [data-map-id]');
     // The list of nodes shuts when the click was anywhere but in it.
     if (mapMenuOpen && !event.target.closest('.map-drop')) {
       mapMenuOpen = false;
@@ -5350,10 +5491,22 @@
       else mapOpenForm(set.mapPlan);
       return;
     }
-    if (set.mapPick || set.mapPickOnly || set.mapPickAll) {
+    if (set.mapPick || set.mapPickOnly || set.mapPickAll || set.mapPickNs || set.mapPickNsOnly) {
       var ids = mapFocuses().map(function (entry) { return entry.id; });
+      var everyRoot = mapRoots();
+      var ofNs = everyRoot.filter(function (root) { return root.namespace === (set.mapPickNs || set.mapPickNsOnly); }).map(function (root) { return root.id; });
       if (set.mapPickAll) ids = '*';
       else if (set.mapPickOnly) ids = set.mapPickOnly;
+      else if (set.mapPickNsOnly) ids = ofNs.length === 1 ? ofNs[0] : ofNs;
+      else if (set.mapPickNs) {
+        var allIn = ofNs.every(function (id) { return ids.indexOf(id) >= 0; });
+        if (allIn) {
+          var rest = ids.filter(function (id) { return ofNs.indexOf(id) < 0; });
+          // The last ones stay: a picture of nothing's dependencies is not a picture.
+          if (rest.length) ids = rest;
+        } else ofNs.forEach(function (id) { if (ids.indexOf(id) < 0) ids.push(id); });
+        ids = ids.length === 1 ? ids[0] : ids.length === everyRoot.length ? '*' : ids;
+      }
       else {
         var at = ids.indexOf(set.mapPick);
         // The last one stays ticked: a picture of nothing's dependencies is not a picture.
@@ -5404,6 +5557,11 @@
       // What was picked comes along: its namespace is unfolded, and the page is brought to it.
       var held = state.mapIndex.byId[ui.sel];
       if (held && held.namespace && set.mapMode === 'topology') ui.open[held.namespace] = true;
+      // Going to Dependencies with a workload in hand is asking what that one stands on, not the one looked at last week.
+      if (set.mapMode === 'graph' && held) {
+        var rootOf = mapIsWorkload(held) ? held : held.kind === 'Pod' ? state.mapIndex.byId[held.owner] : null;
+        if (rootOf && mapRoots().some(function (root) { return root.id === rootOf.id; })) state.view.focus = rootOf.id;
+      }
       mapBring = true;
     } else if (set.mapToggle) {
       if (set.mapToggle === 'hl') ui.hl = null;
@@ -5440,7 +5598,8 @@
     } else if (set.mapId) {
       mapTrail = [];
       mapBring = !state.selected;
-      mapSelect(set.mapId);
+      // The count in the corner is a question — "what warnings?" — and Events is the answer.
+      mapSelect(set.mapId, event.target.closest('.mwarn') ? 'events' : undefined);
       return;
     }
     remember();
@@ -5601,7 +5760,7 @@
   // An open list shuts on Escape, and on a click anywhere outside the map: it is in the way of everything else.
   document.addEventListener('keydown', function (event) {
     if (event.key === 'Escape' && mapMenuOpen && !document.getElementById('map-form')) { mapMenuOpen = false; mapRedraw(); }
-    if (event.key === 'Enter' && event.target.closest && event.target.closest('#map-form') && event.target.tagName !== 'TEXTAREA') {
+    if (event.key === 'Enter' && !event.isComposing && event.target.closest && event.target.closest('#map-form') && event.target.tagName === 'INPUT') {
       event.preventDefault();
       mapSendPlan(document.getElementById('map-form').dataset.op);
     }
@@ -5691,14 +5850,16 @@
             '<td class="bad-text">' + esc(row.status) + '</td></tr>';
         }).join('') + '</tbody></table>';
     } else {
-      trouble = '<div class="note">Nothing is failing, and nothing has raised a warning recently.</div>';
+      trouble = '<div class="note">' + (attentionOf() ? 'No pod is failing. What is listed above is the rest of it.' : 'Nothing is failing, and nothing has raised a warning recently.') + '</div>';
     }
 
     var recent = '';
     if ((data.recent || []).length) {
       recent = '<div class="crumb"><strong>Recent warnings</strong></div><table><tbody>' +
         data.recent.slice(0, 20).map(function (row) {
-          return '<tr><td class="dim age">' + ageHtml(row) + '</td>' +
+          var nav = row.objectKind ? navFor(row.objectKind) : null;
+          return '<tr' + (nav ? ' class="is-link" data-open="' + esc(row.objectName) + '" data-open-kind="' + esc(nav) + '" data-open-namespace="' + esc(row.namespace || '') + '" title="Open ' + esc(row.object) + '"' : '') +
+            '><td class="dim age">' + ageHtml(row) + '</td>' +
             '<td class="warn-text">' + esc(row.status) + '</td>' +
             '<td class="dim">' + esc(row.object) + '</td>' +
             '<td class="grow dim">' + esc(row.message) + '</td></tr>';
@@ -5707,6 +5868,7 @@
 
     $('table').innerHTML =
       '<div class="cards">' + cards + '</div>' +
+      attentionOf() +
       capacityOf(data) +
       chartsFor(null) +
       pressureOf(data) +
@@ -5923,12 +6085,50 @@
    * them as forty. How many kinds of thing are wrong is the number somebody
    * came for.
    */
+  /**
+   * What is wrong now that no pod status says.
+   *
+   * The cards above count failing pods; this is the rest of it, from the map
+   * that is read behind the overview — an autoscaler with nothing to measure,
+   * a budget that lets nothing go. Each is a workload that looks healthy and
+   * is not doing what it was set up to do, and each line opens it.
+   */
+  function attentionOf() {
+    var kept = mapCache[(state.context || '') + '/'] || mapCache[mapKey()];
+    if (!kept || !kept.result || !kept.result.findings) return '';
+    var rows = [];
+    var byId = {};
+    (kept.result.nodes || []).forEach(function (node) { byId[node.id] = node; });
+    Object.keys(kept.result.findings).forEach(function (id) {
+      kept.result.findings[id].forEach(function (finding) {
+        // A failing pod is already counted above; this is for what is not.
+        if (finding.level !== 'now' || /^API · pod status/.test(finding.source || '')) return;
+        if (byId[id]) rows.push({ node: byId[id], finding: finding });
+      });
+    });
+    if (!rows.length) return '';
+    return '<div class="panel-block"><h4>Needs attention <span class="dim">· healthy to look at, and not doing what it was set up to do</span></h4>' +
+      '<table><tbody>' + rows.slice(0, 12).map(function (row) {
+        var nav = navFor(row.node.kind);
+        return '<tr' + (nav ? ' class="is-link" data-open="' + esc(row.node.name) + '" data-open-kind="' + esc(nav) + '" data-open-namespace="' + esc(row.node.namespace || '') + '"' : '') + '>' +
+          '<td class="name"><span class="dot warn"></span>' + esc(row.node.name) + '</td>' +
+          '<td class="dim">' + esc(row.node.namespace || '') + '</td>' +
+          '<td class="warn-text">' + esc(row.finding.title) + '</td>' +
+          '<td class="grow dim">' + esc(row.finding.text) + '</td></tr>';
+      }).join('') + '</tbody></table>' + (rows.length > 12 ? '<div class="dim" style="padding:4px 2px">and ' + (rows.length - 12) + ' more, on the map under Only problems.</div>' : '') + '</div>';
+  }
+
+  document.addEventListener('click', function (event) {
+    var reason = event.target.closest && event.target.closest('[data-reason]');
+    if (reason) show({ type: 'kind', name: 'events' }, { search: reason.dataset.reason });
+  });
+
   function reasonsOf(data) {
     var rows = data.reasons || [];
     if (!rows.length) return '';
     return '<div class="panel-block"><h4>What the cluster is complaining about</h4>' +
       '<table><tbody>' + rows.map(function (row) {
-        return '<tr><td class="warn-text">' + esc(row.reason) + '</td>' +
+        return '<tr class="is-link" data-reason="' + esc(row.reason) + '" title="The events that say ' + esc(row.reason) + '"><td class="warn-text">' + esc(row.reason) + '</td>' +
           '<td class="dim">' + many(row.count) + '×</td>' +
           '<td class="dim">' + esc(row.newest) + '</td>' +
           '<td class="grow dim">' + esc(String(row.example || '').slice(0, 120)) + '</td></tr>';
@@ -6268,6 +6468,7 @@
         '<div class="pane-tools">' +
           (state.view.type === 'map' && mapTrail.length
             ? '<button class="pane-tool" data-pane="back" title="Back to what was open before" aria-label="Back">←</button>' : '') +
+          (release || chosen.kind === 'Event' ? '' : '<button class="pane-tool" data-do="pane-kubectl" title="Copy the kubectl command that reads this" aria-label="Copy kubectl command">&gt;_</button>') +
           '<button class="pane-tool" data-pane="smaller" title="Smaller text" aria-label="Smaller text"' + (state.paneScale <= 0.86 ? ' disabled' : '') + '>A−</button>' +
           '<button class="pane-tool" data-pane="bigger" title="Larger text" aria-label="Larger text"' + (state.paneScale >= 1.59 ? ' disabled' : '') + '>A+</button>' +
           '<button class="pane-tool' + (state.paneBig ? ' on' : '') + '" data-pane="wide" title="' + (state.paneBig ? 'Back to its usual width' : 'Give it most of the room') + '" aria-label="Wider">⤢</button>' +
@@ -6412,7 +6613,7 @@
         return '<tr class="is-link" data-open="' + esc(pod.name) + '" data-open-kind="pods"' +
             ' data-open-namespace="' + esc(pod.namespace || '') + '">' +
           '<td><span class="dot ' + esc(pod.health) + '"></span></td>' +
-          '<td class="grow">' + esc(pod.name) + '</td>' +
+          '<td class="grow">' + esc(pod.name) + warnMark(assign({ kind: 'Pod' }, pod)) + '</td>' +
           '<td class="dim">' + esc(pod.status) + '</td>' +
           '<td class="dim">' + esc(pod.ready || '') + '</td>' +
           '<td class="' + (Number(pod.restarts) ? 'warn-text' : 'dim') + '">' +
@@ -6575,7 +6776,7 @@
   function copyOf(value) { return JSON.parse(JSON.stringify(value)); }
 
   /** The draft for this object, kept across redraws and across tabs. */
-  function configKey(row) { return row.kind + '/' + (row.namespace || '') + '/' + row.name; }
+  function configKey(row) { return (state.context || '') + '\n' + row.kind + '/' + (row.namespace || '') + '/' + row.name; }
 
   /**
    * Kept against the object, so it is still here after a look at another one.
@@ -6591,18 +6792,46 @@
       var names = function (config) { return config.containers.map(function (c) { return c.name; }).join('\n'); };
       if (names(live) !== names(kept.draft)) kept = null;
       else {
-        if (JSON.stringify(live) !== JSON.stringify(kept.live) && configChanges(kept).length) kept.moved = true;
+        if (JSON.stringify(live) !== JSON.stringify(kept.live)) {
+          if (configChanges(kept).length) kept.moved = true;
+          kept.draft = configRebase(kept.draft, kept.live, live);
+        }
         kept.live = live;
         kept.object = object;
       }
     }
     if (!kept) {
       var fresh = configOf(object, row.kind);
-      kept = { key: key, kind: row.kind, live: fresh, draft: copyOf(fresh), object: object };
+      kept = { key: key, kind: row.kind, namespace: row.namespace || '', name: row.name, live: fresh, draft: copyOf(fresh), object: object };
     }
     state.configs[key] = kept;
     state.config = kept;
     return kept;
+  }
+
+  /**
+   * What was edited stays edited; what was not is what the cluster has now.
+   *
+   * The draft is a copy of the whole form, so a field nobody touched held the
+   * value it had when the form was opened — and after an autoscaler moved the
+   * replicas from 3 to 5, the form offered "5 → 3" as if somebody had asked.
+   */
+  function configRebase(draft, was, now) {
+    var out = copyOf(draft);
+    if (same(draft.replicas, was.replicas)) out.replicas = now.replicas;
+    out.containers.forEach(function (container, at) {
+      var before = was.containers[at];
+      var after = now.containers[at];
+      if (!before || !after) return;
+      if (same(container.image, before.image)) container.image = after.image;
+      ['requests', 'limits'].forEach(function (which) {
+        ['cpu', 'memory'].forEach(function (what) {
+          if (same(container[which][what], before[which][what])) container[which][what] = after[which][what];
+        });
+      });
+      if (JSON.stringify(container.env) === JSON.stringify(before.env)) container.env = copyOf(after.env);
+    });
+    return out;
   }
 
   var QUANTITY = /^\d+(\.\d+)?([eE]\d+)?(m|k|M|G|T|P|E|Ki|Mi|Gi|Ti|Pi|Ei)?$/;
@@ -6623,6 +6852,7 @@
    */
   function configProblems(config) {
     var out = [];
+    if (config.draft.replicas === '') out.push({ key: 'undefined|replicas', text: 'replicas is empty: say how many' });
     config.draft.containers.forEach(function (container, at) {
       var of = ' of ' + container.name;
       if (!String(container.image).trim()) out.push({ key: at + '|image', text: 'image' + of + ' is empty' });
@@ -6750,6 +6980,7 @@
       '<div class="edit-note-text">' + esc(note.text) + '</div>' +
       '<div class="edit-note-tools">' +
       (note.line ? '<button class="btn" data-do="yaml-goto" title="Put the caret there">Go to line ' + note.line + '</button>' : '') +
+      (note.left ? '<button class="btn bad" data-do="yaml-replace" title="Send the manifest whole: what is not in the text is taken off the object">Replace…</button>' : '') +
       (note.moved ? '<button class="btn" data-do="yaml-theirs" title="What is different in the cluster now, against what you started from">See what changed</button>' +
         '<button class="btn" data-do="yaml-take" title="Drop your edit and start again from what the cluster has now">Take the cluster\u2019s</button>' +
         '<button class="btn go" data-do="yaml-force" title="Apply your text over what the cluster has now">Apply mine anyway</button>' : '') +
@@ -6894,6 +7125,8 @@
         'placeholder="' + esc(placeholder || '') + '" spellcheck="false" /></label>';
     };
     var env = container.env.map(function (entry, i) {
+      // By its name only: PASSWORD, TOKEN, SECRET, a KEY. The value is on a screen somebody else may be looking at.
+      var hush = /pass(word)?|secret|token|credential|private|api_?key|access_?key|_key$/i.test(entry.name) && entry.value !== '' && !shownEnv[at + '|' + entry.name];
       if (entry.from) {
         return '<div class="config-env is-from">' +
           '<span class="env-name">' + esc(entry.name) + '</span>' +
@@ -6905,7 +7138,9 @@
         '<input class="env-name" data-config="env-name" data-at="' + at + '" data-env="' + i + '" ' +
           'value="' + esc(entry.name) + '" spellcheck="false" />' +
         '<input data-config="env-value" data-at="' + at + '" data-env="' + i + '" ' +
+          (hush ? 'type="password" autocomplete="off" title="Covered because of its name. Click the eye to see it." ' : '') +
           'value="' + esc(entry.value) + '" spellcheck="false" />' +
+        (hush || shownEnv[at + '|' + entry.name] ? '<button class="btn env-eye" data-env-eye="' + esc(at + '|' + entry.name) + '" title="' + (hush ? 'Show it' : 'Cover it') + '" aria-label="Show or cover the value">' + (hush ? '◉' : '◎') + '</button>' : '<span></span>') +
         '<button class="btn" data-config-drop="' + at + '" data-env="' + i + '" title="Remove this variable">✕</button>' +
         '</div>';
     }).join('');
@@ -6954,7 +7189,8 @@
         'What is listed below is measured against what it has now.</div></div>' : '') +
       '<ul class="config-problems" id="config-problems">' + problems.map(function (p) { return '<li>' + esc(p.text) + '</li>'; }).join('') + '</ul>' +
       (draft.replicas == null ? '' :
-        '<section class="block"><h4 class="block-head">Replicas</h4>' +
+        '<section class="block"><h4 class="block-head">Replicas' + (mapKnown(row) && mapKnown(row).hpa
+          ? '<span class="dim block-note">' + esc(mapKnown(row).hpa + ' keeps it between ' + mapKnown(row).hpaRange.replace('–', ' and ') + '; a number set here lasts until it next acts') + '</span>' : '') + '</h4>' +
         '<div class="config-grid config-narrow">' +
           '<label class="config-field"><span>How many</span>' +
           '<input type="number" min="0" data-config="replicas" value="' + esc(String(draft.replicas)) + '" /></label>' +
@@ -6965,6 +7201,15 @@
   }
 
   var configWrongNow = {};
+  /** Covered values somebody asked to see, by container and name. Forgotten with the pane. */
+  var shownEnv = {};
+  document.addEventListener('click', function (event) {
+    var eye = event.target.closest && event.target.closest('[data-env-eye]');
+    if (!eye) return;
+    var key = eye.dataset.envEye;
+    if (shownEnv[key]) delete shownEnv[key]; else shownEnv[key] = true;
+    redrawEditor();
+  });
 
   function configDiffHtml(changes) {
     return changes.map(function (line) { return '<li>' + esc(line) + '</li>'; }).join('');
@@ -6988,7 +7233,8 @@
     var value = field.value;
     var what = field.dataset.config;
     if (what === 'replicas') {
-      config.draft.replicas = value === '' ? 0 : Math.max(0, Number(value) || 0);
+      // Emptied is not zero: it is nothing yet, and it is said to be wrong rather than sent as "stop everything".
+      config.draft.replicas = value === '' ? '' : Math.max(0, Number(value) || 0);
     } else {
       var container = config.draft.containers[Number(field.dataset.at)];
       if (!container) return;
@@ -7339,8 +7585,9 @@
     if (row.kind === 'Event') return eventPane(row);
     var known = mapInfo(row);
     // With the map's own account of it above, the cluster's long description is one click away rather than in the way.
-    return chartsFor(row) + known + factsBlock(row, Boolean(known)) + containersBlock(row) + labelsBlock(row) +
-      (known ? '<details class="pane-fold" data-pane-fold="describe"' + (state.describeOpen ? ' open' : '') + '><summary>Described by the cluster</summary>' + describeBlock() + '</details>' : describeBlock());
+    var drawn = Boolean(known) && state.view.type === 'map';
+    return chartsFor(row) + known + factsBlock(row, drawn) + containersBlock(row) + labelsBlock(row) +
+      (drawn ? '<details class="pane-fold" data-pane-fold="describe"' + (state.describeOpen ? ' open' : '') + '><summary>Described by the cluster</summary>' + describeBlock() + '</details>' : describeBlock());
   }
 
   /** A named section with its own Copy — nobody wants the whole drawer. */
@@ -7427,6 +7674,10 @@
 
   function describeBlock() {
     var loaded = state.detailData.describe;
+    if (typeof loaded === 'string' && /\(NotFound\)|\bnot found\b/i.test(loaded) && loaded.length < 400) {
+      return '<div class="edit-note is-bad" role="status"><div class="edit-note-text">This is no longer in the cluster. It was deleted, or replaced by another of the same kind.\n' +
+        esc(loaded.trim()) + '</div><div class="edit-note-tools"><button class="btn" data-do="close-detail">Close</button></div></div>';
+    }
     return block('Described by the cluster',
       '<pre class="describe">' + (loaded == null ? 'reading…' : describeHtml(loaded)) + '</pre>');
   }
@@ -7490,7 +7741,10 @@
   function yamlBody(row) {
     var draft = draftFor(row);
     // Typing that survived a trip to another tab, or to another object, comes back with the editor open.
-    if (draft != null) state.editingYaml = true;
+    // Not a Secret's: its editor is its values, and they are shown when somebody asks, not when a tab is opened.
+    var covered = row.kind === 'Secret' && !state.showSecret;
+    if (draft != null && !covered) state.editingYaml = true;
+    if (covered) state.editingYaml = false;
     var editing = state.editingYaml;
     var base = baseFor(row);
     var body = draft == null ? base : draft;
@@ -7511,24 +7765,29 @@
         (state.applying === 'open' ? '<span class="spin">◐</span> Reading…' : 'Edit') + '</button>';
 
     return '<div class="yaml-tools is-stuck">' + tools +
-      '<span class="dim" id="yaml-state">' + (editing ? (changed ? 'edited · ' + linesText(diff) : 'nothing changed yet') : 'as it is in the cluster') + '</span>' +
+      (!editing && row.kind !== 'Secret' && state.detailData.editable != null && state.detailData.editable !== state.detailData.yaml
+        ? '<button class="btn' + (state.yamlClean ? ' on' : '') + '" data-do="yaml-clean" title="Leave out what the cluster writes: status, managed fields, what was last applied">Without status</button>' : '') +
+      '<span class="dim" id="yaml-state">' + (editing ? (changed ? 'edited · ' + linesText(diff) : 'nothing changed yet') : state.yamlClean && row.kind !== 'Secret' ? 'as somebody would write it' : 'as it is in the cluster') + '</span>' +
       '<span class="spacer"></span>' +
-      (editing && !showDiff && !theirs ? '<span class="dim" id="yaml-pos"></span>' : '') +
+      (editing && !showDiff && !theirs ? '<span class="dim" id="yaml-pos"></span>' +
+        '<button class="btn' + (state.yamlWrap ? ' on' : '') + '" data-do="yaml-wrap" title="Wrap long lines instead of scrolling sideways">Wrap</button>' : '') +
       '<button class="btn" data-do="yaml-save" title="Save this text to a file on this machine">Save…</button>' +
       '<button class="btn" data-do="copy-detail" title="Copy the whole manifest">Copy</button>' +
       '</div>' +
       editNoteHtml() + (editing ? managedNote() : '') +
+      (covered && draft != null ? '<div class="edit-note" role="note"><div class="edit-note-text">An edit of this Secret is kept and not applied. Edit shows it, with the values.</div></div>' : '') +
       (theirs
         ? '<div class="diff-title dim">What changed in the cluster since you started <button class="btn" data-do="yaml-diff-close">Back to the edit</button></div>' +
           '<div class="diff">' + (diffHtml(lineDiff(base, state.detailData.theirs)) || '<div class="dim">Nothing you would see in this text.</div>') + '</div>'
         : showDiff
-          ? '<div class="diff-title dim">Yours against the cluster\u2019s. Click a line to go to it. <button class="btn" data-do="yaml-diff-close">Back to the edit</button></div>' +
+          ? '<div class="diff-title dim">Yours against the cluster\u2019s. Click a line to go to it. <button class="btn" data-do="yaml-diff-close">Back to the edit</button>' +
+            '<button class="btn" data-do="yaml-diff-copy" title="Copy the changes as a diff">Copy diff</button></div>' +
             '<div class="diff">' + diffHtml(diff) + '</div>'
           : editing
-            ? '<textarea id="yaml-edit" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"' + (busy ? ' readonly' : '') + '>' + esc(body) + '</textarea>'
+            ? '<textarea id="yaml-edit" spellcheck="false" autocapitalize="off" autocomplete="off" class="' + (state.yamlWrap ? 'is-wrapped' : '') + '" wrap="' + (state.yamlWrap ? 'soft' : 'off') + '"' + (busy ? ' readonly' : '') + '>' + esc(body) + '</textarea>'
             // A Secret is painted from the text without what was last applied, which is the values over again.
             : '<pre class="yaml">' + yamlHtml(row.kind === 'Secret'
-              ? (hidesValues(row) ? maskSecret(base) : base) : state.detailData.yaml) + '</pre>');
+              ? (hidesValues(row) ? maskSecret(base) : base) : state.yamlClean && state.detailData.editable != null ? state.detailData.editable : state.detailData.yaml) + '</pre>');
   }
 
   /* ------------------------------------------------------------------ *
@@ -7609,8 +7868,9 @@
           '<div class="event-head"><span class="dot ' + (group.warn ? 'bad' : 'idle') + '"></span><b>' + esc(group.event.status) + '</b>' +
             (group.count > 1 ? '<span class="event-count">×' + group.count + '</span>' : '') +
             (withObject ? '<span class="dim event-about">' + esc(group.event.object) + '</span>' : '') +
-            '<span class="spacer"></span><span class="dim">' + (going ? 'still going · ' : 'stopped ' + esc(ageText(group.last)) + ' ago · ') + 'began ' + esc(ageText(group.first)) + ' ago</span></div>' +
+            '<span class="spacer"></span>' + (going ? '<span class="mtag bad">still going</span>' : '') + '</div>' +
           '<div class="timeline-track"><i class="' + (going ? 'is-going' : '') + '" style="left:' + left.toFixed(2) + '%;width:' + Math.min(100 - left, width).toFixed(2) + '%"></i></div>' +
+          '<div class="event-meta dim">began ' + esc(ageText(group.first)) + ' ago' + (going ? '' : ' · last said ' + esc(ageText(group.last)) + ' ago') + '</div>' +
           '<div class="event-text">' + esc(group.event.message) + '</div></div>';
       }).join('') + '</div>';
   }
@@ -7791,6 +8051,8 @@
         context: state.context, kind: subject.kind, namespace: subject.namespace, name: subject.name, revision: to,
       }).then(function (result) {
         say(result.text || ('Rolled ' + subject.name + ' back to revision ' + to + '.'));
+        recordApplied(subject, 'Rollback', { lines: ['Rolled back to revision ' + to + '.'] });
+        drawCrumb();
         state.detailData.rollout = null;
         drawDetail();
         loadDetail();
@@ -8945,6 +9207,7 @@
     if (what === 'find-next' || what === 'find-prev') { state.find.at += what === 'find-next' ? 1 : -1; findApply(true); return; }
     if (what === 'find-close') { findClose(); return; }
 
+    if (what === 'only-bad') { state.only = 'bad'; remember(); drawCrumb(); drawTable(); return; }
     if (what === 'show-all') {
       state.only = null;
       remember();
@@ -9102,6 +9365,11 @@
     if (what === 'yaml-theirs') { state.yamlView = 'theirs'; drawDetail(true); return; }
     if (what === 'yaml-goto') { if (state.editNote && state.editNote.line) yamlGoTo(state.editNote.line); return; }
     if (what === 'note-close') { state.editNote = null; redrawEditor(); return; }
+    if (what === 'yaml-replace') {
+      var whole = draftFor(row);
+      if (whole != null) applyYaml(whole, false, true, true);
+      return;
+    }
     if (what === 'yaml-force') {
       var mineText = draftFor(row);
       if (mineText != null) applyYaml(mineText, false, true);
@@ -9124,6 +9392,14 @@
       host.emit('save', { name: [row.namespace, row.kind.toLowerCase(), row.name].filter(Boolean).join('-') + '.yaml', text: saving });
       return;
     }
+    if (what === 'yaml-diff-copy') {
+      var mineNow = draftFor(row);
+      if (mineNow != null) copyText(diffText(lineDiff(baseFor(row), mineNow)), 'the changes');
+      return;
+    }
+    if (what === 'yaml-wrap') { state.yamlWrap = !state.yamlWrap; redrawEditor(); return; }
+    if (what === 'pane-kubectl') { copyText(kubectlFor(row), 'the kubectl line'); return; }
+    if (what === 'yaml-clean') { state.yamlClean = !state.yamlClean; drawDetail(true); return; }
     if (what === 'secret-show') { state.showSecret = !state.showSecret; drawDetail(true); return; }
     if (what === 'events-group') { state.eventsGroup = !state.eventsGroup; drawDetail(); return; }
     if (what === 'events-only') { state.eventsOnly = !state.eventsOnly; drawDetail(); return; }
@@ -9188,8 +9464,10 @@
       }
       dropDraft(row);
       stopEditing();
+      rememberSoon();
       state.detailData.theirs = null;
       drawDetail(true);
+      drawCrumb();
       return;
     }
     if (what === 'yaml-check' || what === 'yaml-apply') {
@@ -9219,6 +9497,7 @@
       state.revertArmed = 0;
       state.config.draft = copyOf(state.config.live);
       state.config.moved = false;
+      rememberSoon();
       state.editing = false;
       state.editNote = null;
       drawDetail(true);
@@ -9253,7 +9532,10 @@
     }
 
     if (what === 'scale') {
-      askFor('Scale ' + row.name + ' to how many?', String(row.replicas == null ? 1 : row.replicas))
+      var scaler = mapKnown(row);
+      askFor('Scale ' + row.name + ' to how many?' + (scaler && scaler.hpa
+        ? '\n\nThe autoscaler ' + scaler.hpa + ' keeps it between ' + scaler.hpaRange.replace('–', ' and ') + ': a number set here lasts until it next acts.' : ''),
+        String(row.replicas == null ? 1 : row.replicas))
         .then(function (wanted) {
           if (wanted == null) return;
           // "three", "-1" and an empty box are not a number of replicas, and were sent as one.
@@ -9324,6 +9606,7 @@
    * box loses it — and measured against what the edit started from, so text
    * typed back to how it was is no longer an edit, and the bar says so.
    */
+  var applySitting = 0;
   var yamlCount = 0;
   function yamlTyped(box) {
     var row = state.selected;
@@ -9393,8 +9676,13 @@
     var command = event.metaKey || event.ctrlKey;
     if (command && event.key === 's' && state.selected && (state.detail.tab === 'yaml' || state.detail.tab === 'configure')) {
       // ⌘S anywhere in the pane: the app's own Save has nothing of this frame's to save.
-      if (state.detail.tab === 'configure') { event.preventDefault(); act('config-apply'); return; }
-      if (state.editingYaml) { event.preventDefault(); act('yaml-apply'); return; }
+      var saveWith = document.querySelector('[data-do="' + (state.detail.tab === 'configure' ? 'config-apply' : 'yaml-apply') + '"]');
+      // The key is the button: switched off — nothing changed, something wrong, not allowed — it does nothing.
+      if (state.detail.tab === 'configure' || state.editingYaml) {
+        event.preventDefault();
+        if (saveWith && !saveWith.disabled) act(saveWith.dataset.do);
+        return;
+      }
     }
     if (command && event.key === 'Enter' && state.selected) {
       if (state.detail.tab === 'configure' && event.target.closest && event.target.closest('[data-config]')) { event.preventDefault(); act('config-check'); return; }
@@ -9428,6 +9716,14 @@
       }).join('\n');
       var grew = moved.length - (lineTo - lineFrom);
       yamlInsert(box, lineFrom, lineTo, moved, Math.max(lineFrom, from + firstShift), from === to ? Math.max(lineFrom, from + firstShift) : to + grew);
+      return;
+    }
+    if (event.key === 'Enter' && !command && !event.altKey && !event.isComposing && state.find.open && state.find.text &&
+        to > from && value.slice(from, to).toLowerCase() === state.find.text.toLowerCase()) {
+      // Find put the caret here to show its match. Enter is still "next" — it was replacing the match with a new line.
+      event.preventDefault();
+      state.find.at += event.shiftKey ? -1 : 1;
+      findApply(true);
       return;
     }
     if (event.key === 'Enter' && !command && !event.shiftKey && !event.altKey && !event.isComposing) {
@@ -9472,7 +9768,7 @@
    * and throws it away, which is the difference between learning about a bad
    * indent and learning about an outage. Only then the real one.
    */
-  function applyYaml(text, checkOnly, force) {
+  function applyYaml(text, checkOnly, force, replace) {
     var row = state.selected;
     if (!row || state.applying) return;
     var base = baseFor(row);
@@ -9480,7 +9776,9 @@
     if (!checkOnly && !diff.added && !diff.removed) { state.editNote = { text: 'Nothing is different from what the cluster has.' }; redrawEditor(); return; }
     var where = { context: state.context, kind: row.kind, name: row.name };
     if (row.namespace) where.namespace = row.namespace;
-    var mine = function () { return state.selected === row; };
+    // Left and come back to, the editor is a new sitting: an answer to the old one does not close it or take its text.
+    var sitting = (applySitting += 1);
+    var mine = function () { return state.selected === row && sitting === applySitting; };
     var settle = function (note) {
       if (!mine()) { if (note) say(row.name + ': ' + note.text, note.bad); return; }
       state.applying = null;
@@ -9507,28 +9805,66 @@
       }
       var send = { context: state.context, yaml: text, kind: row.kind, name: row.name, added: diff.added, removed: diff.removed };
       if (row.namespace) send.namespace = row.namespace;
+      if (replace) send.replace = true;
       return call('kube.apply', assign({ dryRun: true }, send)).then(function (dry) {
         if (checkOnly) {
           settle({ text: 'The server accepted it. Nothing was changed.' + (dry.text ? '\n' + dry.text : '') });
           return null;
         }
         return call('kube.apply', send).then(function (done) {
-          dropDraft(row);
-          recordApplied(row, 'YAML', { before: base, after: text, added: diff.added, removed: diff.removed });
+          // Only the edit that was sent: text typed since, in a later sitting, is another edit and stays.
+          if (draftFor(row) === text) dropDraft(row);
+          recordApplied(row, replace ? 'YAML, replaced' : 'YAML', { before: base, after: text, added: diff.added, removed: diff.removed });
           say(done.text || 'Applied.');
-          if (!mine()) return null;
-          stopEditing();
-          // Said where the edit was, and left there: a toast is gone by the time the eye is back from the button.
-          state.editNote = { text: 'Applied. ' + (done.text || '') };
-          drawCrumb();
-          state.detailData.yaml = null;
-          state.detailData.editable = null;
-          state.detailData.theirs = null;
-          state.detailData.object = null;
-          drawDetail(true);
-          loadDetail();
-          setTimeout(function () { load(true); }, 900);
-          return null;
+          var finish = function (left, now) {
+            if (!mine()) {
+              if (left.length) say(row.name + ': applied, but ' + left.length + ' line' + (left.length === 1 ? '' : 's') + ' you removed ' + (left.length === 1 ? 'is' : 'are') + ' still there. Open its YAML to see.', true);
+              return;
+            }
+            stopEditing();
+            drawCrumb();
+            state.detailData.theirs = null;
+            state.detailData.object = null;
+            if (left.length) {
+              /*
+               * It said "configured" and the lines are still there. Said, with
+               * the lines, and the edit left open on what remains — measured
+               * now against what the cluster has, so the bar counts exactly
+               * what did not happen.
+               */
+              state.detailData.editable = now;
+              state.drafts[row.uid] = { text: text, base: now, name: row.name, kind: row.kind, namespace: row.namespace || '' };
+              state.editingYaml = true;
+              state.editing = true;
+              state.editNote = {
+                bad: true, left: !replace,
+                text: (replace ? 'Replaced, and ' : 'Applied, but ') + left.length + ' line' + (left.length === 1 ? '' : 's') + ' you removed ' + (left.length === 1 ? 'is' : 'are') + ' still there:\n' +
+                  left.slice(0, 6).join('\n') + (left.length > 6 ? '\n…' : '') + '\n\n' +
+                  (replace ? 'The cluster put them back itself: they are defaults, or something else manages them.'
+                    : 'Apply only takes off what an earlier apply put there, and this was not made that way. Replace sends the manifest whole, and what is not in it goes.'),
+              };
+              drawDetail(true);
+              setTimeout(function () { load(true); }, 900);
+              return;
+            }
+            // Said where the edit was, and left there: a toast is gone by the time the eye is back from the button.
+            state.editNote = { text: (replace ? 'Replaced. ' : 'Applied. ') + (done.text || '') };
+            state.detailData.yaml = null;
+            state.detailData.editable = null;
+            drawDetail(true);
+            loadDetail();
+            setTimeout(function () { load(true); }, 900);
+          };
+          var gone = {};
+          diff.ops.forEach(function (entry) { if (entry.op === '-' && entry.text.trim()) gone[entry.text] = true; });
+          if (!Object.keys(gone).length) { finish([], null); return null; }
+          // Read back: did what was taken out actually go?
+          return call('kube.manifest', where).then(function (now) {
+            var after = now.editable == null ? '' : now.editable;
+            var left = lineDiff(text, after).ops.filter(function (entry) { return entry.op === '+' && gone[entry.text]; }).map(function (entry) { return entry.text; });
+            finish(left, after);
+            return null;
+          }).catch(function () { finish([], null); return null; });
         });
       });
     }).catch(function (error) {
@@ -9564,8 +9900,11 @@
   }
 
   function run(promise, done, then) {
+    var subject = state.selected;
     promise.then(function () {
       if (then) then();
+      if (subject) recordApplied(subject, 'Action', { lines: [done] });
+      drawCrumb();
       say(done);
       // A change is not visible until the cluster agrees it happened.
       setTimeout(function () { load(true); }, 900);
@@ -9883,7 +10222,7 @@
       box.style.cssText = 'position:fixed;inset:0;display:grid;place-items:center;background:rgba(0,0,0,0.45);z-index:9';
       box.innerHTML = '<form style="background:var(--bg-panel);border:1px solid var(--border-strong);' +
         'border-radius:var(--radius);padding:14px 16px;min-width:280px;max-width:82vw">' +
-        '<div style="margin-bottom:9px">' + esc(question) + '</div>' +
+        '<div style="margin-bottom:9px;white-space:pre-wrap">' + esc(question) + '</div>' +
         '<input id="prompt-value" value="' + esc(initial) + '" style="width:100%;font:inherit;color:var(--text);' +
         'background:var(--bg-input);border:1px solid var(--border);border-radius:var(--radius);padding:5px 8px" />' +
         '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:11px">' +
@@ -10017,6 +10356,10 @@
     }
     if (event.key === 'Escape') {
       // The question closes itself; this is only for what is behind it.
+      if (state.selected && state.detail.tab === 'yaml' && state.editingYaml && state.yamlView !== 'edit' && !document.getElementById('prompt')) {
+        act('yaml-diff-close');
+        return;
+      }
       if (document.getElementById('prompt') || state.editing || state.applying) return;
       // Looking at the changes, Escape goes back to the edit; in an editor nothing was typed into, out of it.
       if (state.selected && state.detail.tab === 'yaml' && state.editingYaml) {
@@ -10042,6 +10385,23 @@
       return;
     }
     if (event.key === '?') { event.preventDefault(); showKeys(); return; }
+    if (state.selected && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      var paneTabs = document.querySelectorAll('aside .tabs [data-tab]');
+      if (/^[1-9]$/.test(event.key) && paneTabs[Number(event.key) - 1]) { event.preventDefault(); paneTabs[Number(event.key) - 1].click(); return; }
+      if (event.key === 'e' && document.querySelector('aside .tabs [data-tab="yaml"]')) {
+        event.preventDefault();
+        if (state.detail.tab !== 'yaml') document.querySelector('aside .tabs [data-tab="yaml"]').click();
+        // The manifest may still be on its way: the editor opens when it is here.
+        var tries = 0;
+        var openEditor = function () {
+          var edit = document.querySelector('[data-do="yaml-edit"]');
+          if (edit && !edit.disabled && state.detailData.yaml != null) { act('yaml-edit'); return; }
+          if (!state.editingYaml && (tries += 1) < 40) setTimeout(openEditor, 100);
+        };
+        openEditor();
+        return;
+      }
+    }
     if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && state.table) {
       var rows = visible();
       if (!rows.length) return;

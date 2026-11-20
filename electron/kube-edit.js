@@ -87,8 +87,31 @@ function skipBlock(lines, from, indent) {
   return at;
 }
 
-/** Kinds a workload makes and names after itself. */
-const NAMED_AFTER = ['Pod', 'ReplicaSet', 'Job', 'ControllerRevision', 'PersistentVolumeClaim'];
+/**
+ * The names a controller builds, by what built them.
+ *
+ * "Starts with the workload's name" was the first rule and it was wrong both
+ * ways: `web` claimed the pods of `web-api`, and a StatefulSet never found its
+ * own claims, which are named `<template>-<set>-<ordinal>`. Each controller
+ * has a shape, and the shape is what is matched: a hash, a hash and five
+ * characters, an ordinal, a timestamp.
+ */
+const escapeRe = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function madeBy(kind, name) {
+  const n = escapeRe(name);
+  const hash = '[a-z0-9]{5,10}';
+  const tail = '[a-z0-9]{5}';
+  const shapes = {
+    Deployment: { ReplicaSet: `^${n}-${hash}$`, Pod: `^${n}-${hash}-${tail}$` },
+    ReplicaSet: { Pod: `^${n}-${tail}$` },
+    StatefulSet: { Pod: `^${n}-\\d+$`, PersistentVolumeClaim: `-${n}-\\d+$`, ControllerRevision: `^${n}-${hash}$` },
+    DaemonSet: { Pod: `^${n}-${tail}$`, ControllerRevision: `^${n}-${hash}$` },
+    Job: { Pod: `^${n}-${tail}$` },
+    CronJob: { Job: `^${n}-\\d+$`, Pod: `^${n}-\\d+-${tail}$` },
+  };
+  const mine = shapes[kind] ?? {};
+  return (objectKind, objectName) => Boolean(mine[objectKind]) && new RegExp(mine[objectKind]).test(String(objectName));
+}
 
 /**
  * Kinds that are put beside a workload under its own name. On a real cluster
@@ -108,12 +131,12 @@ const NAMED_THE_SAME = ['HorizontalPodAutoscaler', 'PodDisruptionBudget', 'Servi
  * the panel can say it was worked out.
  */
 function eventsAbout(rows, kind, name) {
-  const prefix = `${name}-`;
+  const made = madeBy(kind, name);
   const out = [];
   for (const row of rows ?? []) {
     if (row.objectKind === kind && row.objectName === name) out.push(row);
     else if (
-      (NAMED_AFTER.includes(row.objectKind) && String(row.objectName).startsWith(prefix)) ||
+      made(row.objectKind, row.objectName) ||
       (NAMED_THE_SAME.includes(row.objectKind) && row.objectKind !== kind && row.objectName === name)
     ) {
       out.push({ ...row, related: true });

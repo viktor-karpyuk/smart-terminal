@@ -1753,8 +1753,9 @@ async function can({ kind, context, namespace } = {}) {
     const ask = async (verb) => {
       const result = await run([...scope({ context, namespace }), 'auth', 'can-i', verb, what], { timeout: 8000 });
       const said = String(result.stdout || '').trim().split('\n')[0];
-      if (said === 'yes') return true;
-      if (said === 'no') return false;
+      // "no - no RBAC policy matched" is a no with its reason after it.
+      if (/^yes\b/.test(said)) return true;
+      if (/^no\b/.test(said)) return false;
       return null;
     };
     const [patch, remove] = await Promise.all([ask('patch'), ask('delete')]);
@@ -2083,10 +2084,18 @@ async function restart({ kind, name, ...rest }) {
  * about an outage. The panel does that first, every time, and only applies for
  * real once the server has said the thing is legal.
  */
-async function apply({ yaml, dryRun = false, ...rest }) {
+async function apply({ yaml, dryRun = false, replace = false, ...rest }) {
   const body = String(yaml ?? '');
   if (!body.trim()) return { ok: false, error: 'There is nothing to apply.' };
-  const args = [...scope(rest), 'apply', '-f', '-'];
+  /*
+   * `apply` removes only what an earlier apply put there: it reads what was
+   * last applied off the object, and an object made by Helm or by hand has no
+   * such record, so a line deleted from its manifest stays in the cluster and
+   * the command still says "configured". `replace` sends the object whole and
+   * what is not in the text goes. The panel asks for it by name, after an
+   * apply that left something behind — never by itself.
+   */
+  const args = [...scope(rest), replace ? 'replace' : 'apply', '-f', '-'];
   if (dryRun) args.push('--dry-run=server');
   const result = await run(args, { stdin: body });
   /*
