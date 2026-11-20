@@ -1979,7 +1979,7 @@ function LauncherButton({ viewId, title, icon }: { viewId: string; title: string
       aria-pressed={showing}
       onClick={() => useStore.getState().launchExtensionView(viewId)}
     >
-      {icon === 'review' ? <ReviewIcon /> : icon === 'teams' ? <TeamsIcon /> : icon === 'send' ? <SendIcon /> : icon === 'jenkins' ? <JenkinsIcon /> : icon === 'remote' ? <RemoteIcon /> : icon === 'timelogbook' ? <TimelogbookIcon /> : icon === 'kubrik' ? <KubrikIcon /> : <ExtensionsIcon />}
+      {icon === 'review' ? <ReviewIcon /> : icon === 'teams' ? <TeamsIcon /> : icon === 'send' ? <SendIcon /> : icon === 'jenkins' ? <JenkinsIcon /> : icon === 'remote' ? <RemoteIcon /> : icon === 'timelogbook' ? <TimelogbookIcon /> : icon === 'kubrik' ? <KubrikIcon /> : icon === 'database' ? <DatabaseIcon /> : <ExtensionsIcon />}
       {remoteDot ? <span className={`activity-dot is-${remoteDot}`} aria-hidden="true" /> : null}
       {remote && remote.viewers.length > 0 && !remote.error ? <span className="remote-count" aria-hidden="true">{remote.viewers.length}</span> : null}
     </button>
@@ -2055,6 +2055,17 @@ function KubrikIcon() {
       <rect x="13" y="3" width="8" height="8" rx="1.5" />
       <rect x="3" y="13" width="8" height="8" rx="1.5" />
       <path d="M17 13v8M13 17h8" />
+    </svg>
+  );
+}
+
+/** The cylinder every diagram draws a database as, in the stroke the rest use. */
+function DatabaseIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.95" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <ellipse cx="12" cy="5.5" rx="7.5" ry="3" />
+      <path d="M4.5 5.5v13c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3v-13" />
+      <path d="M4.5 12c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3" />
     </svg>
   );
 }

@@ -81,6 +81,7 @@ const { Updates, repoSlug } = require('./updates');
 const { ReviewService } = require('./review-service');
 const { TeamsService } = require('./teams-service');
 const { JenkinsService } = require('./jenkins-service');
+const { RdbService } = require('./rdb-service');
 const { JenkinsMcp } = require('./jenkins-mcp');
 const { TimelogbookService } = require('./timelogbook-service');
 const { KubrikService } = require('./kubrik-service');
@@ -256,6 +257,8 @@ let remoteServer = null;
 const recentOutput = new RecentOutput();
 /** Jenkins: the credentials, the poller, and the verbs the panel may call. Its tables live in this app's own database. */
 let jenkinsService = null;
+/** The Databases extension: saved connections, and the live ones behind its panels. */
+let rdbService = null;
 /** What Claude sessions may ask of it: read-only, and a dialog for anything that starts a build. */
 let jenkinsMcp = null;
 let forgeMcp = null;
@@ -496,6 +499,97 @@ const JENKINS_NOTES_MAX = 50;
 function windowForNotice() {
   const all = [...windows.values()].filter((one) => !one.isDestroyed());
   return all.find((one) => one.isFocused()) ?? all[0] ?? null;
+}
+
+/**
+ * Databases. What it needs of the app: the database handle for its own tables,
+ * the keychain for passwords, and the two system dialogs — one to choose a
+ * SQLite file, one to say where an export goes. The dialog is the person's
+ * consent to that path; no panel ever names a file to read or write.
+ */
+function createRdbService() {
+  const secrets = {
+    encrypt: (text) => {
+      // A password stored in the clear is worse than a password not stored: refuse, and say why.
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('This system offers no encrypted storage, so the password cannot be kept safely.');
+      return safeStorage.encryptString(text).toString('base64');
+    },
+    decrypt: (cipher) => safeStorage.decryptString(Buffer.from(cipher, 'base64')),
+  };
+  try {
+    return new RdbService({
+      db: db.db,
+      secrets,
+      pickFile: async () => {
+        const owner = BrowserWindow.getFocusedWindow() ?? undefined;
+        const picked = await dialog.showOpenDialog(owner, {
+          title: 'Open a SQLite database',
+          properties: ['openFile'],
+          filters: [
+            { name: 'SQLite', extensions: ['sqlite', 'sqlite3', 'db', 'db3', 's3db'] },
+            { name: 'All files', extensions: ['*'] },
+          ],
+        });
+        return picked.canceled || !picked.filePaths[0] ? null : picked.filePaths[0];
+      },
+      pickSavePath: async ({ suggestedName, extension }) => {
+        const owner = BrowserWindow.getFocusedWindow() ?? undefined;
+        const kind = String(extension || 'sql');
+        const picked = await dialog.showSaveDialog(owner, {
+          title: 'Back up to',
+          defaultPath: path.join(app.getPath('documents'), String(suggestedName || `backup.${kind}`)),
+          filters: [{ name: kind.toUpperCase(), extensions: [kind] }],
+        });
+        return picked.canceled || !picked.filePath ? null : picked.filePath;
+      },
+      pickScript: async () => {
+        const owner = BrowserWindow.getFocusedWindow() ?? undefined;
+        const picked = await dialog.showOpenDialog(owner, {
+          title: 'Open a script',
+          properties: ['openFile'],
+          filters: [{ name: 'SQL', extensions: ['sql', 'psql', 'ddl', 'txt'] }, { name: 'All files', extensions: ['*'] }],
+        });
+        return picked.canceled || !picked.filePaths[0] ? null : picked.filePaths[0];
+      },
+      pickCsv: async () => {
+        const owner = BrowserWindow.getFocusedWindow() ?? undefined;
+        const picked = await dialog.showOpenDialog(owner, {
+          title: 'Import rows from',
+          properties: ['openFile'],
+          filters: [{ name: 'Delimited text', extensions: ['csv', 'tsv', 'txt'] }, { name: 'All files', extensions: ['*'] }],
+        });
+        return picked.canceled || !picked.filePaths[0] ? null : picked.filePaths[0];
+      },
+      // A terminal's password file, for the minute it exists: inside the app's own folder, not the shared temp one.
+      scratch: path.join(app.getPath('userData'), 'databases-tmp'),
+      pickBackup: async () => {
+        const owner = BrowserWindow.getFocusedWindow() ?? undefined;
+        const picked = await dialog.showOpenDialog(owner, {
+          title: 'Restore from',
+          properties: ['openFile'],
+          filters: [{ name: 'Backups', extensions: ['sql', 'dump', 'backup', 'bak'] }, { name: 'All files', extensions: ['*'] }],
+        });
+        return picked.canceled || !picked.filePaths[0] ? null : picked.filePaths[0];
+      },
+      // The place is asked for first and the query run after, so cancelling the dialog runs nothing.
+      saveFile: async ({ suggestedName, extension, build, title }) => {
+        const owner = BrowserWindow.getFocusedWindow() ?? undefined;
+        const kind = String(extension || 'csv');
+        const picked = await dialog.showSaveDialog(owner, {
+          title: String(title || 'Export rows'),
+          defaultPath: path.join(app.getPath('downloads'), String(suggestedName || `export.${kind}`)),
+          filters: [{ name: kind.toUpperCase(), extensions: [kind] }],
+        });
+        if (picked.canceled || !picked.filePath) return null;
+        await fs.promises.writeFile(picked.filePath, await build(), 'utf8');
+        return { name: path.basename(picked.filePath) };
+      },
+    });
+  } catch (error) {
+    // Nothing else depends on it; an extension that cannot start says so and stays out of the way.
+    console.error('[databases] could not start:', error);
+    return null;
+  }
 }
 
 function createJenkinsService() {
@@ -2396,6 +2490,8 @@ function registerIpc() {
     top: (args) => kube.top(args),
     summary: (args) => kube.summary(args),
     topology: (args) => kube.topology(args),
+    can: (args) => kube.can(args),
+    plan: (args) => kube.plan(args),
     brief: (args) => kube.brief(args),
     prometheus: (args) => kube.prometheus(args),
     promQuery: (args) => kube.promQuery(args),
@@ -2406,6 +2502,7 @@ function registerIpc() {
     apply: (args) => kube.apply(args),
     configure: (args) => kube.configure(args),
     cordon: (args) => kube.cordon(args),
+    cordonMany: (args) => kube.cordonMany(args),
     history: (args) => kube.history(args),
     rollback: (args) => kube.rollback(args),
     pause: (args) => kube.pause(args),
@@ -2673,6 +2770,12 @@ function registerIpc() {
   ipcMain.handle('kubrik:call', async (_e, { name, args } = {}) => {
     if (!kubrikService) return { ok: false, error: 'Kubrik OS is not running.' };
     return kubrikService.call(String(name ?? ''), args ?? {});
+  });
+
+  /** Databases: the same one door. Every verb is named on the other side of it. */
+  ipcMain.handle('rdb:call', async (_e, { name, args } = {}) => {
+    if (!rdbService) return { ok: false, error: 'Databases is not running.' };
+    return rdbService.call(String(name ?? ''), args ?? {});
   });
 
   ipcMain.handle('review:call', async (_e, { name, args } = {}) => {
@@ -3101,6 +3204,9 @@ if (isPrimaryInstance) app.whenReady().then(() => {
   jenkinsService?.start();
   timelogbookService = createTimelogbookService();
   kubrikService = createKubrikService();
+  // Connections that nobody is using are let go on a clock of its own.
+  rdbService = createRdbService();
+  rdbService?.start();
   reviewService = createReviewService();
   if (teamsService && reviewService) {
     teamsBot = new TeamsBot({
@@ -4064,6 +4170,8 @@ app.on('will-quit', () => {
   // A `claude -p` nobody can see would go on spending on the person's account.
   reviewService?.stop();
   jenkinsService?.stop();
+  // Open connections are closed rather than left for each server to time out.
+  rdbService?.stop();
   teamsBot?.stop();
   diskUsage?.stop();
   housekeepingMonitor?.stop();

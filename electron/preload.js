@@ -303,6 +303,10 @@ contextBridge.exposeInMainWorld('api', {
   },
 
   /** Jenkins: one door, and one stream of "something changed, read it again". */
+  /** Databases: every verb through one call. Connections and their passwords stay on the other side. */
+  rdb: {
+    call: (name, args) => ipcRenderer.invoke('rdb:call', { name, args }),
+  },
   jenkins: {
     call: (name, args) => ipcRenderer.invoke('jenkins:call', { name, args }),
     onEvent: (handler) => on('jenkins:event', handler),

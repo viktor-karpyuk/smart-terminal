@@ -1624,8 +1624,38 @@
 
   function uiFont() { var s = state.overview && state.overview.settings; return (s && s.uiFont) || 12; }
 
+  /*
+   * A press is not interrupted.
+   *
+   * A click is a button going down and coming up on the same element, and this
+   * panel rebuilds its whole body when it draws. While a review runs it draws
+   * four times a second — a line of progress, a clock ticking — so a press that
+   * took a tenth of a second quite often had the button replaced underneath it:
+   * the release landed on a different element than the press, the browser sent
+   * no click at all, and the button had to be pressed again, and sometimes
+   * again. So nothing is redrawn while a button is held: the draw is owed, and
+   * paid the moment the pointer is let go — after the click it would have
+   * swallowed has been delivered.
+   */
+  var pressing = false;
+  var drawOwed = false;
+  function letGo() {
+    if (!pressing) return;
+    pressing = false;
+    if (!drawOwed) return;
+    drawOwed = false;
+    // After the click this release is about to become, not before it.
+    setTimeout(function () { drawQuietly(); }, 0);
+  }
+  document.addEventListener('pointerdown', function (event) { if (event.button === 0) pressing = true; }, true);
+  document.addEventListener('pointerup', letGo, true);
+  document.addEventListener('pointercancel', letGo, true);
+  // A press that ends somewhere this frame cannot see — another window, the app's own chrome — still ends.
+  window.addEventListener('blur', letGo);
+
   function draw() {
     if (!state.started) return;
+    if (pressing) { drawOwed = true; return; }
     /*
      * The one number every size in this panel is measured against. Set on the
      * root because that is what `rem` means, and set on every draw because a
@@ -1746,6 +1776,8 @@
    */
   function drawQuietly() {
     if (!typing()) return draw();
+    // The bar at the top has buttons too, and is no more to be rebuilt under a press than the rest.
+    if (pressing) { drawOwed = true; return; }
     drawTop();
     state.drawPending = true;
   }

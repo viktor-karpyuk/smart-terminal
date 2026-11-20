@@ -489,6 +489,10 @@ function Frame({
           // The address and the key are the main process's: the panel only names verbs and tools.
           return reply(true, await window.api.timelogbook.call(name.slice(12), args), undefined);
         }
+        if (channel === 'db') {
+          // Connections and their passwords are the main process's: a panel names one by id and is answered with rows.
+          return reply(true, await window.api.rdb.call(name.slice(3), args), undefined);
+        }
         if (channel === 'kube-stream') {
           return reply(true, await stream(name.slice(5), args), undefined);
         }
@@ -729,6 +733,51 @@ function Frame({
         if (found.ok === false) return found;
         // A session per task: two tasks are two pieces of work, not one conversation.
         const sessionId = await claudeFor(panelId, { title: String(found.title ?? 'task'), fresh: true });
+        if (!sessionId) return { ok: false, error: 'the app could not open a session' };
+        store.focusSession(sessionId);
+        const handed = await window.api.analysis.handOver(sessionId, String(found.text ?? ''));
+        return { ok: true, sessionId, delivered: handed.delivered ?? false };
+      }
+
+      /*
+       * A change to the infrastructure, asked for from the map.
+       *
+       * The panel names the operation and the pool; the app reads the cluster
+       * again and writes the brief — what runs on those machines, what is
+       * fragile about moving it, and the order to do it in. It goes to this
+       * panel's session, which does the work a step at a time with the person
+       * agreeing to each: nothing here changes a cluster by itself.
+       */
+      if (name === 'kube.askPlan') {
+        const planned = await window.api.kube.call('plan', { ...args, context: where.context });
+        if (planned.ok === false) return planned;
+        const sessionId = await claudeFor(panelId);
+        if (!sessionId) return { ok: false, error: 'the app could not open a session' };
+        store.focusSession(sessionId);
+        const handed = await window.api.analysis.handOver(sessionId, String(planned.text ?? ''));
+        return { ok: true, sessionId, delivered: handed.delivered ?? false };
+      }
+
+      // The database's own client in a real terminal. The main process writes the command line; the panel names a connection.
+      if (name === 'db.shell') {
+        const found = await window.api.rdb.call('shellCommand', { id: args.id, database: args.database });
+        if (found.ok === false) return found;
+        const sessionId = await store.openShellNear(panelId, String(found.title ?? 'database').slice(0, 28), String(found.command ?? ''), below(panelId));
+        if (!sessionId) return { ok: false, error: 'the app could not open a terminal' };
+        return { ok: true, sessionId };
+      }
+
+      // A table, or the statement that just failed: the app reads the definition or remembers the failure, and writes the words.
+      if (name === 'db.ask') {
+        const found = await window.api.rdb.call('brief', {
+          id: args.id,
+          database: args.database,
+          schema: args.schema,
+          name: args.name,
+          failed: args.failed === true,
+        });
+        if (found.ok === false) return found;
+        const sessionId = await claudeFor(panelId, { title: `ask ${String(found.title ?? 'database')}`.slice(0, 28) });
         if (!sessionId) return { ok: false, error: 'the app could not open a session' };
         store.focusSession(sessionId);
         const handed = await window.api.analysis.handOver(sessionId, String(found.text ?? ''));

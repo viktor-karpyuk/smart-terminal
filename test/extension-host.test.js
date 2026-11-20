@@ -88,6 +88,28 @@ test('the questions asked before changing a cluster name where, not just what', 
   assert.match(owned, /next upgrade of that release will put it back/);
   assert.ok(!/Helm installed/.test(H.needsConsent('kube.apply', { yaml: 'kind: ConfigMap' }) ?? ''));
   /*
+   * The question says how much is about to change, and catches the one thing
+   * an editor makes easy to do by accident: a name changed in the text is not
+   * a rename, it is a second object.
+   */
+  const edited = H.needsConsent('kube.apply', {
+    kind: 'Deployment', name: 'web', namespace: 'shop', added: 2, removed: 1,
+    yaml: 'kind: Deployment\nmetadata:\n  labels:\n    name: not-this-one\n  name: web\nspec: {}\n',
+  });
+  assert.match(edited, /2 lines added, 1 line removed in Deployment web\./);
+  assert.ok(!/leaves web as it is/.test(edited));
+  const renamed = H.needsConsent('kube.apply', {
+    kind: 'Deployment', name: 'web', added: 1, removed: 1,
+    yaml: 'kind: Deployment\nmetadata:\n  name: web2\nspec: {}\n',
+  });
+  assert.match(renamed, /This text is Deployment web2, not Deployment web/);
+  assert.match(renamed, /leaves web as it is/);
+  // Argo CD puts things back too, and sooner than Helm does.
+  const synced = H.needsConsent('kube.apply', { yaml: 'metadata:\n  labels:\n    argocd.argoproj.io/instance: shop-app\n' });
+  assert.match(synced, /Argo CD manages this, as part of the application "shop-app"/);
+  // Asking what the account may do changes nothing and is never a question.
+  assert.equal(H.needsConsent('kube.can', { kind: 'deployments' }), null);
+  /*
    * A patch says what it will change, because it can. "Apply this manifest?" is
    * a question nobody can answer without reading the manifest; a list of four
    * lines is a question you can actually answer.
