@@ -69,6 +69,7 @@ const WRITE_VERBS = [
  * prefixed.
  */
 const KUBE_READ = [
+  'can',
   'contexts',
   'reachable',
   'resources',
@@ -81,6 +82,7 @@ const KUBE_READ = [
   'top',
   'summary',
   'topology',
+  'plan',
   'brief',
   'prometheus',
   'history',
@@ -103,6 +105,7 @@ const KUBE_WRITE = [
   'apply',
   'configure',
   'cordon',
+  'cordonMany',
   'rollback',
   'pause',
   'suspend',
@@ -129,7 +132,7 @@ const KUBE_STREAM = ['follow', 'stopFollow', 'forward', 'stopForward', 'forwards
  * whole reason these can exist at all: an extension that could compose the text
  * going into a Claude session could ask it to do anything.
  */
-const KUBE_APP = ['shell', 'terminal', 'ask'] as const;
+const KUBE_APP = ['shell', 'terminal', 'ask', 'askPlan'] as const;
 
 /**
  * Helm, which is a different tool and gets a different door.
@@ -958,7 +961,32 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
         ? `\n\nHelm installed this, as part of the release "${owner[1]}". ` +
           'The next upgrade of that release will put it back the way the chart says.'
         : '';
-      return `Apply this manifest${where}?${managed}`;
+      // Argo CD does the same on its own clock, and sooner: it puts back what Git says, often within minutes.
+      const argo = /argocd\.argoproj\.io\/(?:instance|tracking-id):\s*["']?([^"'\s:]+)/.exec(String(args.yaml ?? ''));
+      const synced = argo
+        ? `\n\nArgo CD manages this, as part of the application "${argo[1]}". ` +
+          'If it syncs by itself it will put this back the way Git says; change it there to keep it.'
+        : '';
+      /*
+       * What is about to be different, in the two numbers the panel counted,
+       * and the one mistake an editor makes easy: a name changed in the text is
+       * not a rename. The cluster is given a new object and keeps the old one.
+       */
+      const yaml = String(args.yaml ?? '');
+      const added = Number(args.added) || 0;
+      const removed = Number(args.removed) || 0;
+      const lines = (n: number) => `${n} line${n === 1 ? '' : 's'}`;
+      const size = added || removed
+        ? `\n\n${[added ? `${lines(added)} added` : '', removed ? `${lines(removed)} removed` : ''].filter(Boolean).join(', ')}` +
+          `${args.name ? ` in ${what}` : ''}.`
+        : '';
+      const named = /^metadata:\n(?: .*\n)*? {2}name:\s*["']?([^"'\s#]+)/m.exec(yaml)?.[1];
+      const kindNow = /^kind:\s*(\S+)/m.exec(yaml)?.[1];
+      const other = args.name && ((named && named !== String(args.name)) || (kindNow && args.kind && kindNow !== String(args.kind)))
+        ? `\n\nThis text is ${kindNow ?? String(args.kind)} ${named ?? String(args.name)}, not ${what}. ` +
+          `Applying it makes or changes that one and leaves ${String(args.name)} as it is.`
+        : '';
+      return `Apply this manifest${where}?${size}${other}${managed}${synced}`;
     }
     /*
      * Changing a few fields, and the question says which.
@@ -998,6 +1026,11 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
     if (name === 'kube.trigger') {
       return `Run ${String(args.name ?? 'this cron job')} now${where}?\n\nIt makes a real job, off schedule.`;
     }
+    // A whole pool at once: one question that says how many, rather than six that get waved through.
+    if (name === 'kube.cordonMany' && args.on !== false) {
+      const many = Array.isArray(args.names) ? args.names.length : 0;
+      return `Stop scheduling new pods onto ${many} node${many === 1 ? '' : 's'}${args.pool ? ` of ${String(args.pool)}` : ''}${where}?\n\nWhat already runs there keeps running. Uncordon puts them back.`;
+    }
     if (name === 'kube.cordon' && args.on !== false) {
       return `Stop scheduling new pods onto ${String(args.name ?? 'this node')}${where}?`;
     }
@@ -1008,7 +1041,7 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
      */
     if (name === 'kube.drain') {
       return (
-        `Move everything off ${String(args.name ?? 'this node')}${where}?\n\n` +
+        `Move everything off ${String(args.name ?? 'this node')}${args.step ? ` (node ${String(args.step)}${args.pool ? ` of ${String(args.pool)}` : ''})` : ''}${where}?\n\n` +
         'Every pod on it is evicted, one at a time. It stops if a disruption budget will not allow it, ' +
         'and you will see that happen in the dock.'
       );

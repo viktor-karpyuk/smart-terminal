@@ -279,6 +279,13 @@ export function ensureTerminal(id: string, options: CreateOptions): TerminalHand
     macOptionClickForcesSelection: true,
     theme: options.theme,
     smoothScrollDuration: 60,
+    // OSC 8 hyperlinks: without this xterm falls back to a confirm() dialog.
+    linkHandler: {
+      activate: (event, uri) => {
+        event.preventDefault();
+        window.api.system.openExternal(uri);
+      },
+    },
   });
 
   const fit = new FitAddon();

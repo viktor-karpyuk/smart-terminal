@@ -3,10 +3,11 @@ import { startDrag } from '../lib/resize';
 import { useShallow } from 'zustand/react/shallow';
 import { asFilePanel, isDarkAppearance, useStore } from '../state/store';
 import { activeTheme, previewInkFor } from '../lib/looks';
-import type { DirEntry } from '../global';
+import type { DirEntry, SearchResult } from '../global';
 import { GIT_TAB } from '../state/types';
 import { leafOfTab } from '../state/layout';
 import { Editor } from './Editor';
+import { revealLine } from '../lib/editorReveal';
 import { Popover } from './Popover';
 import { FileIcon, colourFor } from '../lib/fileIcons';
 import { previewDocument, previewKind, setPreviewInk } from '../lib/preview';
@@ -17,7 +18,6 @@ import { TerminalSlot } from './TerminalSlot';
 import { readAll } from '../terminals/registry';
 import { FILE_MIME } from '../lib/drag';
 import { isInside, nameProblem, parentOf } from '../lib/fileOps';
-import { CaretIcon } from './icons';
 import { mediaKind, mediaUrl, type MediaKind } from '../lib/media';
 
 /**
@@ -174,15 +174,26 @@ export function FilesPanel({ panelId }: { panelId: string }) {
         tabIndex={-1}
         onKeyDown={(event) => treeKeys(event, panelId, panel.root!)}
       >
-        <TreeHeader panelId={panelId} root={panel.root} homedir={homedir} />
-        {panel.find?.trim() ? (
-          <NarrowedTree panelId={panelId} root={panel.root} query={panel.find} />
-        ) : (
-          <DropZone panelId={panelId} dir={panel.root} className="files-tree-scroll">
-            <UpRow panelId={panelId} root={panel.root} />
-            <Dir panelId={panelId} path={panel.root} depth={0} />
-          </DropZone>
-        )}
+        <SideHeader panelId={panelId} />
+        {/*
+          Both views stay mounted, the way an editor's side bar keeps them: going
+          to Search and back must not throw away the tree's scroll, and coming
+          back to Search must find the last results still there.
+        */}
+        <div className="files-side-view" hidden={(panel.sideView ?? 'explorer') !== 'explorer'}>
+          <RootSection panelId={panelId} root={panel.root} homedir={homedir} />
+          {!panel.rootCollapsed &&
+            (panel.find?.trim() ? (
+              <NarrowedTree panelId={panelId} root={panel.root} query={panel.find} />
+            ) : (
+              <DropZone panelId={panelId} dir={panel.root} className="files-tree-scroll">
+                <Dir panelId={panelId} path={panel.root} depth={0} />
+              </DropZone>
+            ))}
+        </div>
+        <div className="files-side-view" hidden={panel.sideView !== 'search'}>
+          <SearchView panelId={panelId} root={panel.root} />
+        </div>
         {notice && (
           <div className={`git-notice is-floating${notice.good ? '' : ' is-bad'}`} onClick={() => setNotice(null)}>
             {notice.text}
@@ -498,37 +509,135 @@ function ChooseFolder({ panelId }: { panelId: string }) {
       return [...seen.entries()].map(([cwd, names]) => `${cwd}\u0000${names.join(', ')}`);
     }),
   );
+  // Where sessions worked lately, from history: the folders worth a click.
+  const [recent, setRecent] = useState<string[]>([]);
+  useEffect(() => {
+    void window.api.history.recentFolders(12).then(setRecent, () => setRecent([]));
+  }, []);
 
   const short = (path: string) => (path.startsWith(homedir) ? `~${path.slice(homedir.length)}` : path);
+  const working = folders.map((entry) => entry.split('\u0000') as [string, string]);
+  const earlier = recent.filter((dir) => !working.some(([cwd]) => cwd === dir)).slice(0, 8);
+  const openFolder = async () => {
+    const picked = await window.api.system.pickDirectory(homedir);
+    if (picked) setPanelRoot(panelId, picked);
+  };
 
   return (
-    <div className="files-choose">
-      <h3>Which folder?</h3>
-      {folders.length > 0 && <p className="form-hint">Where your sessions are working.</p>}
-      <div className="files-choose-list">
-        {folders.map((entry) => {
-          const [cwd, who] = entry.split('\u0000');
-          return (
-            <button key={cwd} className="menu-item" onClick={() => setPanelRoot(panelId, cwd)}>
-              <span>{cwd.split('/').filter(Boolean).pop()}</span>
-              <kbd title={cwd}>{who}</kbd>
-            </button>
-          );
-        })}
+    <div className="files-panel">
+      <div className="files-tree files-no-folder" style={{ flexBasis: 280 }}>
+        <div className="files-side-head">
+          <div className="files-side-views">
+            <span className="files-side-title">Explorer</span>
+          </div>
+        </div>
+        <div className="files-root-section">
+          <svg className="files-chevron is-open" width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+            <path d="M4.5 2.5L8 6l-3.5 3.5" />
+          </svg>
+          <span className="files-root-section-name">No Folder Opened</span>
+        </div>
+        <div className="files-no-folder-body">
+          <p>You have not yet opened a folder.</p>
+          <button className="primary-btn files-open-folder" onClick={() => void openFolder()}>
+            Open Folder
+          </button>
+          {working.length > 0 && (
+            <>
+              <p className="files-no-folder-label">Where your sessions are working</p>
+              <div className="files-choose-list">
+                {working.map(([cwd, who]) => (
+                  <button key={cwd} className="menu-item" title={cwd} onClick={() => setPanelRoot(panelId, cwd)}>
+                    <span>{cwd.split('/').filter(Boolean).pop()}</span>
+                    <kbd>{who}</kbd>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          {earlier.length > 0 && (
+            <>
+              <p className="files-no-folder-label">Recent</p>
+              <div className="files-choose-list">
+                {earlier.map((dir) => (
+                  <button key={dir} className="menu-item" title={dir} onClick={() => setPanelRoot(panelId, dir)}>
+                    <span>{dir.split('/').filter(Boolean).pop() ?? dir}</span>
+                    <kbd>{short(dir.slice(0, dir.lastIndexOf('/')) || '/')}</kbd>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       </div>
-      <div className="files-choose-actions">
+      <div className="files-editor">
+        <div className="files-empty">
+          <p>Open a folder to see its files.</p>
+          <p className="form-hint">Its contents show on the left, as a tree you can fold.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The top of the side column: which view it shows, and the folder's tools. */
+function SideHeader({ panelId }: { panelId: string }) {
+  const view = useStore((s) => asFilePanel(s.panels[panelId])?.sideView ?? 'explorer');
+  const patch = useStore((s) => s.patchPanel);
+
+  // ⇧⌘F, the way every editor has it: to Search, with the box ready to type in.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey || event.key.toLowerCase() !== 'f') return;
+      const { layout, activeLeafId } = useStore.getState();
+      const leaf = leafOfTab(layout, panelId);
+      if (!leaf || leaf.id !== activeLeafId || leaf.active !== panelId) return;
+      event.preventDefault();
+      patch(panelId, { sideView: 'search' });
+      requestAnimationFrame(() => {
+        const box = document.querySelector<HTMLInputElement>(`[data-search-panel="${CSS.escape(panelId)}"]`);
+        box?.focus();
+        box?.select();
+      });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [panelId, patch]);
+
+  return (
+    <div className="files-side-head">
+      <div className="files-side-views" role="tablist" aria-label="Side view">
         <button
-          className="primary-btn"
-          onClick={async () => {
-            const picked = await window.api.system.pickDirectory(homedir);
-            if (picked) setPanelRoot(panelId, picked);
-          }}
+          role="tab"
+          aria-selected={view === 'explorer'}
+          className={`files-side-view-btn${view === 'explorer' ? ' is-on' : ''}`}
+          title="Explorer"
+          onClick={() => patch(panelId, { sideView: 'explorer' })}
         >
-          Browse…
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round">
+            <path d="M4.5 1.75h4.75L12.5 5v6.25a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-8.5a1 1 0 0 1 1-1z" />
+            <path d="M9.25 1.75V5h3.25" />
+            <path d="M1.75 4.5v9a1 1 0 0 0 1 1h7" />
+          </svg>
         </button>
-        {folders.length > 0 && (
-          <span className="form-hint">{short(folders[0].split('\u0000')[0])}</span>
-        )}
+        <button
+          role="tab"
+          aria-selected={view === 'search'}
+          className={`files-side-view-btn${view === 'search' ? ' is-on' : ''}`}
+          title="Search in files (⇧⌘F)"
+          onClick={() => patch(panelId, { sideView: 'search' })}
+        >
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+            <circle cx="7" cy="7" r="4.5" />
+            <path d="M10.4 10.4L14 14" />
+          </svg>
+        </button>
+        <span className="files-side-title">{view === 'search' ? 'Search' : 'Explorer'}</span>
+      </div>
+      <div className="files-head-tools">
+        <GitButton panelId={panelId} />
+        <TerminalButton panelId={panelId} />
+        <ExtensionButtons panelId={panelId} />
       </div>
     </div>
   );
@@ -542,7 +651,17 @@ function ChooseFolder({ panelId }: { panelId: string }) {
  * again. This reads the root and every folder that is open, so what is on screen
  * is what is on the disk, and nothing is collapsed or moved by doing it.
  */
-function RefreshButton({ panelId, root }: { panelId: string; root: string }) {
+function RefreshButton({
+  panelId,
+  root,
+  className = 'files-tool',
+  size = 12,
+}: {
+  panelId: string;
+  root: string;
+  className?: string;
+  size?: number;
+}) {
   const loadDir = useStore((s) => s.loadDir);
   const [busy, setBusy] = useState(false);
 
@@ -558,8 +677,8 @@ function RefreshButton({ panelId, root }: { panelId: string; root: string }) {
   };
 
   return (
-    <button className="files-tool" aria-label="Refresh from disk" title="Refresh from disk" disabled={busy} onClick={() => void refresh()}>
-      <svg className={busy ? 'files-refresh is-spinning' : 'files-refresh'} width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+    <button className={className} aria-label="Refresh from disk" title="Refresh from disk" disabled={busy} onClick={() => void refresh()}>
+      <svg className={busy ? 'files-refresh is-spinning' : 'files-refresh'} width={size} height={size} viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
         <path d="M11.6 7a4.6 4.6 0 1 1-1.5-3.4" />
         <path d="M11.8 1.8v2.6H9.2" />
       </svg>
@@ -567,15 +686,20 @@ function RefreshButton({ panelId, root }: { panelId: string; root: string }) {
   );
 }
 
-function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string; homedir: string }) {
+/**
+ * The folder itself, as the explorer's one section: a heading that folds the
+ * whole tree away, the folder's name in capitals the way an editor writes it,
+ * and — on hover — up a level, another folder, fold every subfolder.
+ */
+function RootSection({ panelId, root, homedir }: { panelId: string; root: string; homedir: string }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
-  // Ids only. Packing several fields into one string to keep the selector stable
-  // was a trap: a title or a path containing the separator came back split wrong.
+  const collapsed = useStore((s) => Boolean(asFilePanel(s.panels[panelId])?.rootCollapsed));
   const sessionIds = useStore(useShallow((state) => Object.keys(state.sessions)));
   const setPanelRoot = useStore((s) => s.setPanelRoot);
+  const patch = useStore((s) => s.patchPanel);
   const short = root.startsWith(homedir) ? `~${root.slice(homedir.length)}` : root;
-  // The folder above this one, or null at the top of the disk.
+  const name = root.split('/').filter(Boolean).pop() ?? root;
   const parent = (() => {
     const cut = root.replace(/\/+$/, '').lastIndexOf('/');
     if (cut <= 0) return root === '/' ? null : '/';
@@ -583,57 +707,74 @@ function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string;
   })();
 
   return (
-    <div className="files-tree-header">
-      <div className="files-head-main">
-      <div className="files-root-row">
-        {/*
-          Changing the root walks you down into a folder, so there has to be a way
-          back out of it. Up to the parent, named — a bare arrow leaves you
-          guessing where it goes.
-        */}
-        <button
-          className="files-up"
-          disabled={!parent}
-          title={parent ? `Up to ${parent.split('/').filter(Boolean).pop() ?? '/'}` : 'Already at the top'}
-          aria-label="Up to the parent folder"
-          onClick={() => parent && setPanelRoot(panelId, parent)}
-        >
-          <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4">
-            <path d="M7 11.2V3.2M3.4 6.6L7 3l3.6 3.6" />
-          </svg>
-        </button>
-        <button ref={buttonRef} className="files-root" title={root} onClick={() => setOpen((o) => !o)}>
-          <span className="files-root-name">{root.split('/').filter(Boolean).pop() ?? root}</span>
-          <span className="files-caret"><CaretIcon /></span>
-        </button>
+    <>
+      <div className="files-explorer-find">
+        <FindBox panelId={panelId} root={root} />
       </div>
-      <div className="files-root-line">
-        <span className="files-root-path" title={root}>{short}</span>
+      <div
+        className={`files-root-section${collapsed ? ' is-collapsed' : ''}`}
+        title={short}
+        role="button"
+        aria-expanded={!collapsed}
+        tabIndex={0}
+        onClick={() => patch(panelId, { rootCollapsed: !collapsed })}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            patch(panelId, { rootCollapsed: !collapsed });
+          }
+        }}
+      >
+        <svg className={`files-chevron${collapsed ? '' : ' is-open'}`} width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+          <path d="M4.5 2.5L8 6l-3.5 3.5" />
+        </svg>
+        <span className="files-root-section-name">{name}</span>
+        <span className="files-root-section-actions" onClick={(event) => event.stopPropagation()}>
+          <button
+            className="files-root-action"
+            disabled={!parent}
+            title={parent ? `Up to ${parent.split('/').filter(Boolean).pop() ?? '/'}` : 'Already at the top'}
+            aria-label="Up to the parent folder"
+            onClick={() => parent && setPanelRoot(panelId, parent)}
+          >
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4">
+              <path d="M7 11.2V3.2M3.4 6.6L7 3l3.6 3.6" />
+            </svg>
+          </button>
+          <button
+            className="files-root-action"
+            title="Collapse folders"
+            aria-label="Collapse every folder"
+            onClick={() => patch(panelId, { expanded: [] })}
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+              <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" />
+              <path d="M5.5 8h5" />
+            </svg>
+          </button>
+          <RefreshButton panelId={panelId} root={root} className="files-root-action" size={13} />
+          <button
+            ref={buttonRef}
+            className="files-root-action"
+            title="Open another folder"
+            aria-label="Open another folder"
+            onClick={() => setOpen((o) => !o)}
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+              <circle cx="3.5" cy="8" r="1.2" />
+              <circle cx="8" cy="8" r="1.2" />
+              <circle cx="12.5" cy="8" r="1.2" />
+            </svg>
+          </button>
+        </span>
       </div>
-      </div>
-
-      {/*
-        Stacked at the end of the header rather than on a bar of their own.
-        A bar would have cost a row of tree height for two buttons, and bought
-        nothing: the header does not scroll, so they are just as permanently in
-        view here. Icons alone — a strip this narrow spends its width on words
-        before it spends it on anything worth reading.
-      */}
-      <div className="files-head-tools">
-        <RefreshButton panelId={panelId} root={root} />
-        <GitButton panelId={panelId} />
-        <TerminalButton panelId={panelId} />
-        <ExtensionButtons panelId={panelId} />
-      </div>
-      <FindBox panelId={panelId} root={root} />
       {open && (
         <Popover anchorEl={buttonRef.current} onClose={() => setOpen(false)}>
-          <div className="popover-header"><span>Show the folder of</span></div>
+          <div className="popover-header"><span>Open the folder of</span></div>
           {sessionIds.map((id) => {
             const session = useStore.getState().sessions[id];
             if (!session?.cwd) return null;
             const { cwd } = session;
-            const name = session.customTitle ?? session.title;
             return (
               <button
                 key={id}
@@ -643,7 +784,7 @@ function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string;
                   setPanelRoot(panelId, cwd);
                 }}
               >
-                <span>{name}</span>
+                <span>{session.customTitle ?? session.title}</span>
                 <kbd title={cwd}>{cwd.split('/').filter(Boolean).pop()}</kbd>
               </button>
             );
@@ -657,43 +798,340 @@ function TreeHeader({ panelId, root, homedir }: { panelId: string; root: string;
               if (picked) setPanelRoot(panelId, picked);
             }}
           >
-            <span>A folder…</span>
+            <span>Open Folder…</span>
             <kbd>choose it</kbd>
           </button>
         </Popover>
       )}
+    </>
+  );
+}
+
+/** What a search was, and what it found — kept per panel while the app runs. */
+interface SearchState {
+  query: string;
+  replacement: string;
+  caseSensitive: boolean;
+  wholeWord: boolean;
+  regex: boolean;
+  include: string;
+  exclude: string;
+  showReplace: boolean;
+  showDetails: boolean;
+}
+const searches = new Map<string, SearchState>();
+const EMPTY_SEARCH: SearchState = {
+  query: '',
+  replacement: '',
+  caseSensitive: false,
+  wholeWord: false,
+  regex: false,
+  include: '',
+  exclude: '',
+  showReplace: false,
+  showDetails: false,
+};
+
+/**
+ * Search inside every file of the folder, the way an editor's Search view does:
+ * match case, whole word, regular expression; files to include and exclude;
+ * results grouped by file, each line clickable; and Replace, for one file or all.
+ */
+function SearchView({ panelId, root }: { panelId: string; root: string }) {
+  const openFile = useStore((s) => s.openFile);
+  const iconStyle = useStore((s) => s.settings.fileIcons);
+  const [state, setState] = useState<SearchState>(() => searches.get(panelId) ?? EMPTY_SEARCH);
+  const [result, setResult] = useState<SearchResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [folded, setFolded] = useState<Set<string>>(() => new Set());
+  const [note, setNote] = useState<string | null>(null);
+  const [armed, setArmed] = useState<string | null>(null);
+  const [seq, setSeq] = useState(0);
+
+  const update = (patch: Partial<SearchState>) =>
+    setState((was) => {
+      const next = { ...was, ...patch };
+      searches.set(panelId, next);
+      return next;
+    });
+
+  const options = {
+    query: state.query,
+    caseSensitive: state.caseSensitive,
+    wholeWord: state.wholeWord,
+    regex: state.regex,
+    include: state.include,
+    exclude: state.exclude,
+  };
+
+  useEffect(() => {
+    if (!state.query) {
+      setResult(null);
+      setBusy(false);
+      return;
+    }
+    let alive = true;
+    setBusy(true);
+    const timer = window.setTimeout(() => {
+      window.api.files.search(root, options).then(
+        (answer) => {
+          if (!alive) return;
+          setResult(answer);
+          setBusy(false);
+        },
+        (error) => {
+          if (!alive) return;
+          setResult({ ok: false, error: String(error?.message ?? error) });
+          setBusy(false);
+        },
+      );
+    }, 250);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [root, state.query, state.caseSensitive, state.wholeWord, state.regex, state.include, state.exclude, seq]);
+
+  const files = result?.ok ? (result.files ?? []) : [];
+  const total = result?.matches ?? 0;
+
+  const go = async (file: string, line: number, from: number, to: number) => {
+    await openFile(panelId, file);
+    revealLine(file, line, from + 1, to + 1);
+  };
+
+  const replace = async (targets: string[]) => {
+    const answer = await window.api.files.replace(root, targets, { ...options, replacement: state.replacement });
+    setArmed(null);
+    if (!answer.ok) setNote(answer.error ?? 'It could not replace.');
+    else {
+      const failed = answer.failed?.length ?? 0;
+      setNote(
+        `Replaced ${answer.replaced ?? 0} in ${answer.changed?.length ?? 0} file${answer.changed?.length === 1 ? '' : 's'}` +
+          (failed ? `; ${failed} could not be written.` : '.'),
+      );
+    }
+    setSeq((n) => n + 1);
+  };
+
+  const toggle = (key: 'caseSensitive' | 'wholeWord' | 'regex', label: string, glyph: React.ReactNode) => (
+    <button
+      className={`search-toggle${state[key] ? ' is-on' : ''}`}
+      title={label}
+      aria-label={label}
+      aria-pressed={state[key]}
+      onClick={() => update({ [key]: !state[key] } as Partial<SearchState>)}
+    >
+      {glyph}
+    </button>
+  );
+
+  return (
+    <div className="search-view">
+      <div className="search-form">
+        <button
+          className={`search-replace-toggle${state.showReplace ? ' is-open' : ''}`}
+          title={state.showReplace ? 'Hide Replace' : 'Show Replace'}
+          aria-label="Toggle Replace"
+          aria-expanded={state.showReplace}
+          onClick={() => update({ showReplace: !state.showReplace })}
+        >
+          <svg className={`files-chevron${state.showReplace ? ' is-open' : ''}`} width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6">
+            <path d="M4.5 2.5L8 6l-3.5 3.5" />
+          </svg>
+        </button>
+        <div className="search-fields">
+          <div className="search-box">
+            <input
+              data-search-panel={panelId}
+              placeholder="Search"
+              aria-label="Search in files"
+              value={state.query}
+              spellCheck={false}
+              onChange={(event) => update({ query: event.target.value })}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') setSeq((n) => n + 1);
+                if (event.key === 'Escape') update({ query: '' });
+              }}
+            />
+            {toggle('caseSensitive', 'Match Case', <span className="search-glyph">Aa</span>)}
+            {toggle('wholeWord', 'Match Whole Word', <span className="search-glyph is-underlined">ab</span>)}
+            {toggle('regex', 'Use Regular Expression', <span className="search-glyph">.*</span>)}
+          </div>
+          {state.showReplace && (
+            <div className="search-box">
+              <input
+                placeholder="Replace"
+                aria-label="Replace with"
+                value={state.replacement}
+                spellCheck={false}
+                onChange={(event) => update({ replacement: event.target.value })}
+              />
+              <button
+                className={`search-toggle${armed === '*' ? ' is-armed' : ''}`}
+                title={armed === '*' ? `Click again to replace in all ${files.length} files` : 'Replace All'}
+                aria-label="Replace All"
+                disabled={!files.length}
+                onClick={() => (armed === '*' ? void replace(files.map((file) => file.path)) : setArmed('*'))}
+                onBlur={() => setArmed((was) => (was === '*' ? null : was))}
+              >
+                <span className="search-glyph">{armed === '*' ? 'Sure?' : 'All'}</span>
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="search-details-row">
+        <button
+          className="search-details-toggle"
+          title={state.showDetails ? 'Hide files to include and exclude' : 'Files to include and exclude'}
+          aria-expanded={state.showDetails}
+          onClick={() => update({ showDetails: !state.showDetails })}
+        >
+          ···
+        </button>
+      </div>
+      {state.showDetails && (
+        <div className="search-details">
+          <label>
+            <span>files to include</span>
+            <input
+              placeholder="e.g. src/**, *.ts"
+              value={state.include}
+              spellCheck={false}
+              onChange={(event) => update({ include: event.target.value })}
+            />
+          </label>
+          <label>
+            <span>files to exclude</span>
+            <input
+              placeholder="e.g. *.test.ts, docs"
+              value={state.exclude}
+              spellCheck={false}
+              onChange={(event) => update({ exclude: event.target.value })}
+            />
+          </label>
+        </div>
+      )}
+
+      <div className={`search-summary${busy ? ' is-busy' : ''}`}>
+        {result && !result.ok ? (
+          <span className="is-bad">{result.error}</span>
+        ) : result && state.query ? (
+          total ? (
+            <>
+              {total} result{total === 1 ? '' : 's'} in {files.length} file{files.length === 1 ? '' : 's'}
+              {result.cut ? ' — stopped early, narrow it down' : ''}
+            </>
+          ) : busy ? (
+            'Searching…'
+          ) : (
+            'No results found.'
+          )
+        ) : busy ? (
+          'Searching…'
+        ) : null}
+        {files.length > 0 && (
+          <button
+            className="link-btn"
+            onClick={() => setFolded(folded.size ? new Set() : new Set(files.map((file) => file.path)))}
+          >
+            {folded.size ? 'Expand all' : 'Collapse all'}
+          </button>
+        )}
+      </div>
+      {note && (
+        <p className="search-note">
+          {note}{' '}
+          <button className="link-btn" onClick={() => setNote(null)}>
+            Dismiss
+          </button>
+        </p>
+      )}
+
+      <div className="search-results">
+        {files.map((file) => {
+          const isFolded = folded.has(file.path);
+          const name = file.relative.split('/').pop() ?? file.relative;
+          const dir = file.relative.includes('/') ? file.relative.slice(0, file.relative.lastIndexOf('/')) : '';
+          return (
+            <div className="search-file" key={file.path}>
+              <div
+                className="search-file-head"
+                title={file.relative}
+                onClick={() =>
+                  setFolded((was) => {
+                    const next = new Set(was);
+                    if (next.has(file.path)) next.delete(file.path);
+                    else next.add(file.path);
+                    return next;
+                  })
+                }
+              >
+                <svg className={`files-chevron${isFolded ? '' : ' is-open'}`} width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.6">
+                  <path d="M4.5 2.5L8 6l-3.5 3.5" />
+                </svg>
+                <FileIcon name={name} isDirectory={false} style={iconStyle} />
+                <span className="search-file-name">{name}</span>
+                <span className="search-file-dir">{dir}</span>
+                {state.showReplace && (
+                  <button
+                    className={`search-file-replace${armed === file.path ? ' is-armed' : ''}`}
+                    title={armed === file.path ? 'Click again to replace in this file' : 'Replace in this file'}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (armed === file.path) void replace([file.path]);
+                      else setArmed(file.path);
+                    }}
+                    onBlur={() => setArmed((was) => (was === file.path ? null : was))}
+                  >
+                    {armed === file.path ? 'Sure?' : 'Replace'}
+                  </button>
+                )}
+                <span className="search-file-count">{file.count}</span>
+              </div>
+              {!isFolded &&
+                file.matches.map((match) => (
+                  <button
+                    key={match.line}
+                    className="search-match"
+                    title={`Line ${match.line}`}
+                    onClick={() => {
+                      const first = match.ranges[0];
+                      const offset = match.column - 1 - (first?.[0] ?? 0);
+                      void go(file.path, match.line, (first?.[0] ?? 0) + offset, (first?.[1] ?? 0) + offset);
+                    }}
+                  >
+                    <span className="search-match-text">{highlight(match.text, match.ranges, state.showReplace ? state.replacement : null)}</span>
+                  </button>
+                ))}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-/**
- * `..` at the top of the tree.
- *
- * The arrow in the header does the same thing, and both are here on purpose:
- * one is where the folder's identity is, the other is where forty years of file
- * trees have taught people to look.
- */
-function UpRow({ panelId, root }: { panelId: string; root: string }) {
-  const setPanelRoot = useStore((s) => s.setPanelRoot);
-  const cut = root.replace(/\/+$/, '').lastIndexOf('/');
-  const parent = cut <= 0 ? (root === '/' ? null : '/') : root.slice(0, cut);
-  if (!parent) return null;
-
-  return (
-    <div
-      className="files-row is-up"
-      style={{ paddingLeft: 6 }}
-      title={parent}
-      onClick={() => setPanelRoot(panelId, parent)}
-    >
-      <span className="files-chevron" />
-      <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3">
-        <path d="M1.6 3.4h3.4l1.1 1.4h6.3v6.2H1.6z" />
-      </svg>
-      <span className="files-name">..</span>
-      <span className="files-up-name">{parent.split('/').filter(Boolean).pop() ?? '/'}</span>
-    </div>
-  );
+/** A result line with what matched marked — and, while replacing, what it would become. */
+function highlight(text: string, ranges: [number, number][], replacement: string | null) {
+  const out: React.ReactNode[] = [];
+  let at = 0;
+  // Leading indentation says nothing in a list of results.
+  const lead = text.length - text.trimStart().length;
+  ranges.forEach(([from, to], index) => {
+    if (from < at) return;
+    out.push(text.slice(Math.max(at, index === 0 ? Math.min(lead, from) : at), from));
+    if (replacement !== null) {
+      out.push(<del key={`d${index}`}>{text.slice(from, to)}</del>);
+      out.push(<ins key={`i${index}`}>{replacement}</ins>);
+    } else out.push(<mark key={`m${index}`}>{text.slice(from, to)}</mark>);
+    at = to;
+  });
+  out.push(text.slice(Math.max(at, ranges.length ? at : lead)));
+  return out;
 }
 
 /**
@@ -1421,7 +1859,6 @@ function NarrowedTree({ panelId, root, query }: { panelId: string; root: string;
   return (
     <FindNarrowing.Provider value={narrowing}>
       <DropZone panelId={panelId} dir={root} className={`files-tree-scroll${behind ? ' is-behind' : ''}`}>
-        <UpRow panelId={panelId} root={root} />
         <Dir panelId={panelId} path={root} depth={0} />
         {found?.error && <p className="files-find-note is-bad">{found.error}</p>}
         {found && !found.error && found.matched.size === 0 && !behind && (

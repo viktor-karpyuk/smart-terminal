@@ -6,7 +6,7 @@
  * is left here, taken by the editor when it mounts, or straight away by one
  * that is already showing that file.
  */
-const wantedLines = new Map<string, { line: number; column: number | null; at: number; shown: boolean }>();
+const wantedLines = new Map<string, { line: number; column: number | null; endColumn: number | null; at: number; shown: boolean }>();
 
 /**
  * How long a shown line is still offered to an editor that mounts for the file.
@@ -15,8 +15,9 @@ const wantedLines = new Map<string, { line: number; column: number | null; at: n
  */
 export const WANTED_FOR_MS = 2000;
 
-export function revealLine(path: string, line: number, column: number | null = null) {
-  wantedLines.set(path, { line, column, at: Date.now(), shown: false });
+/** `endColumn` (1-based, exclusive): select up to there, the way a search result shows its match. */
+export function revealLine(path: string, line: number, column: number | null = null, endColumn: number | null = null) {
+  wantedLines.set(path, { line, column, endColumn, at: Date.now(), shown: false });
   window.dispatchEvent(new CustomEvent('editor-reveal', { detail: { path } }));
 }
 

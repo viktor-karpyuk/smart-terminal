@@ -27,7 +27,8 @@
 
 const { execFile, spawn } = require('node:child_process');
 const { resolvedPath } = require('./cli-env');
-const { graphFrom } = require('./kube-map');
+const { graphFrom, planFrom } = require('./kube-map');
+const { editableYaml, eventsAbout } = require('./kube-edit');
 
 /** Long enough for a slow API server, short enough that a panel is never stuck. */
 const TIMEOUT = 30000;
@@ -673,6 +674,24 @@ const NODE_GROUP_LABELS = [
   'nodegroup',
 ];
 
+/** What makes that pool's nodes, said the way a person would: it decides where a change to it has to be made. */
+const NODE_GROUP_KINDS = {
+  'eks.amazonaws.com/nodegroup': 'EKS managed node group',
+  'alpha.eksctl.io/nodegroup-name': 'eksctl node group',
+  'karpenter.sh/nodepool': 'karpenter',
+  'karpenter.sh/provisioner-name': 'karpenter',
+  'cloud.google.com/gke-nodepool': 'GKE node pool',
+  'kubernetes.azure.com/agentpool': 'AKS agent pool',
+  agentpool: 'AKS agent pool',
+  'kops.k8s.io/instancegroup': 'kops instance group',
+  'doks.digitalocean.com/node-pool': 'DigitalOcean node pool',
+};
+
+function nodeGroupKindOf(labels) {
+  for (const key of NODE_GROUP_LABELS) if (labels[key]) return NODE_GROUP_KINDS[key] ?? '';
+  return '';
+}
+
 function nodeGroupOf(labels) {
   for (const key of NODE_GROUP_LABELS) if (labels[key]) return labels[key];
   return '';
@@ -752,8 +771,10 @@ function eventRow(item, now) {
     object: `${item.involvedObject?.kind ?? ''}/${item.involvedObject?.name ?? ''}`,
     objectKind: item.involvedObject?.kind ?? '',
     objectName: item.involvedObject?.name ?? '',
-    count: item.count ?? 1,
+    count: item.count ?? item.series?.count ?? 1,
     at: at ?? null,
+    firstAt: item.firstTimestamp || item.eventTime || null,
+    from: item.source?.component || item.reportingComponent || '',
     age: age(at, now),
   };
 }
@@ -1506,7 +1527,8 @@ async function manifest({ kind, name, ...rest }) {
     '-o',
     'yaml',
   ]);
-  return result.ok ? { ok: true, yaml: result.stdout } : result;
+  // The same object twice: as the cluster prints it, for reading, and as somebody would write it, for editing.
+  return result.ok ? { ok: true, yaml: result.stdout, editable: editableYaml(result.stdout) } : result;
 }
 
 /**
@@ -1557,18 +1579,19 @@ async function logs({ pod, container, tail = 500, previous = false, timestamps =
  * server rather than here, because it knows the true order of events whose
  * timestamps tie.
  */
-async function events({ kind, name, ...rest }) {
+async function events({ kind, name, related = false, ...rest }) {
   const args = [...scope(rest), 'get', 'events', ...everywhere(rest), '--sort-by=.lastTimestamp'];
-  if (kind && name) {
-    args.push(
-      '--field-selector',
-      `involvedObject.kind=${safeArg(kind, 'the kind')},involvedObject.name=${safeArg(name, 'the name')}`,
-    );
+  const about = kind && name ? { kind: safeArg(kind, 'the kind'), name: safeArg(name, 'the name') } : null;
+  // With what it made asked for too, the whole namespace is read and sorted through here:
+  // a field selector can name one object, not "this one and the pods named after it".
+  if (about && !related) {
+    args.push('--field-selector', `involvedObject.kind=${about.kind},involvedObject.name=${about.name}`);
   }
   args.push('-o', 'json');
   const result = await runJson(args);
   if (!result.ok) return result;
   const shaped = table('Event', result.data);
+  if (about && related) shaped.rows = eventsAbout(shaped.rows, about.kind, about.name);
   // Newest first: a log reads downwards, a dashboard reads from the top.
   shaped.rows.reverse();
   return { ok: true, ...shaped };
@@ -1652,7 +1675,9 @@ const MAP_GROUPS = [
   { key: 'nodes', kind: 'nodes', cluster: true, what: 'nodes' },
   { key: 'pods', kind: 'pods', what: 'pods' },
   { key: 'workloads', kind: 'deployments,statefulsets,daemonsets,replicasets,jobs,cronjobs', what: 'workloads' },
-  { key: 'network', kind: 'services,ingresses,networkpolicies,poddisruptionbudgets', what: 'services, ingresses and policies' },
+  { key: 'network', kind: 'services,ingresses,networkpolicies,poddisruptionbudgets,horizontalpodautoscalers', what: 'services, ingresses, policies and autoscalers' },
+  // Only what went wrong: a card that says "3 warnings" is a reason to open it, and nothing else about events belongs on a map.
+  { key: 'warnings', kind: 'events', fieldSelector: 'type=Warning', what: 'warning events' },
   { key: 'claims', kind: 'persistentvolumeclaims', what: 'volume claims' },
   { key: 'storage', kind: 'persistentvolumes,storageclasses,csidrivers,volumeattachments', cluster: true, what: 'volumes and storage classes' },
 ];
@@ -1662,7 +1687,7 @@ async function topology({ context, namespace } = {}) {
     const where = namespace ? { context, namespace } : { context, allNamespaces: true };
     const [answers, nodeUsage, podUsage] = await Promise.all([
       Promise.all(MAP_GROUPS.map((group) =>
-        listRaw({ kind: group.kind, ...(group.cluster ? { context } : where) })
+        listRaw({ kind: group.kind, fieldSelector: group.fieldSelector, ...(group.cluster ? { context } : where) })
           .catch((error) => ({ ok: false, error: String(error?.message ?? error) })))),
       top({ what: 'nodes', context }),
       top({ what: 'pods', ...where }),
@@ -1687,6 +1712,8 @@ async function topology({ context, namespace } = {}) {
       ingresses: ofKind(items.network, 'Ingress'),
       policies: ofKind(items.network, 'NetworkPolicy'),
       pdbs: ofKind(items.network, 'PodDisruptionBudget'),
+      hpas: ofKind(items.network, 'HorizontalPodAutoscaler'),
+      warnings: items.warnings,
       claims: items.claims,
       volumes: ofKind(items.storage, 'PersistentVolume'),
       classes: ofKind(items.storage, 'StorageClass'),
@@ -1694,9 +1721,64 @@ async function topology({ context, namespace } = {}) {
       attachments: ofKind(items.storage, 'VolumeAttachment'),
       usage: { nodes: nodeUsage.metrics ?? {}, pods: podUsage.metrics ?? {} },
       scoped: Boolean(namespace),
-    }, { podStatus, health, quantity, millicores, podRequests, holdsRoom, nodeGroupOf });
+    }, { podStatus, health, quantity, millicores, podRequests, holdsRoom, nodeGroupOf, nodeGroupKindOf });
     return { ok: true, ...graph, missing };
   });
+}
+
+/**
+ * An infrastructure change, as a brief for Claude.
+ *
+ * The whole cluster is read again for it, whatever namespace the panel was
+ * looking at: what runs on a pool is every namespace's business, and a brief
+ * that left out the database in another namespace would be a plan to break it.
+ */
+async function plan({ context, ...request } = {}) {
+  const graph = await topology({ context });
+  if (!graph.ok) return graph;
+  return planFrom(graph, request, context ?? '');
+}
+
+/**
+ * Whether this account may change or delete a kind of thing, asked before the click.
+ *
+ * `kubectl auth can-i` is the cluster's own answer. It exits 1 for "no", which
+ * is an answer and not a failure; anything else — no connection, an API that
+ * does not do access reviews — is "not known", and what is not known is not
+ * held against the button.
+ */
+async function can({ kind, context, namespace } = {}) {
+  const what = safeArg(String(kind ?? '').toLowerCase(), 'the resource kind');
+  return memo(`can:${context ?? ''}:${namespace ?? ''}:${what}`, 5 * 60 * 1000, async () => {
+    const ask = async (verb) => {
+      const result = await run([...scope({ context, namespace }), 'auth', 'can-i', verb, what], { timeout: 8000 });
+      const said = String(result.stdout || '').trim().split('\n')[0];
+      if (said === 'yes') return true;
+      if (said === 'no') return false;
+      return null;
+    };
+    const [patch, remove] = await Promise.all([ask('patch'), ask('delete')]);
+    return { ok: true, patch, delete: remove };
+  });
+}
+
+/**
+ * Cordon or uncordon several nodes — a pool — as one act.
+ *
+ * One after another and not all at once: the answer says which of them it
+ * reached, so a pool left half cordoned by a dropped connection reads as that.
+ */
+async function cordonMany({ names, on = true, ...rest } = {}) {
+  const wanted = Array.isArray(names) ? names.slice(0, 500) : [];
+  if (!wanted.length) return { ok: false, error: 'No nodes were named.' };
+  const done = [];
+  for (const name of wanted) {
+    const result = await cordon({ name, on, ...rest });
+    if (!result.ok) return { ok: false, error: `${done.length} of ${wanted.length} done, then ${String(name)}: ${result.error}`, done };
+    done.push(String(name));
+  }
+  forgetAnswers();
+  return { ok: true, done };
 }
 
 /**
@@ -1803,8 +1885,9 @@ function nodePressure(nodes) {
 }
 
 /** A list as the API server sent it, for the sums that need what is inside. */
-async function listRaw({ kind, ...rest }) {
+async function listRaw({ kind, fieldSelector, ...rest }) {
   const args = [...scope(rest), 'get', safeArg(kind, 'the resource kind'), ...everywhere(rest), '-o', 'json'];
+  if (fieldSelector) args.push('--field-selector', safeArg(fieldSelector, 'the field selector'));
   return runJson(args);
 }
 
@@ -2546,6 +2629,8 @@ async function history({ kind, name, ...rest }) {
         images: containers.map((container) => container.image).filter(Boolean),
         replicas: item.spec?.replicas ?? null,
         cause: annotations['kubernetes.io/change-cause'] ?? '',
+        // What it would run, to be held against what runs now before anybody goes back to it.
+        spec: JSON.stringify(template.spec ?? {}, null, 2),
       };
     })
     .sort((a, b) => b.revision - a.revision);
@@ -2634,7 +2719,11 @@ module.exports = {
   top,
   summary,
   topology,
+  can,
   graphFrom,
+  plan,
+  planFrom,
+  nodeGroupKindOf,
   brief,
   promQuery,
   promNow,
@@ -2646,6 +2735,7 @@ module.exports = {
   apply,
   configure,
   cordon,
+  cordonMany,
   history,
   rollback,
   pause,

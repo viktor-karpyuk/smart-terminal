@@ -69,6 +69,8 @@ const {
   readFilenamesPlist,
 } = require('./files');
 const git = require('./git');
+const { searchInTree, replaceInFiles } = require('./file-search');
+const { removeWorktrees, cwdsInTranscript } = require('./session-worktrees');
 const { LocalConflicts } = require('./git-conflicts');
 const { layout: layoutGraph } = require('./git-graph');
 const kube = require('./kube');
@@ -2219,6 +2221,22 @@ function registerIpc() {
     }
   });
 
+  // Searching inside the files, and replacing what was found: the Search view.
+  ipcMain.handle('files:search', async (_e, { root, ...options } = {}) => {
+    try {
+      return await searchInTree(String(root ?? ''), options);
+    } catch (error) {
+      return { ok: false, error: error.code === 'ENOENT' ? 'That folder is not there any more.' : error.message };
+    }
+  });
+  ipcMain.handle('files:replace', async (_e, { root, files, ...options } = {}) => {
+    try {
+      return await replaceInFiles(String(root ?? ''), options, Array.isArray(files) ? files : []);
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
+
   ipcMain.handle('files:read', async (_e, file) => {
     try {
       return await readTextFile(file);
@@ -2476,6 +2494,8 @@ function registerIpc() {
     top: (args) => kube.top(args),
     summary: (args) => kube.summary(args),
     topology: (args) => kube.topology(args),
+    can: (args) => kube.can(args),
+    plan: (args) => kube.plan(args),
     brief: (args) => kube.brief(args),
     prometheus: (args) => kube.prometheus(args),
     promQuery: (args) => kube.promQuery(args),
@@ -2486,6 +2506,7 @@ function registerIpc() {
     apply: (args) => kube.apply(args),
     configure: (args) => kube.configure(args),
     cordon: (args) => kube.cordon(args),
+    cordonMany: (args) => kube.cordonMany(args),
     history: (args) => kube.history(args),
     rollback: (args) => kube.rollback(args),
     pause: (args) => kube.pause(args),
@@ -2932,23 +2953,47 @@ function registerIpc() {
   });
   ipcMain.handle('db:group-members', (_e, groupId) => db.groupMembers(groupId));
   ipcMain.handle('db:delete-group', (_e, groupId) => db.deleteGroup(groupId));
-  ipcMain.handle('db:delete-session', (_e, sessionId) => {
+  /**
+   * Where a session worked: its first and last folder, and every folder its
+   * conversation was in. Read before it is deleted, while the transcript is
+   * still there to read.
+   */
+  const foldersOf = (sessionId) => {
+    const row = db.getSession(sessionId);
+    const dirs = new Set([row?.startCwd, row?.lastCwd].filter(Boolean));
+    for (const dir of cwdsInTranscript(context.transcriptFor(sessionId))) dirs.add(dir);
+    return [...dirs];
+  };
+  const dropWorktrees = async (dirs) => {
+    try {
+      return await removeWorktrees({ dirs, stillUsed: db.sessionCwds() });
+    } catch (error) {
+      return { removed: [], kept: [], error: String(error?.message ?? error) };
+    }
+  };
+  ipcMain.handle('db:delete-session', async (_e, sessionId) => {
+    const dirs = foldersOf(sessionId);
     const removed = db.deleteSession(sessionId);
     // Its saved conversation goes with it; nothing is left pointing at nothing.
     if (removed) {
       context.forget(sessionId);
       monitor?.forget(sessionId);
     }
-    return removed;
+    // And the worktrees it worked in, unless something else still needs them.
+    const worktrees = removed ? await dropWorktrees(dirs) : { removed: [], kept: [] };
+    return { removed, worktrees };
   });
-  ipcMain.handle('db:clear-history', (_e, options) => {
+  ipcMain.handle('db:clear-history', async (_e, options) => {
+    const finished = db.finishedSessionIds(options || {});
+    const dirs = [...new Set(finished.flatMap(foldersOf))];
     const removed = db.clearHistory(options || {});
     // Their saved conversations go with them; nothing is left pointing at nothing.
     for (const id of removed) {
       context.forget(id);
       monitor?.forget(id);
     }
-    return removed.length;
+    const worktrees = removed.length ? await dropWorktrees(dirs) : { removed: [], kept: [] };
+    return { removed: removed.length, worktrees };
   });
   ipcMain.handle('db:excerpts', (_e, { sessionId, query }) => db.searchInSession(sessionId, query));
   ipcMain.handle('db:store-transcript', (_e, { sessionId, enabled }) => {
