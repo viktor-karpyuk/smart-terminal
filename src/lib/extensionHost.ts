@@ -706,7 +706,26 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
         ? `\n\nHelm installed this, as part of the release "${owner[1]}". ` +
           'The next upgrade of that release will put it back the way the chart says.'
         : '';
-      return `Apply this manifest${where}?${managed}`;
+      /*
+       * What is about to be different, in the two numbers the panel counted,
+       * and the one mistake an editor makes easy: a name changed in the text is
+       * not a rename. The cluster is given a new object and keeps the old one.
+       */
+      const yaml = String(args.yaml ?? '');
+      const added = Number(args.added) || 0;
+      const removed = Number(args.removed) || 0;
+      const lines = (n: number) => `${n} line${n === 1 ? '' : 's'}`;
+      const size = added || removed
+        ? `\n\n${[added ? `${lines(added)} added` : '', removed ? `${lines(removed)} removed` : ''].filter(Boolean).join(', ')}` +
+          `${args.name ? ` in ${what}` : ''}.`
+        : '';
+      const named = /^metadata:\n(?: .*\n)*? {2}name:\s*["']?([^"'\s#]+)/m.exec(yaml)?.[1];
+      const kindNow = /^kind:\s*(\S+)/m.exec(yaml)?.[1];
+      const other = args.name && ((named && named !== String(args.name)) || (kindNow && args.kind && kindNow !== String(args.kind)))
+        ? `\n\nThis text is ${kindNow ?? String(args.kind)} ${named ?? String(args.name)}, not ${what}. ` +
+          `Applying it makes or changes that one and leaves ${String(args.name)} as it is.`
+        : '';
+      return `Apply this manifest${where}?${size}${other}${managed}`;
     }
     /*
      * Changing a few fields, and the question says which.

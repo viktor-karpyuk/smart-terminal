@@ -296,6 +296,67 @@
     background: var(--bg-panel); border-bottom: 1px solid var(--border);
   }
   .yaml-tools .dim { font-size: 10.5px; }
+  .yaml-tools .btn .spin { display: inline-block; }
+  #yaml-pos { font-variant-numeric: tabular-nums; }
+  .btn[data-armed="1"] { color: var(--danger); border-color: var(--danger); }
+  #yaml-edit[readonly] { opacity: 0.7; }
+
+  /* What the server said, where the edit is: a toast is gone before a long error has been read. */
+  .edit-note {
+    display: flex; gap: 8px; align-items: flex-start; margin: 0 0 7px; padding: 7px 9px;
+    border: 1px solid var(--border); border-left: 3px solid var(--ok); border-radius: var(--radius);
+    background: var(--bg-input); font-size: 11px; animation: note-in 0.16s ease-out;
+  }
+  .edit-note.is-bad { border-left-color: var(--danger); }
+  .edit-note-text { flex: 1; min-width: 0; white-space: pre-wrap; word-break: break-word; user-select: text; }
+  .edit-note.is-bad .edit-note-text { color: var(--danger); }
+  .edit-note-tools { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+  .edit-note-tools .btn { white-space: nowrap; }
+  @keyframes note-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+
+  .tab-unsaved { color: var(--warn, #e0af68); font-size: 8px; margin-left: 4px; vertical-align: 2px; }
+  .tab-count {
+    margin-left: 5px; padding: 0 5px; border-radius: 8px; font-size: 9.5px; font-weight: 600;
+    background: color-mix(in srgb, var(--danger) 22%, transparent); color: var(--danger);
+  }
+
+  .diff-title { display: flex; align-items: center; gap: 8px; font-size: 10.5px; margin-bottom: 5px; }
+  .diff {
+    font-family: "JetBrains Mono", "SF Mono", Menlo, ui-monospace, monospace; font-size: 11.5px; line-height: 1.55;
+    border: 1px solid var(--border); border-radius: var(--radius); overflow: auto; background: var(--bg-input);
+  }
+  .diff-line { display: flex; white-space: pre; min-width: max-content; }
+  .diff-line[data-line] { cursor: pointer; }
+  .diff-line[data-line]:hover { filter: brightness(1.15); }
+  .diff-no { width: 38px; flex: none; text-align: right; padding-right: 8px; color: var(--text-faint); user-select: none; }
+  .diff-op { width: 14px; flex: none; color: var(--text-faint); user-select: none; }
+  .diff-line.is-add { background: color-mix(in srgb, var(--ok) 16%, transparent); }
+  .diff-line.is-add .diff-op { color: var(--ok); }
+  .diff-line.is-del { background: color-mix(in srgb, var(--danger) 16%, transparent); }
+  .diff-line.is-del .diff-op { color: var(--danger); }
+  .diff-line.is-del .diff-text { opacity: 0.75; }
+  .diff-gap { text-align: center; color: var(--text-faint); border-block: 1px dashed var(--border); line-height: 1.1; }
+
+  .config-problems { margin: 0 0 7px; padding: 0; list-style: none; font-size: 11px; color: var(--danger); }
+  .config-problems:empty { display: none; }
+  .config-problems li::before { content: "✕  "; }
+  .config-field input.is-wrong, .config-env input.is-wrong { border-color: var(--danger); }
+
+  .events { display: grid; gap: 5px; }
+  .event {
+    padding: 6px 9px; border: 1px solid var(--border); border-left: 3px solid var(--border-strong, var(--border));
+    border-radius: var(--radius); background: var(--bg-input); font-size: 11px;
+  }
+  .event.is-warn { border-left-color: var(--danger); }
+  .event-head { display: flex; align-items: baseline; gap: 6px; }
+  .event-head .dot { margin-right: 0; }
+  .event.is-warn .event-head b { color: var(--danger); }
+  .event-count { font-size: 10px; padding: 0 5px; border-radius: 8px; background: var(--bg-panel); color: var(--text-dim, var(--text-faint)); }
+  .event-text { margin-top: 3px; white-space: pre-wrap; word-break: break-word; user-select: text; }
+  .event-meta { margin-top: 3px; font-size: 10.5px; }
+  .event-open { color: var(--accent); cursor: pointer; text-decoration: none; }
+  .event-open:hover { text-decoration: underline; }
+  .event-none { padding: 14px 2px; }
   #yaml-edit {
     width: 100%; min-height: 320px; height: calc(100% - 34px); resize: vertical;
     font-family: "JetBrains Mono", "SF Mono", Menlo, ui-monospace, monospace;
@@ -938,7 +999,11 @@
     /** Whether a request is in the air, and how long the last one took. */
     busy: false, tookMs: 0, showing: true, started: false,
     /** Whether a caret is in the YAML box, and what has been typed into it. */
-    editing: false, draft: null,
+    editing: false,
+    /** Edits not applied yet, each kept against the object it is of: uid → { text, base, name }. */
+    drafts: {}, configs: {},
+    /** What an apply is doing, what the server last said about one, and whether the edit or its changes are showing. */
+    applying: null, editNote: null, yamlView: 'edit', revertArmed: 0, eventsOnly: false, eventsWide: true,
     /** Whether this cluster has releases, asked once rather than on a timer. */
     helm: { checked: false, releases: 0 },
     /** Which rows are ticked, by uid. Ticking is not the same act as opening. */
@@ -1564,6 +1629,7 @@
         }
         state.mapFor = mapKey();
         if (state.selected) mapRefreshSelected();
+        if (state.selected && state.detail.tab === 'events') loadEvents(true);
       }
       else {
         state.table = result;
@@ -1571,6 +1637,7 @@
         // The pane, if one is open, is about one of these rows — and this is a
         // new set of them. See refreshSelection.
         refreshSelection();
+        if (state.selected && state.detail.tab === 'events') loadEvents(true);
       }
       draw(quiet ? { keepDock: true } : null);
       /*
@@ -2487,14 +2554,194 @@
    * one is the only case where the text stops meaning anything.
    */
   function draftFor(row) {
-    var draft = state.draft;
-    return draft && row && draft.uid === row.uid ? draft.text : null;
+    var draft = row && state.drafts[row.uid];
+    return draft ? draft.text : null;
   }
 
+  /** The text the edit started from: what the cluster had, as somebody would write it. */
+  function baseFor(row) {
+    var draft = row && state.drafts[row.uid];
+    if (draft) return draft.base;
+    return state.detailData.editable == null ? (state.detailData.yaml || '') : state.detailData.editable;
+  }
+
+  function dropDraft(row) {
+    if (row) delete state.drafts[row.uid];
+  }
+
+  /**
+   * Leave the editor, and keep what was typed.
+   *
+   * It used to throw the text away, so a click on the next row — or an arrow
+   * key a moment after leaving the box — cost whatever had been written. The
+   * draft stays against its object and is there when that object is opened
+   * again; only applying it or reverting it ends it.
+   */
   function stopEditing() {
-    state.draft = null;
     state.editing = false;
     state.editingYaml = false;
+    state.applying = null;
+    state.editNote = null;
+    state.yamlView = 'edit';
+    state.revertArmed = 0;
+  }
+
+  /** Said once, on the way out of an object with an edit left on it. */
+  function sayKept(next) {
+    var row = state.selected;
+    if (!row || (next && next === row.uid)) return;
+    var config = state.config && configChanges(state.config).length;
+    if (draftFor(row) != null || config) say('Your edit of ' + row.name + ' is kept. Open it again to carry on.');
+  }
+
+  /** Whether the pane is holding something a redraw would take the caret out of. */
+  function holdingEdit() {
+    if (state.editing) return true;
+    return state.editingYaml && state.detail.tab === 'yaml' && state.yamlView === 'edit' && Boolean(document.getElementById('yaml-edit'));
+  }
+
+  /**
+   * Redraw the pane around an editor without disturbing it.
+   *
+   * A note from the server, a button going busy, the count of changed lines:
+   * all of them change while somebody is in the box, and the box is rebuilt
+   * with the rest. So the caret, the selection and the scroll are read first
+   * and put back after.
+   */
+  function redrawEditor() {
+    var box = document.getElementById('yaml-edit');
+    var body = document.getElementById('detail-body');
+    var kept = box ? { from: box.selectionStart, to: box.selectionEnd, top: box.scrollTop, left: box.scrollLeft, focused: document.activeElement === box } : null;
+    var active = !box && document.activeElement && document.activeElement.dataset ? document.activeElement : null;
+    var field = active && active.dataset.config
+      ? { what: active.dataset.config, at: active.dataset.at, env: active.dataset.env, from: active.selectionStart, to: active.selectionEnd } : null;
+    var scrolled = body ? body.scrollTop : 0;
+    drawDetail(true);
+    var again = document.getElementById('yaml-edit');
+    if (kept && again) {
+      again.scrollTop = kept.top; again.scrollLeft = kept.left;
+      if (kept.focused) { again.focus(); try { again.setSelectionRange(kept.from, kept.to); } catch (error) { /* nothing to select */ } }
+    }
+    if (field) {
+      var same = document.querySelector('[data-config="' + field.what + '"]' + (field.at == null ? '' : '[data-at="' + field.at + '"]') + (field.env == null ? '' : '[data-env="' + field.env + '"]'));
+      if (same) { same.focus(); try { same.setSelectionRange(field.from, field.to); } catch (error) { /* a number field has no caret to place */ } }
+    }
+    var now = document.getElementById('detail-body');
+    if (now) now.scrollTop = scrolled;
+    yamlWhere();
+  }
+
+  /**
+   * What is different between two texts, by line.
+   *
+   * The ordinary longest-common-subsequence, after the lines both ends share
+   * are set aside — which on an edited manifest is nearly all of them, so the
+   * table that is actually built is a few lines square. Past a size nobody
+   * edits by hand it stops looking for the best answer and says "all of it".
+   */
+  function lineDiff(before, after) {
+    var a = String(before).split('\n');
+    var b = String(after).split('\n');
+    var head = 0;
+    while (head < a.length && head < b.length && a[head] === b[head]) head += 1;
+    var tail = 0;
+    while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail += 1;
+    var x = a.slice(head, a.length - tail);
+    var y = b.slice(head, b.length - tail);
+    var ops = [];
+    var i;
+    var j;
+    if (x.length * y.length > 250000) {
+      for (i = 0; i < x.length; i += 1) ops.push({ op: '-', text: x[i] });
+      for (j = 0; j < y.length; j += 1) ops.push({ op: '+', text: y[j] });
+    } else {
+      var table = [];
+      for (i = 0; i <= x.length; i += 1) { table.push(new Array(y.length + 1)); table[i][y.length] = 0; }
+      for (j = 0; j <= y.length; j += 1) table[x.length][j] = 0;
+      for (i = x.length - 1; i >= 0; i -= 1) {
+        for (j = y.length - 1; j >= 0; j -= 1) {
+          table[i][j] = x[i] === y[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1]);
+        }
+      }
+      i = 0; j = 0;
+      while (i < x.length && j < y.length) {
+        if (x[i] === y[j]) { ops.push({ op: ' ', text: x[i] }); i += 1; j += 1; }
+        else if (table[i + 1][j] >= table[i][j + 1]) { ops.push({ op: '-', text: x[i] }); i += 1; }
+        else { ops.push({ op: '+', text: y[j] }); j += 1; }
+      }
+      for (; i < x.length; i += 1) ops.push({ op: '-', text: x[i] });
+      for (; j < y.length; j += 1) ops.push({ op: '+', text: y[j] });
+    }
+    var added = 0;
+    var removed = 0;
+    for (i = 0; i < ops.length; i += 1) { if (ops[i].op === '+') added += 1; else if (ops[i].op === '-') removed += 1; }
+    return { head: a.slice(0, head), ops: ops, tail: a.slice(a.length - tail), added: added, removed: removed };
+  }
+
+  /** The changes with three lines either side, the way a review shows them. */
+  function diffHtml(diff) {
+    var lines = [];
+    var oldAt = 1;
+    var newAt = 1;
+    var push = function (op, text) {
+      lines.push({ op: op, text: text, was: op === '+' ? '' : oldAt, now: op === '-' ? '' : newAt });
+      if (op !== '+') oldAt += 1;
+      if (op !== '-') newAt += 1;
+    };
+    diff.head.forEach(function (text) { push(' ', text); });
+    diff.ops.forEach(function (entry) { push(entry.op, entry.text); });
+    diff.tail.forEach(function (text) { push(' ', text); });
+    var keep = {};
+    lines.forEach(function (line, at) {
+      if (line.op === ' ') return;
+      for (var k = Math.max(0, at - 3); k <= Math.min(lines.length - 1, at + 3); k += 1) keep[k] = true;
+    });
+    var out = [];
+    var gap = false;
+    lines.forEach(function (line, at) {
+      if (!keep[at]) { gap = true; return; }
+      if (gap && out.length) out.push('<div class="diff-gap">⋯</div>');
+      gap = false;
+      out.push('<div class="diff-line ' + (line.op === '+' ? 'is-add' : line.op === '-' ? 'is-del' : '') + '"' +
+        (line.now ? ' data-line="' + line.now + '" title="Go to line ' + line.now + '"' : '') + '>' +
+        '<span class="diff-no">' + (line.now || line.was) + '</span><span class="diff-op">' + line.op + '</span>' +
+        '<span class="diff-text">' + (esc(line.text) || ' ') + '</span></div>');
+    });
+    return out.join('');
+  }
+
+  function linesText(diff) {
+    var parts = [];
+    if (diff.added) parts.push('+' + diff.added);
+    if (diff.removed) parts.push('−' + diff.removed);
+    return parts.length ? parts.join(' ') + (diff.added + diff.removed === 1 ? ' line' : ' lines') : 'no lines changed';
+  }
+
+  /** Put the caret on a line of the editor, with the line showing. */
+  function yamlGoTo(line) {
+    if (state.yamlView !== 'edit') { state.yamlView = 'edit'; drawDetail(true); }
+    var box = document.getElementById('yaml-edit');
+    if (!box || !line) return;
+    var lines = box.value.split('\n');
+    var at = Math.max(1, Math.min(lines.length, line));
+    var from = 0;
+    for (var i = 0; i < at - 1; i += 1) from += lines[i].length + 1;
+    box.focus();
+    box.setSelectionRange(from, from + lines[at - 1].length);
+    var high = parseFloat(getComputedStyle(box).lineHeight) || 18;
+    box.scrollTop = Math.max(0, (at - 1) * high - box.clientHeight / 3);
+    yamlWhere();
+  }
+
+  /** Line and column of the caret, which is what the server's errors are given in. */
+  function yamlWhere() {
+    var box = document.getElementById('yaml-edit');
+    var mark = document.getElementById('yaml-pos');
+    if (!box || !mark) return;
+    var before = box.value.slice(0, box.selectionStart);
+    var line = before.split('\n').length;
+    var total = box.value.split('\n').length;
+    mark.textContent = 'Ln ' + line + '/' + total + ', Col ' + (before.length - before.lastIndexOf('\n'));
   }
 
   /**
@@ -2507,9 +2754,16 @@
    * middle of an edit has chosen to leave it.
    */
   function leaveDetail() {
+    sayKept();
     stopEditing();
-    state.config = null;
+    letConfigGo();
     state.selected = null;
+  }
+
+  /** The form's draft is kept only while it holds a change; an untouched one is just a copy of the cluster. */
+  function letConfigGo() {
+    if (state.config && !configChanges(state.config).length) delete state.configs[state.config.key];
+    state.config = null;
   }
 
   /**
@@ -2521,12 +2775,12 @@
    */
   function closeDetail() {
     if (!state.selected) return;
+    sayKept();
+    stopEditing();
+    letConfigGo();
     state.selected = null;
-    state.editing = false;
-    state.editingYaml = false;
     state.detail = { tab: 'overview' };
     state.detailData = {};
-    state.config = null;
     if (state.view.type === 'map' && state.view.ui) state.view.ui.sel = null;
     remember();
     draw();
@@ -2661,16 +2915,14 @@
   }
 
   function select(uid) {
-    stopEditing();
     var rows = (state.table && state.table.rows) || [];
     var found = null;
     for (var i = 0; i < rows.length; i += 1) if (rows[i].uid === uid) found = rows[i];
     if (!found) return;
-    // Events are not objects you open; the thing they are about is.
-    if (found.kind === 'Event') {
-      say(found.message || found.status || 'nothing more to say');
-      return;
-    }
+    sayKept(uid);
+    stopEditing();
+    letConfigGo();
+    // An event opens as what it said, whole, with the way to the thing it is about: see eventPane.
     state.selected = found;
     /*
      * Whatever was being typed was being typed about something else. Left
@@ -4134,7 +4386,8 @@
     if (what === 'smaller' || what === 'bigger') state.paneScale = Math.max(0.85, Math.min(1.6, Math.round((state.paneScale + (what === 'bigger' ? 0.1 : -0.1)) * 100) / 100));
     if (what === 'wide') state.paneBig = !state.paneBig;
     remember();
-    drawDetail(true);
+    // With an editor open, around it: the size of the text is not a reason to lose the caret.
+    redrawEditor();
     drawGrips();
     // The map has more or less room now, and is drawn for the room it has.
     if (what === 'wide' && state.view.type === 'map') drawMap();
@@ -4559,10 +4812,10 @@
     mapRows[id] = row;
     // A long afternoon of clicking is not a reason to hold every row that was ever opened.
     if (Object.keys(mapRows).length > 300) { mapRows = {}; mapRows[id] = row; mapDescribed = {}; }
+    sayKept(row.uid);
     stopEditing();
+    letConfigGo();
     state.selected = row;
-    state.editing = false;
-    state.editingYaml = false;
     state.detail = { tab: keepTab || 'overview' };
     // The description read last time stands in until this time's has been read.
     var before = mapDescribed[row.uid];
@@ -5510,7 +5763,7 @@
      * be blocked by the guard that exists to protect what it has not written
      * yet.
      */
-    if (state.editing && !force) return;
+    if (holdingEdit() && !force) return;
     if (!force && state.selected && selectingIn(document.querySelector('aside .detail-body'))) { heldBack.detail = true; return; }
     var chosen = state.selected;
     $('body').className = 'body' + (chosen ? ' with-detail' : '');
@@ -5529,7 +5782,13 @@
      * these.
      */
     var release = chosen.kind === 'Release';
-    var tabs = release ? ['revisions', 'values', 'manifest', 'notes'] : ['overview', 'yaml', 'events'];
+    var tabs = release ? ['revisions', 'values', 'manifest', 'notes'] : chosen.kind === 'Event' ? ['overview', 'yaml'] : ['overview', 'yaml', 'events'];
+    // An edit left on a tab is said on the tab, so it is not found by accident a day later.
+    var unsaved = {
+      yaml: draftFor(chosen) != null,
+      configure: Boolean(state.configs[configKey(chosen)] && configChanges(state.configs[configKey(chosen)]).length),
+    };
+    var warned = warningsKnown();
     /*
      * A workload is two questions a plain object is not: which pods is it
      * actually running, and what was it before this. Both have to be asked of
@@ -5580,7 +5839,8 @@
         '</div>' +
         '<div class="pane-title"><span class="kind-badge c-' + (MAP_CAT[chosen.kind] || 'wk') + '">' + esc(release ? 'Release' : chosen.kind) + '</span>' +
           (chosen.reading ? '<span class="pane-reading spin" title="Reading it from the cluster">◐</span>' : '') + '</div>' +
-        '<h3 class="pane-name">' + esc(chosen.name) + '</h3>' +
+        // An event's own name is a hash; what it is called by anyone is its reason.
+        '<h3 class="pane-name">' + esc(chosen.kind === 'Event' ? (chosen.status || chosen.name) : chosen.name) + '</h3>' +
         '<small class="pane-sub">' +
           (!release && chosen.status ? '<span class="pill p-' + esc(chosen.health || 'idle') + '">' + esc(chosen.status) + '</span>' : '') +
           (release ? esc(chosen.chart + ' ' + chosen.chartVersion) + ' · revision ' + esc(chosen.revision) : '') +
@@ -5588,22 +5848,34 @@
         '<div class="detail-actions">' + actionsFor(chosen) + mapPaneLinks(chosen) + '</div>' +
         detailForwards(chosen) +
         '<div class="ask">' +
-          '<input id="question" placeholder="Ask Claude something about this" />' +
+          '<input id="question" placeholder="' + (chosen.kind === 'Event' ? 'Ask Claude why this happened' : 'Ask Claude something about this') + '" />' +
           '<button class="btn go" data-do="ask">Ask</button>' +
         '</div>' +
       '</div>' +
       '<div class="tabs">' + tabs.map(function (tab) {
         return '<button data-tab="' + tab + '" class="' + (state.detail.tab === tab ? 'on' : '') + '">' +
-          (tab === 'yaml' ? 'YAML' : tab[0].toUpperCase() + tab.slice(1)) + '</button>';
+          (tab === 'yaml' ? 'YAML' : tab[0].toUpperCase() + tab.slice(1)) +
+          (unsaved[tab] ? '<span class="tab-unsaved" title="Edited, not applied">●</span>' : '') +
+          (tab === 'events' && warned ? '<span class="tab-count" title="' + warned + ' warning' + (warned === 1 ? '' : 's') + '">' + warned + '</span>' : '') +
+          '</button>';
       }).join('') +
         '<span class="spacer"></span>' +
-        '<button class="btn" data-do="copy-detail" title="Copy what this tab is showing">Copy</button>' +
+        // The manifest has its own Copy on its own bar, and a form is not something to copy.
+        (state.detail.tab === 'yaml' || state.detail.tab === 'configure' ? '' :
+          '<button class="btn" data-do="copy-detail" title="Copy what this tab is showing">Copy</button>') +
         (release && state.detail.tab === 'values'
           ? '<span class="spacer"></span><button class="btn' + (state.helmAll ? ' on' : '') +
             '" data-do="values-all" title="Every value the chart used, defaults included">All</button>'
           : '') +
       '</div>' +
       '<div class="detail-body" id="detail-body">' + detailBody(chosen) + '</div>';
+
+    // The row of tabs scrolls when the pane is narrow: the one that is open is never the one out of sight.
+    var lit = aside.querySelector('.tabs button.on');
+    var strip = aside.querySelector('.tabs');
+    if (lit && strip && (lit.offsetLeft < strip.scrollLeft || lit.offsetLeft + lit.offsetWidth > strip.scrollLeft + strip.clientWidth - 60)) {
+      strip.scrollLeft = Math.max(0, lit.offsetLeft - 40);
+    }
 
     if (kept && kept.text) {
       var again = document.getElementById('question');
@@ -5617,6 +5889,7 @@
 
   function actionsFor(row) {
     var buttons = [];
+    if (row.kind === 'Event') return eventActions(row);
     if (row.kind === 'Release') {
       return '<button class="btn" data-do="helm-diff" title="What this revision put in the cluster">Manifest</button>' +
         '<span class="gap"></span><button class="btn bad" data-do="helm-uninstall">Uninstall…</button>';
@@ -5828,12 +6101,108 @@
   function copyOf(value) { return JSON.parse(JSON.stringify(value)); }
 
   /** The draft for this object, kept across redraws and across tabs. */
+  function configKey(row) { return row.kind + '/' + (row.namespace || '') + '/' + row.name; }
+
+  /**
+   * Kept against the object, so it is still here after a look at another one.
+   * When the object has been read again since, the draft is measured against
+   * what the cluster has now — and if somebody else changed it meanwhile, the
+   * form says so rather than quietly listing their change as one of yours.
+   */
   function ensureConfig(row, object) {
-    var key = row.kind + '/' + (row.namespace || '') + '/' + row.name;
-    if (state.config && state.config.key === key) return state.config;
-    var live = configOf(object, row.kind);
-    state.config = { key: key, kind: row.kind, live: live, draft: copyOf(live) };
-    return state.config;
+    var key = configKey(row);
+    var kept = state.configs[key];
+    if (kept && kept.object !== object) {
+      var live = configOf(object, row.kind);
+      var names = function (config) { return config.containers.map(function (c) { return c.name; }).join('\n'); };
+      if (names(live) !== names(kept.draft)) kept = null;
+      else {
+        if (JSON.stringify(live) !== JSON.stringify(kept.live) && configChanges(kept).length) kept.moved = true;
+        kept.live = live;
+        kept.object = object;
+      }
+    }
+    if (!kept) {
+      var fresh = configOf(object, row.kind);
+      kept = { key: key, kind: row.kind, live: fresh, draft: copyOf(fresh), object: object };
+    }
+    state.configs[key] = kept;
+    state.config = kept;
+    return kept;
+  }
+
+  var QUANTITY = /^\d+(\.\d+)?([eE]\d+)?(m|k|M|G|T|P|E|Ki|Mi|Gi|Ti|Pi|Ei)?$/;
+  var QUANTITY_UNITS = { m: 0.001, k: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15, E: 1e18,
+    Ki: 1024, Mi: 1048576, Gi: 1073741824, Ti: 1099511627776, Pi: 1125899906842624, Ei: 1152921504606846976 };
+  function quantity(text) {
+    var match = QUANTITY.exec(String(text));
+    if (!match) return NaN;
+    return parseFloat(text) * (match[3] ? QUANTITY_UNITS[match[3]] : 1);
+  }
+
+  /**
+   * What the server would refuse, said before it is asked.
+   *
+   * The dry run is still the judge. This is for the things a form can see by
+   * itself — `500x` is not an amount, a request above its limit, a variable
+   * with no name — next to the field, while it is still being typed.
+   */
+  function configProblems(config) {
+    var out = [];
+    config.draft.containers.forEach(function (container, at) {
+      var of = ' of ' + container.name;
+      if (!String(container.image).trim()) out.push({ key: at + '|image', text: 'image' + of + ' is empty' });
+      else if (/\s/.test(String(container.image).trim())) out.push({ key: at + '|image', text: 'image' + of + ' has a space in it' });
+      ['cpu', 'memory'].forEach(function (what) {
+        var request = String(container.requests[what]).trim();
+        var limit = String(container.limits[what]).trim();
+        if (request && !QUANTITY.test(request)) out.push({ key: at + '|requests.' + what, text: what + ' request' + of + ': ' + request + ' is not an amount' });
+        if (limit && !QUANTITY.test(limit)) out.push({ key: at + '|limits.' + what, text: what + ' limit' + of + ': ' + limit + ' is not an amount' });
+        if (request && limit && quantity(request) > quantity(limit)) {
+          out.push({ key: at + '|requests.' + what, text: what + ' request' + of + ' (' + request + ') is above its limit (' + limit + ')' });
+        }
+      });
+      var seen = {};
+      container.env.forEach(function (entry, i) {
+        var name = String(entry.name);
+        if (!name) { if (entry.value) out.push({ key: at + '|env-name|' + i, text: 'a variable' + of + ' has a value and no name' }); return; }
+        if (!/^[-._a-zA-Z][-._a-zA-Z0-9]*$/.test(name)) out.push({ key: at + '|env-name|' + i, text: name + of + ' is not a name a variable can have' });
+        if (seen[name]) out.push({ key: at + '|env-name|' + i, text: name + of + ' is there twice' });
+        seen[name] = true;
+      });
+    });
+    return out;
+  }
+
+  function configWrong(problems) {
+    var keys = {};
+    problems.forEach(function (problem) { keys[problem.key] = problem.text; });
+    return keys;
+  }
+
+  /** What the server last said about an edit, kept on the page until the next keystroke. */
+  function editNoteHtml() {
+    var note = state.editNote;
+    if (!note) return '';
+    return '<div class="edit-note' + (note.bad ? ' is-bad' : '') + '" role="status">' +
+      '<div class="edit-note-text">' + esc(note.text) + '</div>' +
+      '<div class="edit-note-tools">' +
+      (note.line ? '<button class="btn" data-do="yaml-goto" title="Put the caret there">Go to line ' + note.line + '</button>' : '') +
+      (note.moved ? '<button class="btn" data-do="yaml-theirs" title="What is different in the cluster now, against what you started from">See what changed</button>' +
+        '<button class="btn" data-do="yaml-take" title="Drop your edit and start again from what the cluster has now">Take the cluster\u2019s</button>' +
+        '<button class="btn go" data-do="yaml-force" title="Apply your text over what the cluster has now">Apply mine anyway</button>' : '') +
+      '<button class="btn" data-do="note-close" title="Dismiss" aria-label="Dismiss">×</button>' +
+      '</div></div>';
+  }
+
+  function applyLabel(what) {
+    if (state.applying === 'apply' && what === 'apply') return '<span class="spin">◐</span> Applying…';
+    if (state.applying === 'check' && what === 'check') return '<span class="spin">◐</span> Asking…';
+    return what === 'apply' ? 'Apply' : 'Dry run';
+  }
+
+  function revertLabel() {
+    return state.revertArmed && Date.now() - state.revertArmed < 4000 ? 'Discard the edit?' : 'Revert';
   }
 
   /** A number if it is one, and the thing itself if it is not — for comparing. */
@@ -5956,8 +6325,10 @@
 
   function containerCard(container, at) {
     var field = function (label, what, value, placeholder) {
+      var wrong = configWrongNow[at + '|' + what];
       return '<label class="config-field"><span>' + esc(label) + '</span>' +
         '<input data-config="' + what + '" data-at="' + at + '" value="' + esc(value) + '" ' +
+        (wrong ? 'class="is-wrong" title="' + esc(wrong) + '" ' : '') +
         'placeholder="' + esc(placeholder || '') + '" spellcheck="false" /></label>';
     };
     var env = container.env.map(function (entry, i) {
@@ -6002,16 +6373,23 @@
 
     var config = ensureConfig(row, object);
     var changes = configChanges(config);
+    var problems = configProblems(config);
     var draft = config.draft;
+    var off = !changes.length || problems.length || state.applying;
+    configWrongNow = configWrong(problems);
 
     return '<div class="yaml-tools is-stuck">' +
-      '<button class="btn go" data-do="config-apply" title="Save these changes to the cluster"' +
-        (changes.length ? '' : ' disabled') + '>Apply</button>' +
-      '<button class="btn" data-do="config-check" title="Ask the server whether this is legal, and change nothing"' +
-        (changes.length ? '' : ' disabled') + '>Dry run</button>' +
-      '<button class="btn" data-do="config-revert"' + (changes.length ? '' : ' disabled') + '>Revert</button>' +
+      '<button class="btn go" data-do="config-apply" title="Save these changes to the cluster (⌘S)"' +
+        (off ? ' disabled' : '') + '>' + applyLabel('apply') + '</button>' +
+      '<button class="btn" data-do="config-check" title="Ask the server whether this is legal, and change nothing (⌘↵)"' +
+        (off ? ' disabled' : '') + '>' + applyLabel('check') + '</button>' +
+      '<button class="btn" data-do="config-revert"' + (changes.length && !state.applying ? '' : ' disabled') + '>' + revertLabel() + '</button>' +
       '<span class="dim" id="config-count">' + esc(configCountText(changes)) + '</span>' +
       '</div>' +
+      editNoteHtml() +
+      (config.moved ? '<div class="edit-note" role="status"><div class="edit-note-text">This was changed in the cluster after you started. ' +
+        'What is listed below is measured against what it has now.</div></div>' : '') +
+      '<ul class="config-problems" id="config-problems">' + problems.map(function (p) { return '<li>' + esc(p.text) + '</li>'; }).join('') + '</ul>' +
       (draft.replicas == null ? '' :
         '<section class="block"><h4 class="block-head">Replicas</h4>' +
         '<div class="config-grid config-narrow">' +
@@ -6019,10 +6397,14 @@
           '<input type="number" min="0" data-config="replicas" value="' + esc(String(draft.replicas)) + '" /></label>' +
         '</div></section>') +
       draft.containers.map(containerCard).join('') +
-      (changes.length
-        ? '<section class="block"><h4 class="block-head">Not applied yet</h4><ul class="config-diff">' +
-          changes.map(function (line) { return '<li>' + esc(line) + '</li>'; }).join('') + '</ul></section>'
-        : '');
+      '<section class="block" id="config-pending"' + (changes.length ? '' : ' hidden') + '><h4 class="block-head">Not applied yet</h4>' +
+        '<ul class="config-diff" id="config-diff">' + configDiffHtml(changes) + '</ul></section>';
+  }
+
+  var configWrongNow = {};
+
+  function configDiffHtml(changes) {
+    return changes.map(function (line) { return '<li>' + esc(line) + '</li>'; }).join('');
   }
 
   function configCountText(changes) {
@@ -6057,15 +6439,49 @@
         if (container[parts[0]]) container[parts[0]][parts[1]] = value;
       }
     }
+    state.revertArmed = 0;
+    if (state.editNote) { state.editNote = null; var note = document.querySelector('.edit-note'); if (note) note.remove(); }
+    configShow();
+  }
+
+  /**
+   * The parts of the form that follow from the fields, written in place: the
+   * count, the list of what is not applied, what is wrong, and which buttons
+   * can be pressed. The fields themselves are never rewritten under a caret.
+   */
+  function configShow() {
+    var config = state.config;
+    if (!config) return;
     var changes = configChanges(config);
+    var problems = configProblems(config);
     // Nothing to protect once it matches the cluster again.
     state.editing = changes.length > 0;
     var count = document.getElementById('config-count');
     if (count) count.textContent = configCountText(changes);
-    ['config-apply', 'config-check', 'config-revert'].forEach(function (name) {
+    var list = document.getElementById('config-diff');
+    if (list) list.innerHTML = configDiffHtml(changes);
+    var pending = document.getElementById('config-pending');
+    if (pending) pending.hidden = !changes.length;
+    var wrong = document.getElementById('config-problems');
+    if (wrong) wrong.innerHTML = problems.map(function (p) { return '<li>' + esc(p.text) + '</li>'; }).join('');
+    configWrongNow = configWrong(problems);
+    var fields = document.querySelectorAll('[data-config]');
+    for (var i = 0; i < fields.length; i += 1) {
+      var f = fields[i];
+      var key = f.dataset.at + '|' + f.dataset.config + (f.dataset.env == null ? '' : '|' + f.dataset.env);
+      f.classList.toggle('is-wrong', Boolean(configWrongNow[key]));
+      f.title = configWrongNow[key] || '';
+    }
+    ['config-apply', 'config-check'].forEach(function (name) {
       var button = document.querySelector('[data-do="' + name + '"]');
-      if (button) button.disabled = !changes.length;
+      if (button) button.disabled = !changes.length || problems.length > 0 || Boolean(state.applying);
     });
+    var revert = document.querySelector('[data-do="config-revert"]');
+    if (revert) { revert.disabled = !changes.length; revert.textContent = revertLabel(); revert.dataset.armed = state.revertArmed ? 1 : 0; }
+    var dot = document.querySelector('.tabs [data-tab="configure"] .tab-unsaved');
+    var tab = document.querySelector('.tabs [data-tab="configure"]');
+    if (tab && changes.length && !dot) tab.insertAdjacentHTML('beforeend', '<span class="tab-unsaved" title="Edited, not applied">●</span>');
+    if (dot && !changes.length) dot.remove();
   }
 
   /** Send it, after the server has said it is legal. */
@@ -6074,30 +6490,49 @@
     var row = state.selected;
     if (!config || !row) return;
     var changes = configChanges(config);
-    if (!changes.length) return;
+    if (!changes.length || state.applying) return;
+    var problems = configProblems(config);
+    if (problems.length) { say(problems[0].text, true); return; }
     var patch = configPatch(config);
     var at = { context: state.context, kind: row.kind, name: row.name, patch: patch, summary: changes };
     if (row.namespace) at.namespace = row.namespace;
 
-    say('Asking the server whether this is legal…');
+    // Whoever the answer comes back to, it is about this object: the pane may be on another by then.
+    var mine = function () { return state.selected === row && state.config === config; };
+    var settle = function (note) {
+      if (!mine()) { if (note) say(row.name + ': ' + note.text, note.bad); return; }
+      state.applying = null;
+      state.editNote = note;
+      redrawEditor();
+    };
+    state.applying = checkOnly ? 'check' : 'apply';
+    state.editNote = null;
+    state.revertArmed = 0;
+    redrawEditor();
     call('kube.configure', assign({ dryRun: true }, at)).then(function (dry) {
       if (checkOnly) {
-        say(dry.text || 'The server accepted it. Nothing was changed.');
+        settle({ text: 'The server accepted it. Nothing was changed.' + (dry.text ? '\n' + dry.text : '') });
         return null;
       }
       return call('kube.configure', at).then(function (done) {
         say(done.text || 'Changed.');
+        delete state.configs[config.key];
+        if (!mine()) return null;
+        state.applying = null;
         state.editing = false;
         state.config = null;
         state.detailData.object = null;
         state.detailData.yaml = null;
+        state.detailData.editable = null;
         drawDetail(true);
         loadDetail();
         setTimeout(function () { load(true); }, 900);
         return null;
       });
     }).catch(function (error) {
-      say(String(error.message || error), true);
+      var text = String(error.message || error);
+      // Cancelling the question is an answer: the form goes back to how it was, with nothing in red.
+      settle(/the person said no/.test(text) ? null : { text: text, bad: true });
     });
   }
 
@@ -6331,6 +6766,7 @@
    * is not in the short version.
    */
   function overviewBody(row) {
+    if (row.kind === 'Event') return eventPane(row);
     var known = mapInfo(row);
     // With the map's own account of it above, the cluster's long description is one click away rather than in the way.
     return chartsFor(row) + known + factsBlock(row) + containersBlock(row) + labelsBlock(row) +
@@ -6443,60 +6879,208 @@
   }
 
 
+  /**
+   * Read coloured, edited plain, and the bar says which you are in.
+   *
+   * A textarea cannot hold coloured text, and the alternatives — a
+   * contenteditable pretending to be one, or a whole editor — are how a panel
+   * that shows a manifest turns into a project that maintains an editor. So
+   * the manifest is painted until somebody says they want to change it.
+   *
+   * What is edited is not quite what is read: the cluster's own fields — its
+   * status, its resourceVersion, what it last applied — are left out, because
+   * sent back they are either refused or asserted. See editableYaml.
+   */
+  function yamlBody(row) {
+    var draft = draftFor(row);
+    // Typing that survived a trip to another tab, or to another object, comes back with the editor open.
+    if (draft != null) state.editingYaml = true;
+    var editing = state.editingYaml;
+    var base = baseFor(row);
+    var body = draft == null ? base : draft;
+    var diff = editing && draft != null ? lineDiff(base, draft) : null;
+    var busy = Boolean(state.applying);
+    var changed = diff && (diff.added || diff.removed);
+    var showDiff = editing && state.yamlView === 'diff';
+    var theirs = editing && state.yamlView === 'theirs' && state.detailData.theirs != null;
+
+    var tools = editing
+      ? '<button class="btn go" data-do="yaml-apply" title="Save this manifest to the cluster (⌘S)"' + (busy || !changed ? ' disabled' : '') + '>' + applyLabel('apply') + '</button>' +
+        '<button class="btn" data-do="yaml-check" title="Ask the server whether this is legal, and change nothing (⌘↵)"' + (busy ? ' disabled' : '') + '>' + applyLabel('check') + '</button>' +
+        '<button class="btn' + (showDiff ? ' on' : '') + '" data-do="yaml-diff" title="What you changed, against what the cluster had (⌘D)"' + (changed ? '' : ' disabled') + '>Changes</button>' +
+        '<button class="btn" data-do="yaml-revert" title="' + (changed ? 'Throw the edit away' : 'Leave the editor (Esc)') + '" data-armed="' + (state.revertArmed ? 1 : 0) + '"' + (busy ? ' disabled' : '') + '>' + (changed ? revertLabel() : 'Done') + '</button>'
+      : row.kind === 'Event' ? '' : '<button class="btn" data-do="yaml-edit" title="Change this manifest and apply it to the cluster"' + (state.applying === 'open' ? ' disabled' : '') + '>' +
+        (state.applying === 'open' ? '<span class="spin">◐</span> Reading…' : 'Edit') + '</button>';
+
+    return '<div class="yaml-tools is-stuck">' + tools +
+      '<span class="dim" id="yaml-state">' + (editing ? (changed ? 'edited · ' + linesText(diff) : 'nothing changed yet') : 'as it is in the cluster') + '</span>' +
+      '<span class="spacer"></span>' +
+      (editing && !showDiff && !theirs ? '<span class="dim" id="yaml-pos"></span>' : '') +
+      '<button class="btn" data-do="yaml-save" title="Save this text to a file on this machine">Save…</button>' +
+      '<button class="btn" data-do="copy-detail" title="Copy the whole manifest">Copy</button>' +
+      '</div>' +
+      editNoteHtml() +
+      (theirs
+        ? '<div class="diff-title dim">What changed in the cluster since you started <button class="btn" data-do="yaml-diff-close">Back to the edit</button></div>' +
+          '<div class="diff">' + (diffHtml(lineDiff(base, state.detailData.theirs)) || '<div class="dim">Nothing you would see in this text.</div>') + '</div>'
+        : showDiff
+          ? '<div class="diff-title dim">Yours against the cluster\u2019s. Click a line to go to it. <button class="btn" data-do="yaml-diff-close">Back to the edit</button></div>' +
+            '<div class="diff">' + diffHtml(diff) + '</div>'
+          : editing
+            ? '<textarea id="yaml-edit" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off"' + (busy ? ' readonly' : '') + '>' + esc(body) + '</textarea>'
+            : '<pre class="yaml">' + yamlHtml(state.detailData.yaml) + '</pre>');
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Events: what the cluster has been saying about this one.
+   * ------------------------------------------------------------------ */
+
+  /** Whether this is something that makes other things and names them after itself. */
+  function makesThings(row) {
+    return Boolean(row.selector || row.ownsJobs || /^(Deployment|StatefulSet|DaemonSet|ReplicaSet|Job|CronJob)$/.test(row.kind));
+  }
+
+  /** Warnings known without asking again: from the events if they are read, else from the description's own table. */
+  function warningsKnown() {
+    var events = state.detailData.events;
+    if (events) return events.filter(function (event) { return event.type === 'Warning'; }).length;
+    var text = state.detailData.describe;
+    if (typeof text !== 'string') return 0;
+    return text.split('\n').filter(function (line) { return /^\s+Warning\s/.test(line); }).length;
+  }
+
+  function eventCard(event, withObject) {
+    var warn = event.type === 'Warning';
+    var first = event.firstAt && event.firstAt !== event.at ? Date.parse(event.firstAt) : NaN;
+    var nav = withObject ? navFor(event.objectKind) : null;
+    var meta = [];
+    if (withObject) {
+      meta.push((nav
+        ? '<a class="event-open" data-open="' + esc(event.objectName) + '" data-open-kind="' + esc(nav) + '" data-open-namespace="' + esc(event.namespace || '') + '" title="Open it">' + esc(event.object) + '</a>'
+        : esc(event.object)) +
+        (event.related ? ' <span class="quiet" title="Found by its name, which starts with this one\u2019s. The API did not say so.">by name</span>' : ''));
+    }
+    if (event.from) meta.push('from ' + esc(event.from));
+    if (!isNaN(first)) meta.push('first ' + esc(ageText(first)) + ' ago');
+    return '<div class="event' + (warn ? ' is-warn' : '') + '">' +
+      '<div class="event-head"><span class="dot ' + (warn ? 'bad' : 'idle') + '"></span>' +
+        '<b>' + esc(event.status || event.type) + '</b>' +
+        (event.count > 1 ? '<span class="event-count" title="Said ' + event.count + ' times">×' + event.count + '</span>' : '') +
+        '<span class="spacer"></span><span class="dim">' + ageHtml(event) + ' ago</span></div>' +
+      '<div class="event-text">' + esc(event.message) + '</div>' +
+      (meta.length ? '<div class="event-meta dim">' + meta.join(' · ') + '</div>' : '') +
+      '</div>';
+  }
+
+  function eventsBody(row) {
+    var events = state.detailData.events;
+    var failed = state.detailData.eventsError;
+    var wide = makesThings(row);
+    var warnings = (events || []).filter(function (event) { return event.type === 'Warning'; });
+    var shown = state.eventsOnly ? warnings : (events || []);
+    var tools = '<div class="yaml-tools is-stuck">' +
+      '<span class="dim">' + (events
+        ? (warnings.length ? warnings.length + ' warning' + (warnings.length === 1 ? '' : 's') + ' · ' : '') + events.length + ' event' + (events.length === 1 ? '' : 's')
+        : failed ? 'not read' : 'reading…') + '</span>' +
+      '<button class="btn' + (state.eventsOnly ? ' on' : '') + '" data-do="events-only" title="Only what went wrong"' + (warnings.length || state.eventsOnly ? '' : ' disabled') + '>Warnings</button>' +
+      (wide ? '<button class="btn' + (state.eventsWide ? ' on' : '') + '" data-do="events-wide" ' +
+        'title="Also the events of what it made — its pods, replica sets, jobs and claims — found by their names">What it made</button>' : '') +
+      '<span class="spacer"></span>' +
+      (state.detailData.eventsAt ? '<span class="dim">read <span class="since" data-since="' + state.detailData.eventsAt + '">' + esc(ageText(state.detailData.eventsAt)) + '</span> ago</span>' : '') +
+      '<button class="btn" data-do="events-refresh" title="Ask again"' + (state.detailData.eventsBusy ? ' disabled' : '') + '>' +
+        (state.detailData.eventsBusy ? '<span class="spin">◐</span>' : '↻') + '</button>' +
+      '</div>';
+    if (failed && !events) return tools + '<div class="edit-note is-bad"><div class="edit-note-text">' + esc(failed) + '</div></div>';
+    if (!events) return tools + '<pre>reading…</pre>';
+    if (!events.length) {
+      return tools + '<div class="dim event-none">Nothing has been said about this one' + (wide && state.eventsWide ? ' or what it made' : '') +
+        '. The cluster keeps events for about an hour.</div>';
+    }
+    if (!shown.length) return tools + '<div class="dim event-none">No warnings among them.</div>';
+    return tools + (failed ? '<div class="edit-note is-bad"><div class="edit-note-text">Not read again: ' + esc(failed) + '</div></div>' : '') +
+      '<div class="events">' + shown.map(function (event) { return eventCard(event, wide && state.eventsWide); }).join('') + '</div>';
+  }
+
+  /** The name this panel lists a kind under — `pods` for Pod — if it lists it at all. */
+  function navFor(kind) {
+    for (var i = 0; i < state.resources.length; i += 1) {
+      if (state.resources[i].kind === kind) return state.resources[i].name;
+    }
+    return null;
+  }
+
+  /**
+   * An event, opened.
+   *
+   * In the table it is one clipped line, and the message is the whole point of
+   * it. Here it is whole, with how often and since when, and with the one
+   * thing somebody wants next: the object it is about.
+   */
+  function eventPane(row) {
+    return block('What was said', '<div class="events">' + eventCard(row, true) + '</div>') +
+      block('Summary', '<dl class="facts">' +
+        [['About', row.object], ['Type', row.type], ['Reason', row.status], ['Times', row.count],
+          ['Last', row.at ? new Date(row.at).toLocaleString() : ''], ['First', row.firstAt ? new Date(row.firstAt).toLocaleString() : ''],
+          ['From', row.from], ['Namespace', row.namespace]]
+          .filter(function (pair) { return pair[1] !== '' && pair[1] != null; })
+          .map(function (pair) { return '<dt>' + esc(pair[0]) + '</dt><dd>' + esc(String(pair[1])) + '</dd>'; }).join('') + '</dl>');
+  }
+
+  function eventActions(row) {
+    var nav = navFor(row.objectKind);
+    return (nav ? '<button class="btn go" data-open="' + esc(row.objectName) + '" data-open-kind="' + esc(nav) + '" data-open-namespace="' + esc(row.namespace || '') + '" ' +
+      'title="Open what this event is about">Open ' + esc(row.object) + '</button>' : '') +
+      '<button class="btn" data-do="event-copy" title="Copy the reason and the message">Copy message</button>';
+  }
+
+  /**
+   * Read the events, again if asked.
+   *
+   * Asked for when the tab opens, on its button, and behind every quiet
+   * refresh while the tab is showing — an Events tab read once is a tab that
+   * says "pulling image" for ten minutes after the pod is up.
+   */
+  function loadEvents(quiet) {
+    var row = state.selected;
+    if (!row || row.kind === 'Release' || row.kind === 'Event') return;
+    var data = state.detailData;
+    if (data.eventsBusy) return;
+    if (quiet && data.eventsAt && Date.now() - data.eventsAt < 8000) return;
+    var at = { context: state.context, kind: row.kind, name: row.name, related: makesThings(row) && state.eventsWide };
+    if (row.namespace) at.namespace = row.namespace;
+    data.eventsBusy = true;
+    if (!quiet && state.detail.tab === 'events') drawDetail();
+    call('kube.events', at).then(function (result) {
+      data.eventsBusy = false;
+      if (state.selected !== row || state.detailData !== data) return;
+      var rows = result.rows || [];
+      var same = quiet && data.events && JSON.stringify(rows.map(eventKey)) === JSON.stringify(data.events.map(eventKey));
+      data.events = rows;
+      data.eventsError = null;
+      data.eventsAt = Date.now();
+      if (!same || !quiet) drawDetail();
+    }).catch(function (error) {
+      data.eventsBusy = false;
+      if (state.selected !== row || state.detailData !== data) return;
+      data.eventsError = String(error.message || error);
+      drawDetail();
+    });
+  }
+  function eventKey(event) { return [event.uid, event.count, event.at]; }
+
   function detailBody(row) {
     var tab = state.detail.tab;
     if (row.kind === 'Release') return releaseBody(row, tab);
     if (tab === 'overview') return overviewBody(row);
     if (tab === 'yaml') {
       if (state.detailData.yaml == null) return '<pre>reading…</pre>';
-      var draft = draftFor(row);
-      /*
-       * Editable, and plainly so. No syntax colouring: this frame cannot reach
-       * the app's editor, and a hand-rolled highlighter that is wrong about a
-       * block scalar is worse than none — it would be lying about the one thing
-       * YAML is hard to read for.
-       */
-      var body = draft == null ? state.detailData.yaml : draft;
-      // Typing that survived a trip to Events comes back with the editor open;
-      // painting it read-only would look like the edit had been thrown away.
-      if (draft != null) state.editingYaml = true;
-      /*
-       * Read coloured, edited plain, and the button says which you are in.
-       *
-       * A textarea cannot hold coloured text, and the alternatives — a
-       * contenteditable pretending to be one, or a whole editor — are how a
-       * panel that shows a manifest turns into a project that maintains an
-       * editor. So the manifest is painted until somebody says they want to
-       * change it, which is the state it is in almost all of the time.
-       */
-      return '<div class="yaml-tools is-stuck">' +
-        (state.editingYaml
-          ? '<button class="btn go" data-do="yaml-apply" title="Save this manifest to the cluster">Apply</button>' +
-            '<button class="btn" data-do="yaml-check" title="Ask the server whether this is legal, and change nothing">Dry run</button>' +
-            '<button class="btn" data-do="yaml-revert">Revert</button>'
-          : '<button class="btn" data-do="yaml-edit" title="Change this manifest and apply it to the cluster">Edit</button>') +
-        '<span class="dim" id="yaml-state">' + (draft == null ? 'as it is in the cluster' : 'edited') + '</span>' +
-        '<span class="spacer"></span>' +
-        '<button class="btn" data-do="copy-detail" title="Copy the whole manifest">Copy</button>' +
-        '</div>' +
-        (state.editingYaml
-          ? '<textarea id="yaml-edit" spellcheck="false">' + esc(body) + '</textarea>'
-          : '<pre class="yaml">' + yamlHtml(body) + '</pre>');
+      return yamlBody(row);
     }
     if (tab === 'configure') return configureBody(row);
     if (tab === 'pods') return podsBody(row);
     if (tab === 'jobs') return jobsBody(row);
     if (tab === 'rollout') return rolloutBody(row);
-    if (tab === 'events') {
-      var events = state.detailData.events;
-      if (!events) return '<pre>reading…</pre>';
-      if (!events.length) return '<div class="dim">Nothing has been said about this one.</div>';
-      return '<table><tbody>' + events.map(function (event) {
-        return '<tr><td class="dim age">' + ageHtml(event) + '</td>' +
-          '<td class="' + (event.type === 'Warning' ? 'warn-text' : 'dim') + '">' + esc(event.status) + '</td>' +
-          '<td class="grow dim">' + esc(event.message) + '</td></tr>';
-      }).join('') + '</tbody></table>';
-    }
+    if (tab === 'events') return eventsBody(row);
     return '';
   }
 
@@ -6549,6 +7133,8 @@
     if (undo && state.selected) {
       var subject = state.selected;
       var to = Number(undo.dataset.undo);
+      // Pressed once: a second click while the first is on its way is a second rollback.
+      undo.disabled = true;
       call('kube.rollback', {
         context: state.context, kind: subject.kind, namespace: subject.namespace, name: subject.name, revision: to,
       }).then(function (result) {
@@ -6557,7 +7143,7 @@
         drawDetail();
         loadDetail();
         setTimeout(function () { load(true); }, 1200);
-      }).catch(function (error) { say(String(error.message || error), true); });
+      }).catch(function (error) { undo.disabled = false; say(String(error.message || error), true); });
       return;
     }
 
@@ -6598,6 +7184,7 @@
     if (back && state.selected) {
       var to = Number(back.dataset.rollback);
       var release = state.selected;
+      back.disabled = true;
       call('helm.rollback', { context: state.context, namespace: release.namespace, name: release.name, revision: to })
         .then(function (result) {
           say(result.text || ('Rolled ' + release.name + ' back to revision ' + to + '.'));
@@ -6606,7 +7193,7 @@
           loadDetail();
           setTimeout(function () { load(true); }, 1200);
         })
-        .catch(function (error) { say(String(error.message || error), true); });
+        .catch(function (error) { back.disabled = false; say(String(error.message || error), true); });
       return;
     }
     var tab = event.target.closest('[data-tab]');
@@ -6614,10 +7201,18 @@
       // Whatever was typed stays typed; it is kept against the object, so it is
       // still here on the way back.
       state.editing = false;
+      state.editNote = null;
+      state.revertArmed = 0;
+      state.yamlView = 'edit';
       state.detail.tab = tab.dataset.tab;
       remember();
-      drawDetail();
+      drawDetail(true);
+      // Coming back to an edit is coming back to something a redraw must not take the caret out of.
+      if (state.detail.tab === 'yaml') state.editing = draftFor(state.selected) != null;
+      if (state.detail.tab === 'configure' && state.config) state.editing = configChanges(state.config).length > 0;
       loadDetail();
+      // Already read: asked again on the way in, so the tab is not showing what was true when it was last open.
+      if (state.detail.tab === 'events' && state.detailData.events) loadEvents(true);
       return;
     }
     var action = event.target.closest('[data-do]');
@@ -6630,6 +7225,7 @@
     if (!row) return;
     if (row.kind === 'Release') return loadReleaseDetail(row);
     var at = { context: state.context, kind: row.kind, name: row.name };
+    if (row.kind === 'Event' && state.detail.tab === 'overview') return;
     if (row.namespace) at.namespace = row.namespace;
 
     if (state.detail.tab === 'overview') loadCharts(row);
@@ -6643,14 +7239,20 @@
     }
     if (state.detail.tab === 'yaml' && state.detailData.yaml == null) {
       call('kube.manifest', at).then(function (result) {
-        if (state.selected === row) { state.detailData.yaml = result.yaml || ''; drawDetail(); }
+        if (state.selected === row) { state.detailData.yaml = result.yaml || ''; state.detailData.editable = result.editable == null ? null : result.editable; drawDetail(true); }
       }).catch(function (error) {
-        if (state.selected === row) { state.detailData.yaml = String(error.message || error); drawDetail(); }
+        if (state.selected === row) { state.detailData.yaml = String(error.message || error); state.detailData.unread = true; drawDetail(true); }
       });
     }
     if (state.detail.tab === 'configure' && state.detailData.object == null) {
       call('kube.object', at).then(function (result) {
-        if (state.selected === row) { state.detailData.object = result.object || {}; drawDetail(true); }
+        if (state.selected === row) {
+          state.detailData.object = result.object || {};
+          // An edit that was left on it is an edit again: the form comes back guarded.
+          var kept = state.configs[configKey(row)];
+          drawDetail(true);
+          if (kept) state.editing = configChanges(ensureConfig(row, state.detailData.object)).length > 0;
+        }
       }).catch(function (error) {
         if (state.selected === row) { state.detailData.object = String(error.message || error); drawDetail(true); }
       });
@@ -6682,13 +7284,7 @@
         if (state.selected === row) { state.detailData.rollout = String(error.message || error); drawDetail(); }
       });
     }
-    if (state.detail.tab === 'events' && !state.detailData.events) {
-      call('kube.events', at).then(function (result) {
-        if (state.selected === row) { state.detailData.events = result.rows || []; drawDetail(); }
-      }).catch(function () {
-        if (state.selected === row) { state.detailData.events = []; drawDetail(); }
-      });
-    }
+    if (state.detail.tab === 'events' && !state.detailData.events) loadEvents();
   }
 
   /** The four questions a release answers, each fetched the first time it is asked. */
@@ -7204,14 +7800,7 @@
 
   document.addEventListener('input', function (event) {
     if (event.target.id === 'yaml-edit') {
-      var was = state.editing;
-      state.editing = true;
-      // Kept as it is typed, so a redraw restores it rather than losing it.
-      state.draft = { uid: state.selected ? state.selected.uid : null, text: event.target.value };
-      if (!was) {
-        var mark = document.getElementById('yaml-state');
-        if (mark) mark.textContent = 'edited';
-      }
+      yamlTyped(event.target);
       return;
     }
     if (event.target.id !== 'log-search') return;
@@ -7671,6 +8260,13 @@
       var body = document.querySelector('.detail-body');
       var head = document.querySelector('.detail-head h3');
       if (!body) return;
+      // A manifest is copied as the text it is — what is in the editor if one is open — and not as a bar of buttons above a box.
+      if (state.detail.tab === 'yaml' && state.selected && state.detailData.yaml != null && state.selected.kind !== 'Release') {
+        var manifest = state.editingYaml ? (draftFor(state.selected) == null ? baseFor(state.selected) : draftFor(state.selected)) : state.detailData.yaml;
+        host.emit('copy', { text: manifest });
+        say('Copied ' + manifest.split('\n').length + ' lines' + (state.editingYaml && draftFor(state.selected) != null ? ', with your edit.' : '.'));
+        return;
+      }
       var text = (head ? head.textContent + '\n\n' : '') + readable(body);
       host.emit('copy', { text: text });
       say('Copied ' + text.split('\n').length + ' lines.');
@@ -7801,12 +8397,81 @@
        * textarea it swaps in is plain, because a coloured one would mean
        * maintaining an editor inside a panel.
        */
-      state.editingYaml = true;
+      if (state.detailData.unread || state.applying) return;
+      /*
+       * Read again first. The manifest on screen was read when the tab was
+       * opened, which may be a while ago, and an edit that starts from an old
+       * copy is an edit that puts back whatever changed since.
+       */
+      var opening = row;
+      var here = { context: state.context, kind: row.kind, name: row.name };
+      if (row.namespace) here.namespace = row.namespace;
+      var open = function () {
+        if (state.selected !== opening) return;
+        state.applying = null;
+        state.editingYaml = true;
+        state.yamlView = 'edit';
+        drawDetail(true);
+        var box = document.getElementById('yaml-edit');
+        if (box) { box.focus(); box.setSelectionRange(0, 0); box.scrollTop = 0; yamlWhere(); }
+      };
+      state.applying = 'open';
       drawDetail(true);
-      var box = document.getElementById('yaml-edit');
-      if (box) box.focus();
+      call('kube.manifest', here).then(function (result) {
+        if (state.selected !== opening) return;
+        state.detailData.yaml = result.yaml || '';
+        state.detailData.editable = result.editable == null ? state.detailData.yaml : result.editable;
+        open();
+      }).catch(function (error) {
+        if (state.selected !== opening) return;
+        state.applying = null;
+        state.editNote = { text: 'It could not be read again, so it is not safe to edit: ' + String(error.message || error), bad: true };
+        drawDetail(true);
+      });
       return;
     }
+    if (what === 'yaml-diff' || what === 'yaml-diff-close') {
+      // The text in the box is the draft already; the changes are another way of looking at it.
+      state.yamlView = what === 'yaml-diff' && state.yamlView !== 'diff' && draftFor(row) != null ? 'diff' : 'edit';
+      redrawEditor();
+      if (state.yamlView === 'edit') { var back = document.getElementById('yaml-edit'); if (back) back.focus(); }
+      return;
+    }
+    if (what === 'yaml-theirs') { state.yamlView = 'theirs'; drawDetail(true); return; }
+    if (what === 'yaml-goto') { if (state.editNote && state.editNote.line) yamlGoTo(state.editNote.line); return; }
+    if (what === 'note-close') { state.editNote = null; redrawEditor(); return; }
+    if (what === 'yaml-force') {
+      var mineText = draftFor(row);
+      if (mineText != null) applyYaml(mineText, false, true);
+      return;
+    }
+    if (what === 'yaml-take') {
+      dropDraft(row);
+      stopEditing();
+      state.detailData.yaml = null;
+      state.detailData.editable = null;
+      state.detailData.theirs = null;
+      drawDetail(true);
+      loadDetail();
+      say('Your edit was dropped. This is what the cluster has now.');
+      return;
+    }
+    if (what === 'yaml-save') {
+      var saving = state.editingYaml ? (draftFor(row) == null ? baseFor(row) : draftFor(row)) : state.detailData.yaml;
+      if (saving == null || state.detailData.unread) return;
+      host.emit('save', { name: [row.namespace, row.kind.toLowerCase(), row.name].filter(Boolean).join('-') + '.yaml', text: saving });
+      return;
+    }
+    if (what === 'events-only') { state.eventsOnly = !state.eventsOnly; drawDetail(); return; }
+    if (what === 'events-wide') {
+      state.eventsWide = !state.eventsWide;
+      state.detailData.events = null;
+      state.detailData.eventsAt = 0;
+      loadEvents();
+      return;
+    }
+    if (what === 'events-refresh') { loadEvents(); return; }
+    if (what === 'event-copy') { copyText((row.status ? row.status + ': ' : '') + (row.message || ''), 'the message'); return; }
 
     if (what === 'drain') {
       call('kube.drain', { context: state.context, name: row.name })
@@ -7843,16 +8508,32 @@
       return;
     }
     if (what === 'yaml-revert') {
+      /*
+       * Twice, when there is something to lose. Revert sat one button from
+       * Apply and threw away an afternoon's edit on one click with nothing to
+       * take it back; now the first click asks, on the button itself, and the
+       * question goes away by itself.
+       */
+      if (draftFor(row) != null && !(state.revertArmed && Date.now() - state.revertArmed < 4000)) {
+        state.revertArmed = Date.now();
+        redrawEditor();
+        setTimeout(function () {
+          if (state.revertArmed && Date.now() - state.revertArmed >= 3900) { state.revertArmed = 0; if (state.selected === row && state.editingYaml) redrawEditor(); }
+        }, 4000);
+        return;
+      }
+      dropDraft(row);
       stopEditing();
-      state.detailData.yaml = null;
-      drawDetail();
-      loadDetail();
+      state.detailData.theirs = null;
+      drawDetail(true);
       return;
     }
     if (what === 'yaml-check' || what === 'yaml-apply') {
+      // From the draft and not from the box: the changes may be what is on screen, and then there is no box.
       var field = document.getElementById('yaml-edit');
-      if (!field) return;
-      applyYaml(field.value, what === 'yaml-check');
+      var written = field ? field.value : draftFor(row);
+      if (written == null) written = baseFor(row);
+      applyYaml(written, what === 'yaml-check');
       return;
     }
 
@@ -7862,8 +8543,20 @@
     }
     if (what === 'config-revert') {
       if (!state.config) return;
+      if (!(state.revertArmed && Date.now() - state.revertArmed < 4000)) {
+        state.revertArmed = Date.now();
+        configShow();
+        var armedFor = state.config;
+        setTimeout(function () {
+          if (state.revertArmed && Date.now() - state.revertArmed >= 3900) { state.revertArmed = 0; if (state.config === armedFor) configShow(); }
+        }, 4000);
+        return;
+      }
+      state.revertArmed = 0;
       state.config.draft = copyOf(state.config.live);
+      state.config.moved = false;
       state.editing = false;
+      state.editNote = null;
       drawDetail(true);
       return;
     }
@@ -7883,7 +8576,15 @@
 
     if (what === 'ask') {
       var input = document.getElementById('question');
-      askAbout(assign({ kind: row.kind, name: row.name, namespace: row.namespace }, {}), input ? input.value.trim() : '');
+      var asked = input ? input.value.trim() : '';
+      // An event is not something to describe; the thing it is about is, with what the event said as the question.
+      if (row.kind === 'Event') {
+        askAbout({ kind: row.objectKind, name: row.objectName, namespace: row.namespace },
+          (asked ? asked + ' — ' : 'Why did this happen, and what fixes it? ') + 'The event: ' + row.status + ': ' + row.message);
+        return;
+      }
+      askAbout(assign({ kind: row.kind, name: row.name, namespace: row.namespace }, {}), asked);
+      if (input) input.value = '';
       return;
     }
 
@@ -7891,6 +8592,8 @@
       askFor('Scale ' + row.name + ' to how many?', String(row.replicas == null ? 1 : row.replicas))
         .then(function (wanted) {
           if (wanted == null) return;
+          // "three", "-1" and an empty box are not a number of replicas, and were sent as one.
+          if (!/^\d+$/.test(String(wanted).trim())) { say('"' + wanted + '" is not a number of replicas.', true); return; }
           run(call('kube.scale', assign({ replicas: Number(wanted) }, at)), 'Scaled ' + row.name + ' to ' + wanted + '.');
         });
       return;
@@ -7928,7 +8631,9 @@
     if (what === 'delete') {
       // The pane goes when the object does, not when the question is asked: a Cancel keeps it.
       run(call('kube.remove', at), 'Deleting ' + row.name + '.', function () {
-        if (state.selected && state.selected.uid === row.uid) { state.selected = null; remember(); draw(); }
+        dropDraft(row);
+        delete state.configs[configKey(row)];
+        if (state.selected && state.selected.uid === row.uid) { stopEditing(); state.config = null; state.selected = null; remember(); draw(); }
       });
       return;
     }
@@ -7948,30 +8653,220 @@
    * bad indent and learning about an outage. Only if that passes does the real
    * one go.
    */
-  function applyYaml(text, checkOnly) {
-    var at = { context: state.context, yaml: text, dryRun: true };
-    if (state.selected && state.selected.namespace) at.namespace = state.selected.namespace;
-    say('Asking the server whether this is legal…');
+  /**
+   * What was typed, kept as it is typed.
+   *
+   * Against the object rather than in the box, so nothing that rebuilds the
+   * box loses it — and measured against what the edit started from, so text
+   * typed back to how it was is no longer an edit, and the bar says so.
+   */
+  var yamlCount = 0;
+  function yamlTyped(box) {
+    var row = state.selected;
+    if (!row) return;
+    var base = baseFor(row);
+    var text = box.value;
+    if (text === base) delete state.drafts[row.uid];
+    else {
+      state.drafts[row.uid] = { text: text, base: base, name: row.name };
+      // Not every object ever touched: the oldest go first.
+      var held = Object.keys(state.drafts);
+      if (held.length > 20) delete state.drafts[held[0]];
+    }
+    state.editing = text !== base;
+    state.revertArmed = 0;
+    if (state.editNote) { state.editNote = null; var note = document.querySelector('.edit-note'); if (note) note.remove(); }
+    yamlWhere();
+    // The count of changed lines is a diff, and a diff on every key is felt on a long manifest: once the typing pauses.
+    clearTimeout(yamlCount);
+    yamlCount = setTimeout(yamlShow, 160);
+  }
 
-    call('kube.apply', at).then(function (dry) {
-      if (checkOnly) {
-        say(dry.text || 'The server accepted it. Nothing was changed.');
+  /** The bar, written in place: never the box. */
+  function yamlShow() {
+    var row = state.selected;
+    var mark = document.getElementById('yaml-state');
+    if (!row || !mark) return;
+    var draft = draftFor(row);
+    var diff = draft == null ? null : lineDiff(baseFor(row), draft);
+    var changed = Boolean(diff && (diff.added || diff.removed));
+    mark.textContent = changed ? 'edited · ' + linesText(diff) : 'nothing changed yet';
+    var set = function (name, off) { var b = document.querySelector('[data-do="' + name + '"]'); if (b) b.disabled = off; return b; };
+    set('yaml-apply', !changed || Boolean(state.applying));
+    set('yaml-diff', !changed);
+    var revert = set('yaml-revert', Boolean(state.applying));
+    if (revert) { revert.textContent = changed ? revertLabel() : 'Done'; revert.title = changed ? 'Throw the edit away' : 'Leave the editor (Esc)'; revert.dataset.armed = state.revertArmed ? 1 : 0; }
+    var tab = document.querySelector('.tabs [data-tab="yaml"]');
+    var dot = tab && tab.querySelector('.tab-unsaved');
+    if (tab && changed && !dot) tab.insertAdjacentHTML('beforeend', '<span class="tab-unsaved" title="Edited, not applied">●</span>');
+    if (dot && !changed) dot.remove();
+  }
+
+  /**
+   * The keys an editor has, in a box that is not one.
+   *
+   * Tab leaves a textarea, which in YAML — where the indent is the syntax — is
+   * the wrong thing for it to do. So Tab and Shift-Tab move the selected lines
+   * by two spaces, Enter keeps the indent of the line it leaves (and goes one
+   * deeper after a key that opens a block), and ⌘S is Apply because that is
+   * what a hand does when it means "save". Each goes through execCommand
+   * where that still works, so ⌘Z takes it back like any other typing.
+   */
+  function yamlInsert(box, from, to, text, selectFrom, selectTo) {
+    box.focus();
+    box.setSelectionRange(from, to);
+    var done = false;
+    try { done = document.execCommand('insertText', false, text); } catch (error) { done = false; }
+    if (!done) { box.setRangeText(text, from, to, 'end'); yamlTyped(box); }
+    if (selectFrom != null) box.setSelectionRange(selectFrom, selectTo == null ? selectFrom : selectTo);
+  }
+
+  document.addEventListener('keydown', function (event) {
+    var box = event.target;
+    var command = event.metaKey || event.ctrlKey;
+    if (command && event.key === 's' && state.selected && (state.detail.tab === 'yaml' || state.detail.tab === 'configure')) {
+      // ⌘S anywhere in the pane: the app's own Save has nothing of this frame's to save.
+      if (state.detail.tab === 'configure') { event.preventDefault(); act('config-apply'); return; }
+      if (state.editingYaml) { event.preventDefault(); act('yaml-apply'); return; }
+    }
+    if (command && event.key === 'Enter' && state.selected) {
+      if (state.detail.tab === 'configure' && event.target.closest && event.target.closest('[data-config]')) { event.preventDefault(); act('config-check'); return; }
+      if (state.editingYaml && state.detail.tab === 'yaml') { event.preventDefault(); act('yaml-check'); return; }
+    }
+    if (command && event.key === 'd' && state.editingYaml && state.detail.tab === 'yaml') { event.preventDefault(); act('yaml-diff'); return; }
+    if (!box || box.id !== 'yaml-edit' || box.readOnly) return;
+
+    if (event.key === 'Escape') {
+      // With nothing changed, Escape leaves the editor and not the pane. With something changed it does nothing at all.
+      event.stopPropagation();
+      if (draftFor(state.selected) == null) { event.preventDefault(); act('yaml-revert'); }
+      return;
+    }
+    var value = box.value;
+    var from = box.selectionStart;
+    var to = box.selectionEnd;
+    if (event.key === 'Tab' && !command && !event.altKey) {
+      event.preventDefault();
+      var lineFrom = value.lastIndexOf('\n', from - 1) + 1;
+      if (from === to && !event.shiftKey) { yamlInsert(box, from, to, '  '); return; }
+      var lineTo = value.indexOf('\n', to > from && value[to - 1] === '\n' ? to - 1 : to);
+      if (lineTo < 0) lineTo = value.length;
+      var block = value.slice(lineFrom, lineTo).split('\n');
+      var firstShift = 0;
+      var moved = block.map(function (line, at) {
+        if (!event.shiftKey) { if (at === 0) firstShift = 2; return line.trim() ? '  ' + line : line; }
+        var cut = /^ {1,2}/.exec(line);
+        if (at === 0) firstShift = cut ? -cut[0].length : 0;
+        return cut ? line.slice(cut[0].length) : line;
+      }).join('\n');
+      var grew = moved.length - (lineTo - lineFrom);
+      yamlInsert(box, lineFrom, lineTo, moved, Math.max(lineFrom, from + firstShift), from === to ? Math.max(lineFrom, from + firstShift) : to + grew);
+      return;
+    }
+    if (event.key === 'Enter' && !command && !event.shiftKey && !event.altKey && !event.isComposing) {
+      event.preventDefault();
+      var start = value.lastIndexOf('\n', from - 1) + 1;
+      var line = value.slice(start, from);
+      var indent = /^ */.exec(line)[0];
+      // After `key:` or a block opener the next line is inside it. After `- key: value` it lines up under the key.
+      if (/:\s*([|>][-+]?\d*)?\s*$/.test(line) && line.trim() !== '') indent += '  ';
+      else if (/^ *- /.test(line)) indent += '  ';
+      yamlInsert(box, from, to, '\n' + indent);
+      return;
+    }
+    if (event.key === 'Backspace' && from === to && !command && !event.altKey) {
+      // In the indent, a backspace takes one level, as the Tab that put it there did.
+      var begin = value.lastIndexOf('\n', from - 1) + 1;
+      var lead = value.slice(begin, from);
+      if (lead.length >= 2 && /^ +$/.test(lead) && lead.length % 2 === 0) { event.preventDefault(); yamlInsert(box, from - 2, from, ''); }
+    }
+  }, true);
+
+  ['keyup', 'click', 'select', 'focusin'].forEach(function (name) {
+    document.addEventListener(name, function (event) { if (event.target && event.target.id === 'yaml-edit') yamlWhere(); });
+  });
+
+  /** A line of the changes is a place in the edit. */
+  document.addEventListener('click', function (event) {
+    var line = event.target.closest && event.target.closest('.diff-line[data-line]');
+    if (!line || state.yamlView !== 'diff' || String(window.getSelection() || '')) return;
+    yamlGoTo(Number(line.dataset.line));
+  });
+
+  /**
+   * Send an edited manifest: has it moved, is it legal, then for real.
+   *
+   * First the cluster's copy is read again and held against the one the edit
+   * started from. The text sent carries no resourceVersion — one that is a
+   * minute old is refused on any object a controller touches — so this is
+   * where somebody else's change is noticed, and it is shown rather than only
+   * announced. Then the dry run, always, even when the button said Apply: the
+   * server checks it against the real schemas and the real admission webhooks
+   * and throws it away, which is the difference between learning about a bad
+   * indent and learning about an outage. Only then the real one.
+   */
+  function applyYaml(text, checkOnly, force) {
+    var row = state.selected;
+    if (!row || state.applying) return;
+    var base = baseFor(row);
+    var diff = lineDiff(base, text);
+    if (!checkOnly && !diff.added && !diff.removed) { state.editNote = { text: 'Nothing is different from what the cluster has.' }; redrawEditor(); return; }
+    var where = { context: state.context, kind: row.kind, name: row.name };
+    if (row.namespace) where.namespace = row.namespace;
+    var mine = function () { return state.selected === row; };
+    var settle = function (note) {
+      if (!mine()) { if (note) say(row.name + ': ' + note.text, note.bad); return; }
+      state.applying = null;
+      state.editNote = note;
+      redrawEditor();
+      if (note && note.line) yamlGoTo(note.line);
+    };
+
+    state.applying = checkOnly ? 'check' : 'apply';
+    state.editNote = null;
+    state.revertArmed = 0;
+    redrawEditor();
+
+    var moved = checkOnly || force
+      ? Promise.resolve(null)
+      : call('kube.manifest', where).then(function (now) { return now.editable != null && now.editable !== base ? now.editable : null; });
+
+    moved.then(function (theirs) {
+      if (theirs != null) {
+        if (mine()) state.detailData.theirs = theirs;
+        var other = lineDiff(base, theirs);
+        settle({ text: 'This was changed in the cluster while you were editing (' + linesText(other) + '). Nothing has been applied.', bad: true, moved: true });
         return null;
       }
-      return call('kube.apply', assign({}, { context: at.context, namespace: at.namespace, yaml: text }))
-        .then(function (done) {
-          stopEditing();
+      var send = { context: state.context, yaml: text, kind: row.kind, name: row.name, added: diff.added, removed: diff.removed };
+      if (row.namespace) send.namespace = row.namespace;
+      return call('kube.apply', assign({ dryRun: true }, send)).then(function (dry) {
+        if (checkOnly) {
+          settle({ text: 'The server accepted it. Nothing was changed.' + (dry.text ? '\n' + dry.text : '') });
+          return null;
+        }
+        return call('kube.apply', send).then(function (done) {
+          dropDraft(row);
           say(done.text || 'Applied.');
+          if (!mine()) return null;
+          stopEditing();
           state.detailData.yaml = null;
-          drawDetail();
+          state.detailData.editable = null;
+          state.detailData.theirs = null;
+          state.detailData.object = null;
+          drawDetail(true);
           loadDetail();
           setTimeout(function () { load(true); }, 900);
           return null;
         });
+      });
     }).catch(function (error) {
       // The server's own words. Ours would be a worse version of
       // "error validating data: unknown field spec.replicaz".
-      say(String(error.message || error), true);
+      var words = String(error.message || error);
+      if (/the person said no/.test(words)) { settle(null); return; }
+      var line = /\bline (\d+)\b/.exec(words);
+      settle({ text: words, bad: true, line: line ? Number(line[1]) : null });
     });
   }
 
@@ -8451,7 +9346,12 @@
     }
     if (event.key === 'Escape') {
       // The question closes itself; this is only for what is behind it.
-      if (document.getElementById('prompt') || state.editing) return;
+      if (document.getElementById('prompt') || state.editing || state.applying) return;
+      // Looking at the changes, Escape goes back to the edit; in an editor nothing was typed into, out of it.
+      if (state.selected && state.detail.tab === 'yaml' && state.editingYaml) {
+        if (state.yamlView !== 'edit') act('yaml-diff-close'); else act('yaml-revert');
+        return;
+      }
       // The same close the × does, so both leave the panel in one state.
       closeDetail();
       return;

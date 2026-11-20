@@ -28,6 +28,7 @@
 const { execFile, spawn } = require('node:child_process');
 const { resolvedPath } = require('./cli-env');
 const { graphFrom, planFrom } = require('./kube-map');
+const { editableYaml, eventsAbout } = require('./kube-edit');
 
 /** Long enough for a slow API server, short enough that a panel is never stuck. */
 const TIMEOUT = 30000;
@@ -770,8 +771,10 @@ function eventRow(item, now) {
     object: `${item.involvedObject?.kind ?? ''}/${item.involvedObject?.name ?? ''}`,
     objectKind: item.involvedObject?.kind ?? '',
     objectName: item.involvedObject?.name ?? '',
-    count: item.count ?? 1,
+    count: item.count ?? item.series?.count ?? 1,
     at: at ?? null,
+    firstAt: item.firstTimestamp || item.eventTime || null,
+    from: item.source?.component || item.reportingComponent || '',
     age: age(at, now),
   };
 }
@@ -1524,7 +1527,8 @@ async function manifest({ kind, name, ...rest }) {
     '-o',
     'yaml',
   ]);
-  return result.ok ? { ok: true, yaml: result.stdout } : result;
+  // The same object twice: as the cluster prints it, for reading, and as somebody would write it, for editing.
+  return result.ok ? { ok: true, yaml: result.stdout, editable: editableYaml(result.stdout) } : result;
 }
 
 /**
@@ -1575,18 +1579,19 @@ async function logs({ pod, container, tail = 500, previous = false, timestamps =
  * server rather than here, because it knows the true order of events whose
  * timestamps tie.
  */
-async function events({ kind, name, ...rest }) {
+async function events({ kind, name, related = false, ...rest }) {
   const args = [...scope(rest), 'get', 'events', ...everywhere(rest), '--sort-by=.lastTimestamp'];
-  if (kind && name) {
-    args.push(
-      '--field-selector',
-      `involvedObject.kind=${safeArg(kind, 'the kind')},involvedObject.name=${safeArg(name, 'the name')}`,
-    );
+  const about = kind && name ? { kind: safeArg(kind, 'the kind'), name: safeArg(name, 'the name') } : null;
+  // With what it made asked for too, the whole namespace is read and sorted through here:
+  // a field selector can name one object, not "this one and the pods named after it".
+  if (about && !related) {
+    args.push('--field-selector', `involvedObject.kind=${about.kind},involvedObject.name=${about.name}`);
   }
   args.push('-o', 'json');
   const result = await runJson(args);
   if (!result.ok) return result;
   const shaped = table('Event', result.data);
+  if (about && related) shaped.rows = eventsAbout(shaped.rows, about.kind, about.name);
   // Newest first: a log reads downwards, a dashboard reads from the top.
   shaped.rows.reverse();
   return { ok: true, ...shaped };
