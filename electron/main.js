@@ -2377,6 +2377,7 @@ function registerIpc() {
     events: (args) => kube.events(args),
     top: (args) => kube.top(args),
     summary: (args) => kube.summary(args),
+    topology: (args) => kube.topology(args),
     brief: (args) => kube.brief(args),
     prometheus: (args) => kube.prometheus(args),
     promQuery: (args) => kube.promQuery(args),

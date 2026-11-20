@@ -640,6 +640,138 @@
   .fresh { font-size: 10.5px; color: var(--text-faint); white-space: nowrap; min-width: 0; }
   .fresh.is-stale { color: var(--danger); cursor: help; }
   @keyframes turn { to { transform: rotate(360deg); } }
+
+  /*
+   * The map. A canvas of cards and the lines between them, in the app's own
+   * colours: workloads in the accent, the network in `info`, storage in
+   * `violet` — a strip along the top of a card, so the kind can be read without
+   * the border, which is busy saying whether the thing is well.
+   */
+  .map { display: grid; grid-template-rows: auto auto minmax(0, 1fr); height: 100%; min-height: 0; }
+  .map-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 11px; }
+  .map-bar .sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 4px; }
+  .map-seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius); overflow: hidden; }
+  .map-seg button { padding: 3px 10px; color: var(--text-dim); font-size: 11.5px; }
+  .map-seg button:hover { color: var(--text); }
+  .map-seg button.on { background: var(--accent); color: var(--on-accent, #fff); font-weight: 600; }
+  .map-drop { position: relative; display: inline-flex; }
+  .map-menu {
+    position: absolute; top: calc(100% + 4px); left: 0; z-index: 6; width: 330px; max-height: 60vh; overflow: auto;
+    padding: 6px; background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: var(--radius);
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45);
+  }
+  .map-row { display: flex; align-items: center; gap: 8px; padding: 1px 4px; }
+  .map-row.in { padding-left: 22px; }
+  .map-row.map-head { padding: 6px 4px 2px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
+  .map-row:first-child { justify-content: space-between; padding: 3px 4px 6px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
+  .map-tick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; padding: 3px 4px; text-align: left; border-radius: calc(var(--radius) / 2); color: var(--text-dim); font-size: 11.5px; }
+  .map-tick:hover { background: var(--bg-panel); }
+  .map-tick.on { color: var(--text); }
+  .map-tick i { flex: none; width: 13px; height: 13px; display: grid; place-items: center; border: 1px solid var(--border-strong); border-radius: 3px; font-style: normal; font-size: 10px; line-height: 1; }
+  .map-tick.on i { background: var(--accent); border-color: var(--accent); color: var(--on-accent, #fff); }
+  .map-tick span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .map-row:not(.in) .map-tick span { font-weight: 600; }
+  .map-tick small { margin-left: auto; padding-left: 8px; color: var(--text-faint); font-size: 10px; white-space: nowrap; }
+  .map-row .link { font-size: 10.5px; opacity: 0; }
+  .map-row:hover .link, .map-row:first-child .link { opacity: 1; }
+  .map-note { padding: 5px 10px; font-size: 11px; color: var(--warn); border-bottom: 1px solid var(--border); }
+  .map-view {
+    overflow: auto; min-height: 0; cursor: grab;
+    background-image: radial-gradient(color-mix(in srgb, var(--text) 8%, transparent) 1px, transparent 1px);
+    background-size: 16px 16px;
+  }
+  .map-view.drag { cursor: grabbing; user-select: none; }
+  .map-inner { position: relative; transform-origin: 0 0; }
+  .msvg { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+  .medge { fill: none; stroke: color-mix(in srgb, var(--text-dim) 75%, transparent); stroke-width: 1.3; }
+  .medge.inf { stroke-dasharray: 5 4; }
+  .medge.uses { stroke: var(--accent); opacity: 0.75; }
+  .medge.vol { stroke: var(--violet); stroke-dasharray: 1 5; stroke-linecap: round; stroke-width: 1.6; opacity: 0.5; }
+  .medge.on { stroke: var(--accent); stroke-width: 2; opacity: 1; }
+  .mtag { display: inline-block; padding: 0 6px; border: 1px solid var(--border-strong); border-radius: 99px; color: var(--text-dim); font-size: 10px; line-height: 15px; white-space: nowrap; font-weight: 400; letter-spacing: 0; text-transform: none; }
+  .mtag.inf { border-style: dashed; }
+  .mtag.warn { border-color: var(--warn); color: var(--warn); }
+  .mtag.bad { border-color: var(--danger); color: var(--danger); }
+  .mdot { flex: none; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+  .h-warn > .mdot, .h-warn > .mnode-h .mdot { background: var(--warn); }
+  .h-bad > .mdot, .h-bad > .mnode-h .mdot { background: var(--danger); }
+  .h-idle > .mdot { background: var(--text-faint); }
+  .mtext { display: block; flex: 1; min-width: 0; }
+  .mtext b, .mtext small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mtext b { font-weight: 550; }
+  .mtext small { color: var(--text-dim); font-size: 10px; }
+  .mcard {
+    position: absolute; width: 170px; height: 40px; padding: 4px 8px; display: flex; align-items: center; gap: 7px;
+    text-align: left; background: var(--bg-panel); border: 1px solid var(--border-strong); border-radius: var(--radius);
+    font-size: 11px; line-height: 14px; overflow: hidden; box-shadow: inset 0 2px 0 var(--accent);
+  }
+  .mcard.c-nw { box-shadow: inset 0 2px 0 var(--info); }
+  .mcard.c-st { box-shadow: inset 0 2px 0 var(--violet); }
+  .mcard.c-nd { box-shadow: inset 0 2px 0 var(--text-faint); }
+  .mcard:hover, .mtile:hover { border-color: var(--text-dim); }
+  .mcard.h-warn, .mtile.h-warn { border-color: var(--warn); }
+  .mcard.h-bad, .mtile.h-bad { border-color: var(--danger); }
+  .mcard.inf { border-style: dashed; }
+  .mcard.stack { box-shadow: 3px 3px 0 var(--border-strong); }
+  .mcard.spof { border: 2px solid var(--warn); }
+  .mcard.mhit { background: color-mix(in srgb, var(--danger) 16%, var(--bg-panel)); border-color: var(--danger); }
+  .mcard.focus { border: 2px solid var(--accent); }
+  .mcard.sel, .mtile.sel, .mnode-h.sel { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .mlabel { position: absolute; display: flex; align-items: center; gap: 6px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); white-space: nowrap; }
+  .msq { display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: var(--accent); }
+  .msq.c-nw { background: var(--info); }
+  .msq.c-st { background: var(--violet); }
+  .mband { position: absolute; left: 8px; border: 1px solid var(--border); border-radius: calc(var(--radius) + 2px); background: color-mix(in srgb, var(--text) 2.5%, transparent); }
+  .mband-h { position: absolute; left: 14px; height: 22px; display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-dim); white-space: nowrap; }
+  .mband-h b { color: var(--text); font-weight: 600; }
+  .mband-h:hover b { color: var(--accent); }
+  .mfold { position: absolute; padding: 0 2px; font-size: 10px; color: var(--text-dim); white-space: nowrap; }
+  .mfold:hover { color: var(--accent); }
+
+  .map-inner.flow { min-height: 100%; }
+  .mphys { padding: 14px; display: flex; flex-direction: column; gap: 16px; }
+  .mpools { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+  .mpool, .mlane { border: 1px dashed var(--border-strong); border-radius: calc(var(--radius) + 4px); padding: 8px 10px 10px; }
+  .mpool.warn { border-color: var(--warn); }
+  .mpool.sel { border: 1px solid var(--accent); outline: 2px solid var(--accent); outline-offset: 1px; background: var(--accent-soft); }
+  .mpool.sel > h5 { color: var(--accent); }
+  .mpool.dim { opacity: 0.45; }
+  .mpool.dim:hover { opacity: 0.8; }
+  .mpool-h { cursor: pointer; user-select: none; -webkit-user-select: none; }
+  .mpool-h:hover { color: var(--text); }
+  .mlane { border: 1px solid color-mix(in srgb, var(--violet) 60%, transparent); background: color-mix(in srgb, var(--violet) 7%, transparent); }
+  .mpool > h5, .mlane > h5 { margin: 0 0 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
+  .mpool > h5 > span:first-of-type { color: var(--text-faint); font-weight: 400; }
+  .mnodes { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; }
+  .mnode { width: 300px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--bg-panel); }
+  .mnode.h-bad { border-color: var(--danger); }
+  .mnode.h-warn { border-color: var(--warn); }
+  .mnode-h { display: block; width: 100%; text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); border-radius: var(--radius) var(--radius) 0 0; }
+  .mnode-h:hover { background: var(--bg-elevated); }
+  .mnode-t { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: 12px; }
+  .mnode-t small { color: var(--text-dim); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mbars { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; margin-top: 5px; font-size: 10px; color: var(--text-dim); }
+  .mbar { display: block; height: 5px; border-radius: 99px; background: var(--bg-input); overflow: hidden; }
+  .mbar i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+  .mbar i.warm { background: var(--warn); }
+  .mbar i.hot { background: var(--danger); }
+  .mtiles { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; padding: 8px; }
+  .mtiles.wide { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); padding: 0; }
+  .mtile { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 5px 7px; text-align: left; background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--radius); font-size: 11px; line-height: 14px; }
+  .mtile.sys { border-style: dashed; color: var(--text-dim); }
+  .mtile.hl { box-shadow: 0 0 0 2px var(--accent); }
+  .mtile.off { opacity: 0.3; }
+  .mplug { flex: none; width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--violet); }
+  .mvols { display: flex; flex-wrap: wrap; gap: 8px; }
+  .mvol { width: 190px; background: var(--bg-panel); }
+  .mbox { position: absolute; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-panel); font-size: 11.5px; cursor: default; }
+  .mbox p { margin: 4px 0 0; }
+  .mfind { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .mfind p { color: var(--text-dim); }
+  .msim-pick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .msim { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+  .msim > div { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
+  .msim small { display: block; margin-bottom: 3px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
 </style>
 
 <div id="app">
@@ -680,6 +812,8 @@
     namespaces: [], namespace: '',
     resources: [], resourcesFor: null,
     view: { type: 'overview' },
+    /** The cluster as a graph, and the same thing indexed by what joins what. */
+    map: null, mapIndex: null,
     table: null, loading: false, error: null, counts: {},
     search: '', sort: { column: null, dir: 1 },
     selected: null, detail: { tab: 'overview' }, detailData: {},
@@ -821,6 +955,7 @@
   function tabTitle(place) {
     var view = place.view || { type: 'overview' };
     var what = view.type === 'overview' ? 'Overview'
+      : view.type === 'map' ? 'Map'
       : view.type === 'stats' ? 'Stats'
         : view.type === 'helm' ? 'Helm releases'
           : LABELS[view.name] || (known(view.name) || {}).kind || view.name || 'View';
@@ -1061,7 +1196,8 @@
   }
 
   function drawNav() {
-    var html = '<button class="' + (state.view.type === 'overview' ? 'on' : '') + '" data-view="overview">Overview</button>';
+    var html = '<button class="' + (state.view.type === 'overview' ? 'on' : '') + '" data-view="overview">Overview</button>' +
+      '<button class="' + (state.view.type === 'map' ? 'on' : '') + '" data-view="map" title="The cluster drawn as what is joined to what">Map</button>';
 
     var open = openGroups();
     var heading = function (title, count) {
@@ -1134,6 +1270,9 @@
       drawNav();
     } else if (button.dataset.view === 'overview') {
       show({ type: 'overview' });
+    } else if (button.dataset.view === 'map') {
+      // Back to the way it was last drawn, rather than to the first of the three.
+      if (state.view.type !== 'map') show(state.lastMap || { type: 'map', mode: 'topology' });
     } else if (button.dataset.view === 'helm') {
       show({ type: 'helm' });
     } else if (button.dataset.kind) {
@@ -1149,6 +1288,7 @@
     stopWatch();
     state.picked = [];
     state.only = extras.only || null;
+    if (state.view.type === 'map') state.lastMap = state.view;
     state.view = view;
     // You cannot be looking at something inside a folded group.
     if (view.type === 'kind') {
@@ -1261,6 +1401,8 @@
 
     var request = state.view.type === 'overview'
       ? call('kube.summary', { context: state.context })
+      : state.view.type === 'map'
+        ? call('kube.topology', where())
       : state.view.type === 'helm'
         ? call('helm.releases', helmWhere()).then(asHelmTable)
         : state.view.name === 'events'
@@ -1296,6 +1438,21 @@
         loadCharts(null);
         loadDisk();
       }
+      else if (state.view.type === 'map') {
+        /*
+         * The same cluster as last time is the same map: kept as it is, so the
+         * page under somebody's hand is not rebuilt every time the cluster is
+         * asked and says nothing happened.
+         */
+        var text = JSON.stringify([result.nodes, result.edges, result.findings, result.missing]);
+        if (!state.map || state.mapFor !== mapKey() || state.mapText !== text) {
+          state.map = result;
+          state.mapIndex = mapIndexOf(result);
+          state.mapText = text;
+        }
+        state.mapFor = mapKey();
+        if (state.selected) mapRefreshSelected();
+      }
       else {
         state.table = result;
         if (state.view.name) state.counts[state.view.name] = (result.rows || []).length;
@@ -1308,7 +1465,13 @@
        * Somebody clicked a node on the overview and this is the table it was
        * on. Opening it is what they were asking for.
        */
-      if (state.wanted && state.table) {
+      if (state.wanted && state.view.type === 'map') {
+        // Rebuilt with the pane open on something the map drew: open it again.
+        var again = state.view.ui && state.view.ui.sel;
+        state.wanted = null;
+        if (again && !state.selected) mapSelect(again, state.detail.tab);
+      }
+      else if (state.wanted && state.table) {
         var found = state.table.rows.filter(function (row) { return row.name === state.wanted; })[0];
         state.wanted = null;
         if (found) select(found.uid);
@@ -1326,7 +1489,7 @@
        * red sentence, which is less true than the rows were; now the rows stay
        * and the header says they are no longer being kept up to date.
        */
-      var shown = state.view.type === 'overview' ? state.overview : state.table;
+      var shown = state.view.type === 'overview' ? state.overview : state.view.type === 'map' ? state.map : state.table;
       if (quiet && shown) {
         state.stale = String(error.message || error);
         drawFresh();
@@ -1873,7 +2036,7 @@
   // In place: what is there stays there until the new answer replaces it, and
   // the arrow turning is what says it is being asked.
   $('reload').addEventListener('click', function () {
-    if (state.error || !(state.view.type === 'overview' ? state.overview : state.table)) load();
+    if (state.error || !(state.view.type === 'overview' ? state.overview : state.view.type === 'map' ? state.map : state.table)) load();
     else load(true);
   });
   $('live').addEventListener('click', function () {
@@ -1902,6 +2065,7 @@
     drawCrumb();
     if (state.view.type === 'overview') drawOverview();
     else if (state.view.type === 'stats') drawStats();
+    else if (state.view.type === 'map') drawMap();
     else drawTable();
     drawDetail();
     if (!options || !options.keepDock) drawDock();
@@ -1916,9 +2080,13 @@
       bits.push('<button class="link" data-view="overview">Overview</button>');
       bits.push('<strong>' + esc(STAT_TITLES[state.view.focus] || state.view.focus) + '</strong>');
     } else if (state.view.type === 'overview') bits.push('<strong>Overview</strong>');
+    else if (state.view.type === 'map') {
+      bits.push('<strong>Map</strong>');
+      if (state.map) bits.push((state.map.nodes || []).length + ' resources');
+    }
     else if (state.view.type === 'helm') bits.push('<strong>Helm releases</strong>');
     else bits.push('<strong>' + esc(LABELS[state.view.name] || titleOf(state.view.name)) + '</strong>');
-    var listing = state.view.type !== 'overview' && state.view.type !== 'stats';
+    var listing = state.view.type !== 'overview' && state.view.type !== 'stats' && state.view.type !== 'map';
     if (state.view.type !== 'stats') bits.push(esc(state.namespace || 'all namespaces'));
     if (state.table && listing) {
       var total = (state.table.rows || []).length;
@@ -2034,6 +2202,8 @@
   });
 
   function drawTable() {
+    // Asked for late — a forward changing, a selection let go — while the map is what is showing.
+    if (state.view.type === 'map') return;
     if (selectingIn($('table'))) { heldBack.table = true; return; }
     closeRowMenu();
     if (state.error) {
@@ -2201,6 +2371,7 @@
     state.detail = { tab: 'overview' };
     state.detailData = {};
     state.config = null;
+    if (state.view.type === 'map' && state.view.ui) state.view.ui.sel = null;
     remember();
     draw();
   }
@@ -2359,6 +2530,1462 @@
     draw();
     loadDetail();
   }
+
+  /* ---------------------------------------------------------------------- *
+   * The map: the same cluster, drawn as what is joined to what.
+   *
+   * Three ways of looking at one graph, and the graph is asked for once —
+   * switching between them is a redraw, not a question to the cluster.
+   *
+   *   Topology      who routes to what, and what disk is behind it
+   *   Physical      which machine each pod is actually on
+   *   Dependencies  one workload, everything it stands on, and what goes with it
+   *
+   * Every line the API stated is solid. Every line that was worked out — a
+   * Deployment that names a service in an environment variable, a StatefulSet
+   * called MongoDB because of its image — is dashed, and says how it was
+   * worked out. A map that draws a guess the same as a fact is a map that will
+   * be believed at the wrong moment.
+   *
+   * It only reads. Clicking anything opens the same pane the tables open, and
+   * whatever can be done to an object is done from there.
+   * ---------------------------------------------------------------------- */
+  var MAP_MODES = [['topology', 'Topology'], ['physical', 'Physical'], ['graph', 'Dependencies']];
+  var MAP_RESOURCE = {
+    Pod: 'pods', Deployment: 'deployments', StatefulSet: 'statefulsets', DaemonSet: 'daemonsets',
+    ReplicaSet: 'replicasets', Job: 'jobs', CronJob: 'cronjobs', Service: 'services', Ingress: 'ingresses',
+    NetworkPolicy: 'networkpolicies', PersistentVolumeClaim: 'persistentvolumeclaims',
+    PersistentVolume: 'persistentvolumes', StorageClass: 'storageclasses', CSIDriver: 'csidrivers', Node: 'nodes',
+  };
+  var MAP_CAT = {
+    Pod: 'wk', Deployment: 'wk', StatefulSet: 'wk', DaemonSet: 'wk', ReplicaSet: 'wk', Job: 'wk', CronJob: 'wk',
+    Service: 'nw', Ingress: 'nw', NetworkPolicy: 'nw',
+    PersistentVolumeClaim: 'st', PersistentVolume: 'st', StorageClass: 'st', CSIDriver: 'st',
+    Node: 'nd', Pool: 'nd', Zone: 'nd',
+  };
+  var MAP_WORKLOADS = ['Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Job', 'CronJob'];
+  var MAP_CW = 170;
+  var MAP_CH = 40;
+  var MAP_ROW = 48;
+  var MAP_COLS = { ingress: 16, service: 214, workload: 448, pod: 646, claim: 844, volume: 1042, klass: 1240 };
+
+  /** Which cluster and namespace a map was read from: one of another namespace is not this one's. */
+  function mapKey() { return (state.context || '') + '/' + (state.namespace || ''); }
+
+  /** What the person has folded, picked and zoomed. It rides on the view, so it comes back with it. */
+  function mapUi() {
+    var view = state.view;
+    if (!view.ui) view.ui = {};
+    if (!view.ui.open) view.ui.open = {};
+    if (!view.ui.more) view.ui.more = {};
+    return view.ui;
+  }
+
+  function mapIndexOf(data) {
+    var ix = { byId: {}, out: {}, inn: {}, system: {}, units: null };
+    (data.nodes || []).forEach(function (node) { ix.byId[node.id] = node; });
+    (data.edges || []).forEach(function (edge) {
+      var out = ix.out[edge.type] || (ix.out[edge.type] = {});
+      (out[edge.from] || (out[edge.from] = [])).push(edge);
+      var inn = ix.inn[edge.type] || (ix.inn[edge.type] = {});
+      (inn[edge.to] || (inn[edge.to] = [])).push(edge);
+    });
+    (data.namespaces || []).forEach(function (ns) { if (ns.system) ix.system[ns.name] = true; });
+    return ix;
+  }
+
+  /** The things an edge of this type leads to from here. */
+  function mapTo(id, type) {
+    var ix = state.mapIndex;
+    return (((ix.out[type] || {})[id]) || []).map(function (edge) { return ix.byId[edge.to]; }).filter(Boolean);
+  }
+
+  /** The things an edge of this type arrives from. */
+  function mapFrom(id, type) {
+    var ix = state.mapIndex;
+    return (((ix.inn[type] || {})[id]) || []).map(function (edge) { return ix.byId[edge.from]; }).filter(Boolean);
+  }
+
+  function mapUnique(list) {
+    var seen = {};
+    return list.filter(function (node) {
+      if (!node || seen[node.id]) return false;
+      seen[node.id] = true;
+      return true;
+    });
+  }
+
+  /** A workload's pods — through its jobs, when it is a CronJob. */
+  function mapPodsOf(id) {
+    var pods = [];
+    mapTo(id, 'owns').forEach(function (node) {
+      if (node.kind === 'Pod') pods.push(node);
+      else pods = pods.concat(mapPodsOf(node.id));
+    });
+    return pods;
+  }
+
+  function mapWorst(list) {
+    var worst = 'idle';
+    var rank = { idle: 0, ok: 1, warn: 2, bad: 3 };
+    list.forEach(function (node) { if (node && rank[node.health] > rank[worst]) worst = node.health; });
+    return worst;
+  }
+
+  function mapMem(b) {
+    if (!b) return '';
+    var g = b / 1073741824;
+    if (g >= 1) return (g >= 10 ? Math.round(g) : Math.round(g * 10) / 10) + 'Gi';
+    return Math.round(b / 1048576) + 'Mi';
+  }
+
+  function mapCpu(m) {
+    if (!m) return '';
+    return m >= 1000 ? String(Math.round(m / 100) / 10) : m + 'm';
+  }
+
+  /** A cloud's node name is mostly its domain. The first label is the part people say. */
+  function mapShort(name) { return String(name || '').split('.')[0]; }
+
+  function mapPlural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
+
+  /** The second line of a card: the one fact about this kind that is worth the room. */
+  function mapLine(node) {
+    if (node.kind === 'Pod') {
+      return node.status + (node.restarts ? ' · ↻' + node.restarts : '') + (node.node ? ' · ' + mapShort(node.node) : '');
+    }
+    if (MAP_WORKLOADS.indexOf(node.kind) >= 0) return node.kind + (node.status ? ' · ' + node.status : '');
+    if (node.kind === 'PersistentVolumeClaim') return node.status + (node.capacity ? ' · ' + node.capacity : '');
+    if (node.kind === 'PersistentVolume') {
+      return (node.capacity || node.status) + (node.attachedTo ? ' · on ' + mapShort(node.attachedTo) : node.local ? ' · local' : '');
+    }
+    if (node.kind === 'Node') return node.status + (node.instance ? ' · ' + node.instance : '');
+    return node.status || node.kind;
+  }
+
+  function mapCard(node, x, y, o) {
+    o = o || {};
+    var ui = mapUi();
+    var cls = 'mcard c-' + (MAP_CAT[node.kind] || 'wk') + ' h-' + (o.health || node.health || 'ok') +
+      (ui.sel && ui.sel === node.id && !o.more ? ' sel' : '') + (o.cls ? ' ' + o.cls : '');
+    return '<button class="' + cls + '" style="left:' + x + 'px;top:' + y + 'px' +
+      (o.w ? ';width:' + o.w + 'px' : '') + (o.h ? ';height:' + o.h + 'px' : '') + '"' +
+      (o.more ? ' data-map-more="' + esc(o.more) + '"' : ' data-map-id="' + esc(node.id) + '"') +
+      ' title="' + esc(o.title || (node.kind + ' · ' + (node.namespace ? node.namespace + '/' : '') + node.name)) + '">' +
+      '<i class="mdot"></i><span class="mtext"><b>' + esc(o.name || node.name) + '</b><small>' +
+      (o.html || esc(o.line != null ? o.line : mapLine(node))) + '</small></span></button>';
+  }
+
+  /** A line that leaves sideways, turns once, and arrives sideways. */
+  function mapElbow(x1, y1, x2, y2, nearSource) {
+    if (y1 === y2) return 'M' + x1 + ' ' + y1 + 'H' + x2;
+    var mx = nearSource ? x1 + 12 : x2 - 12;
+    return 'M' + x1 + ' ' + y1 + 'H' + mx + 'V' + y2 + 'H' + x2;
+  }
+
+  function mapPath(d, cls, a, b) {
+    var sel = mapUi().sel;
+    return '<path class="medge' + (cls ? ' ' + cls : '') + (sel && (a === sel || b === sel) ? ' on' : '') + '" d="' + d + '"/>';
+  }
+
+  /**
+   * What a namespace is made of, as the things a person would name.
+   *
+   * A unit is a workload nobody else owns, with its pods — a CronJob with its
+   * jobs' pods, a Deployment without its ReplicaSets — or a pod that nothing
+   * owns at all. Finished pods are left out: last night's backup is not part of
+   * what is running.
+   */
+  function mapUnits() {
+    var ix = state.mapIndex;
+    if (ix.units) return ix.units;
+    var units = {};
+    var put = function (ns, unit) { (units[ns] || (units[ns] = [])).push(unit); };
+    state.map.nodes.forEach(function (node) {
+      if (MAP_WORKLOADS.indexOf(node.kind) >= 0) {
+        if (mapFrom(node.id, 'owns').length) return;
+        put(node.namespace, {
+          root: node,
+          pods: mapPodsOf(node.id).filter(function (pod) { return !pod.finished; }),
+          services: mapFrom(node.id, 'routes'),
+        });
+      } else if (node.kind === 'Pod' && !node.owner && !node.finished) {
+        put(node.namespace, { root: node, bare: true, pods: [node], services: mapFrom(node.id, 'routes') });
+      }
+    });
+    Object.keys(units).forEach(function (ns) {
+      units[ns].sort(function (a, b) { return a.root.name < b.root.name ? -1 : 1; });
+    });
+    ix.units = units;
+    return units;
+  }
+
+  function mapUnitText(unit) {
+    if (unit.text != null) return unit.text;
+    var words = [unit.root.name, unit.root.kind, unit.root.namespace, unit.root.tech || ''];
+    unit.pods.forEach(function (pod) {
+      words.push(pod.name, pod.node);
+      mapTo(pod.id, 'mounts').forEach(function (claim) { words.push(claim.name, claim.className); });
+    });
+    unit.services.forEach(function (service) { words.push(service.name); });
+    unit.text = words.join(' ').toLowerCase();
+    return unit.text;
+  }
+
+  function mapUnitBad(unit) {
+    if (unit.root.health === 'warn' || unit.root.health === 'bad') return true;
+    return unit.pods.some(function (pod) {
+      return pod.health === 'warn' || pod.health === 'bad' ||
+        mapTo(pod.id, 'mounts').some(function (claim) { return claim.health !== 'ok'; });
+    });
+  }
+
+  /* ---- Topology -------------------------------------------------------- */
+
+  /**
+   * Seven columns, read left to right the way a request travels and then the
+   * way its data does: ingress, service, workload, pods, claim, volume, class.
+   * A namespace is a band; a band folds; and a workload with more than three
+   * pods is one card that says how many until somebody asks to see them.
+   */
+  function mapTopology() {
+    var data = state.map;
+    var ui = mapUi();
+    var text = state.search;
+    var units = mapUnits();
+    var html = '';
+    var edges = '';
+    var where = {};
+    var total = 0;
+    Object.keys(units).forEach(function (ns) { total += units[ns].length; });
+    var small = total <= 40;
+
+    var heads = [['ingress', 'Ingress', 'nw'], ['service', 'Service', 'nw'], ['workload', 'Workload', 'wk'],
+      ['pod', 'Pods', 'wk'], ['claim', 'Claim (PVC)', 'st'], ['volume', 'Volume (PV)', 'st'], ['klass', 'Storage class', 'st']];
+    heads.forEach(function (head) {
+      html += '<div class="mlabel" style="left:' + MAP_COLS[head[0]] + 'px;top:10px"><i class="msq c-' + head[2] + '"></i>' + head[1] + '</div>';
+    });
+
+    var spaces = (data.namespaces || []).slice().sort(function (a, b) {
+      return a.system === b.system ? (a.name < b.name ? -1 : 1) : a.system ? 1 : -1;
+    });
+    var y = 34;
+    var drawn = 0;
+    var mid = MAP_CH / 2;
+    var right = MAP_CW;
+
+    spaces.forEach(function (ns) {
+      var mine = (units[ns.name] || []).filter(function (unit) {
+        if (text && ns.name.toLowerCase().indexOf(text) < 0 && mapUnitText(unit).indexOf(text) < 0) return false;
+        if (ui.bad && !mapUnitBad(unit)) return false;
+        return true;
+      });
+      if (!mine.length) return;
+      drawn += 1;
+      var open = text || ui.bad ? true : ui.open[ns.name] != null ? ui.open[ns.name] : small && !ns.system;
+      var pods = 0;
+      var troubled = 0;
+      var techs = {};
+      mine.forEach(function (unit) {
+        pods += unit.pods.length;
+        if (mapUnitBad(unit)) troubled += 1;
+        if (unit.root.tech) techs[unit.root.tech] = true;
+      });
+      var top = y;
+      html += '<button class="mband-h" data-map-ns="' + esc(ns.name) + '" style="top:' + (y + 5) + 'px">' +
+        '<span class="twist">' + (open ? '▾' : '▸') + '</span><b>' + esc(ns.name) + '</b>' +
+        '<span>' + mapPlural(mine.length, 'workload') + ' · ' + mapPlural(pods, 'pod') + '</span>' +
+        Object.keys(techs).map(function (tech) { return '<span class="mtag inf">' + esc(tech) + '</span>'; }).join('') +
+        (troubled ? '<span class="mtag bad">' + troubled + ' not well</span>' : '') + '</button>';
+      y += 32;
+
+      if (open) {
+        var classUse = {};
+        var useClass = function (name, cy) { if (name) (classUse[name] || (classUse[name] = [])).push(cy); };
+        mine.forEach(function (unit) {
+          var root = unit.root;
+          var folded = unit.pods.length > 3 && !ui.more[root.id];
+          var rows = [];
+          if (folded) {
+            var allClaims = [];
+            unit.pods.forEach(function (pod) { allClaims = allClaims.concat(mapTo(pod.id, 'mounts')); });
+            rows.push({ stack: unit.pods, claims: mapUnique(allClaims) });
+          } else {
+            unit.pods.forEach(function (pod) {
+              var claims = mapTo(pod.id, 'mounts');
+              if (!claims.length) rows.push({ pod: pod, from: pod });
+              claims.forEach(function (claim, at) { rows.push({ pod: at === 0 ? pod : null, from: pod, claim: claim }); });
+            });
+          }
+          var services = ui.net === false ? [] : unit.services;
+          var ingresses = [];
+          services.forEach(function (service) { ingresses = ingresses.concat(mapFrom(service.id, 'exposes')); });
+          ingresses = mapUnique(ingresses);
+
+          var podX = MAP_COLS.pod;
+          var rootX = unit.bare ? podX : MAP_COLS.workload;
+          var rootY = y;
+          if (!unit.bare) {
+            html += mapCard(root, rootX, rootY, root.tech ? {
+              html: esc(root.status) + ' · <span class="mtag inf" title="Read off the image name">' +
+                esc(root.tech + (root.techVersion ? ' ' + root.techVersion : '')) + '</span>',
+            } : null);
+            where[root.id] = { x: rootX, y: rootY };
+          }
+
+          rows.forEach(function (row, at) {
+            var ry = y + at * MAP_ROW;
+            var cy = ry + mid;
+            if (row.stack) {
+              html += mapCard(root, podX, ry, {
+                more: root.id, cls: 'stack', health: mapWorst(row.stack), name: '× ' + row.stack.length + ' pods',
+                line: 'on ' + mapPlural(mapUnique(row.stack.map(function (pod) { return state.mapIndex.byId['Node//' + pod.node]; })).length, 'node') + ' · show them',
+                title: 'Show each pod of ' + root.name,
+              });
+              edges += mapPath(mapElbow(rootX + right, rootY + mid, podX, cy), '', root.id, null);
+              if (row.claims.length && ui.storage !== false) {
+                var volumes = [];
+                row.claims.forEach(function (claim) { volumes = volumes.concat(mapTo(claim.id, 'binds')); });
+                html += mapCard(root, MAP_COLS.claim, ry, {
+                  more: root.id, cls: 'stack c-st', health: mapWorst(row.claims), name: '× ' + row.claims.length + ' claims', line: 'show them',
+                });
+                edges += mapPath(mapElbow(podX + right, cy, MAP_COLS.claim, cy), '');
+                if (volumes.length) {
+                  html += mapCard(root, MAP_COLS.volume, ry, {
+                    more: root.id, cls: 'stack c-st', health: mapWorst(volumes), name: '× ' + volumes.length + ' volumes', line: 'show them',
+                  });
+                  edges += mapPath(mapElbow(MAP_COLS.claim + right, cy, MAP_COLS.volume, cy), '');
+                }
+                var seen = {};
+                (volumes.length ? volumes : row.claims).forEach(function (entry) {
+                  if (entry.className && !seen[entry.className]) { seen[entry.className] = true; useClass(entry.className, cy); }
+                });
+              }
+              return;
+            }
+            if (row.pod) {
+              if (!unit.bare) {
+                html += mapCard(row.pod, podX, ry);
+                edges += mapPath(mapElbow(rootX + right, rootY + mid, podX, cy), '', root.id, row.pod.id);
+              } else {
+                html += mapCard(row.pod, podX, ry);
+                where[row.pod.id] = { x: podX, y: ry };
+              }
+            }
+            if (row.claim && ui.storage !== false) {
+              html += mapCard(row.claim, MAP_COLS.claim, ry);
+              // A second claim hangs off the pod's own row, which is `at` rows up.
+              var fromY = y + rows.indexOf(rows.filter(function (other) { return other.pod === row.from; })[0]) * MAP_ROW + mid;
+              edges += mapPath(mapElbow(podX + right, fromY, MAP_COLS.claim, cy), '', row.from.id, row.claim.id);
+              var volume = mapTo(row.claim.id, 'binds')[0];
+              if (volume) {
+                html += mapCard(volume, MAP_COLS.volume, ry);
+                edges += mapPath(mapElbow(MAP_COLS.claim + right, cy, MAP_COLS.volume, cy), '', row.claim.id, volume.id);
+                useClass(volume.className, cy);
+              } else useClass(row.claim.className, -cy);
+            }
+          });
+
+          services.forEach(function (service, at) {
+            var sy = y + at * MAP_ROW;
+            html += mapCard(service, MAP_COLS.service, sy);
+            if (!where[service.id]) where[service.id] = { x: MAP_COLS.service, y: sy };
+            edges += mapPath(mapElbow(MAP_COLS.service + right, sy + mid, rootX, rootY + mid), '', service.id, root.id);
+          });
+          ingresses.forEach(function (ingress, at) {
+            var iy = y + at * MAP_ROW;
+            html += mapCard(ingress, MAP_COLS.ingress, iy);
+            mapTo(ingress.id, 'exposes').forEach(function (service) {
+              var at2 = services.indexOf(service);
+              if (at2 < 0) return;
+              edges += mapPath(mapElbow(MAP_COLS.ingress + right, iy + mid, MAP_COLS.service, y + at2 * MAP_ROW + mid), '', ingress.id, service.id);
+            });
+          });
+          var tall = Math.max(rows.length, services.length, ingresses.length, 1) * MAP_ROW;
+          if (!folded && unit.pods.length > 3) {
+            // What was unfolded can be folded again, from where its pods end.
+            html += '<button class="mfold" data-map-more="' + esc(root.id) + '" style="left:' + podX + 'px;top:' + (y + rows.length * MAP_ROW - 6) + 'px">▴ fold these ' + unit.pods.length + ' pods</button>';
+            tall = Math.max(tall, rows.length * MAP_ROW + 14);
+          }
+          y += tall + 8;
+        });
+
+        /*
+         * What belongs to nothing. A service whose selector matches no pod is
+         * very often the bug somebody is looking for, and a claim no pod mounts
+         * is a disk being paid for; neither hangs off a workload, so neither
+         * would otherwise be drawn at all.
+         */
+        var strays = state.map.nodes.filter(function (node) {
+          if (node.namespace !== ns.name) return false;
+          if (text && node.name.toLowerCase().indexOf(text) < 0 && ns.name.toLowerCase().indexOf(text) < 0) return false;
+          if (node.kind === 'Service') return ui.net !== false && node.selects === 0;
+          if (node.kind === 'PersistentVolumeClaim') return ui.storage !== false && !ui.bad && !mapFrom(node.id, 'mounts').length;
+          return false;
+        });
+        strays.forEach(function (node) {
+          var cy = y + mid;
+          if (node.kind === 'Service') {
+            html += mapCard(node, MAP_COLS.service, y, { health: 'warn', line: 'selects no pods' });
+            mapFrom(node.id, 'exposes').forEach(function (ingress) {
+              html += mapCard(ingress, MAP_COLS.ingress, y);
+              edges += mapPath(mapElbow(MAP_COLS.ingress + right, cy, MAP_COLS.service, cy), '', ingress.id, node.id);
+            });
+          } else {
+            html += mapCard(node, MAP_COLS.claim, y, { line: node.status + (node.capacity ? ' · ' + node.capacity : '') + ' · not mounted' });
+            var held = mapTo(node.id, 'binds')[0];
+            if (held) {
+              html += mapCard(held, MAP_COLS.volume, y);
+              edges += mapPath(mapElbow(MAP_COLS.claim + right, cy, MAP_COLS.volume, cy), '', node.id, held.id);
+              useClass(held.className, cy);
+            } else useClass(node.className, -cy);
+          }
+          y += MAP_ROW;
+        });
+        if (strays.length) y += 8;
+
+        /*
+         * One card per class per band, level with the volumes it provisions.
+         * A class is cluster-wide, and drawn once it would be the far end of a
+         * line from every band on the page.
+         */
+        var lastY = -1000;
+        Object.keys(classUse).sort(function (a, b) {
+          return Math.abs(classUse[a][0]) - Math.abs(classUse[b][0]);
+        }).forEach(function (name) {
+          var ys = classUse[name].map(Math.abs);
+          var cy = Math.round((Math.min.apply(null, ys) + Math.max.apply(null, ys)) / 2);
+          var ky = Math.max(cy - mid, lastY + MAP_ROW);
+          lastY = ky;
+          var klass = state.mapIndex.byId['StorageClass//' + name] ||
+            { id: 'StorageClass//' + name, kind: 'StorageClass', name: name, namespace: '', status: '', health: 'ok' };
+          html += mapCard(klass, MAP_COLS.klass, ky);
+          classUse[name].forEach(function (from) {
+            // Negative: a claim with no volume yet, which reaches its class from one column further back.
+            var fx = from < 0 ? MAP_COLS.claim + right : MAP_COLS.volume + right;
+            edges += mapPath(mapElbow(fx, Math.abs(from), MAP_COLS.klass, ky + mid, from >= 0), from < 0 ? 'inf' : '', klass.id, null);
+          });
+          y = Math.max(y, ky + MAP_ROW + 8);
+        });
+      }
+      html = '<div class="mband" style="top:' + top + 'px;height:' + (y - top) + 'px;width:' + (MAP_COLS.klass + MAP_CW + 8) + 'px"></div>' + html;
+      y += 10;
+    });
+
+    /*
+     * What is only inferred, last and over the top: a workload that names a
+     * service. Both ends sit either side of the same gutter, so the curve lives
+     * in it and crosses nothing.
+     */
+    (data.edges || []).forEach(function (edge) {
+      if (edge.type !== 'uses') return;
+      var from = where[edge.from];
+      var to = where[edge.to];
+      if (!from || !to) return;
+      var x1 = from.x;
+      var y1 = from.y + mid + 8;
+      var x2 = to.x + right;
+      var y2 = to.y + mid + 8;
+      edges += mapPath('M' + x1 + ' ' + y1 + 'C' + (x1 - 44) + ' ' + y1 + ',' + (x2 + 44) + ' ' + y2 + ',' + x2 + ' ' + y2, 'inf uses', edge.from, edge.to);
+    });
+
+    if (!drawn) {
+      return { w: 600, h: 120, html: '<div class="note" style="position:absolute;left:16px;top:40px">' +
+        (text || ui.bad ? 'Nothing matches. ' + (ui.bad ? 'Nothing here is failing.' : '') : 'There is nothing running here.') + '</div>', edges: '' };
+    }
+    return { w: MAP_COLS.klass + MAP_CW + 24, h: y + 16, html: html, edges: edges };
+  }
+
+  /* ---- Physical -------------------------------------------------------- */
+
+  function mapBar(part, whole) {
+    var pct = whole ? Math.min(100, Math.round((part / whole) * 100)) : 0;
+    return { pct: pct, html: '<span class="mbar"><i class="' + (pct >= 90 ? 'hot' : pct >= 75 ? 'warm' : '') + '" style="width:' + pct + '%"></i></span>' };
+  }
+
+  function mapTile(pod, ui, text) {
+    var claims = mapTo(pod.id, 'mounts');
+    var off = (text && (pod.name + ' ' + pod.namespace + ' ' + pod.owner).toLowerCase().indexOf(text) < 0) ||
+      (ui.bad && pod.health !== 'warn' && pod.health !== 'bad');
+    var size = [mapCpu(pod.cpuReq), mapMem(pod.memReq)].filter(Boolean).join(' · ');
+    return '<button class="mtile h-' + pod.health + (ui.hl && pod.owner === ui.hl ? ' hl' : '') + (ui.sel === pod.id ? ' sel' : '') +
+      (off ? ' off' : '') + '" data-map-id="' + esc(pod.id) + '" title="' + esc(pod.namespace + '/' + pod.name + ' · ' + pod.status) + '">' +
+      '<i class="mdot"></i><span class="mtext"><b>' + esc(pod.name) + '</b><small>' +
+      esc(pod.health === 'ok' ? pod.namespace + (size ? ' · ' + size : '') : pod.status + (pod.restarts ? ' · ' + mapPlural(pod.restarts, 'restart') : '')) +
+      '</small></span>' + (claims.length ? '<i class="mplug" title="Mounts ' + esc(claims.map(function (c) { return c.name; }).join(', ')) + '"></i>' : '') +
+      '</button>';
+  }
+
+  /**
+   * Which machines are on the page.
+   *
+   * Nineteen nodes are a wall, and the question is usually about three of them:
+   * the pool the databases are on, or the one node that is misbehaving. So any
+   * pool and any node can be put away, and what is left is drawn large enough
+   * to read. Kept as what is hidden rather than what is shown, so a node that
+   * joins the cluster tomorrow appears instead of being silently left out.
+   */
+  function mapNodeShown(node, ui) {
+    var off = ui.off || {};
+    return !off['p:' + (node.pool || '')] && !off['n:' + node.name];
+  }
+
+  /**
+   * Whether a node with nothing on it is drawn. With one namespace picked it is
+   * not, unless asked: most of the cluster runs nothing of that namespace, and
+   * sixteen boxes saying so bury the three that matter.
+   */
+  function mapShowsEmpty() {
+    var ui = mapUi();
+    return ui.empty != null ? ui.empty : !(state.map && state.map.scoped);
+  }
+
+  var mapMenuOpen = false;
+  var mapOnlyPool = '';
+
+  function mapNodesMenu() {
+    var ui = mapUi();
+    var off = ui.off || {};
+    var every = state.map.nodes.filter(function (node) { return node.kind === 'Node'; });
+    var pools = {};
+    every.forEach(function (node) { (pools[node.pool || ''] || (pools[node.pool || ''] = [])).push(node); });
+    var shown = every.filter(function (node) { return mapNodeShown(node, ui); }).length;
+    var html = '<span class="map-drop"><button class="btn' + (shown < every.length ? ' on' : '') + '" data-map-menu="nodes" title="Which node pools and nodes to draw">' +
+      'Nodes: ' + (shown === every.length ? 'all ' + every.length : shown + ' of ' + every.length) + ' ▾</button>';
+    if (mapMenuOpen !== 'nodes') return html + '</span>';
+    var row = function (key, label, sub, on, indent) {
+      return '<div class="map-row' + (indent ? ' in' : '') + '">' +
+        '<button class="map-tick' + (on ? ' on' : '') + '" data-map-off="' + esc(key) + '" title="' + esc(label) + '">' +
+        '<i>' + (on ? '✓' : '') + '</i><span>' + esc(label) + '</span>' + (sub ? '<small>' + esc(sub) + '</small>' : '') + '</button>' +
+        '<button class="link" data-map-only="' + esc(key) + '" title="Show this and put the rest away">only</button></div>';
+    };
+    html += '<div class="map-menu"><div class="map-row"><button class="link" data-map-all="1">Show all</button>' +
+      '<span class="dim">Untick what you do not need</span></div>';
+    Object.keys(pools).sort().forEach(function (pool) {
+      var poolOn = !off['p:' + pool];
+      html += row('p:' + pool, pool || 'Nodes without a pool', mapPlural(pools[pool].length, 'node'), poolOn, false);
+      pools[pool].sort(function (a, b) { return a.name < b.name ? -1 : 1; }).forEach(function (node) {
+        html += row('n:' + node.name, mapShort(node.name), [node.instance, node.zone].filter(Boolean).join(' · '), poolOn && !off['n:' + node.name], true);
+      });
+    });
+    return html + '</div></span>';
+  }
+
+  /**
+   * Machines as boxes, with what runs on each one inside it.
+   *
+   * The disks are the part worth being careful about. A cloud volume is not on
+   * the node: it is in the provider's storage and attached over the network,
+   * and it follows the pod when the pod moves. So volumes get a lane of their
+   * own underneath, joined to their pods by a dotted line, rather than being
+   * drawn inside a machine they would survive.
+   */
+  function mapPhysical() {
+    var data = state.map;
+    var ix = state.mapIndex;
+    var ui = mapUi();
+    var text = state.search;
+    var every = data.nodes.filter(function (node) { return node.kind === 'Node'; });
+    var showEmpty = mapShowsEmpty();
+    var machines = every.filter(function (node) {
+      if (!mapNodeShown(node, ui)) return false;
+      return showEmpty || mapFrom(node.id, 'runs-on').some(function (pod) { return !pod.finished; });
+    });
+    var chosen = {};
+    machines.forEach(function (node) { chosen[node.name] = true; });
+    var narrowed = Object.keys(ui.off || {}).length > 0;
+    var pools = {};
+    machines.forEach(function (node) { (pools[node.pool || ''] || (pools[node.pool || ''] = [])).push(node); });
+
+    // With one namespace picked, only its pods were read: the bars are its share of the node, not the node's load.
+    var asked = data.scoped ? 'Here: ' : 'Requested: ';
+    var askedWhy = data.scoped ? 'What the pods of this namespace ask of the node. The other namespaces were not read.' : 'What the pods on this node were promised';
+    // Any number of pools can be lit; once one is, the others step back rather than leave.
+    var lit = ui.pools || {};
+    var anyLit = Object.keys(lit).length > 0;
+    var html = '<div class="mphys"><div class="mpools">';
+    if (!machines.length) {
+      html += '<div class="note">No node is shown. ' + (narrowed ? 'Every one of them is unticked under Nodes.' :
+        'None of them runs anything from this namespace — turn Empty nodes on to see them anyway.') + '</div>';
+    }
+    Object.keys(pools).sort().forEach(function (pool) {
+      var zones = {};
+      pools[pool].forEach(function (node) { if (node.zone) zones[node.zone] = true; });
+      // A pool can be picked like anything else on the page: the frame around it lights up, and stays lit.
+      html += '<section class="mpool' + (lit['p:' + pool] ? ' sel' : anyLit ? ' dim' : '') + '"><h5 class="mpool-h" data-map-pool="p:' + esc(pool) +
+        '" title="Highlight this node pool">' + (pool ? 'Node pool · ' + esc(pool) : 'Nodes without a pool') +
+        '<span>' + mapPlural(pools[pool].length, 'node') + '</span>' +
+        Object.keys(zones).sort().map(function (zone) { return '<span class="mtag">' + esc(zone) + '</span>'; }).join('') +
+        '</h5><div class="mnodes">';
+      pools[pool].sort(function (a, b) { return a.name < b.name ? -1 : 1; }).forEach(function (node) {
+        var pods = mapFrom(node.id, 'runs-on').filter(function (pod) { return !pod.finished; });
+        var furniture = [];
+        var own = [];
+        pods.forEach(function (pod) {
+          var owner = ix.byId[pod.owner];
+          if (ix.system[pod.namespace] || (owner && owner.kind === 'DaemonSet')) furniture.push(pod);
+          else own.push(pod);
+        });
+        // The ones with a disk go last, so their lines leave from the bottom of the box.
+        own.sort(function (a, b) {
+          var da = mapTo(a.id, 'mounts').length ? 1 : 0;
+          var db = mapTo(b.id, 'mounts').length ? 1 : 0;
+          return da !== db ? da - db : a.name < b.name ? -1 : 1;
+        });
+        var cpu = mapBar(node.cpuReq, node.cpuAlloc);
+        var mem = mapBar(node.memReq, node.memAlloc);
+        var used = node.cpuUsed != null
+          ? '<span>in use ' + mapBar(node.cpuUsed, node.cpuAlloc).pct + '%</span><span>in use ' + mapBar(node.memUsed, node.memAlloc).pct + '%</span>'
+          : '';
+        html += '<div class="mnode h-' + node.health + '">' +
+          '<button class="mnode-h' + (ui.sel === node.id ? ' sel' : '') + '" data-map-id="' + esc(node.id) + '" title="' + esc(node.name) + '">' +
+          '<span class="mnode-t"><i class="mdot"></i><b>' + esc(mapShort(node.name)) + '</b><small>' +
+          esc([node.status, node.instance, node.zone].filter(Boolean).join(' · ')) + '</small></span>' +
+          '<span class="mbars" title="' + askedWhy + '"><span>' + asked + 'CPU ' + cpu.pct + '%</span><span>' + asked + 'memory ' + mem.pct + '%</span>' +
+          cpu.html + mem.html + used + '</span></button><div class="mtiles">' +
+          (ui.sys ? furniture : []).concat(own).map(function (pod) { return mapTile(pod, ui, text); }).join('') +
+          (!ui.sys && furniture.length
+            ? '<button class="mtile sys h-' + mapWorst(furniture) + '" data-map-sys="1" title="DaemonSets and system namespaces. Show them">' +
+              '<i class="mdot"></i><span class="mtext"><b>+ ' + mapPlural(furniture.length, 'system pod') + '</b><small>show them</small></span></button>'
+            : '') +
+          (!pods.length ? '<span class="dim" style="padding:2px 4px">nothing running</span>' : '') +
+          '</div></div>';
+      });
+      html += '</div></section>';
+    });
+    html += '</div>';
+
+    var waiting = data.nodes.filter(function (node) { return node.kind === 'Pod' && !node.node && !node.finished; });
+    if (waiting.length) {
+      html += '<section class="mpool warn"><h5>Not scheduled<span>' + waiting.length + '</span>' +
+        '<span class="dim" style="text-transform:none;letter-spacing:0">no node has taken these</span></h5><div class="mtiles wide">' +
+        waiting.map(function (pod) { return mapTile(pod, ui, text); }).join('') + '</div></section>';
+    }
+
+    var volumes = data.nodes.filter(function (node) {
+      if (node.kind !== 'PersistentVolume') return false;
+      // With some machines put away, so are the disks that are plugged into them.
+      return !narrowed || chosen[node.attachedTo] || chosen[node.pinnedTo];
+    });
+    var lanes = {};
+    volumes.forEach(function (volume) { (lanes[volume.className || ''] || (lanes[volume.className || ''] = [])).push(volume); });
+    Object.keys(lanes).sort().forEach(function (name) {
+      var klass = ix.byId['StorageClass//' + name];
+      var local = lanes[name].every(function (volume) { return volume.local; });
+      html += '<section class="mlane"><h5>Storage' + (name ? ' · ' + esc(name) : ' · no class') +
+        (klass && klass.provisioner ? '<span class="mtag mono">' + esc(klass.provisioner) + '</span>' : '') +
+        '<span class="dim" style="text-transform:none;letter-spacing:0">' +
+        (local ? 'Local volumes: the data is on one node and stays there.' : 'Remote volumes, attached over the network. They are not on any node’s disk.') +
+        '</span></h5><div class="mvols">' +
+        lanes[name].sort(function (a, b) { return a.attachedTo < b.attachedTo ? -1 : 1; }).map(function (volume) {
+          var claim = mapFrom(volume.id, 'binds')[0];
+          var users = claim ? mapFrom(claim.id, 'mounts') : [];
+          var lit = ui.hl && users.some(function (pod) { return pod.owner === ui.hl; });
+          return '<button class="mtile mvol h-' + volume.health + (lit ? ' hl' : '') + (ui.sel === volume.id ? ' sel' : '') +
+            '" data-map-id="' + esc(volume.id) + '" title="' + esc(volume.name) + '"><span class="mtext"><b>' +
+            esc(claim ? claim.name : volume.name) + '</b><small>' + esc(claim ? claim.namespace : 'not claimed') + ' · ' +
+            esc([volume.capacity, volume.modes].filter(Boolean).join(' · ')) + '</small><small>' +
+            esc(volume.attachedTo ? 'attached to ' + mapShort(volume.attachedTo) : volume.local ? 'local to ' + mapShort(volume.pinnedTo) : 'not attached') +
+            '</small></span></button>';
+        }).join('') + '</div></section>';
+    });
+    var unbound = data.nodes.filter(function (node) { return node.kind === 'PersistentVolumeClaim' && node.health !== 'ok'; });
+    if (unbound.length) {
+      html += '<section class="mpool warn"><h5>Claims without a volume<span>' + unbound.length + '</span></h5><div class="mvols">' +
+        unbound.map(function (claim) {
+          return '<button class="mtile mvol h-' + claim.health + '" data-map-id="' + esc(claim.id) + '"><i class="mdot"></i><span class="mtext"><b>' +
+            esc(claim.name) + '</b><small>' + esc(claim.namespace + ' · ' + claim.status) + '</small></span></button>';
+        }).join('') + '</div></section>';
+    }
+    return { flow: true, html: html + '</div>' };
+  }
+
+  /** Where an element is inside the canvas, in the canvas's own unscaled pixels. */
+  function mapOffset(el, root) {
+    var x = 0;
+    var y = 0;
+    var at = el;
+    while (at && at !== root) { x += at.offsetLeft; y += at.offsetTop; at = at.offsetParent; }
+    return { x: x, y: y, w: el.offsetWidth, h: el.offsetHeight };
+  }
+
+  /**
+   * The dotted lines from pods to their volumes, measured once the boxes are
+   * where the browser put them. With many volumes only the highlighted
+   * workload's are drawn: forty lines across a page explain nothing.
+   */
+  function mapPhysicalLines(inner) {
+    var ui = mapUi();
+    var cards = inner.querySelectorAll('.mvol[data-map-id^="PersistentVolume//"]');
+    var all = cards.length <= 8;
+    var paths = '';
+    for (var i = 0; i < cards.length; i += 1) {
+      var volume = state.mapIndex.byId[cards[i].dataset.mapId];
+      var claim = volume && mapFrom(volume.id, 'binds')[0];
+      var pods = claim ? mapFrom(claim.id, 'mounts') : [];
+      for (var p = 0; p < pods.length; p += 1) {
+        var lit = (ui.hl && pods[p].owner === ui.hl) || ui.sel === pods[p].id || ui.sel === volume.id;
+        if (!all && !lit) continue;
+        var tile = inner.querySelector('.mtile[data-map-id="' + CSS.escape(pods[p].id) + '"]');
+        if (!tile) continue;
+        var a = mapOffset(tile, inner);
+        var b = mapOffset(cards[i], inner);
+        var x1 = a.x + a.w - 12;
+        var y1 = a.y + a.h;
+        var x2 = b.x + b.w / 2;
+        var y2 = b.y;
+        var bend = Math.max(30, (y2 - y1) / 2);
+        paths += '<path class="medge vol' + (lit ? ' on' : '') + '" d="M' + x1 + ' ' + y1 + 'C' + x1 + ' ' + (y1 + bend) + ',' + x2 + ' ' + (y2 - bend) + ',' + x2 + ' ' + y2 + '"/>';
+      }
+    }
+    return paths;
+  }
+
+  /* ---- Dependencies ---------------------------------------------------- */
+
+  /** What can be the centre of the picture: anything with pods of its own. */
+  function mapFocusable(node) {
+    return node && (MAP_WORKLOADS.indexOf(node.kind) >= 0 || (node.kind === 'Pod' && !node.owner));
+  }
+
+  function mapFocus() {
+    var ix = state.mapIndex;
+    var chosen = ix.byId[state.view.focus];
+    if (mapFocusable(chosen)) return chosen;
+    var roots = [];
+    var units = mapUnits();
+    Object.keys(units).forEach(function (ns) { units[ns].forEach(function (unit) { if (!unit.bare) roots.push(unit.root); }); });
+    var rank = function (node) {
+      return (node.tech ? 0 : 4) + (node.health === 'bad' ? 0 : node.health === 'warn' ? 1 : 2) + (ix.system[node.namespace] ? 8 : 0);
+    };
+    roots.sort(function (a, b) { return rank(a) - rank(b); });
+    return roots[0] || null;
+  }
+
+  /**
+   * What the picture is centred on: one workload, or all of them.
+   *
+   * All of them is the question "what does this namespace stand on" — every
+   * node, zone and storage class under any of its workloads, on one page, with
+   * the ones they all share marked.
+   */
+  function mapFocuses() {
+    var wanted = state.view.focus;
+    if (wanted !== '*' && !Array.isArray(wanted)) { var one = mapFocus(); return one ? [one] : []; }
+    var roots = mapRoots();
+    if (wanted === '*') return roots;
+    var picked = roots.filter(function (root) { return wanted.indexOf(root.id) >= 0; });
+    // Every one of them gone from the cluster since they were picked: back to one, rather than an empty page.
+    if (!picked.length) { var fallback = mapFocus(); return fallback ? [fallback] : []; }
+    return picked;
+  }
+
+  /** Every workload that could be in the middle, namespace by namespace. */
+  function mapRoots() {
+    var units = mapUnits();
+    var roots = [];
+    Object.keys(units).sort().forEach(function (ns) { units[ns].forEach(function (unit) { if (!unit.bare) roots.push(unit.root); }); });
+    return roots;
+  }
+
+  /**
+   * The list the workloads are picked from.
+   *
+   * Ticks rather than a single choice, because the useful question is often
+   * about a handful — the three services that make up one product, the two
+   * databases — and neither "one" nor "all of them" answers it. What is typed
+   * in the filter box narrows the list, which is the only way through a
+   * namespace with eighty workloads in it.
+   */
+  function mapFocusMenu(focuses) {
+    var roots = mapRoots();
+    var chosen = {};
+    focuses.forEach(function (entry) { chosen[entry.id] = true; });
+    var everything = focuses.length === roots.length && roots.length > 1;
+    var label = everything ? 'All ' + roots.length + ' workloads'
+      : focuses.length === 1 ? (focuses[0].tech ? focuses[0].tech + ' · ' : '') + focuses[0].name
+        : focuses.length + ' workloads';
+    var html = '<span class="map-drop"><button class="btn on" data-map-menu="focus" title="Whose dependencies to draw">' + esc(label) + ' ▾</button>';
+    if (mapMenuOpen !== 'focus') return html + '</span>';
+    var text = state.search;
+    html += '<div class="map-menu"><div class="map-row"><button class="link" data-map-pick-all="1">All ' + roots.length + '</button>' +
+      '<span class="dim">' + (text ? 'filtered by “' + esc(text) + '”' : 'Tick the ones to draw together') + '</span></div>';
+    var last = null;
+    roots.forEach(function (root) {
+      if (text && (root.name + ' ' + root.namespace + ' ' + (root.tech || '')).toLowerCase().indexOf(text) < 0) return;
+      if (root.namespace !== last) {
+        last = root.namespace;
+        html += '<div class="map-row map-head">' + esc(root.namespace) + '</div>';
+      }
+      html += '<div class="map-row in"><button class="map-tick' + (chosen[root.id] ? ' on' : '') + '" data-map-pick="' + esc(root.id) + '" title="' + esc(root.name) + '">' +
+        '<i>' + (chosen[root.id] ? '✓' : '') + '</i><span>' + esc(root.name) + '</span><small>' + esc(root.tech || root.kind) + '</small></button>' +
+        '<button class="link" data-map-pick-only="' + esc(root.id) + '" title="Draw this one alone">only</button></div>';
+    });
+    return html + '</div></span>';
+  }
+
+  /**
+   * What goes if this goes.
+   *
+   * Worked out from where things are and how many of them there are — never
+   * measured, and it says so. It does not know that a database needs a
+   * majority; it knows which pods would be gone and how many would be left.
+   */
+  function mapFailure(key, focusIds, focusPods) {
+    var data = state.map;
+    var ix = state.mapIndex;
+    var target = key.split('//');
+    var kind = target[0];
+    var name = target[1];
+    var lostNodes = {};
+    var lostPods = {};
+    var lostVolumes = [];
+    if (kind === 'Node' || kind === 'Zone') {
+      data.nodes.forEach(function (node) {
+        if (node.kind === 'Node' && (kind === 'Node' ? node.name === name : node.zone === name)) lostNodes[node.name] = true;
+      });
+      data.nodes.forEach(function (node) {
+        if (node.kind === 'Pod' && lostNodes[node.node] && !node.finished) lostPods[node.id] = node;
+        if (node.kind === 'PersistentVolume' && (lostNodes[node.attachedTo] || lostNodes[node.pinnedTo])) lostVolumes.push(node);
+      });
+    } else {
+      data.nodes.forEach(function (node) {
+        if (node.kind !== 'PersistentVolume' || node.className !== name) return;
+        lostVolumes.push(node);
+        mapFrom(node.id, 'binds').forEach(function (claim) {
+          mapFrom(claim.id, 'mounts').forEach(function (pod) { lostPods[pod.id] = pod; });
+        });
+      });
+    }
+
+    var mine = focusPods.filter(function (pod) { return lostPods[pod.id]; });
+    var left = focusPods.filter(function (pod) { return !lostPods[pod.id] && pod.ready; }).length;
+    var what = kind === 'StorageClass' ? 'lose their disk' : 'are lost';
+    var own = !mine.length
+      ? 'None of its pods are affected.'
+      : mine.length + ' of ' + focusPods.length + ' pods ' + what + ': ' + mine.slice(0, 3).map(function (pod) { return pod.name; }).join(', ') +
+        (mine.length > 3 ? ' and ' + (mine.length - 3) + ' more' : '') + '. ' +
+        (left ? left + ' ready ' + (left === 1 ? 'pod is' : 'pods are') + ' left.' : 'Nothing ready is left: it is down until they come back.');
+
+    var owners = {};
+    Object.keys(lostPods).forEach(function (id) {
+      var pod = lostPods[id];
+      if (!pod.owner || focusIds[pod.owner] || focusIds[pod.id]) return;
+      (owners[pod.owner] || (owners[pod.owner] = [])).push(pod);
+    });
+    var down = [];
+    var thinner = 0;
+    Object.keys(owners).forEach(function (id) {
+      var owner = ix.byId[id];
+      if (!owner || owner.kind === 'DaemonSet') return;
+      var still = mapPodsOf(id).filter(function (pod) { return !lostPods[pod.id] && pod.ready; }).length;
+      if (still) thinner += 1; else down.push(owner.name);
+    });
+    var others = !down.length && !thinner
+      ? 'Nothing else is affected.'
+      : (down.length ? mapPlural(down.length, 'other workload') + ' left with no ready pod: ' + down.slice(0, 4).join(', ') +
+          (down.length > 4 ? ' and ' + (down.length - 4) + ' more' : '') + '. ' : '') +
+        (thinner ? mapPlural(thinner, 'workload') + ' lose some replicas and stay up.' : '');
+
+    var local = lostVolumes.filter(function (volume) { return volume.local; }).length;
+    var remote = lostVolumes.length - local;
+    var disks = kind === 'StorageClass'
+      ? mapPlural(lostVolumes.length, 'volume') + ' provisioned by this class. Kubernetes sees no second copy of them.'
+      : !lostVolumes.length
+        ? 'No volumes are attached there.'
+        : (remote ? mapPlural(remote, 'volume') + ' detach and re-attach wherever the pods are rescheduled' +
+            (kind === 'Zone' ? ' — if the volumes are zonal, only once the zone is back. ' : '. ') : '') +
+          (local ? mapPlural(local, 'local volume') + ' stay with the lost node: that data is unreachable.' : '');
+    return { own: own, others: others, disks: disks, pods: lostPods, nodes: lostNodes };
+  }
+
+  /**
+   * One workload in the middle, and everything it stands on fanned out from it.
+   *
+   * To the left, what reaches it. To the right, in two rows: where it runs —
+   * pods, nodes, pools, zones — and where its data is — claims, volumes, class,
+   * driver. Anything every replica depends on is marked, because that is the
+   * thing whose failure takes all of them.
+   */
+  function mapGraph() {
+    var data = state.map;
+    var ix = state.mapIndex;
+    var ui = mapUi();
+    var focuses = mapFocuses();
+    var focus = focuses[0];
+    if (!focus) return { w: 600, h: 120, html: '<div class="note" style="position:absolute;left:16px;top:16px">There is no workload here to look at.</div>', edges: '' };
+    var many = focuses.length > 1;
+    var focusIds = {};
+    focuses.forEach(function (entry) { focusIds[entry.id] = true; });
+
+    var W = 160;
+    var X = [16, 204, 392, 580, 768, 956, 1144, 1332];
+    var mid = MAP_CH / 2;
+    var pods = [];
+    // Which of the workloads in the middle each pod belongs to — through its jobs, when that is a CronJob.
+    var podOf = {};
+    focuses.forEach(function (entry) {
+      (entry.kind === 'Pod' ? [entry] : mapPodsOf(entry.id).filter(function (pod) { return !pod.finished; })).forEach(function (pod) {
+        podOf[pod.id] = entry.id;
+        pods.push(pod);
+      });
+    });
+    var machines = mapUnique(pods.map(function (pod) { return ix.byId['Node//' + pod.node]; }));
+    var pseudo = function (kind, name, line) { return { id: kind + '//' + name, kind: kind, name: name, namespace: '', status: line, health: 'ok' }; };
+    var poolNames = {};
+    var zoneNames = {};
+    machines.forEach(function (node) {
+      (poolNames[node.pool || '(no pool)'] || (poolNames[node.pool || '(no pool)'] = [])).push(node);
+      if (node.zone) (zoneNames[node.zone] || (zoneNames[node.zone] = [])).push(node);
+    });
+    var claims = [];
+    pods.forEach(function (pod) { claims = claims.concat(mapTo(pod.id, 'mounts')); });
+    claims = mapUnique(claims);
+    var volumes = [];
+    claims.forEach(function (claim) { volumes = volumes.concat(mapTo(claim.id, 'binds')); });
+    volumes = mapUnique(volumes);
+    var classes = [];
+    volumes.forEach(function (volume) { classes = classes.concat(mapTo(volume.id, 'class')); });
+    claims.forEach(function (claim) { classes = classes.concat(mapTo(claim.id, 'class')); });
+    classes = mapUnique(classes);
+    var drivers = [];
+    classes.forEach(function (klass) { drivers = drivers.concat(mapTo(klass.id, 'driver')); });
+    drivers = mapUnique(drivers);
+    var services = [];
+    focuses.forEach(function (entry) { services = services.concat(mapFrom(entry.id, 'routes')); });
+    services = mapUnique(services);
+    var users = [];
+    services.forEach(function (service) {
+      (((ix.inn.uses || {})[service.id]) || []).forEach(function (edge) {
+        // One of the workloads in the middle using another is already on the page, as itself.
+        if (ix.byId[edge.from] && !focusIds[edge.from]) users.push({ node: ix.byId[edge.from], to: service, via: edge.via, inferred: true });
+      });
+      mapFrom(service.id, 'exposes').forEach(function (ingress) { users.push({ node: ingress, to: service }); });
+    });
+    var needs = many ? [] : (((ix.out.uses || {})[focus.id]) || []).map(function (edge) {
+      var service = ix.byId[edge.to];
+      var behind = service ? mapTo(service.id, 'routes')[0] : null;
+      return service ? { node: behind || service, via: edge.via, through: service.name } : null;
+    }).filter(Boolean);
+    var policies = many ? [] : mapFrom(focus.id, 'policy');
+
+    var replicated = pods.length >= 2;
+    var sim = ui.sim ? mapFailure(ui.sim, focusIds, pods) : null;
+    var hit = function (node) {
+      if (!sim) return false;
+      if (node.id === ui.sim) return true;
+      if (node.kind === 'Pod') return Boolean(sim.pods[node.id]);
+      if (node.kind === 'Node') return Boolean(sim.nodes[node.name]);
+      if (node.kind === 'PersistentVolume') return ui.sim === 'StorageClass//' + node.className || Boolean(sim.nodes[node.attachedTo]);
+      return false;
+    };
+
+    var html = '';
+    var edges = '';
+    var where = {};
+    var put = function (node, col, y, o) {
+      o = o || {};
+      o.w = W;
+      if (hit(node)) o.cls = (o.cls ? o.cls + ' ' : '') + 'mhit';
+      html += mapCard(node, X[col], y, o);
+      where[node.id] = { x: X[col], y: y, h: o.h || MAP_CH };
+    };
+    var link = function (a, b, cls, nearSource) {
+      var from = where[a];
+      var to = where[b];
+      if (!from || !to) return;
+      edges += mapPath(mapElbow(from.x + W, from.y + from.h / 2, to.x, to.y + to.h / 2, nearSource), cls || '', a, b);
+    };
+    var label = function (col, y, words) { html += '<div class="mlabel" style="left:' + X[col] + 'px;top:' + y + 'px">' + words + '</div>'; };
+    /** A column of cards, folded past eight so one big Deployment does not become the whole page. */
+    var column = function (list, col, y, key, each) {
+      var shown = list.length > 8 && !ui.more[key] ? list.slice(0, 7) : list;
+      shown.forEach(function (node, at) { put(node, col, y + at * MAP_ROW, each ? each(node) : null); });
+      if (shown.length < list.length) {
+        html += mapCard(focus, X[col], y + shown.length * MAP_ROW, { more: key, cls: 'stack', w: W, health: mapWorst(list.slice(7)), name: '+ ' + (list.length - 7) + ' more', line: 'show them' });
+        return shown.length + 1;
+      }
+      if (list.length > 8) {
+        html += '<button class="mfold" data-map-more="' + esc(key) + '" style="left:' + X[col] + 'px;top:' + (y + shown.length * MAP_ROW - 6) + 'px">▴ show fewer</button>';
+      }
+      return shown.length;
+    };
+    var spof = function (count, words) { return replicated && count === 1 ? { cls: 'spof', line: words } : null; };
+
+    var y0 = 34;
+    label(0, 10, 'Reaches it · ' + users.length);
+    label(1, 10, 'Services · ' + services.length);
+    label(2, 10, many ? 'Workloads · ' + focuses.length : 'Focus');
+    label(3, 10, 'Pods · ' + pods.length);
+    label(4, 10, 'Nodes · ' + machines.length);
+    label(5, 10, 'Pools · ' + Object.keys(poolNames).length);
+    label(6, 10, (machines[0] && machines[0].zoneKind === 'region' ? 'Region' : 'Zone') + ' · ' + Object.keys(zoneNames).length);
+
+    var rows = [];
+    if (many) {
+      rows.push(column(focuses, 2, y0, 'g:focus', function (entry) {
+        return entry.tech ? { html: esc(entry.status) + ' · <span class="mtag inf" title="Read off the image name">' + esc(entry.tech) + '</span>' } : null;
+      }));
+    } else put(focus, 2, y0, {
+      cls: 'focus', h: 56,
+      html: esc(focus.kind + (focus.status ? ' · ' + focus.status : '')) + '<br>' + esc(focus.namespace) +
+        (focus.tech ? ' <span class="mtag inf" title="Read off the image name">' + esc(focus.tech + (focus.techVersion ? ' ' + focus.techVersion : '')) + '</span>' : ''),
+    });
+    if (!many) rows.push(2);
+    rows.push(column(mapUnique(users.map(function (user) { return user.node; })), 0, y0, 'g:users', function (node) {
+      var user = users.filter(function (entry) { return entry.node === node; })[0];
+      return user.inferred ? { cls: 'inf', line: 'inferred · ' + user.via } : null;
+    }));
+    rows.push(column(services, 1, y0, 'g:services'));
+    users.forEach(function (user) { link(user.node.id, user.to.id, user.inferred ? 'inf' : ''); });
+    services.forEach(function (service) {
+      mapTo(service.id, 'routes').forEach(function (target) { if (focusIds[target.id]) link(service.id, target.id, '', true); });
+    });
+
+    rows.push(column(pods, 3, y0, 'g:pods', function (pod) {
+      return { line: pod.status + (pod.role ? ' · ' + pod.role : '') + (pod.restarts ? ' · ' + mapPlural(pod.restarts, 'restart') : '') };
+    }));
+    pods.forEach(function (pod) { if (podOf[pod.id] !== pod.id) link(podOf[pod.id], pod.id); });
+    rows.push(column(machines, 4, y0, 'g:nodes', function (node) {
+      return spof(machines.length, many ? 'every pod here is on it' : 'every replica is here') || { name: mapShort(node.name) };
+    }));
+    pods.forEach(function (pod) { link(pod.id, 'Node//' + pod.node); });
+    var pools = Object.keys(poolNames).map(function (name) { return pseudo('Pool', name, mapPlural(poolNames[name].length, 'node')); });
+    rows.push(column(pools, 5, y0, 'g:pools', function () { return spof(pools.length, many ? 'every pod here is on it' : 'every replica is here'); }));
+    machines.forEach(function (node) { link(node.id, 'Pool//' + (node.pool || '(no pool)')); });
+    var zones = Object.keys(zoneNames).map(function (name) { return pseudo('Zone', name, mapPlural(zoneNames[name].length, 'node')); });
+    rows.push(column(zones, 6, y0, 'g:zones', function () { return spof(zones.length, many ? 'every pod here is on it' : 'every replica is here'); }));
+    machines.forEach(function (node) { if (node.zone) link('Pool//' + (node.pool || '(no pool)'), 'Zone//' + node.zone); });
+
+    // Under the focus: what it needs that is not a machine or a disk.
+    var under = many ? y0 : y0 + 56 + 26;
+    if (needs.length) {
+      label(2, under - 18, 'Uses · inferred');
+      needs.forEach(function (need, at) {
+        html += mapCard(need.node, X[2], under + at * MAP_ROW, { w: W, cls: 'inf', line: need.via + ' → ' + need.through });
+      });
+      under += needs.length * MAP_ROW + 26;
+    }
+    if (policies.length || focus.pdb) {
+      label(2, under - 18, 'Policies');
+      policies.forEach(function (policy, at) { html += mapCard(policy, X[2], under + at * MAP_ROW, { w: W }); });
+      under += policies.length * MAP_ROW;
+      if (focus.pdb) {
+        html += '<div class="mcard c-nw h-ok" style="left:' + X[2] + 'px;top:' + under + 'px;width:' + W + 'px;cursor:default"><i class="mdot"></i>' +
+          '<span class="mtext"><b>' + esc(focus.pdb) + '</b><small>PodDisruptionBudget</small></span></div>';
+        under += MAP_ROW;
+      }
+    }
+
+    var y1 = Math.max(y0 + Math.max.apply(null, rows) * MAP_ROW, claims.length ? 0 : under) + 34;
+    var bottom = y1 - 34;
+    if (claims.length) {
+      label(4, y1 - 24, 'Claims · ' + claims.length);
+      label(5, y1 - 24, 'Volumes · ' + volumes.length);
+      label(6, y1 - 24, 'Storage class · ' + classes.length);
+      if (drivers.length) label(7, y1 - 24, 'Driver');
+      var lower = [];
+      lower.push(column(claims, 4, y1, 'g:claims'));
+      lower.push(column(volumes, 5, y1, 'g:volumes'));
+      lower.push(column(classes, 6, y1, 'g:classes', function () { return spof(classes.length, 'every volume is here'); }));
+      lower.push(column(drivers, 7, y1, 'g:drivers'));
+      pods.forEach(function (pod) { mapTo(pod.id, 'mounts').forEach(function (claim) { link(pod.id, claim.id); }); });
+      claims.forEach(function (claim) {
+        mapTo(claim.id, 'binds').forEach(function (volume) { link(claim.id, volume.id); });
+        mapTo(claim.id, 'class').forEach(function (klass) { link(claim.id, klass.id, 'inf'); });
+      });
+      volumes.forEach(function (volume) { mapTo(volume.id, 'class').forEach(function (klass) { link(volume.id, klass.id, '', true); }); });
+      classes.forEach(function (klass) { mapTo(klass.id, 'driver').forEach(function (driver) { link(klass.id, driver.id); }); });
+      bottom = y1 + Math.max.apply(null, lower) * MAP_ROW;
+    }
+    bottom = Math.max(bottom, under) + 20;
+
+    /* What is fragile, and what would go with what. */
+    var findings = [];
+    focuses.forEach(function (entry) {
+      ((data.findings || {})[entry.id] || []).forEach(function (finding) {
+        findings.push(many ? assign(assign({}, finding), { title: entry.name + ': ' + finding.title }) : finding);
+      });
+    });
+    // What is broken now, then what everything shares, then the rest — across all of them.
+    var order = { now: 0, spof: 1, risk: 2 };
+    if (many) findings.sort(function (a, b) { return order[a.level] - order[b.level]; });
+    var hidden = Math.max(0, findings.length - 14);
+    if (hidden) findings = findings.slice(0, 14);
+    var tags = { now: ['bad', 'happening now'], spof: ['warn', 'single point of failure'], risk: ['', 'risk'] };
+    var boxW = 520;
+    html += '<div class="mbox" style="left:16px;top:' + bottom + 'px;width:' + boxW + 'px"><b>Risks' + (findings.length ? ' · ' + (findings.length + hidden) : '') + '</b>' +
+      (findings.length ? findings.map(function (finding) {
+        var tag = tags[finding.level] || tags.risk;
+        return '<div class="mfind"><span class="mtag ' + tag[0] + '">' + tag[1] + '</span> <b>' + esc(finding.title) + '</b><p>' +
+          esc(finding.text) + ' <span class="mtag">' + esc(finding.source) + '</span></p></div>';
+      }).join('') + (hidden ? '<div class="mfind"><p>And ' + hidden + ' more. Pick one workload to see all of its own.</p></div>' : '')
+        : '<p class="dim">Nothing stands out from where ' + (many ? 'they run and how they are' : 'it runs and how it is') + ' spread.</p>') +
+      (!many && focus.tech ? '<div class="mfind"><p>What happens inside ' + esc(focus.tech) + ' — which member is primary, replication lag — is not in the Kubernetes API. ' +
+        (focus.exporter ? 'An exporter runs beside it; its numbers are in Prometheus.' : 'It needs an exporter scraped by Prometheus.') +
+        ' Nothing here asks for database credentials.</p></div>' : '') + '</div>';
+
+    var targets = machines.map(function (node) { return [node.id, mapShort(node.name)]; }).slice(0, 8)
+      .concat(zones.map(function (zone) { return [zone.id, zone.name]; }))
+      .concat(classes.map(function (klass) { return [klass.id, klass.name]; }));
+    html += '<div class="mbox" style="left:' + (16 + boxW + 16) + 'px;top:' + bottom + 'px;width:' + (X[7] + W - boxW - 32) + 'px">' +
+      '<b>What goes with it, if this fails?</b> <span class="mtag inf">reasoned from placement, not measured</span>' +
+      (data.scoped ? ' <span class="mtag warn" title="Pick All namespaces to see what else would go">only ' + esc(state.namespace) + ' was read</span>' : '') +
+      '<div class="msim-pick">' + (targets.length ? targets.map(function (target) {
+        return '<button class="btn' + (ui.sim === target[0] ? ' on' : '') + '" data-map-sim="' + esc(target[0]) + '">' + esc(target[1]) + '</button>';
+      }).join('') : '<span class="dim">Its pods are not on any node yet.</span>') + '</div>' +
+      (sim ? '<div class="msim"><div><small>' + esc(many ? 'These workloads' : focus.name) + '</small>' + esc(sim.own) + '</div><div><small>Other workloads</small>' +
+        esc(sim.others) + '</div><div><small>Data</small>' + esc(sim.disks) + '</div></div>'
+        : (targets.length ? '<p class="dim">Pick a node, a zone or a storage class.</p>' : '')) + '</div>';
+
+    return { w: X[7] + W + 24, h: bottom + 40, html: html, edges: edges, tall: true };
+  }
+
+  /* ---- Drawing, and what a click does ---------------------------------- */
+
+  var mapScroll = {};
+  var mapZoomNow = 1;
+  var mapWheel = 0;
+  var mapWheelFrame = 0;
+  /** Rows and descriptions already read from the map, by card: what a second click shows without waiting. */
+  var mapRows = {};
+  var mapDescribed = {};
+  var mapCacheFor = '';
+
+  function drawMap() {
+    var box = $('table');
+    if (state.error && !state.map) {
+      box.innerHTML = '<div class="note error">' + esc(state.error) + '</div>' + advice(state.error);
+      return;
+    }
+    if (!state.map || state.mapFor !== mapKey()) {
+      box.innerHTML = state.loading ? waiting() : '<div class="note">Nothing loaded.</div>';
+      return;
+    }
+
+    var ui = mapUi();
+    var mode = state.view.mode || 'topology';
+    var old = document.getElementById('map-view');
+    /*
+     * `draw` is called for a great many reasons that are not the map's — the
+     * pane loading a tab, a forward coming up, a log arriving. Rebuilding five
+     * hundred cards for each would be slow and, worse, would take the page out
+     * from under a drag. So what was drawn is remembered, and drawn again only
+     * when the data, the view, the filter or the room for it has changed.
+     */
+    var drawn = [state.map.at, JSON.stringify(state.view), state.search, box.clientWidth, mapMenuOpen].join('|');
+    if (old && old.dataset.drawn === drawn) return;
+    if (old && old.dataset.mode) mapScroll[old.dataset.mode] = { x: old.scrollLeft, y: old.scrollTop };
+
+    var scene = mode === 'physical' ? mapPhysical() : mode === 'graph' ? mapGraph() : mapTopology();
+    var zoom = (ui.z || {})[mode] || 1;
+    var picked = state.mapIndex.byId[ui.sel];
+    var toggle = function (key, on, label, title) {
+      return '<button class="btn' + (on ? ' on' : '') + '" data-map-toggle="' + key + '"' + (title ? ' title="' + esc(title) + '"' : '') + '>' + label + '</button>';
+    };
+    var bar = '<span class="map-seg" role="group" aria-label="How to draw it">' + MAP_MODES.map(function (entry) {
+      return '<button class="' + (mode === entry[0] ? 'on' : '') + '" data-map-mode="' + entry[0] + '">' + entry[1] + '</button>';
+    }).join('') + '</span><span class="sep"></span>';
+    if (mode === 'topology') {
+      bar += toggle('net', ui.net !== false, 'Network') + toggle('storage', ui.storage !== false, 'Storage') +
+        toggle('bad', ui.bad, 'Only problems') +
+        '<button class="btn" data-map-fold="open">Unfold all</button><button class="btn" data-map-fold="shut">Fold all</button>';
+    } else if (mode === 'physical') {
+      bar += mapNodesMenu() + toggle('empty', mapShowsEmpty(), 'Empty nodes', 'Nodes with none of these pods on them') +
+        toggle('sys', ui.sys, 'System pods', 'DaemonSets and system namespaces') + toggle('bad', ui.bad, 'Only problems') +
+        (Object.keys(ui.pools || {}).length
+          ? '<button class="btn on" data-map-toggle="pools" title="Stop highlighting node pools">' + mapPlural(Object.keys(ui.pools).length, 'pool') + ' lit ✕</button>' : '') +
+        (ui.hl && state.mapIndex.byId[ui.hl]
+          ? '<button class="btn on" data-map-toggle="hl" title="Stop highlighting">' + esc(state.mapIndex.byId[ui.hl].name) + ' ✕</button>' : '');
+    } else {
+      bar += mapFocusMenu(mapFocuses());
+    }
+    var target = picked && picked.kind === 'Pod' && picked.owner ? state.mapIndex.byId[picked.owner] : picked;
+    var middle = mode === 'graph' ? mapFocuses() : [];
+    if (mapFocusable(target) && !(middle.length === 1 && middle[0] === target)) {
+      bar += '<button class="btn" data-map-focus-on="' + esc(target.id) + '" title="Draw what ' + esc(target.name) + ' depends on">Dependencies of ' + esc(target.name) + '</button>';
+    }
+    bar += '<span class="spacer"></span><span class="mtag" title="Stated by the Kubernetes API">API</span>' +
+      '<span class="mtag inf" title="Worked out: from an image name, or a service named in a pod template">inferred</span>' +
+      (state.map.metrics ? '<span class="mtag" title="Usage comes from metrics-server">metrics</span>' : '') +
+      '<span class="sep"></span><button class="btn icon" data-map-zoom="out" aria-label="Zoom out">−</button>' +
+      '<span class="dim" id="map-zoom" style="min-width:34px;text-align:center">' + Math.round(zoom * 100) + '%</span>' +
+      '<button class="btn icon" data-map-zoom="in" aria-label="Zoom in">+</button><button class="btn" data-map-zoom="fit">Fit</button>';
+
+    var missing = (state.map.missing || []).map(function (gap) { return gap.what; });
+    var inner = scene.flow
+      ? '<div class="map-inner flow" id="map-inner">' + scene.html + '<svg class="msvg" id="map-lines"></svg></div>'
+      : '<div class="map-inner" id="map-inner" style="width:' + scene.w + 'px;height:' + scene.h + 'px">' +
+        '<svg class="msvg" width="' + scene.w + '" height="' + scene.h + '">' + scene.edges + '</svg>' + scene.html + '</div>';
+
+    box.innerHTML = '<div class="map"><div class="map-bar">' + bar + '</div>' +
+      (missing.length ? '<div class="map-note">Not drawn, because the cluster would not list them: ' + esc(missing.join('; ')) + '.</div>' : '<div></div>') +
+      '<div class="map-view" id="map-view" data-mode="' + mode + '"><div class="map-size" id="map-size">' + inner + '</div></div></div>';
+
+    var view = document.getElementById('map-view');
+    var canvas = document.getElementById('map-inner');
+    if (scene.flow) {
+      // Laid out by the browser at the width there is, then measured for its lines.
+      canvas.style.width = Math.max(980, Math.floor((view.clientWidth - 2) / zoom)) + 'px';
+      var lines = document.getElementById('map-lines');
+      lines.setAttribute('width', canvas.offsetWidth);
+      lines.setAttribute('height', canvas.offsetHeight);
+      lines.innerHTML = mapPhysicalLines(canvas);
+    }
+    /*
+     * Until somebody zooms, a drawing a little wider than the pane is shrunk to
+     * fit it — but never so far that it stops being readable; past that it
+     * scrolls, and Fit is one click away.
+     */
+    if (!scene.flow && !(ui.z || {})[mode]) {
+      zoom = Math.max(0.75, Math.min(1, Math.floor(((view.clientWidth - 12) / canvas.offsetWidth) * 20) / 20));
+      document.getElementById('map-zoom').textContent = Math.round(zoom * 100) + '%';
+    }
+    mapZoomNow = zoom;
+    canvas.style.transform = 'scale(' + zoom + ')';
+    var size = document.getElementById('map-size');
+    size.style.width = Math.ceil(canvas.offsetWidth * zoom) + 'px';
+    size.style.height = Math.ceil(canvas.offsetHeight * zoom) + 'px';
+    view.dataset.drawn = drawn;
+    var kept = mapScroll[mode];
+    if (kept) { view.scrollLeft = kept.x; view.scrollTop = kept.y; }
+  }
+
+  /**
+   * Open the pane on something the map drew.
+   *
+   * The pane is the tables' pane and wants a table's row, so the row is asked
+   * for — one object, by name. Which also means the pane shows what the cluster
+   * says now rather than what the map was told a while ago.
+   */
+  function mapSelect(id, keepTab) {
+    var node = state.mapIndex && state.mapIndex.byId[id];
+    var ui = mapUi();
+    ui.sel = id;
+    if (node && node.kind === 'Pod' && node.owner) ui.hl = node.owner;
+    else if (node && MAP_WORKLOADS.indexOf(node.kind) >= 0) ui.hl = node.id;
+    var resource = node && MAP_RESOURCE[node.kind];
+    if (!resource) { remember(); draw(); return; }
+
+    /*
+     * Open at once, on what is already known.
+     *
+     * Asking the cluster for the row first meant every click waited on kubectl —
+     * a second or two on a cluster whose login is a cloud CLI — with nothing on
+     * screen to say the click had landed. The map already knows the name, the
+     * kind and the status, which is enough to open the pane; a row seen before
+     * is kept and shown as it was. The real one is asked for behind it and
+     * folded in when it arrives, the same way a table's refresh is.
+     */
+    if (mapCacheFor !== mapKey()) { mapRows = {}; mapDescribed = {}; mapCacheFor = mapKey(); }
+    var row = mapRows[id] || {
+      uid: node.uid || id, name: node.name, namespace: node.namespace, kind: node.kind,
+      status: node.status, health: node.health, createdAt: node.createdAt, age: '', labels: {},
+    };
+    mapRows[id] = row;
+    stopEditing();
+    state.selected = row;
+    state.editing = false;
+    state.editingYaml = false;
+    state.detail = { tab: keepTab || 'overview' };
+    // The description read last time stands in until this time's has been read.
+    var before = mapDescribed[row.uid];
+    state.detailData = before == null ? {} : { describe: before };
+    remember();
+    draw();
+    loadDetail();
+
+    var at = { context: state.context, kind: node.kind, name: node.name };
+    var args = { kind: resource, context: state.context, fieldSelector: 'metadata.name=' + node.name };
+    if (node.namespace) { args.namespace = node.namespace; at.namespace = node.namespace; }
+    call('kube.list', args).then(function (result) {
+      var fresh = (result.rows || [])[0];
+      if (!fresh) {
+        delete mapRows[id];
+        if (state.selected === row) { say(node.name + ' is no longer there.', true); closeDetail(); }
+        return;
+      }
+      assign(row, fresh);
+      if (state.selected === row) drawDetail();
+    }).catch(function (error) { if (state.selected === row) say(String(error.message || error), true); });
+    if (before != null) {
+      call('kube.describe', at).then(function (result) {
+        mapDescribed[row.uid] = result.text || '';
+        if (state.selected === row && state.detailData.describe !== mapDescribed[row.uid]) {
+          state.detailData.describe = mapDescribed[row.uid];
+          drawDetail();
+        }
+      }).catch(function () { /* the one on screen is from a moment ago, and says so by being there */ });
+    }
+  }
+
+  /** The open pane's object, read again after the map was: its status may have moved. */
+  function mapRefreshSelected() {
+    var chosen = state.selected;
+    var resource = chosen && MAP_RESOURCE[chosen.kind];
+    if (!resource) return;
+    var args = { kind: resource, context: state.context, fieldSelector: 'metadata.name=' + chosen.name };
+    if (chosen.namespace) args.namespace = chosen.namespace;
+    call('kube.list', args).then(function (result) {
+      if (state.selected !== chosen) return;
+      if (adoptInto(chosen, result.rows)) drawDetail();
+    }).catch(function () { /* the map's own refresh already said what is wrong */ });
+  }
+
+  function mapZoomTo(zoom) {
+    var ui = mapUi();
+    if (!ui.z) ui.z = {};
+    var next = Math.max(0.3, Math.min(1.6, Math.round(zoom * 20) / 20));
+    var before = mapZoomNow || 1;
+    var view = document.getElementById('map-view');
+    // The point in the middle of the pane stays in the middle of the pane.
+    var cx = view ? (view.scrollLeft + view.clientWidth / 2) / before : 0;
+    var cy = view ? (view.scrollTop + view.clientHeight / 2) / before : 0;
+    ui.z[state.view.mode || 'topology'] = next;
+    remember();
+    drawMap();
+    view = document.getElementById('map-view');
+    if (view) {
+      view.scrollLeft = cx * mapZoomNow - view.clientWidth / 2;
+      view.scrollTop = cy * mapZoomNow - view.clientHeight / 2;
+    }
+  }
+
+  $('table').addEventListener('click', function (event) {
+    if (state.view.type !== 'map') return;
+    var ui = mapUi();
+    var el = event.target.closest('[data-map-pick], [data-map-pick-only], [data-map-pick-all], [data-map-pool], [data-map-menu], [data-map-off], [data-map-only], [data-map-all], [data-map-mode], [data-map-toggle], [data-map-fold], [data-map-zoom], [data-map-ns], [data-map-more], [data-map-sys], [data-map-sim], [data-map-focus-on], [data-map-id]');
+    // The list of nodes shuts when the click was anywhere but in it.
+    if (mapMenuOpen && !event.target.closest('.map-drop')) {
+      mapMenuOpen = false;
+      if (!el) { draw(); return; }
+    }
+    if (!el) return;
+    var set = el.dataset;
+    if (set.mapPick || set.mapPickOnly || set.mapPickAll) {
+      var ids = mapFocuses().map(function (entry) { return entry.id; });
+      if (set.mapPickAll) ids = '*';
+      else if (set.mapPickOnly) ids = set.mapPickOnly;
+      else {
+        var at = ids.indexOf(set.mapPick);
+        // The last one stays ticked: a picture of nothing's dependencies is not a picture.
+        if (at >= 0) { if (ids.length > 1) ids.splice(at, 1); } else ids.push(set.mapPick);
+        ids = ids.length === 1 ? ids[0] : ids.length === mapRoots().length ? '*' : ids;
+      }
+      state.view = assign(assign({}, state.view), { focus: ids });
+      ui.sim = null;
+    } else if (set.mapPool) {
+      if (!ui.pools) ui.pools = {};
+      if (ui.pools[set.mapPool]) delete ui.pools[set.mapPool]; else ui.pools[set.mapPool] = true;
+    } else if (set.mapMenu) {
+      mapMenuOpen = mapMenuOpen === set.mapMenu ? false : set.mapMenu;
+    } else if (set.mapAll) {
+      ui.off = {};
+    } else if (set.mapOff) {
+      if (!ui.off) ui.off = {};
+      if (set.mapOff.slice(0, 2) === 'n:' && !ui.off[set.mapOff]) {
+        // Ticking a node whose whole pool is put away means wanting that node: its pool comes back, its neighbours do not.
+        var owner = state.map.nodes.filter(function (node) { return node.kind === 'Node' && node.name === set.mapOff.slice(2); })[0];
+        var poolKey = 'p:' + ((owner && owner.pool) || '');
+        if (owner && ui.off[poolKey]) {
+          delete ui.off[poolKey];
+          state.map.nodes.forEach(function (node) {
+            if (node.kind === 'Node' && (node.pool || '') === (owner.pool || '') && node !== owner) ui.off['n:' + node.name] = true;
+          });
+        } else ui.off[set.mapOff] = true;
+      } else if (ui.off[set.mapOff]) delete ui.off[set.mapOff];
+      else ui.off[set.mapOff] = true;
+    } else if (set.mapOnly) {
+      var onlyPool = set.mapOnly.slice(0, 2) === 'p:';
+      var wanted = set.mapOnly.slice(2);
+      ui.off = {};
+      state.map.nodes.forEach(function (node) {
+        if (node.kind !== 'Node') return;
+        if (onlyPool) { if ((node.pool || '') !== wanted) ui.off['p:' + (node.pool || '')] = true; return; }
+        if (node.name === wanted) { mapOnlyPool = node.pool || ''; }
+      });
+      if (!onlyPool) {
+        state.map.nodes.forEach(function (node) {
+          if (node.kind !== 'Node' || node.name === wanted) return;
+          if ((node.pool || '') === mapOnlyPool) ui.off['n:' + node.name] = true;
+          else ui.off['p:' + (node.pool || '')] = true;
+        });
+      }
+    } else if (set.mapMode) {
+      state.view = assign(assign({}, state.view), { mode: set.mapMode });
+    } else if (set.mapToggle) {
+      if (set.mapToggle === 'hl') ui.hl = null;
+      else if (set.mapToggle === 'pools') ui.pools = {};
+      else if (set.mapToggle === 'empty') ui.empty = !mapShowsEmpty();
+      else if (set.mapToggle === 'net' || set.mapToggle === 'storage') ui[set.mapToggle] = ui[set.mapToggle] === false;
+      else ui[set.mapToggle] = !ui[set.mapToggle];
+    } else if (set.mapFold) {
+      (state.map.namespaces || []).forEach(function (ns) { ui.open[ns.name] = set.mapFold === 'open'; });
+    } else if (set.mapZoom) {
+      if (set.mapZoom === 'fit') {
+        var view = document.getElementById('map-view');
+        var canvas = document.getElementById('map-inner');
+        mapZoomTo(Math.min(1, (view.clientWidth - 12) / canvas.offsetWidth));
+      } else mapZoomTo(mapZoomNow + (set.mapZoom === 'in' ? 0.1 : -0.1));
+      return;
+    } else if (set.mapNs) {
+      var units = mapUnits();
+      var total = 0;
+      Object.keys(units).forEach(function (ns) { total += units[ns].length; });
+      var was = ui.open[set.mapNs] != null ? ui.open[set.mapNs] : total <= 40 && !state.mapIndex.system[set.mapNs];
+      ui.open[set.mapNs] = !was;
+    } else if (set.mapMore) {
+      ui.more[set.mapMore] = !ui.more[set.mapMore];
+    } else if (set.mapSys) {
+      ui.sys = true;
+    } else if (set.mapSim) {
+      ui.sim = ui.sim === set.mapSim ? null : set.mapSim;
+    } else if (set.mapFocusOn) {
+      state.view = assign(assign({}, state.view), { mode: 'graph', focus: set.mapFocusOn });
+      mapUi().sim = null;
+    } else if (set.mapId) {
+      mapSelect(set.mapId);
+      return;
+    }
+    remember();
+    draw();
+  });
+
+  // ⌘ or Ctrl with the wheel zooms, as it does on every other canvas.
+  $('table').addEventListener('wheel', function (event) {
+    if (state.view.type !== 'map' || !(event.metaKey || event.ctrlKey)) return;
+    if (!event.target.closest('#map-view')) return;
+    event.preventDefault();
+    // A trackpad sends dozens of these a second, and each zoom is a redraw: one per frame is all that shows.
+    mapWheel += event.deltaY < 0 ? 1 : -1;
+    if (mapWheelFrame) return;
+    mapWheelFrame = requestAnimationFrame(function () {
+      var steps = Math.max(-2, Math.min(2, mapWheel));
+      mapWheel = 0;
+      mapWheelFrame = 0;
+      if (steps) mapZoomTo(mapZoomNow + steps * 0.05);
+    });
+  }, { passive: false });
+
+  // Dragging the background moves the page under the hand.
+  $('table').addEventListener('mousedown', function (event) {
+    var view = event.target.closest('#map-view');
+    if (!view || event.button !== 0 || event.target.closest('button, select, .mbox')) return;
+    var from = { x: event.clientX, y: event.clientY, left: view.scrollLeft, top: view.scrollTop };
+    view.classList.add('drag');
+    var move = function (moved) {
+      view.scrollLeft = from.left - (moved.clientX - from.x);
+      view.scrollTop = from.top - (moved.clientY - from.y);
+    };
+    var up = function () {
+      view.classList.remove('drag');
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+    event.preventDefault();
+  });
 
   /* ---------------------------------------------------------------------- *
    * The overview: what is on fire, if anything.
@@ -4015,6 +5642,7 @@
     if (state.detail.tab === 'overview') loadCharts(row);
     if (state.detail.tab === 'overview' && state.detailData.describe == null) {
       call('kube.describe', at).then(function (result) {
+        if (state.view.type === 'map') mapDescribed[row.uid] = result.text || '';
         if (state.selected === row) { state.detailData.describe = result.text || ''; drawDetail(); }
       }).catch(function (error) {
         if (state.selected === row) { state.detailData.describe = String(error.message || error); drawDetail(); }
@@ -5885,6 +7513,8 @@
      * slowly right, so it is still read from time to time. Rarely.
      */
     if (state.watch.id) wait = Math.max(wait, 120000);
+    // The map is the whole cluster read at once. It is kept current, not kept busy.
+    if (state.view.type === 'map') wait = Math.max(wait, 45000);
     setTimeout(function () {
       scheduleRefresh();
       // `showing` is the app saying whether this tab is in front; `hidden` is

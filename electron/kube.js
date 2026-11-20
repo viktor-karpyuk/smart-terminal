@@ -27,6 +27,7 @@
 
 const { execFile, spawn } = require('node:child_process');
 const { resolvedPath } = require('./cli-env');
+const { graphFrom } = require('./kube-map');
 
 /** Long enough for a slow API server, short enough that a panel is never stuck. */
 const TIMEOUT = 30000;
@@ -667,6 +668,7 @@ const NODE_GROUP_LABELS = [
   'kubernetes.azure.com/agentpool',
   'agentpool',
   'kops.k8s.io/instancegroup',
+  'doks.digitalocean.com/node-pool',
   'node-pool',
   'nodegroup',
 ];
@@ -1638,6 +1640,66 @@ async function wholeSummary({ context } = {}) {
 }
 
 /**
+ * The cluster as a graph, for the map.
+ *
+ * Asked in groups rather than in one call, and each group allowed to fail by
+ * itself: somebody who may read pods but not volumes still gets a map, with
+ * the storage missing and a line saying so, rather than no map and an error
+ * about a kind they never asked for. Shared while it is in the air and never
+ * kept, for the same reason the overview is not.
+ */
+const MAP_GROUPS = [
+  { key: 'nodes', kind: 'nodes', cluster: true, what: 'nodes' },
+  { key: 'pods', kind: 'pods', what: 'pods' },
+  { key: 'workloads', kind: 'deployments,statefulsets,daemonsets,replicasets,jobs,cronjobs', what: 'workloads' },
+  { key: 'network', kind: 'services,ingresses,networkpolicies,poddisruptionbudgets', what: 'services, ingresses and policies' },
+  { key: 'claims', kind: 'persistentvolumeclaims', what: 'volume claims' },
+  { key: 'storage', kind: 'persistentvolumes,storageclasses,csidrivers,volumeattachments', cluster: true, what: 'volumes and storage classes' },
+];
+
+async function topology({ context, namespace } = {}) {
+  return memo(`topology:${context ?? ''}:${namespace ?? ''}`, 0, async () => {
+    const where = namespace ? { context, namespace } : { context, allNamespaces: true };
+    const [answers, nodeUsage, podUsage] = await Promise.all([
+      Promise.all(MAP_GROUPS.map((group) =>
+        listRaw({ kind: group.kind, ...(group.cluster ? { context } : where) })
+          .catch((error) => ({ ok: false, error: String(error?.message ?? error) })))),
+      top({ what: 'nodes', context }),
+      top({ what: 'pods', ...where }),
+    ]);
+
+    const items = {};
+    const missing = [];
+    MAP_GROUPS.forEach((group, at) => {
+      const answer = answers[at];
+      items[group.key] = answer.ok ? answer.data?.items ?? [] : [];
+      if (!answer.ok) missing.push({ what: group.what, error: answer.error ?? 'it did not say why' });
+    });
+    // Without pods and without nodes there is nothing to draw, and the reason is the answer.
+    if (!answers[0].ok && !answers[1].ok) return answers[1];
+
+    const ofKind = (list, kind) => list.filter((item) => item.kind === kind);
+    const graph = graphFrom({
+      nodes: items.nodes,
+      pods: items.pods,
+      workloads: items.workloads,
+      services: ofKind(items.network, 'Service'),
+      ingresses: ofKind(items.network, 'Ingress'),
+      policies: ofKind(items.network, 'NetworkPolicy'),
+      pdbs: ofKind(items.network, 'PodDisruptionBudget'),
+      claims: items.claims,
+      volumes: ofKind(items.storage, 'PersistentVolume'),
+      classes: ofKind(items.storage, 'StorageClass'),
+      drivers: ofKind(items.storage, 'CSIDriver'),
+      attachments: ofKind(items.storage, 'VolumeAttachment'),
+      usage: { nodes: nodeUsage.metrics ?? {}, pods: podUsage.metrics ?? {} },
+      scoped: Boolean(namespace),
+    }, { podStatus, health, quantity, millicores, podRequests, holdsRoom, nodeGroupOf });
+    return { ok: true, ...graph, missing };
+  });
+}
+
+/**
  * What the persistent volumes add up to.
  *
  * Nothing to do with the disk on the nodes: a claim is fulfilled by a volume
@@ -2571,6 +2633,8 @@ module.exports = {
   events,
   top,
   summary,
+  topology,
+  graphFrom,
   brief,
   promQuery,
   promNow,
