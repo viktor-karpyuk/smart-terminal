@@ -192,7 +192,56 @@
     border-left: 1px solid var(--border); background: var(--bg-panel);
     display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-height: 0;
   }
-  .detail-head { position: relative; padding: 8px 26px 6px 10px; border-bottom: 1px solid var(--border); }
+  .detail-head { position: relative; padding: 10px 12px 8px; border-bottom: 1px solid var(--border); }
+  aside.pane-in { animation: pane-in 0.16s ease-out; }
+  @keyframes pane-in { from { opacity: 0; translate: 12px 0; } to { opacity: 1; translate: 0 0; } }
+  .pane-tools { position: absolute; top: 7px; right: 8px; display: flex; gap: 2px; }
+  .pane-tool { min-width: 22px; height: 22px; padding: 0 5px; border-radius: var(--radius); color: var(--text-dim); font-size: 11px; line-height: 1; }
+  .pane-tool:hover { color: var(--text); background: var(--bg-elevated); }
+  .pane-tool.on { color: var(--accent); background: var(--accent-soft); }
+  .pane-tool[disabled] { opacity: 0.35; cursor: default; }
+  .pane-tools .detail-close { position: static; width: 22px; height: 22px; font-size: 15px; opacity: 1; }
+  .pane-title { display: flex; align-items: center; gap: 8px; min-height: 22px; padding-right: 130px; }
+  .kind-badge { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); background: var(--accent-soft); }
+  .kind-badge.c-nw { color: var(--info); background: color-mix(in srgb, var(--info) 14%, transparent); }
+  .kind-badge.c-st { color: var(--violet); background: color-mix(in srgb, var(--violet) 14%, transparent); }
+  .kind-badge.c-nd { color: var(--text-dim); background: var(--bg-elevated); }
+  .pane-reading { color: var(--text-faint); font-size: 11px; }
+  .detail-head h3.pane-name { margin: 6px 0 4px; font-size: calc(15px * var(--pane-scale, 1)); font-weight: 600; line-height: 1.25; }
+  .detail-head small.pane-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: calc(11px * var(--pane-scale, 1)); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--border-strong); color: var(--text-dim); font-weight: 550; }
+  .pill.p-ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, transparent); background: color-mix(in srgb, var(--ok) 10%, transparent); }
+  .pill.p-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, transparent); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+  .pill.p-bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, transparent); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  aside .detail-body { zoom: var(--pane-scale, 1); padding: 12px 12px 20px; }
+  .mglance { display: grid; grid-template-columns: repeat(auto-fit, minmax(60px, 1fr)); gap: 6px; }
+  .mstat { padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); min-width: 0; }
+  .mstat b { display: block; font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mstat span { display: block; font-size: 10px; color: var(--text-dim); }
+  .mstat.warn b { color: var(--warn); }
+  .mstat.bad b { color: var(--danger); }
+  .mnote { margin: 8px 0 0; font-size: 11px; color: var(--text-dim); }
+  .mgos { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 5px; }
+  .mgo { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 5px 8px; text-align: left; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); font-size: 11px; line-height: 14px; transition: border-color 0.12s, background-color 0.12s; }
+  .mgo:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .mgo.h-warn { border-color: color-mix(in srgb, var(--warn) 60%, var(--border)); }
+  .mgo.h-bad { border-color: color-mix(in srgb, var(--danger) 60%, var(--border)); }
+  .mchain { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+  .mchain .mgo { flex: 1 1 0; }
+  .mchain > i { flex: none; font-style: normal; color: var(--text-faint); }
+  .mmeter { display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 2px 10px; margin-top: 7px; font-size: 11px; color: var(--text-dim); }
+  .mmeter small { grid-column: 2; font-size: 10px; color: var(--text-faint); }
+  .mrisk { padding: 6px 0; border-top: 1px solid var(--border); font-size: 11px; }
+  .mrisk:first-child { border-top: 0; padding-top: 0; }
+  .mrisk p { margin: 3px 0 0; color: var(--text-dim); }
+  .msub { margin: 9px 0 4px; font-size: 10.5px; font-weight: 500; color: var(--text-dim); }
+  .msub:first-child { margin-top: 0; }
+  .pane-fold { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 8px; }
+  .pane-fold > summary { cursor: pointer; font-size: 10.5px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-faint); }
+  .pane-fold > summary:hover { color: var(--text); }
+  .pane-fold .block { margin-top: 6px; }
+  .pane-fold .block-head { display: none; }
+  @media (prefers-reduced-motion: reduce) { aside.pane-in { animation: none; } }
   .detail-close {
     position: absolute; top: 5px; right: 6px; width: 18px; height: 18px; line-height: 1;
     border-radius: var(--radius); color: var(--text-faint); font-size: 14px; opacity: 0.7;
@@ -898,6 +947,8 @@
     only: null, wanted: null,
     /** How wide the two columns that can be dragged are. */
     navWidth: 178, detailWidth: 380,
+    /** How large the pane's text is, and whether it has been given most of the room. */
+    paneScale: 1, paneBig: false,
     /** The open watch, if any: what it is watching and whether a redraw is due. */
     watch: { id: null, kind: null, of: null, token: 0, draw: 0, pane: false },
     /**
@@ -965,6 +1016,7 @@
   /** Where this panel is looking, as one value: what a subtab holds. */
   function placeNow() {
     return {
+      pane: { scale: state.paneScale, big: state.paneBig },
       view: state.view,
       only: state.only,
       sort: state.sort,
@@ -980,6 +1032,10 @@
   /** Put it back, before anything is asked of the cluster. */
   function resume(saved) {
     if (!saved || !saved.view) return;
+    if (saved.pane) {
+      state.paneScale = Math.max(0.85, Math.min(1.6, Number(saved.pane.scale) || 1));
+      state.paneBig = Boolean(saved.pane.big);
+    }
     state.view = saved.view;
     state.only = saved.only || null;
     state.sort = saved.sort || { column: null, dir: 1 };
@@ -2083,6 +2139,15 @@
     leaveDetail();
     remember();
     load();
+  });
+  // On the map, Enter in the filter goes to the first thing that matches and opens it.
+  $('search').addEventListener('keydown', function (event) {
+    if (event.key !== 'Enter' || state.view.type !== 'map' || !state.map || !state.search) return;
+    var found = state.map.nodes.filter(function (node) { return node.name.toLowerCase().indexOf(state.search) >= 0; });
+    var rank = function (node) { return (node.name.toLowerCase() === state.search ? 0 : 2) + (mapIsWorkload(node) ? 0 : 1); };
+    found.sort(function (a, b) { return rank(a) - rank(b); });
+    if (found[0]) { mapTrail = []; mapFollow(found[0].id); }
+    else say('Nothing on the map is called that.', true);
   });
   $('search').addEventListener('input', function (event) {
     state.search = event.target.value.trim().toLowerCase();
@@ -3837,6 +3902,248 @@
     return { w: X[7] + W + 24, h: bottom + 40, html: html, edges: edges, tall: true };
   }
 
+  /* ---- What the map knows about one thing, for the pane ----------------- */
+
+  /*
+   * The pane used to open on `kubectl describe`: everything, in the order the
+   * API happens to hold it. What somebody opens a database to find out is
+   * shorter than that and is not in one place — where its pods are, what disk
+   * is behind each, what reaches it, what would take it down. The map has
+   * already worked all of that out, so the pane says it first, and every name
+   * in it is a way to the next thing.
+   */
+  var mapTrail = [];
+
+  function mapGo(node, extra) {
+    if (!node) return '';
+    return '<button class="mgo h-' + esc(node.health || 'ok') + '" data-map-go="' + esc(node.id) + '" title="' + esc(mapTip(node)) + '">' +
+      '<i class="mdot"></i><span class="mtext"><b>' + esc(node.kind === 'Node' ? mapShort(node.name) : node.name) + '</b>' +
+      (extra ? '<small>' + esc(extra) + '</small>' : '') + '</span></button>';
+  }
+
+  function mapStats(list) {
+    return '<div class="mglance">' + list.filter(Boolean).map(function (entry) {
+      return '<div class="mstat ' + (entry[2] || '') + '"><b>' + esc(entry[0]) + '</b><span>' + esc(entry[1]) + '</span></div>';
+    }).join('') + '</div>';
+  }
+
+  function mapMeter(label, part, whole, words) {
+    if (!whole) return '';
+    var bar = mapBar(part, whole);
+    return '<div class="mmeter"><span>' + esc(label) + '</span>' + bar.html + '<small>' + esc(words) + '</small></div>';
+  }
+
+  function mapList(nodes, each, limit) {
+    var shown = nodes.slice(0, limit || 30);
+    return '<div class="mgos">' + shown.map(function (node) { return mapGo(node, each ? each(node) : ''); }).join('') +
+      (nodes.length > shown.length ? '<span class="dim">and ' + (nodes.length - shown.length) + ' more</span>' : '') + '</div>';
+  }
+
+  /** A pod to its disk: claim, volume, class, each a step that can be followed. */
+  function mapStorageRows(claims) {
+    return claims.map(function (claim) {
+      var volume = mapTo(claim.id, 'binds')[0];
+      var klass = volume ? mapTo(volume.id, 'class')[0] : mapTo(claim.id, 'class')[0];
+      return '<div class="mchain">' + mapGo(claim, claim.capacity) + '<i>›</i>' +
+        (volume ? mapGo(volume, volume.attachedTo ? 'on ' + mapShort(volume.attachedTo) : volume.local ? 'local' : 'not attached') : '<span class="dim">no volume yet</span>') +
+        (klass ? '<i>›</i>' + mapGo(klass, klass.provisioner) : '') + '</div>';
+    }).join('');
+  }
+
+  function mapInfo(row) {
+    if (state.view.type !== 'map' || !state.mapIndex) return '';
+    var node = state.mapIndex.byId[mapUi().sel];
+    if (!node || node.name !== row.name || (node.namespace || '') !== (row.namespace || '')) return '';
+    var ix = state.mapIndex;
+    var html = '';
+    var uses = function (id, table, end) {
+      return (((ix[table].uses || {})[id]) || []).map(function (edge) { return { node: ix.byId[edge[end]], via: edge.via }; }).filter(function (entry) { return entry.node; });
+    };
+
+    if (mapIsWorkload(node)) {
+      var pods = mapPodsOf(node.id).filter(function (pod) { return !pod.finished; });
+      var machines = mapUnique(pods.map(function (pod) { return ix.byId['Node//' + pod.node]; }));
+      var claims = [];
+      pods.forEach(function (pod) { claims = claims.concat(mapTo(pod.id, 'mounts')); });
+      claims = mapUnique(claims);
+      var restarts = pods.reduce(function (sum, pod) { return sum + pod.restarts; }, 0);
+      var zones = {};
+      machines.forEach(function (machine) { if (machine.zone) zones[machine.zone] = true; });
+      html += mapStats([
+        [String(node.status || '').replace(' ready', '') || String(pods.length), node.desired ? 'ready' : 'pods', node.health === 'bad' ? 'bad' : node.health === 'warn' ? 'warn' : ''],
+        [restarts, 'restarts', restarts ? 'warn' : ''],
+        [machines.length, machines.length === 1 ? 'node' : 'nodes'],
+        [Object.keys(zones).length, Object.keys(zones).length === 1 ? 'zone' : 'zones'],
+        claims.length ? [claims.length, claims.length === 1 ? 'volume' : 'volumes'] : null,
+      ]);
+      if (node.tech) {
+        html += '<p class="mnote"><span class="mtag inf">' + esc(node.tech + (node.techVersion ? ' ' + node.techVersion : '')) + '</span> Recognised by its image. ' +
+          (node.custom ? 'Made by an operator from a ' + esc(node.kind) + '; known here through its pods. ' : '') +
+          'Roles and replication are the database’s own business: they show only where a pod’s labels say so.</p>';
+      }
+      var findings = (state.map.findings || {})[node.id] || [];
+      if (findings.length) {
+        var tags = { now: ['bad', 'now'], spof: ['warn', 'single point of failure'], risk: ['', 'risk'] };
+        html += block('Risks', findings.map(function (finding) {
+          var tag = tags[finding.level] || tags.risk;
+          return '<div class="mrisk"><span class="mtag ' + tag[0] + '">' + tag[1] + '</span> <b>' + esc(finding.title) + '</b><p>' + esc(finding.text) + '</p></div>';
+        }).join(''));
+      }
+      if (pods.length) {
+        html += block('Pods', mapList(pods, function (pod) {
+          return pod.status + (pod.role ? ' · ' + pod.role : '') + (pod.restarts ? ' · ↻' + pod.restarts : '') + (pod.node ? ' · ' + mapShort(pod.node) : '');
+        }));
+      }
+      if (machines.length) html += block('Runs on', mapList(machines, function (machine) { return [machine.pool, machine.zone, machine.instance].filter(Boolean).join(' · '); }));
+      var used = { cpu: 0, mem: 0, any: false };
+      pods.forEach(function (pod) { if (pod.cpuUsed != null) { used.cpu += pod.cpuUsed; used.mem += pod.memUsed; used.any = true; } });
+      var per = [mapCpu(node.cpuReq), mapMem(node.memReq)].filter(Boolean).join(' · ');
+      var cap = [mapCpu(node.cpuLim), mapMem(node.memLim)].filter(Boolean).join(' · ');
+      html += block('Resources', '<dl class="facts"><dt>Requests, per pod</dt><dd>' + esc(per || 'none set') + '</dd><dt>Limits, per pod</dt><dd>' + esc(cap || 'none set') + '</dd></dl>' +
+        (used.any ? mapMeter('CPU in use', used.cpu, (node.cpuLim || node.cpuReq) * pods.length, mapCpu(used.cpu) + ' of ' + mapCpu((node.cpuLim || node.cpuReq) * pods.length) + (node.cpuLim ? ' limit' : ' requested')) +
+          mapMeter('Memory in use', used.mem, (node.memLim || node.memReq) * pods.length, mapMem(used.mem) + ' of ' + mapMem((node.memLim || node.memReq) * pods.length) + (node.memLim ? ' limit' : ' requested')) : ''));
+      if (claims.length) html += block('Storage', mapStorageRows(claims));
+      var services = mapFrom(node.id, 'routes');
+      var ingresses = [];
+      var users = [];
+      services.forEach(function (service) {
+        ingresses = ingresses.concat(mapFrom(service.id, 'exposes'));
+        users = users.concat(uses(service.id, 'inn', 'from'));
+      });
+      var needs = uses(node.id, 'out', 'to');
+      if (services.length || needs.length) {
+        html += block('Network', (services.length ? '<h5 class="msub">Reached through</h5>' + mapList(services, function (service) { return service.status; }) : '') +
+          (ingresses.length ? '<h5 class="msub">From outside</h5>' + mapList(mapUnique(ingresses), function (ingress) { return (ingress.hosts || []).join(', '); }) : '') +
+          (users.length ? '<h5 class="msub">Used by <span class="mtag inf">inferred</span></h5><div class="mgos">' + users.map(function (user) { return mapGo(user.node, user.via); }).join('') + '</div>' : '') +
+          (needs.length ? '<h5 class="msub">Uses <span class="mtag inf">inferred</span></h5><div class="mgos">' + needs.map(function (need) { return mapGo(need.node, need.via); }).join('') + '</div>' : ''));
+      }
+      html += block('Placement', '<dl class="facts"><dt>Kept apart</dt><dd>' +
+        esc(node.spread ? node.spread.mode + (node.spread.key ? ', by ' + node.spread.key : '') : 'nothing keeps replicas on different nodes') + '</dd>' +
+        '<dt>Disruption budget</dt><dd>' + esc(node.pdb ? node.pdb + (node.pdbAllowed != null ? ' · ' + node.pdbAllowed + ' may go right now' : '') : 'none') + '</dd>' +
+        (node.helm ? '<dt>Installed by</dt><dd>' + esc(node.helm) + '</dd>' : '') + '</dl>');
+    } else if (node.kind === 'Pod') {
+      var owner = ix.byId[node.owner];
+      var machine = ix.byId['Node//' + node.node];
+      html += mapStats([
+        [node.status, 'status', node.health === 'bad' ? 'bad' : node.health === 'warn' ? 'warn' : ''],
+        [node.restarts, 'restarts', node.restarts ? 'warn' : ''],
+        node.role ? [node.role, 'role'] : null,
+      ]);
+      if (owner) html += block('Belongs to', mapList([owner], function (entry) { return entry.kind + ' · ' + entry.status; }));
+      if (machine) html += block('Runs on', mapList([machine], function (entry) { return [entry.pool, entry.zone, entry.instance].filter(Boolean).join(' · '); }));
+      html += block('Resources', '<dl class="facts"><dt>Requests</dt><dd>' + esc([mapCpu(node.cpuReq), mapMem(node.memReq)].filter(Boolean).join(' · ') || 'none set') + '</dd><dt>Limits</dt><dd>' +
+        esc([mapCpu(node.cpuLim), mapMem(node.memLim)].filter(Boolean).join(' · ') || 'none set') + '</dd></dl>' +
+        (node.cpuUsed != null ? mapMeter('CPU in use', node.cpuUsed, node.cpuLim || node.cpuReq, mapCpu(node.cpuUsed) + ' of ' + mapCpu(node.cpuLim || node.cpuReq) + (node.cpuLim ? ' limit' : ' requested')) +
+          mapMeter('Memory in use', node.memUsed, node.memLim || node.memReq, mapMem(node.memUsed) + ' of ' + mapMem(node.memLim || node.memReq) + (node.memLim ? ' limit' : ' requested')) : ''));
+      var mounted = mapTo(node.id, 'mounts');
+      if (mounted.length) html += block('Storage', mapStorageRows(mounted));
+    } else if (node.kind === 'Node') {
+      var onIt = mapFrom(node.id, 'runs-on').filter(function (pod) { return !pod.finished; });
+      var mine = onIt.filter(function (pod) { var by = ix.byId[pod.owner]; return !ix.system[pod.namespace] && !pod.mirror && !(by && by.kind === 'DaemonSet'); });
+      var cpu = mapBar(node.cpuReq, node.cpuAlloc);
+      var mem = mapBar(node.memReq, node.memAlloc);
+      html += mapStats([[onIt.length, 'pods'], [cpu.pct + '%', 'CPU requested', cpu.pct >= 90 ? 'bad' : cpu.pct >= 75 ? 'warn' : ''],
+        [mem.pct + '%', 'memory requested', mem.pct >= 90 ? 'bad' : mem.pct >= 75 ? 'warn' : ''], node.capacity === 'spot' ? ['spot', 'capacity', 'warn'] : null]);
+      html += block('Machine', '<dl class="facts"><dt>Pool</dt><dd>' + esc(node.pool || 'none') + (node.poolKind ? ' · ' + esc(node.poolKind) : '') + '</dd><dt>' + (node.zoneKind === 'region' ? 'Region' : 'Zone') + '</dt><dd>' +
+        esc(node.zone || 'not labelled') + '</dd><dt>Type</dt><dd>' + esc(node.instance || 'unknown') + '</dd><dt>Kubelet</dt><dd>' + esc(node.version || '') + '</dd>' +
+        (node.taintList && node.taintList.length ? '<dt>Taints</dt><dd>' + node.taintList.map(function (taint) { return '<span class="mtag">' + esc(taint) + '</span>'; }).join(' ') + '</dd>' : '') + '</dl>' +
+        mapMeter('CPU', node.cpuReq, node.cpuAlloc, mapCpu(node.cpuReq) + ' requested of ' + mapCpu(node.cpuAlloc) + (node.cpuUsed != null ? ' · ' + mapCpu(node.cpuUsed) + ' in use' : '')) +
+        mapMeter('Memory', node.memReq, node.memAlloc, mapMem(node.memReq) + ' requested of ' + mapMem(node.memAlloc) + (node.memUsed != null ? ' · ' + mapMem(node.memUsed) + ' in use' : '')));
+      if (mine.length) html += block('Running here', mapList(mine, function (pod) { return pod.namespace + ' · ' + pod.status; }, 40) +
+        (onIt.length > mine.length ? '<p class="mnote">And ' + (onIt.length - mine.length) + ' system and DaemonSet pods.</p>' : ''));
+      var plugged = state.map.nodes.filter(function (other) { return other.kind === 'PersistentVolume' && (other.attachedTo === node.name || other.pinnedTo === node.name); });
+      if (plugged.length) html += block('Volumes attached', mapList(plugged, function (volume) { var claim = mapFrom(volume.id, 'binds')[0]; return (claim ? claim.namespace + '/' + claim.name + ' · ' : '') + volume.capacity; }));
+    } else if (node.kind === 'Service') {
+      var targets = mapTo(node.id, 'routes');
+      html += block('Sends traffic to', targets.length ? mapList(targets, function (target) { return target.kind + ' · ' + target.status; }) : '<p class="mnote">' + (node.selects === 0 ? 'Its selector matches no pod.' : 'No selector: its endpoints are set by hand.') + '</p>');
+      var outside = mapFrom(node.id, 'exposes');
+      if (outside.length) html += block('From outside', mapList(outside, function (ingress) { return (ingress.hosts || []).join(', '); }));
+      var callers = uses(node.id, 'inn', 'from');
+      if (callers.length) html += block('Used by', '<p class="mnote"><span class="mtag inf">inferred</span> from a name written in their pod templates.</p><div class="mgos">' + callers.map(function (user) { return mapGo(user.node, user.via); }).join('') + '</div>');
+    } else if (node.kind === 'Ingress') {
+      html += block('Hosts', '<div class="chips">' + (node.hosts || []).map(function (host) { return '<span class="chip">' + esc(host) + '</span>'; }).join('') + '</div>');
+      html += block('Sends traffic to', mapList(mapTo(node.id, 'exposes'), function (service) { return service.status; }));
+    } else if (node.kind === 'PersistentVolumeClaim') {
+      var by = mapFrom(node.id, 'mounts');
+      html += block('Storage', mapStorageRows([node]));
+      html += block('Mounted by', by.length ? mapList(by, function (pod) { return pod.status + ' · ' + mapShort(pod.node); }) : '<p class="mnote">No pod mounts it.</p>');
+    } else if (node.kind === 'PersistentVolume') {
+      var claim = mapFrom(node.id, 'binds')[0];
+      html += mapStats([[node.capacity || '?', 'capacity'], [node.modes || '?', 'access'], [node.reclaim || '?', 'reclaim']]);
+      if (claim) {
+        html += block('Storage', mapStorageRows([claim]));
+        html += block('Mounted by', mapList(mapFrom(claim.id, 'mounts'), function (pod) { return pod.status + ' · ' + mapShort(pod.node); }));
+      }
+      html += '<p class="mnote">' + (node.local ? 'A local volume: its data is on ' + esc(mapShort(node.pinnedTo) || 'one node') + ' and does not follow the pod.'
+        : node.attachedTo ? 'Lives in the storage backend, attached to ' + esc(mapShort(node.attachedTo)) + ' over the network. It follows the pod if the pod moves.' : 'Not attached to any node right now.') + '</p>';
+    } else if (node.kind === 'StorageClass') {
+      var made = mapFrom(node.id, 'class').filter(function (other) { return other.kind === 'PersistentVolume'; });
+      html += mapStats([[made.length, 'volumes'], [node.reclaim || '?', 'reclaim'], [node.binding === 'WaitForFirstConsumer' ? 'on first use' : 'at once', 'binding'], node.isDefault ? ['yes', 'default'] : null]);
+      if (made.length) html += block('Volumes it made', mapList(made, function (volume) { var held = mapFrom(volume.id, 'binds')[0]; return (held ? held.namespace + '/' + held.name + ' · ' : '') + volume.capacity; }, 40));
+    }
+    return html;
+  }
+
+  /** From the pane to the other two ways of looking at the same thing. */
+  function mapPaneLinks(row) {
+    if (state.view.type !== 'map' || !state.mapIndex) return '';
+    var node = state.mapIndex.byId[mapUi().sel];
+    if (!node || node.name !== row.name) return '';
+    var owner = node.kind === 'Pod' && node.owner ? state.mapIndex.byId[node.owner] : node;
+    var mode = state.view.mode || 'topology';
+    var html = '';
+    if (mapFocusable(owner) && mode !== 'graph') html += '<button class="btn" data-pane-view="graph" title="Everything ' + esc(owner.name) + ' stands on">Dependencies</button>';
+    if ((node.kind === 'Pod' || node.kind === 'Node' || node.kind === 'PersistentVolume') && mode !== 'physical') html += '<button class="btn" data-pane-view="physical" title="The machine it is on">Where it is</button>';
+    if (mode !== 'topology' && node.namespace) html += '<button class="btn" data-pane-view="topology" title="What reaches it and what is behind it">Topology</button>';
+    return html;
+  }
+
+  /** Follow a name in the pane: the map goes to it, and the pane opens on it. */
+  function mapFollow(id, back) {
+    var node = state.mapIndex && state.mapIndex.byId[id];
+    if (!node) return;
+    var ui = mapUi();
+    if (!back && ui.sel && ui.sel !== id) { mapTrail.push(ui.sel); if (mapTrail.length > 30) mapTrail.shift(); }
+    if (node.namespace) ui.open[node.namespace] = true;
+    mapBring = true;
+    mapSelect(id);
+  }
+
+  document.addEventListener('click', function (event) {
+    var go = event.target.closest('[data-map-go]');
+    if (go) { mapFollow(go.dataset.mapGo); return; }
+    var jump = event.target.closest('[data-pane-view]');
+    if (jump) {
+      var here = state.mapIndex && state.mapIndex.byId[mapUi().sel];
+      if (!here) return;
+      var owned = here.kind === 'Pod' && here.owner ? state.mapIndex.byId[here.owner] : here;
+      var next = { mode: jump.dataset.paneView };
+      if (next.mode === 'graph') { next.focus = owned.id; mapUi().sim = null; }
+      if (next.mode === 'topology' && here.namespace) mapUi().open[here.namespace] = true;
+      if (next.mode === 'physical' && here.kind === 'Pod' && here.owner) mapUi().hl = here.owner;
+      state.view = assign(assign({}, state.view), next);
+      mapBring = true;
+      remember();
+      draw();
+      return;
+    }
+    var tool = event.target.closest('[data-pane]');
+    if (!tool) return;
+    var what = tool.dataset.pane;
+    if (what === 'back') { var last = mapTrail.pop(); if (last) mapFollow(last, true); return; }
+    if (what === 'smaller' || what === 'bigger') state.paneScale = Math.max(0.85, Math.min(1.6, Math.round((state.paneScale + (what === 'bigger' ? 0.1 : -0.1)) * 100) / 100));
+    if (what === 'wide') state.paneBig = !state.paneBig;
+    remember();
+    drawDetail(true);
+    drawGrips();
+    // The map has more or less room now, and is drawn for the room it has.
+    if (what === 'wide' && state.view.type === 'map') drawMap();
+  });
+  // Whether the long description is unfolded is remembered across the pane's own redraws.
+  document.addEventListener('toggle', function (event) {
+    if (event.target && event.target.dataset && event.target.dataset.paneFold === 'describe') state.describeOpen = event.target.open;
+  }, true);
+
   /* ---- Changing things from the map ----------------------------------- */
 
   /*
@@ -4246,6 +4553,8 @@
     var row = mapRows[id] || {
       uid: node.uid || id, name: node.name, namespace: node.namespace, kind: node.kind,
       status: node.status, health: node.health, createdAt: node.createdAt, age: '', labels: {},
+      // Shown on what the map knows until the cluster has been asked: the pane says so with a turning mark.
+      reading: true,
     };
     mapRows[id] = row;
     // A long afternoon of clicking is not a reason to hold every row that was ever opened.
@@ -4273,6 +4582,7 @@
         return;
       }
       assign(row, fresh);
+      delete row.reading;
       if (state.selected === row) drawDetail();
     }).catch(function (error) { if (state.selected === row) say(String(error.message || error), true); });
     if (before != null) {
@@ -4440,6 +4750,8 @@
       state.view = assign(assign({}, state.view), { mode: 'graph', focus: set.mapFocusOn });
       mapUi().sim = null;
     } else if (set.mapId) {
+      mapTrail = [];
+      mapBring = !state.selected;
       mapSelect(set.mapId);
       return;
     }
@@ -4531,6 +4843,18 @@
     if (!view) return;
     mapUnlight(view);
     mapHoverVolumes(null);
+  });
+
+  $('table').addEventListener('dblclick', function (event) {
+    if (state.view.type !== 'map' || state.view.mode === 'graph') return;
+    var card = event.target.closest('#map-view [data-map-id]');
+    var node = card && state.mapIndex.byId[card.dataset.mapId];
+    var owner = node && node.kind === 'Pod' && node.owner ? state.mapIndex.byId[node.owner] : node;
+    if (!mapFocusable(owner)) return;
+    state.view = assign(assign({}, state.view), { mode: 'graph', focus: owner.id });
+    mapUi().sim = null;
+    remember();
+    draw();
   });
 
   /*
@@ -5158,7 +5482,9 @@
     var nav = Math.max(0, Math.min(state.navWidth, room - TABLE_FLOOR));
     var aside = 0;
     if (detail) {
-      aside = Math.max(0, Math.min(state.detailWidth, room - nav - TABLE_FLOOR));
+      // Given most of the room when asked: this is where the reading is done.
+      var wanted = state.paneBig ? Math.max(state.detailWidth, Math.round(room * 0.62)) : state.detailWidth;
+      aside = Math.max(0, Math.min(wanted, room - nav - TABLE_FLOOR));
       // Narrower than the two of them plus a floor: the navigation goes first,
       // because the detail pane is what was asked for and the nav is a menu.
       if (aside < 160) {
@@ -5193,7 +5519,8 @@
     if (!chosen) { if (existing) existing.remove(); return; }
 
     var aside = existing || document.createElement('aside');
-    if (!existing) $('body').appendChild(aside);
+    if (!existing) { $('body').appendChild(aside); aside.classList.add('pane-in'); }
+    aside.style.setProperty('--pane-scale', String(state.paneScale));
 
     /*
      * A release is asked different questions than an object is. Not "what does
@@ -5236,15 +5563,29 @@
 
     aside.innerHTML =
       '<div class="detail-head">' +
-        // A pane that opens on a click has to close on one. Escape closes it too.
-        '<button class="detail-close" data-do="close-detail" title="Close (Esc)" aria-label="Close">×</button>' +
-        '<h3>' + esc(chosen.name) + '</h3>' +
-        '<small>' +
-          (release
-            ? esc(chosen.chart + ' ' + chosen.chartVersion) + ' · revision ' + esc(chosen.revision)
-            : esc(chosen.kind)) +
-          (chosen.namespace ? ' · ' + esc(chosen.namespace) : '') + ' · ' + ageHtml(chosen) + ' old</small>' +
-        '<div class="detail-actions">' + actionsFor(chosen) + '</div>' +
+        /*
+         * The pane's own controls, in one corner: back to what was open before,
+         * the text smaller or larger, the pane given most of the room, and shut.
+         * The size is the reader's to choose — a description is read at arm's
+         * length by one person and across a desk by another.
+         */
+        '<div class="pane-tools">' +
+          (state.view.type === 'map' && mapTrail.length
+            ? '<button class="pane-tool" data-pane="back" title="Back to what was open before" aria-label="Back">←</button>' : '') +
+          '<button class="pane-tool" data-pane="smaller" title="Smaller text" aria-label="Smaller text"' + (state.paneScale <= 0.86 ? ' disabled' : '') + '>A−</button>' +
+          '<button class="pane-tool" data-pane="bigger" title="Larger text" aria-label="Larger text"' + (state.paneScale >= 1.59 ? ' disabled' : '') + '>A+</button>' +
+          '<button class="pane-tool' + (state.paneBig ? ' on' : '') + '" data-pane="wide" title="' + (state.paneBig ? 'Back to its usual width' : 'Give it most of the room') + '" aria-label="Wider">⤢</button>' +
+          // A pane that opens on a click has to close on one. Escape closes it too.
+          '<button class="pane-tool detail-close" data-do="close-detail" title="Close (Esc)" aria-label="Close">×</button>' +
+        '</div>' +
+        '<div class="pane-title"><span class="kind-badge c-' + (MAP_CAT[chosen.kind] || 'wk') + '">' + esc(release ? 'Release' : chosen.kind) + '</span>' +
+          (chosen.reading ? '<span class="pane-reading spin" title="Reading it from the cluster">◐</span>' : '') + '</div>' +
+        '<h3 class="pane-name">' + esc(chosen.name) + '</h3>' +
+        '<small class="pane-sub">' +
+          (!release && chosen.status ? '<span class="pill p-' + esc(chosen.health || 'idle') + '">' + esc(chosen.status) + '</span>' : '') +
+          (release ? esc(chosen.chart + ' ' + chosen.chartVersion) + ' · revision ' + esc(chosen.revision) : '') +
+          (chosen.namespace ? '<span>' + esc(chosen.namespace) + '</span>' : '') + '<span>' + ageHtml(chosen) + ' old</span></small>' +
+        '<div class="detail-actions">' + actionsFor(chosen) + mapPaneLinks(chosen) + '</div>' +
         detailForwards(chosen) +
         '<div class="ask">' +
           '<input id="question" placeholder="Ask Claude something about this" />' +
@@ -5990,7 +6331,10 @@
    * is not in the short version.
    */
   function overviewBody(row) {
-    return chartsFor(row) + factsBlock(row) + containersBlock(row) + labelsBlock(row) + describeBlock();
+    var known = mapInfo(row);
+    // With the map's own account of it above, the cluster's long description is one click away rather than in the way.
+    return chartsFor(row) + known + factsBlock(row) + containersBlock(row) + labelsBlock(row) +
+      (known ? '<details class="pane-fold" data-pane-fold="describe"' + (state.describeOpen ? ' open' : '') + '><summary>Described by the cluster</summary>' + describeBlock() + '</details>' : describeBlock());
   }
 
   /** A named section with its own Copy — nobody wants the whole drawer. */
