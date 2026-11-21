@@ -1056,17 +1056,60 @@
   .msim { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
   .msim > div { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
   .msim small { display: block; margin-bottom: 3px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
+
+  /* ------------------------------------------------------------------ *
+   * States, for every control at once.
+   *
+   * Each of these was right somewhere and missing somewhere else: a ring
+   * for the keyboard on some buttons and the browser's own on the rest, a
+   * tool that appears under the pointer and never under the Tab key, a
+   * disabled button that swallowed the tooltip saying why. Said once, here.
+   * ------------------------------------------------------------------ */
+  button:focus-visible, [tabindex]:focus-visible, select:focus-visible, input[type="checkbox"]:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  .row-menu .btn:focus-visible, .map-seg button:focus-visible, nav button:focus-visible, tr[tabindex]:focus-visible, th[tabindex]:focus-visible {
+    outline-offset: -2px;
+  }
+  .btn, .pane-tool, nav button, .tabs button, .link, .subtab-tool, .cl-row, .cl-tool, .dock-tab {
+    transition: background-color 0.1s, border-color 0.1s, color 0.1s, opacity 0.1s;
+  }
+  .btn:active, .pane-tool:active, .tabs button:active, nav button:active, .subtab-tool:active, .cluster-pick:active { filter: brightness(0.9); }
+  /* Off, and able to say why: the reason is in its title, which a control that takes no pointer never shows. */
+  .btn[disabled] { pointer-events: auto; cursor: not-allowed; }
+  .btn[disabled]:hover, .btn[disabled]:active { filter: none; }
+  .pane-tool[disabled]:hover { background: none; color: var(--text-dim); cursor: not-allowed; }
+  .btn.on:hover { border-color: var(--accent); filter: brightness(1.1); }
+  /* What the pointer reveals, the keyboard reveals. */
+  td.more button:focus-visible, tbody tr:focus-within td.more button,
+  .map-row .link:focus-visible, .map-row:focus-within .link, .config-env:focus-within .btn { opacity: 1; }
+  .subtab:focus-within .x { visibility: visible; }
+  th.tick, th.more { cursor: default; }
+  th.tick:hover, th.more:hover { color: inherit; background: none; }
+  /* Small things to press, given the room a finger of the pointer needs. */
+  .subtab .x, .dock-tab .x, td.more button { min-width: 20px; min-height: 20px; display: inline-grid; place-items: center; box-sizing: border-box; }
+  .dock-tab { cursor: pointer; }
+  .dock-tab:hover { color: var(--text); border-color: var(--border-strong); }
+  .dock-tab .x, .keys-link, th .arrow, .nav-sub { opacity: 1; color: var(--text-dim); }
+  /* Under the sheets and the menus, which are asked for over it. */
+  .map-form { z-index: 7; }
+  .pane-find input:focus { box-shadow: 0 0 0 1px var(--accent); }
+  tr.gone td, .is-gone { opacity: 0.6; }
+  @media (prefers-reduced-motion: reduce) {
+    .spin, #reload.is-busy svg, #live.on .live-dot, .timeline-track i.is-going, .edit-note, #sheet { animation: none !important; }
+    .btn, .pane-tool, nav button, .tabs button, .link, .mcard, .mtile { transition: none !important; }
+  }
 </style>
 
 <div id="app">
   <header class="top">
     <button id="cluster" class="cluster-pick" aria-haspopup="listbox" aria-expanded="false"><span class="cl-name"></span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button>
-    <select id="namespace" title="Which namespace"></select>
-    <input id="search" placeholder="Filter by name, namespace or status" />
+    <select id="namespace" title="Which namespace" aria-label="Namespace"></select>
+    <input id="search" placeholder="Filter by anything shown" aria-label="Filter" />
     <button class="btn with-icon" id="terminal" title="Open a terminal aimed at this cluster and namespace"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4.5 6.5 6.5 8l-2 1.5M8 10h3"/></svg>Terminal</button>
     <span class="refresh-group">
       <button class="btn with-icon" id="live" title="Keep this up to date by itself"><span class="live-dot"></span>Live</button>
-      <span class="fresh" id="fresh"></span>
+      <span class="fresh" id="fresh" aria-live="polite"></span>
       <button class="btn icon" id="reload" title="Refresh now" aria-label="Refresh now"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg></button>
     </span>
   </header>
@@ -1548,12 +1591,12 @@
   }
 
   function drawNav() {
-    var html = '<button class="' + (state.view.type === 'overview' ? 'on' : '') + '" data-view="overview">Overview</button>' +
+    var html = '<button class="' + (state.view.type === 'overview' ? 'on' : '') + '"' + (state.view.type === 'overview' ? ' aria-current="page"' : '') + ' data-view="overview">Overview</button>' +
       '<button class="' + (state.view.type === 'map' ? 'on' : '') + '" data-view="map" title="The cluster drawn as what is joined to what">Map</button>';
 
     var open = openGroups();
     var heading = function (title, count) {
-      return '<button class="nav-group' + (open[title] ? ' is-open' : '') + '" data-group="' + esc(title) + '">' +
+      return '<button class="nav-group' + (open[title] ? ' is-open' : '') + '" aria-expanded="' + (open[title] ? 'true' : 'false') + '" data-group="' + esc(title) + '">' +
         '<span class="twist">' + (open[title] ? '▾' : '▸') + '</span><span class="group-title">' + esc(title) + '</span>' +
         (count ? '<span class="count">' + count + '</span>' : '') + '</button>';
     };
@@ -2828,6 +2871,7 @@
     ).join('');
     $('namespace').innerHTML = namespaces;
     $('live').className = 'btn with-icon' + (state.live ? ' on' : '');
+    $('live').setAttribute('aria-pressed', state.live ? 'true' : 'false');
     drawFresh();
   }
 
@@ -3188,11 +3232,12 @@
       return !(column === 'namespace' && state.namespace);
     });
 
-    var head = '<tr><th class="tick"><input type="checkbox" id="tick-all"' +
+    var head = '<tr><th class="tick"><input type="checkbox" aria-label="Tick all shown" id="tick-all"' +
       (state.picked.length && state.picked.length === rows.length ? ' checked' : '') + ' /></th>' +
       columns.map(function (column) {
       var arrow = state.sort.column === column ? '<span class="arrow">' + (state.sort.dir > 0 ? '↑' : '↓') + '</span>' : '';
-      return '<th data-column="' + esc(column) + '">' + esc(HEADINGS[column] || column) + arrow + '</th>';
+      var sorted = state.sort.column === column ? (state.sort.dir > 0 ? 'ascending' : 'descending') : 'none';
+      return '<th scope="col" tabindex="0" role="columnheader" aria-sort="' + sorted + '" data-column="' + esc(column) + '" title="Sort by ' + esc(HEADINGS[column] || column) + '">' + esc(HEADINGS[column] || column) + arrow + '</th>';
     }).join('') + '<th class="more"></th></tr>';
 
     var body = '';
@@ -3201,7 +3246,7 @@
       var row = rows[i];
       var on = state.selected && state.selected.uid === row.uid;
       body += '<tr data-uid="' + esc(row.uid) + '" class="' + (on ? 'on' : '') + '">';
-      body += '<td class="tick"><input type="checkbox" data-tick="' + esc(row.uid) + '"' +
+      body += '<td class="tick"><input type="checkbox" aria-label="Tick ' + esc(row.name) + '" data-tick="' + esc(row.uid) + '"' +
         (state.picked.indexOf(row.uid) >= 0 ? ' checked' : '') + ' /></td>';
       for (var c = 0; c < columns.length; c += 1) body += cell(row, columns[c]);
       // What you can do to this one, without opening it first.
@@ -6498,7 +6543,7 @@
       { value: data.restarts, label: 'restarts', warn: data.restarts > 0, go: 'pods', sort: 'restarts' },
       { value: data.warnings, label: 'warning events', warn: data.warnings > 0, go: 'events' },
     ].map(function (card) {
-      return '<div class="card is-link ' + (card.bad ? 'bad' : card.warn ? 'warn' : '') + '"' +
+      return '<div tabindex="0" role="link" class="card is-link ' + (card.bad ? 'bad' : card.warn ? 'warn' : '') + '"' +
         ' data-go="' + esc(card.go) + '"' +
         (card.only ? ' data-only="' + esc(card.only) + '"' : '') +
         (card.sort ? ' data-sort="' + esc(card.sort) + '"' : '') +
@@ -6523,7 +6568,7 @@
       recent = '<div class="crumb"><strong>Recent warnings</strong></div><table><tbody>' +
         data.recent.slice(0, 20).map(function (row) {
           var nav = row.objectKind ? navFor(row.objectKind) : null;
-          return '<tr' + (nav ? ' class="is-link" data-open="' + esc(row.objectName) + '" data-open-kind="' + esc(nav) + '" data-open-namespace="' + esc(row.namespace || '') + '" title="Open ' + esc(row.object) + '"' : '') +
+          return '<tr' + (nav ? ' class="is-link" tabindex="0" role="link" data-open="' + esc(row.objectName) + '" data-open-kind="' + esc(nav) + '" data-open-namespace="' + esc(row.namespace || '') + '" title="Open ' + esc(row.object) + '"' : '') +
             '><td class="dim age">' + ageHtml(row) + '</td>' +
             '<td class="warn-text">' + esc(row.status) + '</td>' +
             '<td class="dim">' + esc(row.object) + '</td>' +
@@ -6574,7 +6619,7 @@
     var bar = function (title, of, format) {
       var pct = function (n) { return Math.max(0, Math.min(100, (n / of.allocatable) * 100)); };
       var over = of.used > of.requested;
-      return '<div class="gauge is-link" data-stat="' + title.toLowerCase() + '">' +
+      return '<div tabindex="0" role="link" class="gauge is-link" data-stat="' + title.toLowerCase() + '">' +
         '<div class="gauge-head"><span>' + title + '</span>' +
           '<b>' + format(of.used) + '</b><span class="dim"> used of ' + format(of.allocatable) + '</span></div>' +
         '<div class="gauge-bar">' +
@@ -6601,7 +6646,7 @@
       var used = state.disk.used;
       var pct = (used / state.disk.total) * 100;
       var vols = data.volumes;
-      gauges += '<div class="gauge is-link" data-stat="disk">' +
+      gauges += '<div tabindex="0" role="link" class="gauge is-link" data-stat="disk">' +
         '<div class="gauge-head"><span>Disk</span><b>' + gigs(used) + '</b>' +
           '<span class="dim"> used of ' + gigs(state.disk.total) + '</span></div>' +
         '<div class="gauge-bar"><span class="gauge-use ' + (pct >= 85 ? 'is-over' : '') + '" style="width:' +
@@ -6775,7 +6820,7 @@
     return '<div class="panel-block"><h4>Needs attention <span class="dim">· healthy to look at, and not doing what it was set up to do</span></h4>' +
       '<table><tbody>' + rows.slice(0, 12).map(function (row) {
         var nav = navFor(row.node.kind);
-        return '<tr' + (nav ? ' class="is-link" data-open="' + esc(row.node.name) + '" data-open-kind="' + esc(nav) + '" data-open-namespace="' + esc(row.node.namespace || '') + '"' : '') + '>' +
+        return '<tr' + (nav ? ' class="is-link" tabindex="0" role="link" data-open="' + esc(row.node.name) + '" data-open-kind="' + esc(nav) + '" data-open-namespace="' + esc(row.node.namespace || '') + '"' : '') + '>' +
           '<td class="name"><span class="dot warn"></span>' + esc(row.node.name) + '</td>' +
           '<td class="dim">' + esc(row.node.namespace || '') + '</td>' +
           '<td class="warn-text">' + esc(row.finding.title) + '</td>' +
@@ -6793,7 +6838,7 @@
     if (!rows.length) return '';
     return '<div class="panel-block"><h4>What the cluster is complaining about</h4>' +
       '<table><tbody>' + rows.map(function (row) {
-        return '<tr class="is-link" data-reason="' + esc(row.reason) + '" title="The events that say ' + esc(row.reason) + '"><td class="warn-text">' + esc(row.reason) + '</td>' +
+        return '<tr class="is-link" tabindex="0" role="link" data-reason="' + esc(row.reason) + '" title="The events that say ' + esc(row.reason) + '"><td class="warn-text">' + esc(row.reason) + '</td>' +
           '<td class="dim">' + many(row.count) + '×</td>' +
           '<td class="dim">' + esc(row.newest) + '</td>' +
           '<td class="grow dim">' + esc(String(row.example || '').slice(0, 120)) + '</td></tr>';
@@ -7281,7 +7326,7 @@
         (unwell ? ' · <span class="bad-text">' + unwell + ' unhealthy</span>' : ' · all healthy') +
         (restarts ? ' · ' + restarts + ' restarts between them' : '') + '</p>' +
       '<table><tbody>' + pods.map(function (pod) {
-        return '<tr class="is-link" data-open="' + esc(pod.name) + '" data-open-kind="pods"' +
+        return '<tr class="is-link" tabindex="0" role="link" data-open="' + esc(pod.name) + '" data-open-kind="pods"' +
             ' data-open-namespace="' + esc(pod.namespace || '') + '">' +
           '<td><span class="dot ' + esc(pod.health) + '"></span></td>' +
           '<td class="grow">' + esc(pod.name) + warnMark(assign({ kind: 'Pod' }, pod)) + '</td>' +
@@ -7310,7 +7355,7 @@
     return '<p class="all-well">' + jobs.length + (jobs.length === 1 ? ' run kept' : ' runs kept') +
         (failed ? ' · <span class="bad-text">' + failed + ' failed</span>' : ' · none failed') + '</p>' +
       '<table><tbody>' + jobs.map(function (job) {
-        return '<tr class="is-link" data-open="' + esc(job.name) + '" data-open-kind="jobs"' +
+        return '<tr class="is-link" tabindex="0" role="link" data-open="' + esc(job.name) + '" data-open-kind="jobs"' +
             ' data-open-namespace="' + esc(job.namespace || '') + '">' +
           '<td><span class="dot ' + esc(job.health) + '"></span></td>' +
           '<td class="grow">' + esc(job.name) + '</td>' +
@@ -9245,7 +9290,7 @@
 
     var log = currentLog();
     var tabs = state.logs.map(function (entry, at) {
-      return '<span class="dock-tab' + (at === state.logAt ? ' on' : '') + '" data-log="' + at + '">' +
+      return '<span class="dock-tab' + (at === state.logAt ? ' on' : '') + '" tabindex="0" role="tab" aria-selected="' + (at === state.logAt) + '" data-log="' + at + '">' +
         '<span class="dot ' + (entry.following ? 'ok' : 'idle') + '" title="' + (entry.following ? 'Following' : 'Not following') + '"></span>' +
         '<span class="what" title="' + esc((entry.namespace ? entry.namespace + '/' : '') + entry.name + (entry.container ? ' · ' + entry.container : '')) + '">' + esc(entry.name) + '</span>' +
         '<button class="x" data-close="' + at + '" title="Close this log" aria-label="Close">✕</button></span>';
@@ -11108,10 +11153,7 @@
     }
     if (event.key === 'Escape' && document.querySelector('.row-menu')) {
       // A menu is the nearest thing open: it goes, and what was selected before it comes back.
-      var before = menuRow ? menuWas : state.selected;
-      var hadRow = Boolean(menuRow);
-      closeRowMenu();
-      if (hadRow) { state.selected = before; draw({ keepDock: true }); }
+      dismissMenu();
       event.preventDefault();
       return;
     }
@@ -11275,6 +11317,115 @@
     clusters.stale = true;
     if (document.getElementById('cluster-menu')) readClusters(true);
   });
+
+
+  /* ---------------------------------------------------------------------- *
+   * The keyboard, for everything that is pressed.
+   *
+   * A row that opens something, a heading that sorts, a card that leads
+   * somewhere: each is a thing to press, and Enter or Space presses whatever
+   * has the focus. One listener, so a new clickable thing needs only a
+   * tabindex and a role to be reachable.
+   * ---------------------------------------------------------------------- */
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    var target = event.target;
+    if (!target || !target.matches || !target.matches('[tabindex][role="link"], [tabindex][role="button"], [tabindex][role="tab"], th[tabindex]')) return;
+    event.preventDefault();
+    target.click();
+  });
+
+  /**
+   * Menus and sheets, as they appear.
+   *
+   * Every menu here is a box of buttons put on the page by whoever opens it,
+   * and there are a dozen of them. Rather than teach each one, the page is
+   * watched: a menu that arrives is given its role, kept on screen, its first
+   * item focused and its arrows wired; a sheet is made modal for the Tab key.
+   * When either goes, the focus returns to what opened it.
+   */
+  function withinView(box) {
+    var at = box.getBoundingClientRect();
+    if (at.bottom > window.innerHeight - 6) box.style.top = Math.max(6, window.innerHeight - at.height - 6) + 'px';
+    if (at.top < 6) box.style.top = '6px';
+    if (at.right > window.innerWidth - 6) box.style.left = Math.max(6, window.innerWidth - at.width - 6) + 'px';
+  }
+  var overlayOpener = null;
+  new MutationObserver(function (changes) {
+    changes.forEach(function (change) {
+      Array.prototype.forEach.call(change.addedNodes, function (node) {
+        if (node.nodeType !== 1) return;
+        if (node.classList.contains('row-menu')) {
+          var opener = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
+          node.setAttribute('role', 'menu');
+          Array.prototype.forEach.call(node.querySelectorAll('button'), function (item) { item.setAttribute('role', 'menuitem'); });
+          // Placed by whoever made it, a moment from now; then pulled back inside the frame if it fell out.
+          setTimeout(function () {
+            if (!node.isConnected) return;
+            withinView(node);
+            // Opened from the keyboard, the keyboard goes into it. Opened by the pointer, the focus is left alone.
+            if (opener && opener.matches && opener.matches(':focus-visible')) {
+              overlayOpener = opener;
+              var first = node.querySelector('button:not([disabled])');
+              if (first) first.focus();
+            }
+          }, 0);
+          node.addEventListener('keydown', function (event) {
+            if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') return;
+            var items = Array.prototype.filter.call(node.querySelectorAll('button'), function (item) { return !item.disabled; });
+            if (!items.length) return;
+            event.preventDefault();
+            var at = items.indexOf(document.activeElement);
+            var next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+              : (at + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
+            items[at < 0 && event.key === 'ArrowUp' ? items.length - 1 : next].focus();
+          });
+        }
+        if (node.id === 'sheet' || node.id === 'prompt') {
+          var from = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
+          var card = node.querySelector('[role="dialog"]') || node.firstElementChild || node;
+          card.setAttribute('role', 'dialog');
+          card.setAttribute('aria-modal', 'true');
+          node.sheetOpener = from;
+          node.addEventListener('keydown', function (event) {
+            if (event.key !== 'Tab') return;
+            var stops = Array.prototype.filter.call(node.querySelectorAll('button, input, select, textarea, [tabindex]'), function (one) {
+              return !one.disabled && one.tabIndex >= 0 && one.offsetParent !== null;
+            });
+            if (!stops.length) return;
+            var first = stops[0];
+            var last = stops[stops.length - 1];
+            if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+            else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+          });
+        }
+      });
+      Array.prototype.forEach.call(change.removedNodes, function (node) {
+        if (node.nodeType !== 1) return;
+        var back = node.classList.contains('row-menu') ? overlayOpener : (node.id === 'sheet' || node.id === 'prompt') ? node.sheetOpener : null;
+        if (node.classList.contains('row-menu')) overlayOpener = null;
+        // Only if the focus fell out with it; somebody who has moved on is not pulled back.
+        if (back && back.isConnected && (document.activeElement === document.body || !document.activeElement)) back.focus();
+      });
+    });
+  }).observe(document.body, { childList: true });
+
+  /** A menu put away without choosing: what was selected before it comes back. */
+  function dismissMenu() {
+    if (!document.querySelector('.row-menu')) return false;
+    var before = menuRow ? menuWas : state.selected;
+    var hadRow = Boolean(menuRow);
+    closeRowMenu();
+    if (hadRow) { state.selected = before; draw({ keepDock: true }); }
+    return true;
+  }
+  // A menu is fixed to the window; what it was opened on is not. Scrolled, resized or left, it goes.
+  document.addEventListener('scroll', function (event) {
+    if (event.target && event.target.closest && event.target.closest('.row-menu, #cluster-menu')) return;
+    dismissMenu();
+  }, { passive: true, capture: true });
+  window.addEventListener('resize', function () { dismissMenu(); closeClusterMenu(); });
+  window.addEventListener('blur', dismissMenu);
 
   host.on('theme', function () { /* the app rebuilds the frame; nothing to do here */ });
 
