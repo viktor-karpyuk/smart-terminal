@@ -436,6 +436,8 @@ function graphFrom(lists, helpers, now = Date.now()) {
       status,
       health: finished ? 'idle' : health(status),
       ready: statuses.length > 0 && statuses.every((entry) => entry.ready),
+      // Since when it has been ready, if it is: what it complained about before that, it got over.
+      readyAt: (pod.status?.conditions ?? []).find((one) => one.type === 'Ready' && one.status === 'True')?.lastTransitionTime ?? '',
       restarts: statuses.reduce((sum, entry) => sum + (entry.restartCount ?? 0), 0),
       lastEnd: statuses.map((entry) => entry.lastState?.terminated?.reason).filter(Boolean)[0] ?? '',
       node: pod.spec?.nodeName ?? '',
@@ -661,19 +663,36 @@ function graphFrom(lists, helpers, now = Date.now()) {
     const node = id ? byId.get(id) : null;
     if (!node) continue;
     const at = event.lastTimestamp || event.eventTime || event.metadata?.creationTimestamp || '';
+    const words = `${event.reason ?? 'Warning'}: ${String(event.message ?? '').trim().slice(0, 180)}`;
+    /*
+     * A pod that is ready now, and was last complained about before it became
+     * so, got over it: a probe that failed while the application was starting
+     * is how every start looks. The cluster keeps saying it for an hour; it is
+     * counted apart, so the number on a row is what is wrong and not what was.
+     */
+    if (node.kind === 'Pod' && node.ready && node.readyAt && at && Date.parse(at) <= Date.parse(node.readyAt)) {
+      node.warningsPast = (node.warningsPast ?? 0) + 1;
+      if (!node.warningPast) node.warningPast = words;
+      continue;
+    }
     node.warnings = (node.warnings ?? 0) + 1;
+    // When each was last said, so that one put aside by its reader stays aside until it is said again.
+    (node.warnTimes ??= []).push(at);
     if (!node.warnedAt || at > node.warnedAt) {
       node.warnedAt = at;
-      node.warning = `${event.reason ?? 'Warning'}: ${String(event.message ?? '').trim().slice(0, 180)}`;
+      node.warning = words;
     }
   }
 
   // A workload's card is what is on screen when its pods are folded into it: their complaints are counted there too.
   for (const pod of nodes) {
-    if (pod.kind !== 'Pod' || !pod.warnings || !pod.owner) continue;
+    if (pod.kind !== 'Pod' || !pod.owner || (!pod.warnings && !pod.warningsPast)) continue;
     const owner = byId.get(pod.owner);
     if (!owner) continue;
+    if (pod.warningsPast) owner.warningsPast = (owner.warningsPast ?? 0) + pod.warningsPast;
+    if (!pod.warnings) continue;
     owner.podWarnings = (owner.podWarnings ?? 0) + pod.warnings;
+    (owner.podWarnTimes ??= []).push(...pod.warnTimes);
     if (!owner.warning) owner.warning = `${pod.name}: ${pod.warning}`;
   }
 

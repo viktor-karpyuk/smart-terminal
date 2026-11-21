@@ -398,6 +398,9 @@
     border-radius: var(--radius); background: var(--bg-input); font-size: 11px;
   }
   .event.is-warn { border-left-color: var(--danger); }
+  /* Over: still readable, no longer asking for anything. */
+  .event.is-past { opacity: 0.62; }
+  .event.is-past .event-head { align-items: center; flex-wrap: wrap; }
   .event-head { display: flex; align-items: baseline; gap: 6px; }
   .event-head .dot { margin-right: 0; }
   .event.is-warn .event-head b { color: var(--danger); }
@@ -1089,6 +1092,8 @@
    * no second copy of the truth anywhere in this file.
    * ---------------------------------------------------------------------- */
   var state = {
+    // Which things have had their warnings put aside, and when: by map id.
+    cleared: {},
     context: null,
     namespaces: [], namespace: '',
     resources: [], resourcesFor: null,
@@ -1230,7 +1235,10 @@
       room -= size;
       return true;
     });
-    return { context: state.context, drafts: drafts, configs: configs, history: history };
+    // Events are forgotten by the cluster in about an hour; a clearing older than a few is about nothing.
+    var cleared = {};
+    Object.keys(state.cleared).forEach(function (id) { if (Date.now() - state.cleared[id] < 6 * 3600000) cleared[id] = state.cleared[id]; });
+    return { context: state.context, drafts: drafts, configs: configs, history: history, cleared: cleared };
   }
   var rememberSoonTimer = 0;
   function rememberSoon() {
@@ -1266,6 +1274,7 @@
       state.drafts = saved.edits.drafts || {};
       state.configs = saved.edits.configs || {};
       state.history = Array.isArray(saved.edits.history) ? saved.edits.history : [];
+      state.cleared = saved.edits.cleared && typeof saved.edits.cleared === 'object' ? saved.edits.cleared : {};
     }
     state.view = saved.view;
     state.only = saved.only || null;
@@ -3989,7 +3998,7 @@
     o = o || {};
     var ui = mapUi();
     // What the cluster has complained about it lately — and, for a workload, about its pods — as a number in the corner.
-    var warned = o.more ? 0 : (node.warnings || 0) + (node.podWarnings || 0);
+    var warned = o.more ? 0 : warnedCount(node);
     var cls = 'mcard c-' + (MAP_CAT[node.kind] || 'wk') + ' h-' + (o.health || node.health || 'ok') +
       (ui.sel && ui.sel === node.id && !o.more ? ' sel' : '') + (o.cls ? ' ' + o.cls : '');
     return '<button class="' + cls + '" style="left:' + x + 'px;top:' + y + 'px' +
@@ -4060,8 +4069,8 @@
 
   /** Whether the cluster has complained lately about a unit or anything of it. */
   function mapUnitWarned(unit) {
-    if (unit.root.warnings || unit.root.podWarnings) return true;
-    return unit.pods.some(function (pod) { return pod.warnings > 0; });
+    if (warnedCount(unit.root)) return true;
+    return unit.pods.some(function (pod) { return stillSaid(pod) > 0; });
   }
 
   function mapUnitBad(unit) {
@@ -4351,13 +4360,13 @@
   function mapTile(pod, ui, text) {
     var claims = mapTo(pod.id, 'mounts');
     var off = (text && (pod.name + ' ' + pod.namespace + ' ' + pod.owner).toLowerCase().indexOf(text) < 0) ||
-      (ui.bad && pod.health !== 'warn' && pod.health !== 'bad' && !pod.warnings);
+      (ui.bad && pod.health !== 'warn' && pod.health !== 'bad' && !stillSaid(pod));
     var size = [mapCpu(pod.cpuReq), mapMem(pod.memReq)].filter(Boolean).join(' · ');
     return '<button class="mtile h-' + pod.health + (ui.hl && pod.owner === ui.hl ? ' hl' : '') + (ui.sel === pod.id ? ' sel' : '') +
       (off ? ' off' : '') + '" data-map-id="' + esc(pod.id) + '" title="' + esc(mapTip(pod)) + '">' +
       '<i class="mdot"></i><span class="mtext"><b>' + esc(pod.name) + '</b><small>' +
       esc(pod.health === 'ok' ? pod.namespace + (size ? ' · ' + size : '') : pod.status + (pod.restarts ? ' · ' + mapPlural(pod.restarts, 'restart') : '')) +
-      '</small></span>' + (pod.warnings ? '<span class="mwarn is-inline" title="' + esc(pod.warning || '') + '">' + (pod.warnings > 99 ? '99+' : pod.warnings) + '</span>' : '') +
+      '</small></span>' + (stillSaid(pod) ? '<span class="mwarn is-inline" title="' + esc(pod.warning || '') + '">' + (stillSaid(pod) > 99 ? '99+' : stillSaid(pod)) + '</span>' : '') +
       (claims.length ? '<i class="mplug" title="Mounts ' + esc(claims.map(function (c) { return c.name; }).join(', ')) + '"></i>' : '') +
       '</button>';
   }
@@ -4522,7 +4531,7 @@
           esc([node.status, node.instance, byZone ? node.pool : node.zone].filter(Boolean).join(' · ')) + '</small>' +
           '<span class="mnode-tags">' + (node.capacity === 'spot' ? '<span class="mtag warn" title="A spot machine: the cloud can take it back at short notice">spot</span>' : '') +
           (node.taintList && node.taintList.length ? '<span class="mtag" title="' + esc(node.taintList.join('\n')) + '">' + mapPlural(node.taintList.length, 'taint') + '</span>' : '') +
-          (node.warnings ? '<span class="mtag bad" title="' + esc(node.warning || '') + '">' + mapPlural(node.warnings, 'warning') + '</span>' : '') +
+          (stillSaid(node) ? '<span class="mtag bad" title="' + esc(node.warning || '') + '">' + mapPlural(stillSaid(node), 'warning') + '</span>' : '') +
           '<span class="mtag" title="Pods running on it">' + pods.length + '</span></span></span>' +
           '<span class="mbars" title="' + esc(askedWhy + '\nCPU: ' + cpuSays + '\nMemory: ' + memSays) + '"><span>' + asked + 'CPU ' + cpu.pct + '%</span><span>' + asked + 'memory ' + mem.pct + '%</span>' +
           cpu.html + mem.html + used + '</span></button><div class="mtiles">' +
@@ -5119,19 +5128,113 @@
     }).join('');
   }
 
+  /* ---------------------------------------------------------------------- *
+   * Warnings that are over.
+   *
+   * The cluster goes on repeating what it said for about an hour, whether or
+   * not it is still true, and a number in red on a row that has been healthy
+   * for fifty minutes teaches people not to look at numbers in red. So there
+   * are two ways out of the count. One is the cluster's own evidence: a pod
+   * that became ready after it was last complained about got over it, and the
+   * map reader counts that apart. The other is the reader's: "Clear" puts what
+   * has been said about one thing aside as of now. Nothing is deleted from the
+   * cluster, and anything said again afterwards is counted again.
+   * ---------------------------------------------------------------------- */
+  function mapNow() {
+    if (state.map && state.mapFor === mapKey()) return state.map;
+    return (mapCache[mapKey()] || mapCache[(state.context || '') + '/'] || {}).result || null;
+  }
+  /** The pods each workload made, worked out once per reading of the map. */
+  function podsOf(id) {
+    var data = mapNow();
+    if (!data) return [];
+    if (!data.podsOf) {
+      data.podsOf = {};
+      (data.nodes || []).forEach(function (node) {
+        if (node.kind === 'Pod' && node.owner) (data.podsOf[node.owner] || (data.podsOf[node.owner] = [])).push(node);
+      });
+    }
+    return data.podsOf[id] || [];
+  }
+  function stillSaid(node) {
+    if (!node || !node.warnings) return 0;
+    var since = state.cleared[node.id] || 0;
+    if (!since) return node.warnings;
+    // A map read by an older reader has the count and not the times: then the latest one decides for all.
+    if (!node.warnTimes) return (Date.parse(node.warnedAt) || Infinity) > since ? node.warnings : 0;
+    return node.warnTimes.filter(function (at) { return (Date.parse(at) || Infinity) > since; }).length;
+  }
+  /** What is being complained about now: its own, and for a workload its pods'. */
+  function warnedCount(node) {
+    if (!node) return 0;
+    var count = stillSaid(node);
+    if (node.podWarnings) podsOf(node.id).forEach(function (pod) { count += stillSaid(pod); });
+    return count;
+  }
+  /** What was complained about and is over: got over by the pod, or put aside here. */
+  function warnedPast(node) {
+    if (!node) return 0;
+    var all = (node.warnings || 0) + (node.podWarnings || 0) + (node.warningsPast || 0);
+    return Math.max(0, all - warnedCount(node));
+  }
+  function clearWarnings(node) {
+    if (!node) return;
+    var now = Date.now();
+    state.cleared[node.id] = now;
+    podsOf(node.id).forEach(function (pod) { state.cleared[pod.id] = now; });
+    remember();
+  }
+  function unclearWarnings(node) {
+    if (!node) return;
+    delete state.cleared[node.id];
+    podsOf(node.id).forEach(function (pod) { delete state.cleared[pod.id]; });
+    remember();
+  }
+  function wasCleared(node) {
+    if (!node) return false;
+    return Boolean(state.cleared[node.id]) || podsOf(node.id).some(function (pod) { return Boolean(state.cleared[pod.id]); });
+  }
+  /** Whether one event in the pane is over, and why: '' while it still counts. */
+  function eventOver(event) {
+    if (event.type !== 'Warning') return '';
+    var at = Date.parse(event.at);
+    if (isNaN(at)) return '';
+    var id = event.objectKind + '/' + (event.objectKind === 'Node' ? '' : event.namespace || '') + '/' + event.objectName;
+    var data = mapNow();
+    var node = null;
+    if (data) {
+      if (!data.byIdAll) { data.byIdAll = {}; (data.nodes || []).forEach(function (one) { data.byIdAll[one.id] = one; }); }
+      node = data.byIdAll[id] || null;
+    }
+    var row = state.selected;
+    var own = row ? row.kind + '/' + (row.namespace || '') + '/' + row.name : '';
+    if ((state.cleared[id] || 0) >= at || (own && (state.cleared[own] || 0) >= at)) return 'cleared';
+    if (node && node.kind === 'Pod' && node.ready && node.readyAt && at <= Date.parse(node.readyAt)) return 'before it was ready';
+    return '';
+  }
+
   /** In a table: the same count the map puts on a card, for the same reason. */
   function warnMark(row) {
     if (!row || !row.kind || row.kind === 'Event') return '';
     var node = mapKnown(row);
-    var count = node ? (node.warnings || 0) + (node.podWarnings || 0) : 0;
+    var count = warnedCount(node);
     return count ? '<span class="row-warn" title="' + esc(node.warning || '') + '">' + (count > 99 ? '99+' : count) + '</span>' : '';
   }
 
   function mapWarned(node) {
-    var count = (node.warnings || 0) + (node.podWarnings || 0);
-    if (!count) return '';
+    var count = warnedCount(node);
+    var past = warnedPast(node);
+    if (!count && !past) return '';
+    if (!count) {
+      // Nothing is wrong now. Said quietly, because it is still worth knowing that something was.
+      return block('Warnings', '<div class="events"><div class="event is-past"><div class="event-head"><span class="dot idle"></span><b>' +
+        'None now</b><span class="dim">· ' + past + ' earlier, ' + (wasCleared(node) ? 'cleared' : 'before it was ready') + '</span><span class="spacer"></span>' +
+        (wasCleared(node) ? '<button class="btn" data-do="warnings-unclear" title="Count them again">Show again</button>' : '') +
+        '<button class="btn" data-tab="events">Open Events</button></div></div></div>');
+    }
     return block('Warnings', '<div class="events"><div class="event is-warn"><div class="event-head"><span class="dot bad"></span><b>' +
-      count + ' lately</b><span class="spacer"></span>' +
+      count + ' lately</b>' + (past ? '<span class="dim">· ' + past + ' earlier</span>' : '') + '<span class="spacer"></span>' +
+      '<button class="btn" data-do="warnings-clear" title="Put these aside. Nothing is deleted in the cluster, and anything said again is counted again.">Clear</button>' +
       '<button class="btn" data-tab="events">Open Events</button></div><div class="event-text">' + esc(node.warning || '') + '</div></div></div>');
   }
 
@@ -8217,7 +8320,10 @@
   /** Warnings known without asking again: from the events if they are read, else from the description's own table. */
   function warningsKnown() {
     var events = state.detailData.events;
-    if (events) return events.filter(function (event) { return event.type === 'Warning'; }).length;
+    if (events) return events.filter(function (event) { return event.type === 'Warning' && !eventOver(event); }).length;
+    // Before the events are read, the map's count is the one that knows which of them are over.
+    var known = mapKnown(state.selected);
+    if (known) return warnedCount(known);
     var text = state.detailData.describe;
     if (typeof text !== 'string') return 0;
     return text.split('\n').filter(function (line) { return /^\s+Warning\s/.test(line); }).length;
@@ -8236,7 +8342,9 @@
     }
     if (event.from) meta.push('from ' + esc(event.from));
     if (!isNaN(first)) meta.push('first ' + esc(ageText(first)) + ' ago');
-    return '<div class="event' + (warn ? ' is-warn' : '') + '">' +
+    var over = eventOver(event);
+    if (over) { warn = false; meta.push(esc(over)); }
+    return '<div class="event' + (warn ? ' is-warn' : '') + (over ? ' is-past' : '') + '">' +
       '<div class="event-head"><span class="dot ' + (warn ? 'bad' : 'idle') + '"></span>' +
         '<b>' + esc(event.status || event.type) + '</b>' +
         (event.count > 1 ? '<span class="event-count" title="Said ' + event.count + ' times">×' + event.count + '</span>' : '') +
@@ -8294,13 +8402,18 @@
     var events = state.detailData.events;
     var failed = state.detailData.eventsError;
     var wide = makesThings(row);
-    var warnings = (events || []).filter(function (event) { return event.type === 'Warning'; });
-    var shown = state.eventsOnly ? warnings : (events || []);
+    var everyWarning = (events || []).filter(function (event) { return event.type === 'Warning'; });
+    var warnings = everyWarning.filter(function (event) { return !eventOver(event); });
+    var over = everyWarning.length - warnings.length;
+    var known = mapKnown(row);
+    var shown = state.eventsOnly ? everyWarning : (events || []);
     var tools = '<div class="yaml-tools is-stuck">' +
       '<span class="dim">' + (events
-        ? (warnings.length ? warnings.length + ' warning' + (warnings.length === 1 ? '' : 's') + ' · ' : '') + events.length + ' event' + (events.length === 1 ? '' : 's')
+        ? (warnings.length ? warnings.length + ' warning' + (warnings.length === 1 ? '' : 's') + ' · ' : '') + (over ? over + ' over · ' : '') + events.length + ' event' + (events.length === 1 ? '' : 's')
         : failed ? 'not read' : 'reading…') + '</span>' +
-      '<button class="btn' + (state.eventsOnly ? ' on' : '') + '" data-do="events-only" title="Only what went wrong"' + (warnings.length || state.eventsOnly ? '' : ' disabled') + '>Warnings</button>' +
+      '<button class="btn' + (state.eventsOnly ? ' on' : '') + '" data-do="events-only" title="Only what went wrong"' + (everyWarning.length || state.eventsOnly ? '' : ' disabled') + '>Warnings</button>' +
+      (warnings.length ? '<button class="btn" data-do="warnings-clear" title="Put these warnings aside. Nothing is deleted in the cluster, and anything said again is counted again.">Clear</button>' : '') +
+      (!warnings.length && known && wasCleared(known) ? '<button class="btn" data-do="warnings-unclear" title="Count the cleared warnings again">Show again</button>' : '') +
       '<button class="btn' + (state.eventsGroup ? ' on' : '') + '" data-do="events-group" title="One line per problem, from when it began to when it was last said"' + (events && events.length ? '' : ' disabled') + '>Timeline</button>' +
       (wide ? '<button class="btn' + (state.eventsWide ? ' on' : '') + '" data-do="events-wide" ' +
         'title="Also the events of what it made — its pods, replica sets, jobs and claims — found by their names">What it made</button>' : '') +
@@ -9818,6 +9931,16 @@
     if (what === 'secret-show') { state.showSecret = !state.showSecret; drawDetail(true); return; }
     if (what === 'events-group') { state.eventsGroup = !state.eventsGroup; drawDetail(); return; }
     if (what === 'events-only') { state.eventsOnly = !state.eventsOnly; drawDetail(); return; }
+    if (what === 'warnings-clear' || what === 'warnings-unclear') {
+      var about = state.selected;
+      if (!about) return;
+      // The map may not know it — a kind it does not draw — and the events in the pane are still its own.
+      var aboutNode = mapKnown(about) || { id: about.kind + '/' + (about.namespace || '') + '/' + about.name };
+      if (what === 'warnings-clear') clearWarnings(aboutNode); else unclearWarnings(aboutNode);
+      if (state.view.type === 'map') drawMap(); else drawTable();
+      drawDetail();
+      return;
+    }
     if (what === 'events-wide') {
       state.eventsWide = !state.eventsWide;
       state.detailData.events = null;
