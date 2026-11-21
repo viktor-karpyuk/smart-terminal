@@ -997,6 +997,13 @@ export function needsConsent(name: string, args: Record<string, unknown>): strin
       return `Delete ${String(args.count)} ${String(args.kind ?? 'object')}s${spread}?\n\nNothing brings them back.`;
     }
     if (name === 'kube.remove') return `Delete ${what}${where}?\n\nNothing brings it back.`;
+    // Several at once: one restart is undone by time, forty at once is an outage somebody should have been asked about.
+    if (name === 'kube.restart' && Number(args.count) > 1) {
+      const spread = Number(args.spread) > 1
+        ? ` across ${String(args.spread)} namespaces${args.context ? ` on ${clusterName(String(args.context))}` : ''}`
+        : where;
+      return `Restart ${String(args.count)} ${String(args.kind ?? 'object')}s${spread}?\n\nEach replaces its pods, a few at a time.`;
+    }
     // A dry run is a question, not a change: the server validates it and throws
     // it away. Asking about that is asking about nothing.
     if (name === 'kube.apply' && !args.dryRun) {

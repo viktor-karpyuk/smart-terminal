@@ -1859,6 +1859,26 @@
         if (state.selected && state.detail.tab === 'events') loadEvents(true);
       }
       else {
+        /*
+         * What was folded in afterwards is carried over until it is read again:
+         * CPU, memory and the zone arrive a moment after the rows, and every
+         * refresh used to blank the three columns — and undo a sort on them —
+         * until they did.
+         */
+        var before = state.table;
+        if (before && before.rows && result.rows && (before.columns || []).some(function (c) { return c === 'cpu' || c === 'zone'; })) {
+          var old = {};
+          before.rows.forEach(function (row) { old[row.uid] = row; });
+          result.rows.forEach(function (row) {
+            var was = old[row.uid];
+            if (was) { row.cpu = was.cpu; row.memory = was.memory; row.zone = was.zone; }
+          });
+          ['zone', 'cpu', 'memory'].forEach(function (column) {
+            if (before.columns.indexOf(column) < 0 || result.columns.indexOf(column) >= 0) return;
+            var after = column === 'zone' ? result.columns.indexOf('node') + 1 : result.columns.indexOf('age');
+            result.columns.splice(after <= 0 && column !== 'zone' ? result.columns.length : after, 0, column);
+          });
+        }
         state.table = result;
         if (state.view.name) state.counts[state.view.name] = (result.rows || []).length;
         // The pane, if one is open, is about one of these rows — and this is a
@@ -1940,8 +1960,10 @@
       });
       if (!any) return;
       // Before Age, which is the column people scan last.
-      var at = state.table.columns.indexOf('age');
-      state.table.columns.splice(at < 0 ? state.table.columns.length : at, 0, 'cpu', 'memory');
+      if (state.table.columns.indexOf('cpu') < 0) {
+        var at = state.table.columns.indexOf('age');
+        state.table.columns.splice(at < 0 ? state.table.columns.length : at, 0, 'cpu', 'memory');
+      }
       drawTable();
     }).catch(function () { /* no metrics-server; the table is the table */ });
   }
@@ -2397,7 +2419,18 @@
         if (state.table.rows[n].uid === event.row.uid) at = n;
       }
       if (event.type === 'DELETED') {
-        if (at >= 0) { state.table.rows.splice(at, 1); changed = true; }
+        if (at >= 0) {
+          var goneRow = state.table.rows[at];
+          state.table.rows.splice(at, 1);
+          changed = true;
+          // The one the pane is open on: it says so, rather than going on reading Running for ever.
+          if (state.selected && state.selected.uid === goneRow.uid) {
+            state.selected.status = 'Deleted';
+            state.selected.health = 'idle';
+            state.selected.gone = true;
+            state.watch.pane = true;
+          }
+        }
       } else if (at >= 0) {
         /*
          * Carried across, because the API server does not know about them: CPU
@@ -2426,6 +2459,8 @@
         state.watch.draw = 0;
         // Never over an editor, and never while a question is open.
         if (state.editing || document.getElementById('prompt')) return;
+        // A button is being pressed: rebuilt now, it would never get its click.
+        if (drawHeld) { drawOwed = { options: { keepDock: true } }; return; }
         var pane = state.watch.pane;
         state.watch.pane = false;
         drawTable();
@@ -2831,11 +2866,23 @@
     if (found[0]) { mapTrail = []; mapFollow(found[0].id); }
     else say('Nothing on the map is called that.', true);
   });
+  // Enter in the question sends it: it is a line of text with a button beside it.
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Enter' || !event.target || event.target.id !== 'question' || event.isComposing) return;
+    event.preventDefault();
+    act('ask');
+  });
   $('search').addEventListener('input', function (event) {
     state.search = event.target.value.trim().toLowerCase();
-    remember();
-    draw();
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(function () {
+      remember();
+      // The table or the map, and what counts them. Not the pane and not the logs: neither is filtered by this.
+      if (state.view.type === 'kind' || state.view.type === 'helm') { drawCrumb(); drawTable(); drawPicked(); }
+      else draw({ keepDock: true });
+    }, 110);
   });
+  var searchTimer = 0;
   // In place: what is there stays there until the new answer replaces it, and
   // the arrow turning is what says it is being asked.
   $('reload').addEventListener('click', function () {
@@ -2995,8 +3042,15 @@
       rows = rows.filter(function (row) {
         // Every part guarded: a node has no namespace, and the word "undefined"
         // in the haystack is a search term that matches every row there is.
-        return (row.name + ' ' + (row.namespace || '') + ' ' + (row.status || '') + ' ' +
-          (row.message || '') + ' ' + (row.nodegroup || '')).toLowerCase().indexOf(term) >= 0;
+        var hay = row.name + ' ' + (row.namespace || '') + ' ' + (row.status || '') + ' ' +
+          (row.message || '') + ' ' + (row.nodegroup || '');
+        // And whatever else the table is showing of it: a node's name, an address, a zone.
+        var shown = (state.table && state.table.columns) || [];
+        for (var c = 0; c < shown.length; c += 1) {
+          var part = row[shown[c]];
+          if (part != null && typeof part !== 'object' && shown[c] !== 'age') hay += ' ' + part;
+        }
+        return hay.toLowerCase().indexOf(term) >= 0;
       });
     }
     if (state.sort.column) {
@@ -3008,13 +3062,45 @@
           var young = bornAt(a), old = bornAt(b);
           if (young != null && old != null) return (old - young) * dir;
         }
-        var left = a[column];
-        var right = b[column];
-        if (typeof left === 'number' && typeof right === 'number') return (left - right) * dir;
-        return String(left == null ? '' : left).localeCompare(String(right == null ? '' : right)) * dir;
+        var left = sortKey(a, column);
+        var right = sortKey(b, column);
+        var order = typeof left === 'number' && typeof right === 'number'
+          ? left - right
+          : String(left == null ? '' : left).localeCompare(String(right == null ? '' : right), undefined, { numeric: true });
+        // The same in this column: by name, so the order does not shuffle between two draws.
+        if (!order) order = String(a.name || '').localeCompare(String(b.name || ''), undefined, { numeric: true }) * dir;
+        return order * dir;
       });
     }
     return rows;
+  }
+
+  /**
+   * What a column is ordered by, which is not always what it prints: "10/10"
+   * before "2/3" and "100m" before "12m" are orders of the letters, not of the
+   * things.
+   */
+  function sortKey(row, column) {
+    var value = row[column];
+    if (value == null || value === '') return column === 'cpu' || column === 'memory' || column === 'ready' ? -1 : '';
+    if (typeof value === 'number') return value;
+    var text = String(value);
+    if (column === 'ready') {
+      var parts = /^(\d+)\/(\d+)/.exec(text);
+      // Least ready first: the share that is up, then how many there are.
+      if (parts) return (Number(parts[2]) ? Number(parts[1]) / Number(parts[2]) : 1) * 1e6 + Number(parts[2]);
+    }
+    if (column === 'cpu') {
+      var cores = /^([\d.]+)(m?)$/.exec(text);
+      if (cores) return Number(cores[1]) * (cores[2] ? 1 : 1000);
+    }
+    if (column === 'memory' || column === 'capacity') {
+      var size = /^([\d.]+)\s*(Ki|Mi|Gi|Ti|K|M|G|T|KiB|MiB|GiB|TiB)?$/.exec(text);
+      var scale = { Ki: 1024, K: 1000, KiB: 1024, Mi: 1048576, M: 1e6, MiB: 1048576, Gi: 1073741824, G: 1e9, GiB: 1073741824, Ti: 1099511627776, T: 1e12, TiB: 1099511627776 };
+      if (size) return Number(size[1]) * (scale[size[2]] || 1);
+    }
+    if (column === 'restarts') return Number(text) || 0;
+    return text;
   }
 
   var HEADINGS = {
@@ -3072,6 +3158,8 @@
     // Asked for late — a forward changing, a selection let go — while the map is what is showing.
     if (state.view.type === 'map') return;
     if (selectingIn($('table'))) { heldBack.table = true; return; }
+    // A row's menu is open: the table under it waits. Redrawn, the menu went and its row stayed selected, unseen.
+    if (menuRow) { heldBack.table = true; return; }
     closeRowMenu();
     if (state.error) {
       $('table').innerHTML = '<div class="note error">' + esc(state.error) + '</div>' + advice(state.error);
@@ -3170,8 +3258,10 @@
     }
     if (event.target.id === 'tick-all') {
       event.stopPropagation();
-      var all = visible().map(function (row) { return row.uid; });
-      state.picked = state.picked.length === all.length ? [] : all;
+      // Only what is drawn: past the cap a row cannot be seen, and must not be acted on unseen.
+      var all = visible().slice(0, CAP).map(function (row) { return row.uid; });
+      var every = all.length > 0 && all.every(function (uid) { return state.picked.indexOf(uid) >= 0; });
+      state.picked = every ? [] : all;
       drawTable();
       drawPicked();
       return;
@@ -3790,8 +3880,10 @@
     if (open) open.remove();
     // The click-away of a menu that is gone must not act on the next one.
     if (menuAway) { document.removeEventListener('click', menuAway); menuAway = null; }
+    var owed = menuRow && heldBack.table;
     menuRow = null;
     menuWas = null;
+    if (owed) setTimeout(function () { if (heldBack.table && !menuRow) { heldBack.table = false; if (state.table) drawTable(); } }, 0);
   }
 
   /**
@@ -5865,7 +5957,12 @@
 
     box.innerHTML = '<div class="map"><div class="map-bar">' + bar + '</div>' +
       '<div>' + (missing.length ? '<div class="map-note">Not drawn, because the cluster would not list them: ' + esc(missing.join('; ')) + '.</div>' : '') +
-      (mode === 'physical' && ui.by !== 'zone' ? mapPoolBar() : '') + '</div>' +
+      (mode === 'physical' && ui.by !== 'zone' ? mapPoolBar() : '') +
+      // A drain in hand is said, and can be stopped, from whichever way the map is being looked at.
+      (mapDraining && !(mode === 'physical' && ui.by !== 'zone' && mapLitPools().names.length)
+        ? '<div class="map-acts"><span class="mtag warn">draining ' + esc(mapDraining.pool) + ': node ' + (mapDraining.at + 1) + ' of ' + mapDraining.names.length +
+          '</span><button class="btn" data-map-act="stop-drain" title="Finish the node in hand and go no further">Stop after this node</button></div>' : '') +
+      '</div>' +
       '<div class="map-view" id="map-view" data-mode="' + mode + '">' +
       /*
        * The column headings ride at the top of the pane: forty rows down, "which
@@ -6969,6 +7066,12 @@
     if (holdingEdit() && !force) return;
     if (!force && state.selected && selectingIn(document.querySelector('aside .detail-body'))) { heldBack.detail = true; return; }
     var chosen = state.selected;
+    // Where the reader was, if this is the same thing on the same tab drawn again.
+    var bodyWas = document.querySelector('aside .detail-body');
+    var paneKey = chosen ? chosen.uid + '|' + state.detail.tab : '';
+    var paneTop = bodyWas && paneKey && drawDetail.key === paneKey ? bodyWas.scrollTop : 0;
+    drawDetail.key = paneKey;
+    if (paneTop) setTimeout(function () { var body = document.querySelector('aside .detail-body'); if (body && drawDetail.key === paneKey && !body.scrollTop) body.scrollTop = paneTop; }, 0);
     $('body').className = 'body' + (chosen ? ' with-detail' : '');
     applyColumns();
     var existing = document.querySelector('aside');
@@ -8891,6 +8994,8 @@
     if (log.id) call('kube.stopFollow', { id: log.id }).catch(function () {});
     log.id = null;
     log.following = false;
+    // Whatever is still on its way for this tab was asked for before this.
+    log.token = (log.token || 0) + 1;
   }
 
   function currentLog() { return state.logs[state.logAt] || null; }
@@ -8925,12 +9030,15 @@
     log.showingPrevious = Boolean(previous);
     log.loading = true;
     stopFollowing(log);
+    var mine = (log.token = (log.token || 0) + 1);
     log.unseen = 0;
     drawDock();
     call('kube.logs', {
       context: log.context, namespace: log.namespace, pod: log.name,
       container: log.container || undefined, tail: log.tail, previous: previous || false, timestamps: log.times,
     }).then(function (result) {
+      // Asked for something else since: this answer is about what is no longer shown.
+      if (log.token !== mine) return;
       log.loading = false;
       var text = String(result.text || '');
       log.lines = text ? text.replace(/\n$/, '').split('\n').map(function (line) { return { text: line }; }) : [];
@@ -8938,6 +9046,7 @@
       if (previous && !text.trim()) say('That container has no previous run to show.');
       drawDock(true);
     }).catch(function (error) {
+      if (log.token !== mine) return;
       log.loading = false;
       log.lines = [{ text: String(error.message || error), err: true }];
       drawDock();
@@ -8948,15 +9057,24 @@
     if (log.following) { stopFollowing(log); drawDock(); return; }
     log.following = true;
     log.showingPrevious = false;
-    log.lines = [];
+    // After a stream that ended, what it said stays: it is usually the reason it ended.
+    if (log.ended && log.lines.length) log.lines.push({ text: '— following again —', note: true });
+    else log.lines = [];
+    log.ended = false;
     log.pending = '';
     log.unseen = 0;
+    var mine = (log.token = (log.token || 0) + 1);
     drawDock(true);
     call('kube.follow', {
       context: log.context, namespace: log.namespace, pod: log.name,
       container: log.container || undefined, tail: log.tail, timestamps: log.times,
-    }).then(function (result) { log.id = result.id; })
+    }).then(function (result) {
+      // Stopped, closed or pointed elsewhere before the stream had a name: it is stopped by that name now.
+      if (log.token !== mine || !log.following || state.logs.indexOf(log) < 0) { call('kube.stopFollow', { id: result.id }).catch(function () {}); return; }
+      log.id = result.id;
+    })
       .catch(function (error) {
+        if (log.token !== mine) return;
         log.following = false;
         say(String(error.message || error), true);
         drawDock();
@@ -9072,18 +9190,21 @@
 
   /** The search term, marked where it was found. Everything else is escaped first. */
   function markUp(text, term) {
-    var safe = esc(text);
-    if (!term) return safe;
-    var needle = esc(term);
+    if (!term) return esc(text);
+    // Found in the text as it is, and escaped piece by piece: looked for in the
+    // escaped form, "amp" and "quot" were found inside every & and ".
+    var raw = String(text);
+    var low = raw.toLowerCase();
+    var needle = String(term).toLowerCase();
     var out = '';
-    var rest = safe;
-    var at = rest.toLowerCase().indexOf(needle.toLowerCase());
+    var from = 0;
+    var at = low.indexOf(needle);
     while (at >= 0) {
-      out += rest.slice(0, at) + '<mark class="hit">' + rest.slice(at, at + needle.length) + '</mark>';
-      rest = rest.slice(at + needle.length);
-      at = rest.toLowerCase().indexOf(needle.toLowerCase());
+      out += esc(raw.slice(from, at)) + '<mark class="hit">' + esc(raw.slice(at, at + needle.length)) + '</mark>';
+      from = at + needle.length;
+      at = low.indexOf(needle, from);
     }
-    return out + rest;
+    return out + esc(raw.slice(from));
   }
 
   /** Put the current hit in view and say which it is. `step` moves it first. */
@@ -9602,7 +9723,9 @@
         log.following = false;
         log.id = null;
         if (log.pending) { log.lines.push({ text: log.pending }); log.pending = ''; }
-        log.lines.push({ text: '— the log ended —', note: true });
+        log.ended = true;
+        // Ended and failed are different things to read at the bottom of a log.
+        log.lines.push({ text: payload.code ? '— stopped (exit ' + payload.code + ') —' : '— the log ended —', note: true, err: Boolean(payload.code) });
         drawDock();
         return;
       }
@@ -9825,24 +9948,42 @@
       var batch = 'batch-' + Date.now() + '-' + Math.random().toString(36).slice(2);
       var spread = chosen.map(function (row) { return row.namespace || ''; })
         .filter(function (ns, at, all) { return all.indexOf(ns) === at; }).length;
-      call(verb, {
-        context: state.context, namespace: first.namespace, kind: first.kind,
-        name: first.name, count: chosen.length, spread: spread, batch: batch,
-      }).then(function () {
-        var rest = chosen.slice(1).map(function (row) {
-          return call(verb, { context: state.context, namespace: row.namespace, kind: row.kind, name: row.name, count: chosen.length, spread: spread, batch: batch })
-            .then(function () { return null; })
-            .catch(function (error) { return row.name + ': ' + String(error.message || error); });
-        });
-        return Promise.all(rest).then(function (failed) {
-          var bad = failed.filter(Boolean);
-          say(bad.length
-            ? (chosen.length - bad.length) + ' of ' + chosen.length + ' done. ' + bad[0]
-            : 'All ' + chosen.length + ' done.', bad.length > 0);
-          state.picked = [];
+      if (state.bulkBusy) return;
+      state.bulkBusy = (what === 'pick-delete' ? 'Deleting ' : 'Restarting ') + chosen.length + '…';
+      drawPicked();
+      var failed = [];
+      var done = 0;
+      var askOf = function (row) {
+        return call(verb, { context: state.context, namespace: row.namespace, kind: row.kind, name: row.name, count: chosen.length, spread: spread, batch: batch });
+      };
+      var finish = function () {
+        state.bulkBusy = '';
+        state.picked = [];
+        drawPicked();
+        if (failed.length || done) {
+          say(failed.length
+            ? done + ' of ' + chosen.length + ' done. Failed: ' + failed.slice(0, 3).join('; ') + (failed.length > 3 ? ' and ' + (failed.length - 3) + ' more' : '')
+            : 'All ' + chosen.length + ' done.', failed.length > 0);
           setTimeout(function () { load(true); }, 1200);
-        });
-      }).catch(function (error) { say(String(error.message || error), true); });
+        }
+      };
+      // The first carries the question. Said no to, nothing else is asked of the cluster.
+      askOf(first).then(function () { done += 1; }, function (error) {
+        var why = String(error.message || error);
+        if (/the person said no/.test(why)) { state.bulkBusy = ''; drawPicked(); return Promise.reject(null); }
+        failed.push(first.name + ': ' + why);
+      }).then(function () {
+        // Then the rest, four at a time: forty kubectl processes at once is its own outage.
+        var rest = chosen.slice(1);
+        var next = 0;
+        var worker = function () {
+          if (next >= rest.length) return Promise.resolve();
+          var row = rest[next];
+          next += 1;
+          return askOf(row).then(function () { done += 1; }, function (error) { failed.push(row.name + ': ' + String(error.message || error)); }).then(worker);
+        };
+        return Promise.all([worker(), worker(), worker(), worker()]);
+      }).then(finish, function (stopped) { if (stopped !== null) finish(); });
       return;
     }
 
@@ -10037,8 +10178,7 @@
       call('helm.uninstall', { context: state.context, namespace: row.namespace, name: row.name })
         .then(function (result) {
           say(result.text || ('Uninstalled ' + row.name + '.'));
-          state.selected = null;
-          draw();
+          if (state.selected === row) { state.selected = null; draw(); }
           setTimeout(function () { load(true); }, 1200);
         })
         .catch(function (error) { say(String(error.message || error), true); });
@@ -10117,10 +10257,14 @@
     if (what === 'ask') {
       var input = document.getElementById('question');
       var asked = input ? input.value.trim() : '';
+      // Twice in a second is a double press, not two questions.
+      if (act.askedAt && Date.now() - act.askedAt < 1500) return;
+      act.askedAt = Date.now();
       // An event is not something to describe; the thing it is about is, with what the event said as the question.
       if (row.kind === 'Event') {
         askAbout({ kind: row.objectKind, name: row.objectName, namespace: row.namespace },
           (asked ? asked + ' — ' : 'Why did this happen, and what fixes it? ') + 'The event: ' + row.status + ': ' + row.message);
+        if (input) input.value = '';
         return;
       }
       askAbout(assign({ kind: row.kind, name: row.name, namespace: row.namespace }, {}), asked);
@@ -10551,7 +10695,11 @@
   /** The name column shows forwards; redrawn when one starts, comes up, drops or ends — not per line kubectl prints. */
   function drawTableSoon() {
     if (tableTimer) return;
-    tableTimer = setTimeout(function () { tableTimer = 0; if (state.table) drawTable(); }, 120);
+    tableTimer = setTimeout(function () {
+      tableTimer = 0;
+      if (drawHeld) { drawTableSoon(); return; }
+      if (state.table) drawTable();
+    }, 120);
   }
 
   /** `⇄ :54321` beside a name that is reachable from here right now. */
@@ -10715,15 +10863,22 @@
     if (!rows.length) { bar.innerHTML = ''; return; }
     var kind = rows[0].kind || 'object';
     var restartable = rows.every(function (row) { return row.restartable; });
-    bar.innerHTML = '<span>' + rows.length + ' ' + esc(kind) + (rows.length === 1 ? '' : 's') + ' ticked</span>' +
-      (restartable ? '<button class="btn" data-do="pick-restart">Restart them</button>' : '') +
-      '<button class="btn bad" data-do="pick-delete">Delete them</button>' +
+    // While the lot is being done, the bar says so and offers nothing: a second press was a second batch.
+    if (state.bulkBusy) {
+      bar.innerHTML = '<span role="status"><span class="spin" aria-hidden="true">◐</span> ' + esc(state.bulkBusy) + '</span>';
+      return;
+    }
+    var hidden = state.picked.length - rows.length;
+    bar.innerHTML = '<span>' + rows.length + ' ' + esc(kind) + (rows.length === 1 ? '' : 's') + ' ticked' +
+      (hidden > 0 ? ' <span class="dim" title="Ticked, and not in what is shown now. They are left alone.">· ' + hidden + ' more not shown</span>' : '') + '</span>' +
+      (restartable ? '<button class="btn" data-do="pick-restart">Restart them…</button>' : '') +
+      '<button class="btn bad" data-do="pick-delete">Delete them…</button>' +
       '<button class="btn" data-do="pick-none">Clear</button>';
   }
 
   function pickedRows() {
-    var rows = (state.table && state.table.rows) || [];
-    return rows.filter(function (row) { return state.picked.indexOf(row.uid) >= 0; });
+    // Of the rows on show: one ticked and then filtered away is not something to delete by a button that says "them".
+    return visible().slice(0, CAP).filter(function (row) { return state.picked.indexOf(row.uid) >= 0; });
   }
 
   /**
@@ -10951,6 +11106,21 @@
       }
       return;
     }
+    if (event.key === 'Escape' && document.querySelector('.row-menu')) {
+      // A menu is the nearest thing open: it goes, and what was selected before it comes back.
+      var before = menuRow ? menuWas : state.selected;
+      var hadRow = Boolean(menuRow);
+      closeRowMenu();
+      if (hadRow) { state.selected = before; draw({ keepDock: true }); }
+      event.preventDefault();
+      return;
+    }
+    if (event.key === 'Escape' && event.target && event.target.id === 'search') {
+      // In the filter, Escape is about the filter: empty it, then leave it.
+      if (event.target.value) { event.target.value = ''; event.target.dispatchEvent(new Event('input', { bubbles: true })); }
+      else event.target.blur();
+      return;
+    }
     if (event.key === 'Escape') {
       // The question closes itself; this is only for what is behind it.
       if (state.selected && state.detail.tab === 'yaml' && state.editingYaml && state.yamlView !== 'edit' && !document.getElementById('prompt')) {
@@ -10975,7 +11145,8 @@
      */
     var typing = event.target && /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName || '') || (event.target && event.target.isContentEditable);
     if (typing) return;
-    if (document.getElementById('prompt')) return;
+    // Nothing behind a question, a sheet or a form answers to keys meant for it.
+    if (document.getElementById('prompt') || document.getElementById('sheet') || document.getElementById('map-form') || document.getElementById('cluster-menu')) return;
     if (event.key === '/') {
       event.preventDefault();
       $('search').focus();
