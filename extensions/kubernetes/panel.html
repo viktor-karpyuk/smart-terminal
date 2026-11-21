@@ -4322,7 +4322,19 @@
         if (ui.bad && !mapUnitBad(unit) && !mapUnitWarned(unit)) return false;
         return true;
       });
-      if (!mine.length) return;
+      /*
+       * What belongs to nothing, found before deciding whether the namespace
+       * is worth drawing: a namespace holding only a service that selects no
+       * pods was skipped whole, with the one thing in it this exists to show.
+       */
+      var strays = state.map.nodes.filter(function (node) {
+        if (node.namespace !== ns.name) return false;
+        if (text && node.name.toLowerCase().indexOf(text) < 0 && ns.name.toLowerCase().indexOf(text) < 0) return false;
+        if (node.kind === 'Service') return ui.net !== false && node.selects === 0;
+        if (node.kind === 'PersistentVolumeClaim') return ui.storage !== false && !ui.bad && !mapFrom(node.id, 'mounts').length;
+        return false;
+      });
+      if (!mine.length && !strays.length) return;
       drawn += 1;
       var open = text || ui.bad ? true : ui.open[ns.name] != null ? ui.open[ns.name] : small && !ns.system;
       var pods = 0;
@@ -4338,7 +4350,8 @@
       var top = y;
       html += '<button class="mband-h" aria-expanded="' + (open ? 'true' : 'false') + '" data-map-ns="' + esc(ns.name) + '" style="top:' + (y + 5) + 'px">' +
         '<span class="twist">' + (open ? '▾' : '▸') + '</span><b>' + esc(ns.name) + '</b>' +
-        '<span>' + mapPlural(mine.length, 'workload') + ' · ' + mapPlural(pods, 'pod') + '</span>' +
+        '<span>' + (mine.length ? mapPlural(mine.length, 'workload') + ' · ' + mapPlural(pods, 'pod') : 'nothing running') +
+          (strays.length ? ' · ' + strays.length + ' attached to nothing' : '') + '</span>' +
         Object.keys(techs).map(function (tech) { return '<span class="mtag inf">' + esc(tech) + '</span>'; }).join('') +
         (troubled ? '<span class="mtag bad">' + troubled + ' not well</span>' : '') +
         (warnedHere ? '<span class="mtag warn" title="Workloads the cluster has raised warnings about lately">' + warnedHere + ' with warnings</span>' : '') + '</button>';
@@ -4468,13 +4481,6 @@
          * is a disk being paid for; neither hangs off a workload, so neither
          * would otherwise be drawn at all.
          */
-        var strays = state.map.nodes.filter(function (node) {
-          if (node.namespace !== ns.name) return false;
-          if (text && node.name.toLowerCase().indexOf(text) < 0 && ns.name.toLowerCase().indexOf(text) < 0) return false;
-          if (node.kind === 'Service') return ui.net !== false && node.selects === 0;
-          if (node.kind === 'PersistentVolumeClaim') return ui.storage !== false && !ui.bad && !mapFrom(node.id, 'mounts').length;
-          return false;
-        });
         strays.forEach(function (node) {
           var cy = y + mid;
           if (node.kind === 'Service') {
@@ -4602,19 +4608,30 @@
     var html = '<span class="map-drop"><button class="btn icon" data-map-menu="legend" title="What the colours and lines mean" aria-label="Legend">?</button>';
     if (mapMenuOpen !== 'legend') return html + '</span>';
     var row = function (mark, words) { return '<div class="mleg"><span class="mleg-mark">' + mark + '</span><span>' + words + '</span></div>'; };
-    return html + '<div class="map-menu right">' +
-      row('<i class="msq"></i>', 'Workloads and pods') +
-      row('<i class="msq c-nw"></i>', 'Network: ingresses, services, policies') +
-      row('<i class="msq c-st"></i>', 'Storage: claims, volumes, classes') +
-      row('<i class="mdot"></i>', 'Well') +
+    var mode = state.view.mode || 'topology';
+    var rows = row('<i class="mdot"></i>', 'Well') +
       row('<i class="mdot" style="background:var(--warn)"></i>', 'Degraded, pending, or cordoned') +
       row('<i class="mdot" style="background:var(--danger)"></i>', 'Failing') +
-      row('<svg width="34" height="8"><path class="medge" d="M0 4H34"/></svg>', 'Stated by the Kubernetes API: an owner, a selector, a binding') +
-      row('<svg width="34" height="8"><path class="medge inf" d="M0 4H34"/></svg>', 'Inferred: a service named in a pod template, a data service known by its image') +
-      row('<svg width="34" height="8"><path class="medge vol on" d="M0 4H34"/></svg>', 'A pod mounting a volume that lives in the storage backend') +
-      row('<span class="mwarn is-inline">3</span>', 'Warnings the cluster raised about it lately. Click the number for its events') +
-      row('<span class="mtag warn">spof</span>', 'Amber, thick border: every replica depends on it') +
-      row('<span class="mtag bad">lost</span>', 'Red fill: gone in the failure being tried') +
+      row('<span class="mwarn is-inline">3</span>', 'Warnings the cluster is raising about it now. Click the number for its events');
+    // Only what this way of looking at it actually draws.
+    if (mode === 'physical') {
+      rows += row('<span class="mtag warn">spot</span>', 'A machine the cloud can take back at short notice') +
+        row('<span class="mtag">taint</span>', 'A node that only takes pods which tolerate it') +
+        row('<i class="msq" style="border-style:dashed"></i>', 'A pod of the system: kube-system and the like') +
+        row('<svg width="34" height="8"><path class="medge vol on" d="M0 4H34"/></svg>', 'A pod mounting a volume that lives in the storage backend') +
+        row('<span class="mtag bad">lost</span>', 'Red fill: gone in the failure being tried');
+    } else {
+      rows = row('<i class="msq"></i>', 'Workloads and pods') +
+        row('<i class="msq c-nw"></i>', 'Network: ingresses, services, policies') +
+        row('<i class="msq c-st"></i>', 'Storage: claims, volumes, classes') + rows +
+        row('<svg width="34" height="8"><path class="medge" d="M0 4H34"/></svg>', 'Stated by the Kubernetes API: an owner, a selector, a binding') +
+        row('<svg width="34" height="8"><path class="medge inf" d="M0 4H34"/></svg>', 'Inferred: a service named in a pod template, a data service known by its image');
+      if (mode === 'graph') {
+        rows += row('<span class="mtag warn">spof</span>', 'Amber, thick border: every replica depends on it') +
+          row('<span class="mtag bad">lost</span>', 'Red fill: gone in the failure being tried');
+      }
+    }
+    return html + '<div class="map-menu right">' + rows +
       '<div class="mleg dim" style="margin-top:6px">Point at a card to light everything it reaches and everything that reaches it. Right-click a card for more. ⌘ and the wheel zooms.</div>' +
       '</div></span>';
   }
@@ -5016,11 +5033,19 @@
       var still = mapPodsOf(id).filter(function (pod) { return !lostPods[pod.id] && pod.ready; }).length;
       if (still) thinner += 1; else down.push(owner.name);
     });
+    // Made by nothing: no controller will start it again anywhere. A mirror pod is the node's own and goes with it.
+    var bare = Object.keys(lostPods).map(function (id) { return lostPods[id]; }).filter(function (pod) {
+      return !pod.owner && !pod.mirror && !focusIds[pod.id];
+    });
+    var forGood = bare.length
+      ? ' ' + mapPlural(bare.length, 'pod') + ' made by no controller ' + (bare.length === 1 ? 'is' : 'are') + ' gone for good: ' +
+        bare.slice(0, 3).map(function (pod) { return pod.name; }).join(', ') + (bare.length > 3 ? ' and ' + (bare.length - 3) + ' more' : '') + '.'
+      : '';
     var others = !down.length && !thinner
-      ? 'Nothing else is affected.'
+      ? (bare.length ? forGood.trim() : 'Nothing else is affected.')
       : (down.length ? mapPlural(down.length, 'other workload') + ' left with no ready pod: ' + down.slice(0, 4).join(', ') +
           (down.length > 4 ? ' and ' + (down.length - 4) + ' more' : '') + '. ' : '') +
-        (thinner ? mapPlural(thinner, 'workload') + ' lose some replicas and stay up.' : '');
+        (thinner ? mapPlural(thinner, 'workload') + ' lose some replicas and stay up.' : '') + forGood;
 
     var local = lostVolumes.filter(function (volume) { return volume.local; }).length;
     var remote = lostVolumes.length - local;
@@ -5112,7 +5137,7 @@
       if (node.kind === 'Pod') return Boolean(sim.pods[node.id]);
       if (node.kind === 'Node') return Boolean(sim.nodes[node.name]);
       if (node.kind === 'Pool') return ui.sim === node.id;
-      if (node.kind === 'PersistentVolume') return ui.sim === 'StorageClass//' + node.className || Boolean(sim.nodes[node.attachedTo]);
+      if (node.kind === 'PersistentVolume') return ui.sim === 'StorageClass//' + node.className || Boolean(sim.nodes[node.attachedTo]) || Boolean(sim.nodes[node.pinnedTo]);
       return false;
     };
 
@@ -6646,19 +6671,23 @@
 
     var bar = function (title, of, format) {
       var pct = function (n) { return Math.max(0, Math.min(100, (n / of.allocatable) * 100)); };
-      var over = of.used > of.requested;
+      // Nothing measured is not nothing used: "0% in use" over a busy cluster was a false number.
+      var measured = data.metrics !== false;
+      var over = measured && of.used > of.requested;
       return '<div tabindex="0" role="link" class="gauge is-link" data-stat="' + title.toLowerCase() + '">' +
         '<div class="gauge-head"><span>' + title + '</span>' +
-          '<b>' + format(of.used) + '</b><span class="dim"> used of ' + format(of.allocatable) + '</span></div>' +
+          (measured ? '<b>' + format(of.used) + '</b><span class="dim"> used of ' + format(of.allocatable) + '</span>'
+            : '<b>' + format(of.allocatable) + '</b><span class="dim"> · usage not measured</span>') + '</div>' +
         '<div class="gauge-bar">' +
           '<span class="gauge-req" style="width:' + pct(of.requested).toFixed(1) + '%"></span>' +
-          '<span class="gauge-use' + (over ? ' is-over' : '') + '" style="width:' + pct(of.used).toFixed(1) + '%"></span>' +
+          (measured ? '<span class="gauge-use' + (over ? ' is-over' : '') + '" style="width:' + pct(of.used).toFixed(1) + '%"></span>' : '') +
         '</div>' +
         '<div class="gauge-foot">' +
           '<span><i class="key-req"></i>' + format(of.requested) + ' promised to pods · ' +
             Math.round((of.requested / of.allocatable) * 100) + '%</span>' +
-          '<span><i class="key-use' + (over ? ' is-over' : '') + '"></i>' +
-            Math.round((of.used / of.allocatable) * 100) + '% in use</span>' +
+          (measured ? '<span><i class="key-use' + (over ? ' is-over' : '') + '"></i>' +
+            Math.round((of.used / of.allocatable) * 100) + '% in use</span>'
+            : '<span class="dim" title="kubectl top answered nothing: the cluster has no metrics-server, or it is not ready">no metrics-server</span>') +
         '</div>' +
         '</div>';
     };

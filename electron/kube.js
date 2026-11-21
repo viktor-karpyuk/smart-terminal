@@ -1652,6 +1652,8 @@ async function wholeSummary({ context } = {}) {
     ok: true,
     ...overview({ nodes: nodeRows, pods: podRows, events: warningRows }),
     capacity: capacityFrom(nodeItems, podItems, usage.metrics ?? {}),
+    // Whether usage was measured at all: without metrics-server it is unknown, which is not zero.
+    metrics: Object.keys(usage.metrics ?? {}).length > 0,
     busiest: busiestPods(podUsage.metrics ?? {}),
     workloads: workloadHealth(workloads.data?.items ?? []),
     pressure: nodePressure(nodeItems),
