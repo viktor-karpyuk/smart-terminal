@@ -2924,6 +2924,16 @@
      * can be found again: the ones not applied are counted here, wherever the
      * panel is, and the count is the way back to each.
      */
+    // What the rows on show are being complained about, in one number, and the way to put all of it aside.
+    if (listing && state.table && state.view.name !== 'events') {
+      var warnedRows = 0;
+      var warnedSum = 0;
+      visible().forEach(function (row) { var n = warnedCount(mapKnown(row)); if (n) { warnedRows += 1; warnedSum += n; } });
+      if (warnedSum) {
+        bits.push('<button class="link" data-do="warnings-clear-shown" title="Put aside the warnings of the ' + warnedRows + ' shown here that have any. Nothing is deleted in the cluster, and anything said again is counted again.">' +
+          warnedSum + ' warning' + (warnedSum === 1 ? '' : 's') + ' · clear</button>');
+      }
+    }
     var pending = pendingEdits();
     if (pending.length) {
       bits.push('<button class="link pending-edits" data-pending="1" title="Edits that have not been applied to the cluster">' +
@@ -5144,6 +5154,13 @@
     if (state.map && state.mapFor === mapKey()) return state.map;
     return (mapCache[mapKey()] || mapCache[(state.context || '') + '/'] || {}).result || null;
   }
+  /** Anything the map drew, by its id; indexed once per reading of the map. */
+  function mapNode(id) {
+    var data = mapNow();
+    if (!data) return null;
+    if (!data.byIdAll) { data.byIdAll = {}; (data.nodes || []).forEach(function (one) { data.byIdAll[one.id] = one; }); }
+    return data.byIdAll[id] || null;
+  }
   /** The pods each workload made, worked out once per reading of the map. */
   function podsOf(id) {
     var data = mapNow();
@@ -5200,12 +5217,7 @@
     var at = Date.parse(event.at);
     if (isNaN(at)) return '';
     var id = event.objectKind + '/' + (event.objectKind === 'Node' ? '' : event.namespace || '') + '/' + event.objectName;
-    var data = mapNow();
-    var node = null;
-    if (data) {
-      if (!data.byIdAll) { data.byIdAll = {}; (data.nodes || []).forEach(function (one) { data.byIdAll[one.id] = one; }); }
-      node = data.byIdAll[id] || null;
-    }
+    var node = mapNode(id);
     var row = state.selected;
     var own = row ? row.kind + '/' + (row.namespace || '') + '/' + row.name : '';
     if ((state.cleared[id] || 0) >= at || (own && (state.cleared[own] || 0) >= at)) return 'cleared';
@@ -5264,7 +5276,13 @@
     if (node.pdb) facts.push(['Disruption budget', node.pdb + (node.pdbAllowed != null ? ' · ' + node.pdbAllowed + ' may go right now' : '')]);
     if (node.tech) facts.push(['Runs', node.tech + (node.techVersion ? ' ' + node.techVersion : '') + ' (by its image)']);
     if (node.helm) facts.push(['Installed by', node.helm]);
-    if (node.kind === 'Pod' && node.node) facts.push(['On', node.node]);
+    if (node.kind === 'Pod' && node.node) {
+      facts.push(['On', node.node]);
+      // Where that machine is: from the nodes the pod list already read, or from the map's own.
+      var machine = mapNode('Node//' + node.node);
+      var zone = (state.zones && state.zones[node.node]) || (machine && machine.zone) || '';
+      if (zone) facts.push(['Zone', zone]);
+    }
     if (facts.length) {
       html += block('From the map', '<dl class="facts">' + facts.map(function (fact) { return '<dt>' + esc(fact[0]) + '</dt><dd>' + esc(fact[1]) + '</dd>'; }).join('') + '</dl>');
     }
@@ -9717,6 +9735,13 @@
       var text = (head ? head.textContent + '\n\n' : '') + readable(body);
       host.emit('copy', { text: text });
       say('Copied ' + text.split('\n').length + ' lines.');
+      return;
+    }
+    if (what === 'warnings-clear-shown') {
+      var cleared = 0;
+      visible().forEach(function (row) { var node = mapKnown(row); if (warnedCount(node)) { clearWarnings(node); cleared += 1; } });
+      say('Cleared the warnings of ' + cleared + '. They are counted again if the cluster says them again.');
+      draw();
       return;
     }
     if (what === 'copy-table') {
