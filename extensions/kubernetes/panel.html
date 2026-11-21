@@ -1884,6 +1884,7 @@
         }
       }
       if (state.view.name === 'pods' || state.view.name === 'nodes') withMetrics(mine, state.view.name);
+      if (state.view.name === 'pods') withZones(mine);
       if (state.view.type === 'kind') startWatch(state.view.name);
     }).catch(function (error) {
       state.busy = false;
@@ -1934,6 +1935,37 @@
       state.table.columns.splice(at < 0 ? state.table.columns.length : at, 0, 'cpu', 'memory');
       drawTable();
     }).catch(function () { /* no metrics-server; the table is the table */ });
+  }
+
+  /**
+   * Which zone each pod is in, beside the node it is on.
+   *
+   * A pod does not say: its node does, in a label. So the nodes are read once
+   * and kept for a few minutes — they change far less often than pods are
+   * listed — and the column turns up a moment after the rows, as the metrics
+   * do. Where nodes may not be read, or carry no zone, there is no column.
+   */
+  var zonesByContext = {};
+  function withZones(token) {
+    var forThis = state.context;
+    var kept = zonesByContext[forThis];
+    var known = kept && Date.now() - kept.at < 300000
+      ? Promise.resolve(kept.map)
+      : call('kube.list', { kind: 'nodes', context: forThis }).then(function (result) {
+        var map = {};
+        (result.rows || []).forEach(function (node) { if (node.zone) map[node.name] = node.zone; });
+        zonesByContext[forThis] = { at: Date.now(), map: map };
+        return map;
+      });
+    known.then(function (map) {
+      if (token !== loadToken || !state.table || forThis !== state.context || !Object.keys(map).length) return;
+      state.zones = map;
+      if (state.table.columns.indexOf('zone') < 0) {
+        var at = state.table.columns.indexOf('node');
+        state.table.columns.splice(at < 0 ? state.table.columns.length : at + 1, 0, 'zone');
+      }
+      drawTable();
+    }).catch(function () { /* nodes are not ours to read here; the table is the table */ });
   }
 
   /** A release lives in a namespace, but "all namespaces" is the useful default. */
@@ -3005,6 +3037,10 @@
       return;
     }
 
+    // On every draw rather than once: a pod that arrives by the watch is a new row, and has a node too.
+    if (state.zones && state.view.name === 'pods' && state.table.columns.indexOf('zone') >= 0) {
+      state.table.rows.forEach(function (row) { row.zone = state.zones[row.node] || ''; });
+    }
     var rows = visible();
     if (!rows.length) {
       $('table').innerHTML = '<div class="note">' +
