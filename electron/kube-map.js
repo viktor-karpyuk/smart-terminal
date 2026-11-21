@@ -662,7 +662,8 @@ function graphFrom(lists, helpers, now = Date.now()) {
       : idOf(about.kind, namespace, about.name);
     const node = id ? byId.get(id) : null;
     if (!node) continue;
-    const at = event.lastTimestamp || event.eventTime || event.metadata?.creationTimestamp || '';
+    // A repeated event of the newer kind says when it was last seen in its series; `eventTime` is only the first.
+    const at = event.series?.lastObservedTime || event.lastTimestamp || event.eventTime || event.metadata?.creationTimestamp || '';
     const words = `${event.reason ?? 'Warning'}: ${String(event.message ?? '').trim().slice(0, 180)}`;
     /*
      * A pod that is ready now, and was last complained about before it became

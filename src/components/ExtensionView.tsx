@@ -108,7 +108,7 @@ export function ExtensionView({ panelId, showing = true }: { panelId: string; sh
    * so a tab pointed at another one starts a new document rather than trying to
    * talk the old one out of what it knows.
    */
-  const onCluster = view.needs === 'kubernetes' ? `:${root ?? ''}` : '';
+  const onCluster = view.needs === 'kubernetes' ? `:${adoptedCluster.get(panelId) === root ? '' : (root ?? '')}` : '';
   return (
     <Frame
       key={`${view.from}:${view.id}:${theme}${onCluster}`}
@@ -171,6 +171,9 @@ function useAppliedTheme(): string {
  * store rather than assumed — the person may have closed it, and a session id
  * that no longer exists is not a session to hand a briefing to.
  */
+
+/** Cluster tabs opened on no cluster, and the one each found for itself: the frame is the same frame. */
+const adoptedCluster = new Map<string, string>();
 
 /** The document each kept frame was last given, so a frame that moved is not given it again. */
 const loadedDoc = new WeakMap<HTMLIFrameElement, string>();
@@ -385,6 +388,15 @@ function Frame({
           const store = useStore.getState();
           if (message.payload.newTab) store.openCluster(message.payload.context);
           else store.retargetCluster(panelId, message.payload.context);
+        } else if (message.name === 'clustersCheck' && view.needs === 'kubernetes') {
+          // The panel looked again; the count on the app's own button is the app's to refresh.
+          const store = useStore.getState();
+          void store.loadClusters().then(() => store.probeClusters(true));
+        } else if (message.name === 'adoptedCluster' && view.needs === 'kubernetes' && typeof message.payload?.context === 'string' && !root) {
+          // Opened on no cluster in particular, it chose kubeconfig's own. Known
+          // by that name from here on — without rebuilding the frame that just said so.
+          adoptedCluster.set(panelId, message.payload.context);
+          useStore.getState().nameCluster(panelId, message.payload.context);
         } else if (message.name === 'clusterMenu' && view.needs === 'kubernetes' && typeof message.payload?.context === 'string') {
           // The things done to kubeconfig rather than to a cluster are the
           // app's, with the app's own question before the one that removes.

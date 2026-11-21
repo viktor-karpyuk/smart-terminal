@@ -521,6 +521,8 @@ interface State {
    * accident is two places to follow the same thing.
    */
   retargetCluster(panelId: string, context: string): void;
+  /** A cluster tab opened on no cluster says which one it found: remembered, nothing else changed. */
+  nameCluster(panelId: string, context: string): void;
   /**
    * The Code Reviewer, at a place in it — the board, a repository's pull
    * requests, settings. Opened if it is not, brought forward if it is.
@@ -3632,6 +3634,13 @@ export const useStore = create<State>((set, get) => ({
     set((prev) => ({
       panels: { ...prev.panels, [panelId]: { ...panel, root: context, title: shortContext(context), resume: undefined } },
     }));
+    schedulePersist(get);
+  },
+
+  nameCluster(panelId, context) {
+    const panel = get().panels[panelId];
+    if (!panel || panel.kind !== 'extension' || panel.root || !context) return;
+    set((prev) => ({ panels: { ...prev.panels, [panelId]: { ...panel, root: context, title: shortContext(context) } } }));
     schedulePersist(get);
   },
 

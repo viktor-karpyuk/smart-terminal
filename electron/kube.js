@@ -761,7 +761,7 @@ function namespaceRow(item, now) {
 
 function eventRow(item, now) {
   const type = item.type ?? 'Normal';
-  const at = item.lastTimestamp || item.eventTime || item.firstTimestamp || item.metadata?.creationTimestamp;
+  const at = item.series?.lastObservedTime || item.lastTimestamp || item.eventTime || item.firstTimestamp || item.metadata?.creationTimestamp;
   return {
     ...base(item, now),
     status: item.reason ?? '',

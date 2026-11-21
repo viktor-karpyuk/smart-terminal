@@ -1967,7 +1967,11 @@
         return map;
       });
     known.then(function (map) {
-      if (token !== loadToken || !state.table || forThis !== state.context || !Object.keys(map).length) return;
+      if (token !== loadToken || !state.table || forThis !== state.context) return;
+      // A machine added since the nodes were read: read them again, once, rather than leave its pods with no zone.
+      var unknown = Object.keys(map).length && state.table.rows.some(function (row) { return row.node && !map[row.node]; });
+      if (unknown && kept && Date.now() - kept.at > 20000) { delete zonesByContext[forThis]; withZones(token); return; }
+      if (!Object.keys(map).length) return;
       state.zones = map;
       if (state.table.columns.indexOf('zone') < 0) {
         var at = state.table.columns.indexOf('node');
@@ -2046,6 +2050,8 @@
       var first = (result.contexts || [])[0];
       state.context = result.current || (first && first.name) || null;
       if (!state.context) throw new Error('There are no clusters in kubeconfig.');
+      // Nobody said which cluster; say which one this turned out to be, so the app does not open it twice.
+      host.emit('adoptedCluster', { context: state.context });
       return loadForContext();
     });
   }
@@ -2468,7 +2474,10 @@
     clusters.error = null;
     return call('kube.contexts', fresh ? { fresh: true } : {}).then(function (result) {
       clusters.names = (result.contexts || []).map(function (one) { return one.name; });
+      if (clusters.current !== (result.current || null)) { var drawn = document.querySelector('#cluster-menu .cl-list'); if (drawn) drawn.dataset.rows = '\u0000'; }
       clusters.current = result.current || null;
+      // The app keeps its own count of the ones not answering, on its button: asked to look again too.
+      if (fresh) host.emit('clustersCheck', {});
       clusters.stale = false;
       // Until somebody has moved, the mark sits on the cluster this tab is on.
       if (!clusters.moved) clusters.on = Math.max(0, clustersShown().indexOf(state.context));
@@ -2513,11 +2522,28 @@
     var shown = clustersShown();
     if (clusters.on >= shown.length) clusters.on = Math.max(0, shown.length - 1);
     var names = clusters.names || [];
+    if (clusters.error || !clusters.names || !shown.length) list.dataset.rows = '\u0000';
     if (clusters.error) list.innerHTML = '<div class="cl-empty">' + esc(clusters.error) + '</div>';
     else if (!clusters.names) list.innerHTML = '<div class="cl-empty">Reading kubeconfig…</div>';
     else if (!names.length) list.innerHTML = '<div class="cl-empty">No clusters in kubeconfig. Add one below.</div>';
     else if (!shown.length) list.innerHTML = '<div class="cl-empty">Nothing called that.</div>';
-    else {
+    else if (list.dataset.rows === shown.join('\n')) {
+      /*
+       * The same rows as are there: only what changed about them is touched.
+       * Each cluster answers in its own time in the seconds after the list
+       * opens, and rebuilding it under a pointer that was about to press, or
+       * under a button that had the focus, loses the press and the focus.
+       */
+      var rows = list.querySelectorAll('.cl-row');
+      shown.forEach(function (name, at) {
+        var row = rows[at];
+        var reach = clusters.reach[name];
+        row.classList.toggle('on', at === clusters.on);
+        row.querySelector('.cl-dot').className = 'cl-dot is-' + clusterDot(name);
+        row.title = name + (reach && reach.error ? '\n' + reach.error : '');
+      });
+    } else {
+      list.dataset.rows = shown.join('\n');
       list.innerHTML = shown.map(function (name, at) {
         var reach = clusters.reach[name];
         var note = clusterNote(name, names);
@@ -2634,6 +2660,8 @@
 
   /** What this tab is holding that belongs to the cluster it is on, in words; or nothing. */
   function heldHere() {
+    // A pool being drained is driven from here, node by node: pointed elsewhere, it would stop half way.
+    if (mapDraining) return 'a drain in progress';
     var edits = pendingEdits().length;
     if (edits) return edits === 1 ? 'an edit kept' : edits + ' edits kept';
     if (state.forwards && state.forwards.length) return state.forwards.length === 1 ? 'a port held open' : state.forwards.length + ' ports held open';
@@ -5178,8 +5206,8 @@
     var since = state.cleared[node.id] || 0;
     if (!since) return node.warnings;
     // A map read by an older reader has the count and not the times: then the latest one decides for all.
-    if (!node.warnTimes) return (Date.parse(node.warnedAt) || Infinity) > since ? node.warnings : 0;
-    return node.warnTimes.filter(function (at) { return (Date.parse(at) || Infinity) > since; }).length;
+    if (!node.warnTimes) return (Date.parse(node.warnedAt) || 0) > since ? node.warnings : 0;
+    return node.warnTimes.filter(function (at) { return (Date.parse(at) || 0) > since; }).length;
   }
   /** What is being complained about now: its own, and for a workload its pods'. */
   function warnedCount(node) {
@@ -5196,7 +5224,11 @@
   }
   function clearWarnings(node) {
     if (!node) return;
+    // As of now by this clock — and no earlier than the last thing the cluster said, whose clock may be ahead.
     var now = Date.now();
+    [node].concat(podsOf(node.id)).forEach(function (one) {
+      (one.warnTimes || [one.warnedAt]).forEach(function (at) { now = Math.max(now, Date.parse(at) || 0); });
+    });
     state.cleared[node.id] = now;
     podsOf(node.id).forEach(function (pod) { state.cleared[pod.id] = now; });
     remember();
@@ -8341,10 +8373,12 @@
     if (events) return events.filter(function (event) { return event.type === 'Warning' && !eventOver(event); }).length;
     // Before the events are read, the map's count is the one that knows which of them are over.
     var known = mapKnown(state.selected);
-    if (known) return warnedCount(known);
     var text = state.detailData.describe;
-    if (typeof text !== 'string') return 0;
-    return text.split('\n').filter(function (line) { return /^\s+Warning\s/.test(line); }).length;
+    var said = typeof text === 'string' ? text.split('\n').filter(function (line) { return /^\s+Warning\s/.test(line); }).length : 0;
+    if (!known) return said;
+    // The map is a few minutes old at worst. Of something that is not well, the description may know more.
+    var unwell = state.selected && (state.selected.health === 'bad' || state.selected.health === 'warn');
+    return unwell && !state.cleared[known.id] ? Math.max(warnedCount(known), said) : warnedCount(known);
   }
 
   function eventCard(event, withObject) {
@@ -8431,7 +8465,7 @@
         : failed ? 'not read' : 'reading…') + '</span>' +
       '<button class="btn' + (state.eventsOnly ? ' on' : '') + '" data-do="events-only" title="Only what went wrong"' + (everyWarning.length || state.eventsOnly ? '' : ' disabled') + '>Warnings</button>' +
       (warnings.length ? '<button class="btn" data-do="warnings-clear" title="Put these warnings aside. Nothing is deleted in the cluster, and anything said again is counted again.">Clear</button>' : '') +
-      (!warnings.length && known && wasCleared(known) ? '<button class="btn" data-do="warnings-unclear" title="Count the cleared warnings again">Show again</button>' : '') +
+      (!warnings.length && wasCleared(known || { id: row.kind + '/' + (row.namespace || '') + '/' + row.name }) ? '<button class="btn" data-do="warnings-unclear" title="Count the cleared warnings again">Show again</button>' : '') +
       '<button class="btn' + (state.eventsGroup ? ' on' : '') + '" data-do="events-group" title="One line per problem, from when it began to when it was last said"' + (events && events.length ? '' : ' disabled') + '>Timeline</button>' +
       (wide ? '<button class="btn' + (state.eventsWide ? ' on' : '') + '" data-do="events-wide" ' +
         'title="Also the events of what it made — its pods, replica sets, jobs and claims — found by their names">What it made</button>' : '') +
@@ -11057,6 +11091,14 @@
     closeClusterMenu();
   });
   window.addEventListener('blur', closeClusterMenu);
+  // Escape puts it away wherever the focus has got to, and gives the focus back to what opened it.
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape' || !document.getElementById('cluster-menu')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeClusterMenu();
+    $('cluster').focus();
+  }, true);
   // The app changed kubeconfig — a context removed, another made the default.
   host.on('clusters', function () {
     clusters.stale = true;
