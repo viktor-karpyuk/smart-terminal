@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../state/store';
 import { PERMISSIONS as PERMISSION_TEXT } from '../lib/extensionHost';
 import type { ExtensionOffer, ExtensionRow } from '../global';
@@ -32,6 +32,7 @@ export function ExtensionsPanel() {
   const [catalog, setCatalog] = useState<{ error: string | null; loading: boolean }>({ error: null, loading: true });
   const [fromRepo, setFromRepo] = useState(false);
   const [offer, setOffer] = useState<OfferState>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   /*
    * The registry is asked when this opens, not when the app starts: an app that
@@ -78,6 +79,31 @@ export function ExtensionsPanel() {
     shown[0] ??
     null;
 
+  /*
+   * The list is walked with the arrows, the way a list in an editor is: ↑ and
+   * ↓ open the one above or below, Home and End the first and last, and the
+   * row that opens takes the focus so the next arrow goes on from there. It
+   * is scrolled only as far as it takes to show that row.
+   */
+  const step = (event: React.KeyboardEvent, fromSearch = false) => {
+    if (!shown.length) return;
+    const at = open ? shown.findIndex((row) => row.id === open.id) : -1;
+    let next: number;
+    if (event.key === 'ArrowDown') next = fromSearch ? Math.max(at, 0) : Math.min(at + 1, shown.length - 1);
+    else if (event.key === 'ArrowUp') next = Math.max(at - 1, 0);
+    else if (event.key === 'Home' && !fromSearch) next = 0;
+    else if (event.key === 'End' && !fromSearch) next = shown.length - 1;
+    else return;
+    // From the search box only ↓ leaves it; ↑ there is the caret's.
+    if (fromSearch && event.key !== 'ArrowDown') return;
+    event.preventDefault();
+    const id = shown[next].id;
+    setChosen(id);
+    const button = listRef.current?.querySelector<HTMLButtonElement>(`[data-extension="${CSS.escape(id)}"]`);
+    button?.focus({ preventScroll: true });
+    button?.scrollIntoView({ block: 'nearest' });
+  };
+
   return (
     <div className="extensions">
       <header className="extensions-head">
@@ -86,6 +112,7 @@ export function ExtensionsPanel() {
           placeholder="Search extensions"
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
+          onKeyDown={(event) => step(event, true)}
         />
         <div className="segmented is-compact extensions-scope" role="radiogroup" aria-label="Which extensions">
           {(['all', 'installed', 'published'] as Scope[]).map((value) => (
@@ -123,11 +150,15 @@ export function ExtensionsPanel() {
       {fromRepo && <FromRepository onLookUp={(repo) => inspect({ repo })} busy={Boolean(offer && 'loading' in offer)} />}
 
       <div className="extensions-body">
-        <div className="extensions-list">
+        <div className="extensions-list" ref={listRef} role="listbox" aria-label="Extensions" onKeyDown={(event) => step(event)}>
           {!shown.length && !catalog.loading && <p className="empty-state">Nothing matches.</p>}
           {shown.map((row) => (
             <button
               key={row.id}
+              data-extension={row.id}
+              role="option"
+              aria-selected={open?.id === row.id}
+              tabIndex={open?.id === row.id ? 0 : -1}
               className={`extension${open?.id === row.id ? ' is-on' : ''}`}
               onClick={() => setChosen(row.id)}
             >
