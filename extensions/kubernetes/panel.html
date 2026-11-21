@@ -464,6 +464,7 @@
   .chart-cursor { stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; opacity: 0.7; }
   .chart-range { display: flex; align-items: flex-start; gap: 4px; }
   .chart-range .btn { padding: 2px 7px; font-size: 10.5px; }
+  .charts-wait { min-height: 92px; display: grid; place-items: center; margin: 0 0 12px; border: 1px dashed var(--border); border-radius: var(--radius); font-size: 11px; }
 
   /* On the overview the charts sit under the cards, so they take that padding. */
   #table > .charts { padding: 0 12px; }
@@ -1845,7 +1846,9 @@
     }
     if (!quiet) { state.loading = true; state.error = null; draw(); }
 
-    var request = state.view.type === 'overview'
+    // The stats page is the overview's numbers looked at more closely: read the same way.
+    var summed = state.view.type === 'overview' || state.view.type === 'stats';
+    var request = summed
       ? call('kube.summary', { context: state.context })
       : state.view.type === 'map'
         ? call('kube.topology', where())
@@ -1876,7 +1879,7 @@
        * there is no window at all in which this panel has not said where it is.
        */
       remember();
-      if (state.view.type === 'overview') {
+      if (summed) {
         state.overview = result;
         // The disk numbers are Prometheus', and arrive after this. Until they
         // do, the last ones stand — see applyDisk.
@@ -1900,6 +1903,7 @@
         mapKeep(mapKey(), result, text);
         if (state.selected) mapRefreshSelected();
         if (state.selected && state.detail.tab === 'events') loadEvents(true);
+        refreshPanePods();
       }
       else {
         /*
@@ -1928,6 +1932,7 @@
         // new set of them. See refreshSelection.
         refreshSelection();
         if (state.selected && state.detail.tab === 'events') loadEvents(true);
+        refreshPanePods();
       }
       draw(quiet ? { keepDock: true } : null);
       if (state.view.type !== 'map') mapPrefetch();
@@ -1969,7 +1974,7 @@
        * red sentence, which is less true than the rows were; now the rows stay
        * and the header says they are no longer being kept up to date.
        */
-      var shown = state.view.type === 'overview' ? state.overview : state.view.type === 'map' ? state.map : state.table;
+      var shown = summed ? state.overview : state.view.type === 'map' ? state.map : state.table;
       if (quiet && shown) {
         state.stale = String(error.message || error);
         drawFresh();
@@ -2164,9 +2169,13 @@
     call('kube.prometheus', { context: state.context })
       .then(function (result) {
         state.prom.found = result.found || null;
-        if (state.prom.found && state.selected) loadCharts(state.selected);
+        if (!state.prom.found) return;
+        if (state.selected) loadCharts(state.selected);
+        // Found after the page it is for was drawn: its charts and its disks are asked for now, not at the next refresh.
+        if (state.view.type === 'overview' || state.view.type === 'stats') { loadCharts(null); loadDisk(); }
       })
-      .catch(function () { /* no Prometheus: no charts, and nothing to apologise for */ });
+      // Not a no: nothing answered. Asked again in a minute rather than never.
+      .catch(function () { setTimeout(function () { state.prom.checked = false; }, 60000); });
   }
 
   /** A PromQL label value. Names cannot contain these; a value from elsewhere might. */
@@ -2278,7 +2287,15 @@
     // Keyed by the range as well: an hour and a day are different questions
     // about the same thing, and one must not be served from the other's answer.
     var key = (row ? row.uid : 'cluster') + '@' + state.prom.minutes;
-    if (state.prom.series[key]) return;
+    /*
+     * Read again when it has aged, by an amount that suits the span: a minute
+     * for an hour's chart, half an hour for a day's. It used to be read once
+     * and kept, so an overview left open all afternoon showed the first hour
+     * of it under the words "last hour". What is drawn stays drawn meanwhile.
+     */
+    var had = state.prom.series[key];
+    var shelf = Math.max(60000, state.prom.minutes * 1000);
+    if (had && (had.loading || had.refreshing || Date.now() - (had.at || 0) < (had.failed ? 60000 : shelf))) return;
 
     /*
      * Bounded, because this is keyed by object and a person going down a list
@@ -2289,10 +2306,10 @@
     var keys = Object.keys(state.prom.series);
     if (keys.length >= CHART_MEMORY) {
       for (var n = 0; n < keys.length - CHART_MEMORY + 1; n += 1) {
-        if (keys[n] !== 'cluster') delete state.prom.series[keys[n]];
+        if (keys[n].indexOf('cluster@') !== 0) delete state.prom.series[keys[n]];
       }
     }
-    state.prom.series[key] = { loading: true };
+    if (had && !had.failed) had.refreshing = true; else state.prom.series[key] = { loading: true };
 
     Promise.all(['cpu', 'memory'].map(function (which) {
       return call('kube.promQuery', {
@@ -2300,8 +2317,13 @@
         query: wanted[which], minutes: state.prom.minutes,
       }).then(function (r) { return r.empty ? null : (r.series[0] || null); }).catch(function () { return null; });
     })).then(function (answers) {
-      state.prom.series[key] = { cpu: answers[0], memory: answers[1] };
-      if (row ? state.selected === row : state.view.type === 'overview') draw();
+      var nothing = !answers[0] && !answers[1];
+      // Nothing came back: said as that, and asked again in a minute rather than believed for good.
+      state.prom.series[key] = nothing && had && !had.failed
+        ? { cpu: had.cpu, memory: had.memory, at: had.at, failed: false }
+        : { cpu: answers[0], memory: answers[1], at: Date.now(), failed: nothing };
+      if (nothing && had && !had.failed) state.prom.series[key].at = Date.now() - shelf + 60000;
+      if (row ? state.selected === row : (state.view.type === 'overview' || state.view.type === 'stats')) draw({ keepDock: true });
     });
   }
 
@@ -2357,7 +2379,7 @@
 
     var last = points[points.length - 1][1];
     var span = state.prom.minutes;
-    var over = span < 1440 ? 'last ' + span / 60 + ' hours' : span === 1440 ? 'last day' : 'last ' + span / 1440 + ' days';
+    var over = span < 1440 ? (span === 60 ? 'last hour' : 'last ' + span / 60 + ' hours') : span === 1440 ? 'last day' : 'last ' + span / 1440 + ' days';
     /*
      * The points ride along on the element, so hovering can answer "what was it
      * at that moment" without asking anything again. A chart you cannot
@@ -2376,18 +2398,21 @@
 
   /** Both charts for one subject, or nothing at all. */
   function chartsFor(row) {
+    if (!state.prom.found || !queriesFor(row)) return '';
     var key = (row ? row.uid : 'cluster') + '@' + state.prom.minutes;
     var got = state.prom.series[key];
-    if (!got || got.loading) return '';
-    var html = chart(got.cpu, fromCores, 'CPU') + chart(got.memory, bytes, 'Memory');
-    if (!html) return '';
     // How far back, offered where the charts are rather than in a settings
-    // menu: it is a question about what you are looking at.
+    // menu: it is a question about what you are looking at. Always there, so
+    // that choosing a span with nothing in it is not a way to lose the choice.
     var ranges = [60, 360, 1440].map(function (minutes) {
-      return '<button class="btn' + (state.prom.minutes === minutes ? ' on' : '') + '" data-range="' + minutes + '">' +
+      return '<button class="btn' + (state.prom.minutes === minutes ? ' on' : '') + '" data-range="' + minutes + '" aria-pressed="' + (state.prom.minutes === minutes) + '">' +
         (minutes < 1440 ? minutes / 60 + 'h' : minutes / 1440 + 'd') + '</button>';
     }).join('');
-    return '<div class="chart-range">' + ranges + '</div><div class="charts">' + html + '</div>';
+    var html = got && !got.loading ? chart(got.cpu, fromCores, 'CPU') + chart(got.memory, bytes, 'Memory') : '';
+    var body = html ? '<div class="charts">' + html + '</div>'
+      // The same height as the charts, so the page does not jump when they arrive.
+      : '<div class="charts-wait dim">' + (!got || got.loading ? '<span class="spin" aria-hidden="true">◐</span> Reading its history…' : 'Prometheus has nothing about this for that span.') + '</div>';
+    return '<div class="chart-range">' + ranges + '</div>' + body;
   }
 
   /* ---------------------------------------------------------------------- *
@@ -2930,7 +2955,7 @@
   // In place: what is there stays there until the new answer replaces it, and
   // the arrow turning is what says it is being asked.
   $('reload').addEventListener('click', function () {
-    if (state.error || !(state.view.type === 'overview' ? state.overview : state.view.type === 'map' ? state.map : state.table)) load();
+    if (state.error || !(state.view.type === 'overview' || state.view.type === 'stats' ? state.overview : state.view.type === 'map' ? state.map : state.table)) load();
     else load(true);
   });
   $('live').addEventListener('click', function () {
@@ -6050,6 +6075,9 @@
       document.getElementById('map-head-in').style.transform = 'scale(' + zoom + ')';
     }
     view.dataset.drawn = drawn;
+    // New cards under the same pointer: what was lit is forgotten, so the next move lights it again.
+    mapHovered = null;
+    mapEdges = null;
     var kept = mapScroll[mode];
     if (kept) { view.scrollLeft = kept.x; view.scrollTop = kept.y; }
     // A view arriving is shown arriving; a refresh of the one already there is not.
@@ -6540,7 +6568,7 @@
       { value: data.podsRunning + ' / ' + data.pods,
         label: 'pods running' + (data.podsDone ? ' · ' + data.podsDone + ' finished' : ''), go: 'pods' },
       { value: data.podsFailing, label: 'pods failing', bad: data.podsFailing > 0, go: 'pods', only: 'bad' },
-      { value: data.restarts, label: 'restarts', warn: data.restarts > 0, go: 'pods', sort: 'restarts' },
+      { value: data.restarts, label: 'restarts, in all', warn: false, go: 'pods', sort: 'restarts' },
       { value: data.warnings, label: 'warning events', warn: data.warnings > 0, go: 'events' },
     ].map(function (card) {
       return '<div tabindex="0" role="link" class="card is-link ' + (card.bad ? 'bad' : card.warn ? 'warn' : '') + '"' +
@@ -6883,7 +6911,10 @@
       ? '<div class="charts one">' + chart(series, format, STAT_TITLES[focus], true) + '</div>'
       : focus === 'disk'
         ? '<p class="note">Disk is measured now rather than over time — the node exporter reports what is there, not a history of it.</p>'
-        : '<p class="note">No Prometheus in this cluster, so there is no history to draw.</p>';
+        : '<p class="note">' + (!state.prom.checked || (state.prom.found && (!state.prom.series[key] || state.prom.series[key].loading))
+          ? '<span class="spin" aria-hidden="true">◐</span> Reading its history…'
+          : state.prom.found ? 'Prometheus has nothing about this for that span.'
+          : 'No Prometheus in this cluster, so there is no history to draw.') + '</p>';
 
     $('table').innerHTML = head + statNumbers(data, focus) + over +
       '<div class="split">' + statNodes(data, focus) + statConsumers(data, focus) + '</div>';
@@ -7262,6 +7293,8 @@
 
   function actionsFor(row) {
     var buttons = [];
+    // Deleted while it was being read: there is nothing left to act on, and every button would fail saying so.
+    if (row.gone) return '<span class="dim">It is gone from the cluster. What is shown is the last that was read of it.</span>';
     if (row.kind === 'Event') return eventActions(row);
     if (row.kind === 'Release') {
       return '<button class="btn" data-do="helm-diff" title="What this revision put in the cluster">Manifest</button>' +
@@ -7269,7 +7302,8 @@
     }
     if (row.kind === 'Pod') {
       buttons.push('<button class="btn" data-do="logs">Logs</button>');
-      buttons.push('<button class="btn" data-do="shell">Shell</button>');
+      var up = row.status === 'Running';
+      buttons.push('<button class="btn" data-do="shell"' + (up ? '' : ' disabled title="It is ' + esc(row.status || 'not running') + ': there is no container to open a shell in"') + '>Shell</button>');
     }
     if (row.scalable) buttons.push('<button class="btn" data-do="scale">Scale…</button>');
     if (row.restartable) buttons.push('<button class="btn" data-do="restart">Restart</button>');
@@ -7316,9 +7350,34 @@
    * where its log and its shell are, which is where the answer was always going
    * to be.
    */
+  /**
+   * The pane's own list of pods, kept true alongside the table.
+   *
+   * It was read once per selection, so after a restart or a scale it went on
+   * listing the pods that had just been replaced, and clicking one said it was
+   * not in the list. Asked again with each refresh, and drawn only if it differs.
+   */
+  function refreshPanePods() {
+    var row = state.selected;
+    var data = state.detailData;
+    if (!row || state.detail.tab !== 'pods' || !data.pods || data.podsBusy || !row.selector) return;
+    data.podsBusy = true;
+    call('kube.list', { context: state.context, kind: 'pods', namespace: row.namespace, selector: row.selector }).then(function (result) {
+      data.podsBusy = false;
+      if (state.selected !== row || state.detailData !== data) return;
+      var mark = function (rows) { return rows.map(function (pod) { return pod.uid + pod.status + pod.ready + pod.restarts; }).join('|'); };
+      var rows = result.rows || [];
+      var same = mark(rows) === mark(data.pods);
+      data.pods = rows;
+      data.podsError = '';
+      if (!same) drawDetail();
+    }, function () { data.podsBusy = false; });
+  }
+
   function podsBody(row) {
     var pods = state.detailData.pods;
     if (!pods) return '<pre>reading…</pre>';
+    if (!pods.length && state.detailData.podsError) return '<div class="edit-note is-bad"><div class="edit-note-text">Its pods could not be read: ' + esc(state.detailData.podsError) + '</div></div>';
     if (!pods.length) return '<div class="dim">It is running no pods at all.</div>';
     var restarts = pods.reduce(function (sum, pod) { return sum + (Number(pod.restarts) || 0); }, 0);
     var unwell = pods.filter(function (pod) { return pod.health === 'bad'; }).length;
@@ -8686,6 +8745,8 @@
     call('kube.events', at).then(function (result) {
       data.eventsBusy = false;
       if (state.selected !== row || state.detailData !== data) return;
+      // "What it made" was switched while this was on its way: this is the answer to the other question.
+      if (Boolean(at.related) !== Boolean(makesThings(row) && state.eventsWide)) { loadEvents(); return; }
       var rows = result.rows || [];
       var same = quiet && data.events && JSON.stringify(rows.map(eventKey)) === JSON.stringify(data.events.map(eventKey));
       data.events = rows;
@@ -8910,8 +8971,9 @@
         context: state.context, kind: 'pods', namespace: row.namespace, selector: row.selector,
       }).then(function (result) {
         if (state.selected === row) { state.detailData.pods = result.rows || []; drawDetail(); }
-      }).catch(function () {
-        if (state.selected === row) { state.detailData.pods = []; drawDetail(); }
+      }).catch(function (error) {
+        // Not read is not the same as none: "it is running no pods" under a refusal was a false statement.
+        if (state.selected === row) { state.detailData.pods = []; state.detailData.podsError = String(error.message || error); drawDetail(); }
       });
     }
     if (state.detail.tab === 'jobs' && !state.detailData.jobs) {
@@ -9692,8 +9754,9 @@
     var range = event.target.closest('[data-range]');
     if (!range) return;
     state.prom.minutes = Number(range.dataset.range);
-    loadCharts(state.selected);
-    draw();
+    if (state.selected) loadCharts(state.selected);
+    if (state.view.type === 'overview' || state.view.type === 'stats') loadCharts(null);
+    draw({ keepDock: true });
   });
 
   document.addEventListener('mousedown', function (event) {
@@ -11294,7 +11357,11 @@
     // the room there is now, and the handles are told where they ended up.
     applyColumns();
     drawGrips();
+    // The map is laid out for the width it had: given another, it is laid out again, once the dragging stops.
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () { if (state.view.type === 'map' && state.map) { var view = document.getElementById('map-view'); if (view) view.dataset.drawn = ''; draw({ keepDock: true }); } }, 160);
   });
+  var resizeTimer = 0;
 
   $('cluster').addEventListener('click', openClusterMenu);
   // A press anywhere else, or outside the frame altogether, puts the list away.

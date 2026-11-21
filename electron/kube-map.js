@@ -93,6 +93,29 @@ function matches(selector, labels) {
   return keys.every((key) => (labels ?? {})[key] === selector[key]);
 }
 
+/**
+ * A label selector as the API means it: every label named, and every
+ * expression. One written only as expressions used to match nothing, so a
+ * budget that said `app in (web, api)` covered neither and both were reported
+ * as having none.
+ */
+function selects(selector, labels) {
+  const named = selector?.matchLabels ?? {};
+  const rules = selector?.matchExpressions ?? [];
+  if (!Object.keys(named).length && !rules.length) return false;
+  const have = labels ?? {};
+  if (!Object.keys(named).every((key) => have[key] === named[key])) return false;
+  return rules.every((rule) => {
+    const present = Object.prototype.hasOwnProperty.call(have, rule.key);
+    const values = rule.values ?? [];
+    if (rule.operator === 'In') return present && values.includes(have[rule.key]);
+    if (rule.operator === 'NotIn') return !present || !values.includes(have[rule.key]);
+    if (rule.operator === 'Exists') return present;
+    if (rule.operator === 'DoesNotExist') return !present;
+    return false;
+  });
+}
+
 /** The pod template of anything that has one. */
 function templateOf(item) {
   if (item.kind === 'CronJob') return item.spec?.jobTemplate?.spec?.template ?? null;
@@ -320,7 +343,7 @@ function graphFrom(lists, helpers, now = Date.now()) {
     const requests = podRequests(fake, 'requests');
     const limits = podRequests(fake, 'limits');
     const pdb = pdbs.find((entry) =>
-      entry.metadata?.namespace === namespace && matches(entry.spec?.selector?.matchLabels, templateLabels));
+      entry.metadata?.namespace === namespace && selects(entry.spec?.selector, templateLabels));
     // The autoscaler names what it scales, so this is stated and not worked out.
     const hpa = hpas.find((entry) => entry.metadata?.namespace === namespace &&
       entry.spec?.scaleTargetRef?.kind === item.kind && entry.spec?.scaleTargetRef?.name === name);
@@ -386,7 +409,7 @@ function graphFrom(lists, helpers, now = Date.now()) {
       const images = (pod.spec?.containers ?? []).map((container) => container.image ?? '');
       const found = images.map(techOf).find(Boolean) ?? null;
       const labels = pod.metadata?.labels ?? {};
-      const pdb = pdbs.find((entry) => entry.metadata?.namespace === namespace && matches(entry.spec?.selector?.matchLabels, labels));
+      const pdb = pdbs.find((entry) => entry.metadata?.namespace === namespace && selects(entry.spec?.selector, labels));
       const node = {
         id, kind: ref.kind, name: ref.name, namespace,
         uid: ref.uid ?? id, createdAt: null,
@@ -728,7 +751,9 @@ function findingsFrom(nodes, edges) {
   const findings = {};
 
   for (const workload of nodes) {
-    if (workload.kind !== 'Deployment' && workload.kind !== 'StatefulSet' && !workload.custom) continue;
+    const placed = workload.kind === 'Deployment' || workload.kind === 'StatefulSet' || Boolean(workload.custom);
+    // A failing pod is said of whatever made it: a DaemonSet in a crash loop is not "nothing stands out".
+    if (!placed && !['DaemonSet', 'ReplicaSet', 'Job', 'CronJob'].includes(workload.kind)) continue;
     const list = [];
     const pods = to(workload.id, 'owns').filter((node) => node.kind === 'Pod');
     for (const pod of pods) {
@@ -741,16 +766,22 @@ function findingsFrom(nodes, edges) {
         ids: [pod.id],
       });
     }
-    const machines = [...new Set(pods.map((pod) => pod.node).filter(Boolean))].map((name) => byId.get(`Node//${name}`)).filter(Boolean);
+    if (!placed) {
+      if (list.length) findings[workload.id] = list;
+      continue;
+    }
+    // Only the ones that are somewhere: a pod still waiting for a node is on none of them.
+    const landed = pods.filter((pod) => pod.node);
+    const machines = [...new Set(landed.map((pod) => pod.node))].map((name) => byId.get(`Node//${name}`)).filter(Boolean);
     const claims = pods.flatMap((pod) => to(pod.id, 'mounts'));
     const volumes = claims.flatMap((claim) => to(claim.id, 'binds'));
     const replicated = workload.desired >= 2 && pods.length >= 2;
 
     if (replicated) {
-      if (machines.length === 1) {
+      if (machines.length === 1 && landed.length >= 2) {
         list.push({
           level: 'spof',
-          title: `All ${pods.length} replicas are on one node`,
+          title: landed.length === pods.length ? `All ${pods.length} replicas are on one node` : `${landed.length} of ${pods.length} replicas are on one node, and the rest on none yet`,
           text: `${machines[0].name} carries every one of them.`,
           source: 'API · pod placement',
           ids: [machines[0].id],
@@ -760,7 +791,7 @@ function findingsFrom(nodes, edges) {
       if (machines.length > 1 && zones.length === 1 && zones[0]) {
         list.push({
           level: 'spof',
-          title: `All ${pods.length} replicas are in one ${machines[0].zoneKind}`,
+          title: landed.length === pods.length ? `All ${pods.length} replicas are in one ${machines[0].zoneKind}` : `The ${landed.length} replicas that have a node are in one ${machines[0].zoneKind}`,
           text: `Every node they run on is labelled ${zones[0]}.`,
           source: 'API · node labels',
           ids: machines.map((machine) => machine.id),

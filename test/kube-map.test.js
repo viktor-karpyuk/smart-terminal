@@ -351,3 +351,24 @@ test('what a pod complained about before it became ready is counted apart from w
   assert.equal(by('web-1').warningsPast, 3);
   assert.equal(by('web-1').podWarnTimes.length, 2);
 });
+
+test('a budget written as expressions covers what it names, and a failing DaemonSet pod is a finding', () => {
+  const deployment = { kind: 'Deployment', metadata: { name: 'web', namespace: 'shop', uid: 'd' },
+    spec: { replicas: 2, selector: { matchLabels: { app: 'web' } }, template: { metadata: { labels: { app: 'web' } }, spec: { containers: [{ name: 'main', image: 'x:1' }] } } },
+    status: { replicas: 2, readyReplicas: 2 } };
+  const daemon = { kind: 'DaemonSet', metadata: { name: 'agent', namespace: 'shop', uid: 'ds' },
+    spec: { selector: { matchLabels: { app: 'agent' } }, template: { metadata: { labels: { app: 'agent' } }, spec: { containers: [{ name: 'main', image: 'x:1' }] } } },
+    status: { desiredNumberScheduled: 1, numberReady: 0 } };
+  const failing = { kind: 'Pod', metadata: { name: 'agent-abcde', namespace: 'shop', uid: 'p', labels: { app: 'agent' }, ownerReferences: [{ kind: 'DaemonSet', name: 'agent' }] },
+    spec: { nodeName: 'n1', containers: [{ name: 'main', image: 'x:1' }] },
+    status: { phase: 'Running', containerStatuses: [{ name: 'main', ready: false, restartCount: 9, state: { waiting: { reason: 'CrashLoopBackOff' } } }] } };
+  const graph = kube.graphFrom({
+    workloads: [deployment, daemon],
+    pods: [failing],
+    pdbs: [{ metadata: { name: 'web-pdb', namespace: 'shop' }, spec: { selector: { matchExpressions: [{ key: 'app', operator: 'In', values: ['web', 'api'] }] } }, status: { disruptionsAllowed: 1 } }],
+  }, helpers);
+  const web = graph.nodes.find((node) => node.name === 'web');
+  const agent = graph.nodes.find((node) => node.name === 'agent');
+  assert.equal(web.pdb, 'web-pdb');
+  assert.ok((graph.findings[agent.id] ?? []).some((finding) => /agent-abcde is CrashLoopBackOff/.test(finding.title)));
+});
