@@ -23,7 +23,10 @@ import {
   jdbCommand,
   terminalSetup,
   shellQuote,
+  addClusterCommand,
+  type NewCluster,
 } from '../lib/extensionHost';
+import { ClusterMenu } from './ClusterMenu';
 
 /**
  * A panel an extension brought, and the only door between it and the app.
@@ -99,10 +102,17 @@ export function ExtensionView({ panelId, showing = true }: { panelId: string; sh
   // setting: the setting changes a render before the page's palette does, so a
   // document rebuilt on it read the old colours — and on "system" the OS can
   // switch with no setting changing at all.
+  /*
+   * And on the cluster, for a cluster's panel. Everything in the document is
+   * about one cluster — its tables, its kept edits, the uids they are kept by —
+   * so a tab pointed at another one starts a new document rather than trying to
+   * talk the old one out of what it knows.
+   */
+  const onCluster = view.needs === 'kubernetes' ? `:${adoptedCluster.get(panelId) === root ? '' : (root ?? '')}` : '';
   return (
     <Frame
-      key={`${view.from}:${view.id}:${theme}`}
-      frameKey={`${view.from}:${view.id}:${theme}`}
+      key={`${view.from}:${view.id}:${theme}${onCluster}`}
+      frameKey={`${view.from}:${view.id}:${theme}${onCluster}`}
       panelId={panelId}
       view={view}
       root={root}
@@ -162,6 +172,9 @@ function useAppliedTheme(): string {
  * that no longer exists is not a session to hand a briefing to.
  */
 
+/** Cluster tabs opened on no cluster, and the one each found for itself: the frame is the same frame. */
+const adoptedCluster = new Map<string, string>();
+
 /** The document each kept frame was last given, so a frame that moved is not given it again. */
 const loadedDoc = new WeakMap<HTMLIFrameElement, string>();
 
@@ -209,6 +222,7 @@ function Frame({
   }, [panelId, frameKey]);
   const revealFile = useStore((s) => s.revealFile);
   const [notice, setNotice] = useState<{ text: string; bad: boolean } | null>(null);
+  const [clusterMenu, setClusterMenu] = useState<{ name: string; x: number; y: number } | null>(null);
 
   /*
    * A notice floats over the panel and does not push it.
@@ -367,6 +381,31 @@ function Frame({
           // with `remember`; where it goes is the app's, and only these two.
           const side = message.payload?.side === 'bottom' ? 'bottom' : 'right';
           useStore.getState().openExtensionBeside(panelId, message.payload?.resume ?? null, side);
+        } else if (message.name === 'openCluster' && view.needs === 'kubernetes' && typeof message.payload?.context === 'string') {
+          // Another cluster: in this tab, or in one of its own. Which clusters
+          // there are is kubeconfig's to say, and a name it does not have opens
+          // a tab that says so.
+          const store = useStore.getState();
+          if (message.payload.newTab) store.openCluster(message.payload.context);
+          else store.retargetCluster(panelId, message.payload.context);
+        } else if (message.name === 'clustersCheck' && view.needs === 'kubernetes') {
+          // The panel looked again; the count on the app's own button is the app's to refresh.
+          const store = useStore.getState();
+          void store.loadClusters().then(() => store.probeClusters(true));
+        } else if (message.name === 'adoptedCluster' && view.needs === 'kubernetes' && typeof message.payload?.context === 'string' && !root) {
+          // Opened on no cluster in particular, it chose kubeconfig's own. Known
+          // by that name from here on — without rebuilding the frame that just said so.
+          adoptedCluster.set(panelId, message.payload.context);
+          useStore.getState().nameCluster(panelId, message.payload.context);
+        } else if (message.name === 'clusterMenu' && view.needs === 'kubernetes' && typeof message.payload?.context === 'string') {
+          // The things done to kubeconfig rather than to a cluster are the
+          // app's, with the app's own question before the one that removes.
+          const box = frame.current.getBoundingClientRect();
+          setClusterMenu({
+            name: message.payload.context,
+            x: box.left + (Number(message.payload.x) || 0),
+            y: box.top + (Number(message.payload.y) || 0),
+          });
         } else if (message.name === 'remember') {
           // Opaque: whatever the panel says it needs to come back, handed back
           // to that same panel and read by nothing else.
@@ -702,6 +741,18 @@ function Frame({
         const sessionId = await store.openShellNear(panelId, run.title, run.command, { ...below(panelId), cwd: run.cwd });
         if (!sessionId) return { ok: false, error: 'the app could not open a terminal' };
         return { ok: true, sessionId, command: run.command, cwd: run.cwd };
+      }
+
+      if (name === 'kube.addCluster') {
+        let line: string;
+        try {
+          line = addClusterCommand(args as NewCluster);
+        } catch (error) {
+          return { ok: false, error: String((error as Error)?.message ?? error) };
+        }
+        const sessionId = await store.openShellNear(panelId, `add ${String(args.name ?? 'cluster')}`.slice(0, 28), line, below(panelId));
+        if (!sessionId) return { ok: false, error: 'the app could not open a terminal' };
+        return { ok: true, sessionId, command: line };
       }
 
       if (verb === 'shell' || verb === 'terminal') {
@@ -1150,6 +1201,18 @@ function Frame({
             </div>
           </div>
         </div>
+      )}
+      {clusterMenu && (
+        <ClusterMenu
+          name={clusterMenu.name}
+          x={clusterMenu.x}
+          y={clusterMenu.y}
+          onClose={() => {
+            setClusterMenu(null);
+            // Whatever was chosen may have changed the list the panel is showing.
+            window.setTimeout(() => tell('clusters', {}), 600);
+          }}
+        />
       )}
       {notice && (
         <div className={`git-notice is-floating ${notice.bad ? 'is-bad' : 'is-ok'}`}>

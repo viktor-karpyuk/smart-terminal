@@ -93,6 +93,29 @@ function matches(selector, labels) {
   return keys.every((key) => (labels ?? {})[key] === selector[key]);
 }
 
+/**
+ * A label selector as the API means it: every label named, and every
+ * expression. One written only as expressions used to match nothing, so a
+ * budget that said `app in (web, api)` covered neither and both were reported
+ * as having none.
+ */
+function selects(selector, labels) {
+  const named = selector?.matchLabels ?? {};
+  const rules = selector?.matchExpressions ?? [];
+  if (!Object.keys(named).length && !rules.length) return false;
+  const have = labels ?? {};
+  if (!Object.keys(named).every((key) => have[key] === named[key])) return false;
+  return rules.every((rule) => {
+    const present = Object.prototype.hasOwnProperty.call(have, rule.key);
+    const values = rule.values ?? [];
+    if (rule.operator === 'In') return present && values.includes(have[rule.key]);
+    if (rule.operator === 'NotIn') return !present || !values.includes(have[rule.key]);
+    if (rule.operator === 'Exists') return present;
+    if (rule.operator === 'DoesNotExist') return !present;
+    return false;
+  });
+}
+
 /** The pod template of anything that has one. */
 function templateOf(item) {
   if (item.kind === 'CronJob') return item.spec?.jobTemplate?.spec?.template ?? null;
@@ -320,7 +343,7 @@ function graphFrom(lists, helpers, now = Date.now()) {
     const requests = podRequests(fake, 'requests');
     const limits = podRequests(fake, 'limits');
     const pdb = pdbs.find((entry) =>
-      entry.metadata?.namespace === namespace && matches(entry.spec?.selector?.matchLabels, templateLabels));
+      entry.metadata?.namespace === namespace && selects(entry.spec?.selector, templateLabels));
     // The autoscaler names what it scales, so this is stated and not worked out.
     const hpa = hpas.find((entry) => entry.metadata?.namespace === namespace &&
       entry.spec?.scaleTargetRef?.kind === item.kind && entry.spec?.scaleTargetRef?.name === name);
@@ -386,7 +409,7 @@ function graphFrom(lists, helpers, now = Date.now()) {
       const images = (pod.spec?.containers ?? []).map((container) => container.image ?? '');
       const found = images.map(techOf).find(Boolean) ?? null;
       const labels = pod.metadata?.labels ?? {};
-      const pdb = pdbs.find((entry) => entry.metadata?.namespace === namespace && matches(entry.spec?.selector?.matchLabels, labels));
+      const pdb = pdbs.find((entry) => entry.metadata?.namespace === namespace && selects(entry.spec?.selector, labels));
       const node = {
         id, kind: ref.kind, name: ref.name, namespace,
         uid: ref.uid ?? id, createdAt: null,
@@ -436,6 +459,8 @@ function graphFrom(lists, helpers, now = Date.now()) {
       status,
       health: finished ? 'idle' : health(status),
       ready: statuses.length > 0 && statuses.every((entry) => entry.ready),
+      // Since when it has been ready, if it is: what it complained about before that, it got over.
+      readyAt: (pod.status?.conditions ?? []).find((one) => one.type === 'Ready' && one.status === 'True')?.lastTransitionTime ?? '',
       restarts: statuses.reduce((sum, entry) => sum + (entry.restartCount ?? 0), 0),
       lastEnd: statuses.map((entry) => entry.lastState?.terminated?.reason).filter(Boolean)[0] ?? '',
       node: pod.spec?.nodeName ?? '',
@@ -660,20 +685,38 @@ function graphFrom(lists, helpers, now = Date.now()) {
       : idOf(about.kind, namespace, about.name);
     const node = id ? byId.get(id) : null;
     if (!node) continue;
-    const at = event.lastTimestamp || event.eventTime || event.metadata?.creationTimestamp || '';
+    // A repeated event of the newer kind says when it was last seen in its series; `eventTime` is only the first.
+    const at = event.series?.lastObservedTime || event.lastTimestamp || event.eventTime || event.metadata?.creationTimestamp || '';
+    const words = `${event.reason ?? 'Warning'}: ${String(event.message ?? '').trim().slice(0, 180)}`;
+    /*
+     * A pod that is ready now, and was last complained about before it became
+     * so, got over it: a probe that failed while the application was starting
+     * is how every start looks. The cluster keeps saying it for an hour; it is
+     * counted apart, so the number on a row is what is wrong and not what was.
+     */
+    if (node.kind === 'Pod' && node.ready && node.readyAt && at && Date.parse(at) <= Date.parse(node.readyAt)) {
+      node.warningsPast = (node.warningsPast ?? 0) + 1;
+      if (!node.warningPast) node.warningPast = words;
+      continue;
+    }
     node.warnings = (node.warnings ?? 0) + 1;
+    // When each was last said, so that one put aside by its reader stays aside until it is said again.
+    (node.warnTimes ??= []).push(at);
     if (!node.warnedAt || at > node.warnedAt) {
       node.warnedAt = at;
-      node.warning = `${event.reason ?? 'Warning'}: ${String(event.message ?? '').trim().slice(0, 180)}`;
+      node.warning = words;
     }
   }
 
   // A workload's card is what is on screen when its pods are folded into it: their complaints are counted there too.
   for (const pod of nodes) {
-    if (pod.kind !== 'Pod' || !pod.warnings || !pod.owner) continue;
+    if (pod.kind !== 'Pod' || !pod.owner || (!pod.warnings && !pod.warningsPast)) continue;
     const owner = byId.get(pod.owner);
     if (!owner) continue;
+    if (pod.warningsPast) owner.warningsPast = (owner.warningsPast ?? 0) + pod.warningsPast;
+    if (!pod.warnings) continue;
     owner.podWarnings = (owner.podWarnings ?? 0) + pod.warnings;
+    (owner.podWarnTimes ??= []).push(...pod.warnTimes);
     if (!owner.warning) owner.warning = `${pod.name}: ${pod.warning}`;
   }
 
@@ -708,7 +751,9 @@ function findingsFrom(nodes, edges) {
   const findings = {};
 
   for (const workload of nodes) {
-    if (workload.kind !== 'Deployment' && workload.kind !== 'StatefulSet' && !workload.custom) continue;
+    const placed = workload.kind === 'Deployment' || workload.kind === 'StatefulSet' || Boolean(workload.custom);
+    // A failing pod is said of whatever made it: a DaemonSet in a crash loop is not "nothing stands out".
+    if (!placed && !['DaemonSet', 'ReplicaSet', 'Job', 'CronJob'].includes(workload.kind)) continue;
     const list = [];
     const pods = to(workload.id, 'owns').filter((node) => node.kind === 'Pod');
     for (const pod of pods) {
@@ -721,16 +766,22 @@ function findingsFrom(nodes, edges) {
         ids: [pod.id],
       });
     }
-    const machines = [...new Set(pods.map((pod) => pod.node).filter(Boolean))].map((name) => byId.get(`Node//${name}`)).filter(Boolean);
+    if (!placed) {
+      if (list.length) findings[workload.id] = list;
+      continue;
+    }
+    // Only the ones that are somewhere: a pod still waiting for a node is on none of them.
+    const landed = pods.filter((pod) => pod.node);
+    const machines = [...new Set(landed.map((pod) => pod.node))].map((name) => byId.get(`Node//${name}`)).filter(Boolean);
     const claims = pods.flatMap((pod) => to(pod.id, 'mounts'));
     const volumes = claims.flatMap((claim) => to(claim.id, 'binds'));
     const replicated = workload.desired >= 2 && pods.length >= 2;
 
     if (replicated) {
-      if (machines.length === 1) {
+      if (machines.length === 1 && landed.length >= 2) {
         list.push({
           level: 'spof',
-          title: `All ${pods.length} replicas are on one node`,
+          title: landed.length === pods.length ? `All ${pods.length} replicas are on one node` : `${landed.length} of ${pods.length} replicas are on one node, and the rest on none yet`,
           text: `${machines[0].name} carries every one of them.`,
           source: 'API · pod placement',
           ids: [machines[0].id],
@@ -740,7 +791,7 @@ function findingsFrom(nodes, edges) {
       if (machines.length > 1 && zones.length === 1 && zones[0]) {
         list.push({
           level: 'spof',
-          title: `All ${pods.length} replicas are in one ${machines[0].zoneKind}`,
+          title: landed.length === pods.length ? `All ${pods.length} replicas are in one ${machines[0].zoneKind}` : `The ${landed.length} replicas that have a node are in one ${machines[0].zoneKind}`,
           text: `Every node they run on is labelled ${zones[0]}.`,
           source: 'API · node labels',
           ids: machines.map((machine) => machine.id),

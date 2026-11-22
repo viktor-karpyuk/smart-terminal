@@ -318,3 +318,57 @@ test('an autoscaler that cannot measure its workload is a finding, and warnings 
   assert.ok((graph.findings[web.id] ?? []).some((finding) => /autoscaler cannot measure/.test(finding.title)));
   assert.ok(!(graph.findings[api.id] ?? []).some((finding) => /autoscaler cannot measure/.test(finding.title)));
 });
+
+test('what a pod complained about before it became ready is counted apart from what is wrong now', () => {
+  const pod = (name, readyAt) => ({
+    kind: 'Pod', metadata: { name, namespace: 'shop', uid: `p-${name}`, ownerReferences: [{ kind: 'ReplicaSet', name: 'web-1' }] },
+    spec: { nodeName: 'n1', containers: [{ name: 'main', image: 'x:1' }] },
+    status: { phase: 'Running', containerStatuses: [{ name: 'main', ready: Boolean(readyAt), restartCount: 0, state: { running: {} } }],
+      conditions: [{ type: 'Ready', status: readyAt ? 'True' : 'False', lastTransitionTime: readyAt || '2026-11-21T10:00:00Z' }] },
+  });
+  const said = (name, at, reason) => ({ reason, message: 'probe failed', lastTimestamp: at, involvedObject: { kind: 'Pod', name, namespace: 'shop' } });
+  const graph = kube.graphFrom({
+    workloads: [{ kind: 'ReplicaSet', metadata: { name: 'web-1', namespace: 'shop', uid: 'rs' }, spec: { replicas: 3 }, status: { replicas: 3, readyReplicas: 2 } }],
+    pods: [pod('started', '2026-11-21T10:05:00Z'), pod('flapping', '2026-11-21T10:05:00Z'), pod('starting', '')],
+    warnings: [
+      said('started', '2026-11-21T10:04:00Z', 'Unhealthy'),
+      said('started', '2026-11-21T10:03:00Z', 'Unhealthy'),
+      said('flapping', '2026-11-21T10:04:00Z', 'Unhealthy'),
+      said('flapping', '2026-11-21T10:09:00Z', 'BackOff'),
+      said('starting', '2026-11-21T10:04:00Z', 'Unhealthy'),
+    ],
+  }, helpers);
+  const by = (name) => graph.nodes.find((node) => node.name === name);
+  assert.equal(by('started').warnings, undefined);
+  assert.equal(by('started').warningsPast, 2);
+  assert.equal(by('flapping').warnings, 1);
+  assert.equal(by('flapping').warningsPast, 1);
+  assert.match(by('flapping').warning, /BackOff/);
+  assert.deepEqual(by('flapping').warnTimes, ['2026-11-21T10:09:00Z']);
+  // Not ready yet: what it says is what is wrong with it.
+  assert.equal(by('starting').warnings, 1);
+  assert.equal(by('web-1').podWarnings, 2);
+  assert.equal(by('web-1').warningsPast, 3);
+  assert.equal(by('web-1').podWarnTimes.length, 2);
+});
+
+test('a budget written as expressions covers what it names, and a failing DaemonSet pod is a finding', () => {
+  const deployment = { kind: 'Deployment', metadata: { name: 'web', namespace: 'shop', uid: 'd' },
+    spec: { replicas: 2, selector: { matchLabels: { app: 'web' } }, template: { metadata: { labels: { app: 'web' } }, spec: { containers: [{ name: 'main', image: 'x:1' }] } } },
+    status: { replicas: 2, readyReplicas: 2 } };
+  const daemon = { kind: 'DaemonSet', metadata: { name: 'agent', namespace: 'shop', uid: 'ds' },
+    spec: { selector: { matchLabels: { app: 'agent' } }, template: { metadata: { labels: { app: 'agent' } }, spec: { containers: [{ name: 'main', image: 'x:1' }] } } },
+    status: { desiredNumberScheduled: 1, numberReady: 0 } };
+  const failing = { kind: 'Pod', metadata: { name: 'agent-abcde', namespace: 'shop', uid: 'p', labels: { app: 'agent' }, ownerReferences: [{ kind: 'DaemonSet', name: 'agent' }] },
+    spec: { nodeName: 'n1', containers: [{ name: 'main', image: 'x:1' }] },
+    status: { phase: 'Running', containerStatuses: [{ name: 'main', ready: false, restartCount: 9, state: { waiting: { reason: 'CrashLoopBackOff' } } }] } };
+  const graph = kube.graphFrom({
+    workloads: [deployment, daemon],
+    pods: [failing],
+    pdbs: [{ metadata: { name: 'web-pdb', namespace: 'shop' }, spec: { selector: { matchExpressions: [{ key: 'app', operator: 'In', values: ['web', 'api'] }] } }, status: { disruptionsAllowed: 1 } }],
+  }, helpers);
+  const web = graph.nodes.find((node) => node.name === 'web');
+  const agent = graph.nodes.find((node) => node.name === 'agent');
+  assert.equal(web.pdb, 'web-pdb');
+  assert.ok((graph.findings[agent.id] ?? []).some((finding) => /agent-abcde is CrashLoopBackOff/.test(finding.title)));
+});

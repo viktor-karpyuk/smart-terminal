@@ -761,7 +761,7 @@ function namespaceRow(item, now) {
 
 function eventRow(item, now) {
   const type = item.type ?? 'Normal';
-  const at = item.lastTimestamp || item.eventTime || item.firstTimestamp || item.metadata?.creationTimestamp;
+  const at = item.series?.lastObservedTime || item.lastTimestamp || item.eventTime || item.firstTimestamp || item.metadata?.creationTimestamp;
   return {
     ...base(item, now),
     status: item.reason ?? '',
@@ -1436,7 +1436,9 @@ function forgetAnswers() {
   answers.clear();
 }
 
-async function contexts() {
+async function contexts({ fresh } = {}) {
+  // Asked to look again: kubeconfig is edited by other tools, and by a terminal this app just opened.
+  if (fresh) answers.delete('contexts');
   return memo('contexts', 15000, wholeContexts);
 }
 
@@ -1650,6 +1652,8 @@ async function wholeSummary({ context } = {}) {
     ok: true,
     ...overview({ nodes: nodeRows, pods: podRows, events: warningRows }),
     capacity: capacityFrom(nodeItems, podItems, usage.metrics ?? {}),
+    // Whether usage was measured at all: without metrics-server it is unknown, which is not zero.
+    metrics: Object.keys(usage.metrics ?? {}).length > 0,
     busiest: busiestPods(podUsage.metrics ?? {}),
     workloads: workloadHealth(workloads.data?.items ?? []),
     pressure: nodePressure(nodeItems),

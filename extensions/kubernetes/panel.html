@@ -398,6 +398,9 @@
     border-radius: var(--radius); background: var(--bg-input); font-size: 11px;
   }
   .event.is-warn { border-left-color: var(--danger); }
+  /* Over: still readable, no longer asking for anything. */
+  .event.is-past { opacity: 0.62; }
+  .event.is-past .event-head { align-items: center; flex-wrap: wrap; }
   .event-head { display: flex; align-items: baseline; gap: 6px; }
   .event-head .dot { margin-right: 0; }
   .event.is-warn .event-head b { color: var(--danger); }
@@ -461,6 +464,7 @@
   .chart-cursor { stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; opacity: 0.7; }
   .chart-range { display: flex; align-items: flex-start; gap: 4px; }
   .chart-range .btn { padding: 2px 7px; font-size: 10.5px; }
+  .charts-wait { min-height: 92px; display: grid; place-items: center; margin: 0 0 12px; border: 1px dashed var(--border); border-radius: var(--radius); font-size: 11px; }
 
   /* On the overview the charts sit under the cards, so they take that padding. */
   #table > .charts { padding: 0 12px; }
@@ -650,10 +654,71 @@
     background: color-mix(in srgb, var(--danger) 7%, transparent);
   }
 
-  .cluster-name {
-    font-weight: 550; color: var(--text); padding: 3px 0 3px 2px;
-    max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* The cluster, chosen where it is named. A control of the same height and
+     edge as the namespace beside it, heavier in weight because it is the one
+     everything else on the page hangs from. */
+  .cluster-pick {
+    display: inline-flex; align-items: center; gap: 6px; font: inherit; font-weight: 550; color: var(--text);
+    background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 3px 6px 3px 9px; min-height: 26px; box-sizing: border-box; max-width: 240px; cursor: pointer;
   }
+  .cluster-pick:hover, .cluster-pick[aria-expanded="true"] { border-color: var(--border-strong); }
+  .cluster-pick:focus-visible, .cluster-pick[aria-expanded="true"] { outline: none; border-color: var(--accent); }
+  .cluster-pick .cl-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cluster-pick svg { width: 13px; height: 13px; flex: none; color: var(--text-faint); }
+  .cluster-menu {
+    position: fixed; z-index: 9; width: 320px; max-width: calc(100vw - 16px); display: flex; flex-direction: column;
+    background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: var(--radius);
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45); font-size: 11.5px; overflow: hidden;
+  }
+  .cluster-menu input {
+    font: inherit; color: var(--text); background: transparent; border: 0; border-bottom: 1px solid var(--border);
+    padding: 8px 10px; outline: none; width: 100%; box-sizing: border-box;
+  }
+  .cl-list { max-height: min(46vh, 340px); overflow: auto; padding: 4px; }
+  .cl-row {
+    display: flex; align-items: center; gap: 8px; padding: 0 4px 0 8px; min-height: 28px; cursor: pointer;
+    border-radius: max(2px, calc(var(--radius, 8px) - 4px)); color: var(--text);
+  }
+  .cl-row.on { background: var(--accent-soft); }
+  .cl-row.here .cl-label { color: var(--accent); }
+  .cl-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .cl-dot.is-ok { background: var(--ok); }
+  .cl-dot.is-bad { background: var(--danger); }
+  .cl-dot.is-warn { background: var(--warn, #e0af68); }
+  .cl-dot.is-unknown { box-shadow: inset 0 0 0 1px var(--border-strong); }
+  .cl-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cl-note { color: var(--text-faint); font-size: 10.5px; white-space: nowrap; }
+  .cl-badge { color: var(--text-dim); font-size: 10px; border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; white-space: nowrap; }
+  .cl-check { margin-left: auto; color: var(--accent); width: 14px; text-align: center; flex: none; }
+  .cl-tool {
+    font: inherit; color: var(--text-faint); background: none; border: 0; border-radius: var(--radius); cursor: pointer;
+    width: 22px; height: 22px; display: inline-grid; place-items: center; flex: none; opacity: 0; padding: 0;
+  }
+  .cl-tool svg { width: 13px; height: 13px; }
+  .cl-row:hover .cl-tool, .cl-row.on .cl-tool, .cl-tool:focus-visible { opacity: 1; }
+  .cl-tool:hover { color: var(--text); background: var(--bg-panel); }
+  .cl-empty { padding: 10px; color: var(--text-dim); line-height: 1.5; }
+  .cl-foot { display: flex; gap: 2px; padding: 4px; border-top: 1px solid var(--border); }
+  .cl-foot button {
+    font: inherit; color: var(--text-dim); background: none; border: 0; cursor: pointer; padding: 5px 8px;
+    border-radius: max(2px, calc(var(--radius, 8px) - 4px)); display: inline-flex; align-items: center; gap: 6px;
+  }
+  .cl-foot button:hover { color: var(--text); background: var(--bg-panel); }
+  .cl-foot svg { width: 12px; height: 12px; }
+  .cl-foot .spacer { flex: 1; }
+  .add-cluster { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 12px; align-items: center; }
+  .add-cluster label { color: var(--text-dim); }
+  .add-cluster input, .add-cluster select {
+    font: inherit; color: var(--text); background: var(--bg-input); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 4px 7px; min-height: 26px; box-sizing: border-box; width: 100%;
+  }
+  .add-cluster input:focus, .add-cluster select:focus { outline: none; border-color: var(--accent); }
+  .add-line {
+    margin: 12px 0 0; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+    font-family: var(--mono, ui-monospace, Menlo, monospace); font-size: 11px; white-space: pre-wrap; word-break: break-all; color: var(--text);
+  }
+  .add-line.is-short { color: var(--text-faint); }
 
   /* The configuration form.
 
@@ -992,17 +1057,60 @@
   .msim { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
   .msim > div { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
   .msim small { display: block; margin-bottom: 3px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-dim); }
+
+  /* ------------------------------------------------------------------ *
+   * States, for every control at once.
+   *
+   * Each of these was right somewhere and missing somewhere else: a ring
+   * for the keyboard on some buttons and the browser's own on the rest, a
+   * tool that appears under the pointer and never under the Tab key, a
+   * disabled button that swallowed the tooltip saying why. Said once, here.
+   * ------------------------------------------------------------------ */
+  button:focus-visible, [tabindex]:focus-visible, select:focus-visible, input[type="checkbox"]:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 1px;
+  }
+  .row-menu .btn:focus-visible, .map-seg button:focus-visible, nav button:focus-visible, tr[tabindex]:focus-visible, th[tabindex]:focus-visible {
+    outline-offset: -2px;
+  }
+  .btn, .pane-tool, nav button, .tabs button, .link, .subtab-tool, .cl-row, .cl-tool, .dock-tab {
+    transition: background-color 0.1s, border-color 0.1s, color 0.1s, opacity 0.1s;
+  }
+  .btn:active, .pane-tool:active, .tabs button:active, nav button:active, .subtab-tool:active, .cluster-pick:active { filter: brightness(0.9); }
+  /* Off, and able to say why: the reason is in its title, which a control that takes no pointer never shows. */
+  .btn[disabled] { pointer-events: auto; cursor: not-allowed; }
+  .btn[disabled]:hover, .btn[disabled]:active { filter: none; }
+  .pane-tool[disabled]:hover { background: none; color: var(--text-dim); cursor: not-allowed; }
+  .btn.on:hover { border-color: var(--accent); filter: brightness(1.1); }
+  /* What the pointer reveals, the keyboard reveals. */
+  td.more button:focus-visible, tbody tr:focus-within td.more button,
+  .map-row .link:focus-visible, .map-row:focus-within .link, .config-env:focus-within .btn { opacity: 1; }
+  .subtab:focus-within .x { visibility: visible; }
+  th.tick, th.more { cursor: default; }
+  th.tick:hover, th.more:hover { color: inherit; background: none; }
+  /* Small things to press, given the room a finger of the pointer needs. */
+  .subtab .x, .dock-tab .x, td.more button { min-width: 20px; min-height: 20px; display: inline-grid; place-items: center; box-sizing: border-box; }
+  .dock-tab { cursor: pointer; }
+  .dock-tab:hover { color: var(--text); border-color: var(--border-strong); }
+  .dock-tab .x, .keys-link, th .arrow, .nav-sub { opacity: 1; color: var(--text-dim); }
+  /* Under the sheets and the menus, which are asked for over it. */
+  .map-form { z-index: 7; }
+  .pane-find input:focus { box-shadow: 0 0 0 1px var(--accent); }
+  tr.gone td, .is-gone { opacity: 0.6; }
+  @media (prefers-reduced-motion: reduce) {
+    .spin, #reload.is-busy svg, #live.on .live-dot, .timeline-track i.is-going, .edit-note, #sheet { animation: none !important; }
+    .btn, .pane-tool, nav button, .tabs button, .link, .mcard, .mtile { transition: none !important; }
+  }
 </style>
 
 <div id="app">
   <header class="top">
-    <span id="cluster" class="cluster-name"></span>
-    <select id="namespace" title="Which namespace"></select>
-    <input id="search" placeholder="Filter by name, namespace or status" />
+    <button id="cluster" class="cluster-pick" aria-haspopup="listbox" aria-expanded="false"><span class="cl-name"></span><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 6.5 8 10l3.5-3.5"/></svg></button>
+    <select id="namespace" title="Which namespace" aria-label="Namespace"></select>
+    <input id="search" placeholder="Filter by anything shown" aria-label="Filter" />
     <button class="btn with-icon" id="terminal" title="Open a terminal aimed at this cluster and namespace"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><path d="M4.5 6.5 6.5 8l-2 1.5M8 10h3"/></svg>Terminal</button>
     <span class="refresh-group">
       <button class="btn with-icon" id="live" title="Keep this up to date by itself"><span class="live-dot"></span>Live</button>
-      <span class="fresh" id="fresh"></span>
+      <span class="fresh" id="fresh" aria-live="polite"></span>
       <button class="btn icon" id="reload" title="Refresh now" aria-label="Refresh now"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg></button>
     </span>
   </header>
@@ -1028,6 +1136,8 @@
    * no second copy of the truth anywhere in this file.
    * ---------------------------------------------------------------------- */
   var state = {
+    // Which things have had their warnings put aside, and when: by map id.
+    cleared: {},
     context: null,
     namespaces: [], namespace: '',
     resources: [], resourcesFor: null,
@@ -1169,7 +1279,10 @@
       room -= size;
       return true;
     });
-    return { context: state.context, drafts: drafts, configs: configs, history: history };
+    // Events are forgotten by the cluster in about an hour; a clearing older than a few is about nothing.
+    var cleared = {};
+    Object.keys(state.cleared).forEach(function (id) { if (Date.now() - state.cleared[id] < 6 * 3600000) cleared[id] = state.cleared[id]; });
+    return { context: state.context, drafts: drafts, configs: configs, history: history, cleared: cleared };
   }
   var rememberSoonTimer = 0;
   function rememberSoon() {
@@ -1205,6 +1318,7 @@
       state.drafts = saved.edits.drafts || {};
       state.configs = saved.edits.configs || {};
       state.history = Array.isArray(saved.edits.history) ? saved.edits.history : [];
+      state.cleared = saved.edits.cleared && typeof saved.edits.cleared === 'object' ? saved.edits.cleared : {};
     }
     state.view = saved.view;
     state.only = saved.only || null;
@@ -1478,12 +1592,12 @@
   }
 
   function drawNav() {
-    var html = '<button class="' + (state.view.type === 'overview' ? 'on' : '') + '" data-view="overview">Overview</button>' +
+    var html = '<button class="' + (state.view.type === 'overview' ? 'on' : '') + '"' + (state.view.type === 'overview' ? ' aria-current="page"' : '') + ' data-view="overview">Overview</button>' +
       '<button class="' + (state.view.type === 'map' ? 'on' : '') + '" data-view="map" title="The cluster drawn as what is joined to what">Map</button>';
 
     var open = openGroups();
     var heading = function (title, count) {
-      return '<button class="nav-group' + (open[title] ? ' is-open' : '') + '" data-group="' + esc(title) + '">' +
+      return '<button class="nav-group' + (open[title] ? ' is-open' : '') + '" aria-expanded="' + (open[title] ? 'true' : 'false') + '" data-group="' + esc(title) + '">' +
         '<span class="twist">' + (open[title] ? '▾' : '▸') + '</span><span class="group-title">' + esc(title) + '</span>' +
         (count ? '<span class="count">' + count + '</span>' : '') + '</button>';
     };
@@ -1732,7 +1846,9 @@
     }
     if (!quiet) { state.loading = true; state.error = null; draw(); }
 
-    var request = state.view.type === 'overview'
+    // The stats page is the overview's numbers looked at more closely: read the same way.
+    var summed = state.view.type === 'overview' || state.view.type === 'stats';
+    var request = summed
       ? call('kube.summary', { context: state.context })
       : state.view.type === 'map'
         ? call('kube.topology', where())
@@ -1763,7 +1879,7 @@
        * there is no window at all in which this panel has not said where it is.
        */
       remember();
-      if (state.view.type === 'overview') {
+      if (summed) {
         state.overview = result;
         // The disk numbers are Prometheus', and arrive after this. Until they
         // do, the last ones stand — see applyDisk.
@@ -1787,14 +1903,36 @@
         mapKeep(mapKey(), result, text);
         if (state.selected) mapRefreshSelected();
         if (state.selected && state.detail.tab === 'events') loadEvents(true);
+        refreshPanePods();
       }
       else {
+        /*
+         * What was folded in afterwards is carried over until it is read again:
+         * CPU, memory and the zone arrive a moment after the rows, and every
+         * refresh used to blank the three columns — and undo a sort on them —
+         * until they did.
+         */
+        var before = state.table;
+        if (before && before.rows && result.rows && (before.columns || []).some(function (c) { return c === 'cpu' || c === 'zone'; })) {
+          var old = {};
+          before.rows.forEach(function (row) { old[row.uid] = row; });
+          result.rows.forEach(function (row) {
+            var was = old[row.uid];
+            if (was) { row.cpu = was.cpu; row.memory = was.memory; row.zone = was.zone; }
+          });
+          ['zone', 'cpu', 'memory'].forEach(function (column) {
+            if (before.columns.indexOf(column) < 0 || result.columns.indexOf(column) >= 0) return;
+            var after = column === 'zone' ? result.columns.indexOf('node') + 1 : result.columns.indexOf('age');
+            result.columns.splice(after <= 0 && column !== 'zone' ? result.columns.length : after, 0, column);
+          });
+        }
         state.table = result;
         if (state.view.name) state.counts[state.view.name] = (result.rows || []).length;
         // The pane, if one is open, is about one of these rows — and this is a
         // new set of them. See refreshSelection.
         refreshSelection();
         if (state.selected && state.detail.tab === 'events') loadEvents(true);
+        refreshPanePods();
       }
       draw(quiet ? { keepDock: true } : null);
       if (state.view.type !== 'map') mapPrefetch();
@@ -1823,6 +1961,7 @@
         }
       }
       if (state.view.name === 'pods' || state.view.name === 'nodes') withMetrics(mine, state.view.name);
+      if (state.view.name === 'pods') withZones(mine);
       if (state.view.type === 'kind') startWatch(state.view.name);
     }).catch(function (error) {
       state.busy = false;
@@ -1835,7 +1974,7 @@
        * red sentence, which is less true than the rows were; now the rows stay
        * and the header says they are no longer being kept up to date.
        */
-      var shown = state.view.type === 'overview' ? state.overview : state.view.type === 'map' ? state.map : state.table;
+      var shown = summed ? state.overview : state.view.type === 'map' ? state.map : state.table;
       if (quiet && shown) {
         state.stale = String(error.message || error);
         drawFresh();
@@ -1869,10 +2008,47 @@
       });
       if (!any) return;
       // Before Age, which is the column people scan last.
-      var at = state.table.columns.indexOf('age');
-      state.table.columns.splice(at < 0 ? state.table.columns.length : at, 0, 'cpu', 'memory');
+      if (state.table.columns.indexOf('cpu') < 0) {
+        var at = state.table.columns.indexOf('age');
+        state.table.columns.splice(at < 0 ? state.table.columns.length : at, 0, 'cpu', 'memory');
+      }
       drawTable();
     }).catch(function () { /* no metrics-server; the table is the table */ });
+  }
+
+  /**
+   * Which zone each pod is in, beside the node it is on.
+   *
+   * A pod does not say: its node does, in a label. So the nodes are read once
+   * and kept for a few minutes — they change far less often than pods are
+   * listed — and the column turns up a moment after the rows, as the metrics
+   * do. Where nodes may not be read, or carry no zone, there is no column.
+   */
+  var zonesByContext = {};
+  function withZones(token) {
+    var forThis = state.context;
+    var kept = zonesByContext[forThis];
+    var known = kept && Date.now() - kept.at < 300000
+      ? Promise.resolve(kept.map)
+      : call('kube.list', { kind: 'nodes', context: forThis }).then(function (result) {
+        var map = {};
+        (result.rows || []).forEach(function (node) { if (node.zone) map[node.name] = node.zone; });
+        zonesByContext[forThis] = { at: Date.now(), map: map };
+        return map;
+      });
+    known.then(function (map) {
+      if (token !== loadToken || !state.table || forThis !== state.context) return;
+      // A machine added since the nodes were read: read them again, once, rather than leave its pods with no zone.
+      var unknown = Object.keys(map).length && state.table.rows.some(function (row) { return row.node && !map[row.node]; });
+      if (unknown && kept && Date.now() - kept.at > 20000) { delete zonesByContext[forThis]; withZones(token); return; }
+      if (!Object.keys(map).length) return;
+      state.zones = map;
+      if (state.table.columns.indexOf('zone') < 0) {
+        var at = state.table.columns.indexOf('node');
+        state.table.columns.splice(at < 0 ? state.table.columns.length : at + 1, 0, 'zone');
+      }
+      drawTable();
+    }).catch(function () { /* nodes are not ours to read here; the table is the table */ });
   }
 
   /** A release lives in a namespace, but "all namespaces" is the useful default. */
@@ -1944,6 +2120,8 @@
       var first = (result.contexts || [])[0];
       state.context = result.current || (first && first.name) || null;
       if (!state.context) throw new Error('There are no clusters in kubeconfig.');
+      // Nobody said which cluster; say which one this turned out to be, so the app does not open it twice.
+      host.emit('adoptedCluster', { context: state.context });
       return loadForContext();
     });
   }
@@ -1991,9 +2169,13 @@
     call('kube.prometheus', { context: state.context })
       .then(function (result) {
         state.prom.found = result.found || null;
-        if (state.prom.found && state.selected) loadCharts(state.selected);
+        if (!state.prom.found) return;
+        if (state.selected) loadCharts(state.selected);
+        // Found after the page it is for was drawn: its charts and its disks are asked for now, not at the next refresh.
+        if (state.view.type === 'overview' || state.view.type === 'stats') { loadCharts(null); loadDisk(); }
       })
-      .catch(function () { /* no Prometheus: no charts, and nothing to apologise for */ });
+      // Not a no: nothing answered. Asked again in a minute rather than never.
+      .catch(function () { setTimeout(function () { state.prom.checked = false; }, 60000); });
   }
 
   /** A PromQL label value. Names cannot contain these; a value from elsewhere might. */
@@ -2105,7 +2287,15 @@
     // Keyed by the range as well: an hour and a day are different questions
     // about the same thing, and one must not be served from the other's answer.
     var key = (row ? row.uid : 'cluster') + '@' + state.prom.minutes;
-    if (state.prom.series[key]) return;
+    /*
+     * Read again when it has aged, by an amount that suits the span: a minute
+     * for an hour's chart, half an hour for a day's. It used to be read once
+     * and kept, so an overview left open all afternoon showed the first hour
+     * of it under the words "last hour". What is drawn stays drawn meanwhile.
+     */
+    var had = state.prom.series[key];
+    var shelf = Math.max(60000, state.prom.minutes * 1000);
+    if (had && (had.loading || had.refreshing || Date.now() - (had.at || 0) < (had.failed ? 60000 : shelf))) return;
 
     /*
      * Bounded, because this is keyed by object and a person going down a list
@@ -2116,10 +2306,10 @@
     var keys = Object.keys(state.prom.series);
     if (keys.length >= CHART_MEMORY) {
       for (var n = 0; n < keys.length - CHART_MEMORY + 1; n += 1) {
-        if (keys[n] !== 'cluster') delete state.prom.series[keys[n]];
+        if (keys[n].indexOf('cluster@') !== 0) delete state.prom.series[keys[n]];
       }
     }
-    state.prom.series[key] = { loading: true };
+    if (had && !had.failed) had.refreshing = true; else state.prom.series[key] = { loading: true };
 
     Promise.all(['cpu', 'memory'].map(function (which) {
       return call('kube.promQuery', {
@@ -2127,8 +2317,13 @@
         query: wanted[which], minutes: state.prom.minutes,
       }).then(function (r) { return r.empty ? null : (r.series[0] || null); }).catch(function () { return null; });
     })).then(function (answers) {
-      state.prom.series[key] = { cpu: answers[0], memory: answers[1] };
-      if (row ? state.selected === row : state.view.type === 'overview') draw();
+      var nothing = !answers[0] && !answers[1];
+      // Nothing came back: said as that, and asked again in a minute rather than believed for good.
+      state.prom.series[key] = nothing && had && !had.failed
+        ? { cpu: had.cpu, memory: had.memory, at: had.at, failed: false }
+        : { cpu: answers[0], memory: answers[1], at: Date.now(), failed: nothing };
+      if (nothing && had && !had.failed) state.prom.series[key].at = Date.now() - shelf + 60000;
+      if (row ? state.selected === row : (state.view.type === 'overview' || state.view.type === 'stats')) draw({ keepDock: true });
     });
   }
 
@@ -2184,7 +2379,7 @@
 
     var last = points[points.length - 1][1];
     var span = state.prom.minutes;
-    var over = span < 1440 ? 'last ' + span / 60 + ' hours' : span === 1440 ? 'last day' : 'last ' + span / 1440 + ' days';
+    var over = span < 1440 ? (span === 60 ? 'last hour' : 'last ' + span / 60 + ' hours') : span === 1440 ? 'last day' : 'last ' + span / 1440 + ' days';
     /*
      * The points ride along on the element, so hovering can answer "what was it
      * at that moment" without asking anything again. A chart you cannot
@@ -2203,18 +2398,21 @@
 
   /** Both charts for one subject, or nothing at all. */
   function chartsFor(row) {
+    if (!state.prom.found || !queriesFor(row)) return '';
     var key = (row ? row.uid : 'cluster') + '@' + state.prom.minutes;
     var got = state.prom.series[key];
-    if (!got || got.loading) return '';
-    var html = chart(got.cpu, fromCores, 'CPU') + chart(got.memory, bytes, 'Memory');
-    if (!html) return '';
     // How far back, offered where the charts are rather than in a settings
-    // menu: it is a question about what you are looking at.
+    // menu: it is a question about what you are looking at. Always there, so
+    // that choosing a span with nothing in it is not a way to lose the choice.
     var ranges = [60, 360, 1440].map(function (minutes) {
-      return '<button class="btn' + (state.prom.minutes === minutes ? ' on' : '') + '" data-range="' + minutes + '">' +
+      return '<button class="btn' + (state.prom.minutes === minutes ? ' on' : '') + '" data-range="' + minutes + '" aria-pressed="' + (state.prom.minutes === minutes) + '">' +
         (minutes < 1440 ? minutes / 60 + 'h' : minutes / 1440 + 'd') + '</button>';
     }).join('');
-    return '<div class="chart-range">' + ranges + '</div><div class="charts">' + html + '</div>';
+    var html = got && !got.loading ? chart(got.cpu, fromCores, 'CPU') + chart(got.memory, bytes, 'Memory') : '';
+    var body = html ? '<div class="charts">' + html + '</div>'
+      // The same height as the charts, so the page does not jump when they arrive.
+      : '<div class="charts-wait dim">' + (!got || got.loading ? '<span class="spin" aria-hidden="true">◐</span> Reading its history…' : 'Prometheus has nothing about this for that span.') + '</div>';
+    return '<div class="chart-range">' + ranges + '</div>' + body;
   }
 
   /* ---------------------------------------------------------------------- *
@@ -2289,7 +2487,18 @@
         if (state.table.rows[n].uid === event.row.uid) at = n;
       }
       if (event.type === 'DELETED') {
-        if (at >= 0) { state.table.rows.splice(at, 1); changed = true; }
+        if (at >= 0) {
+          var goneRow = state.table.rows[at];
+          state.table.rows.splice(at, 1);
+          changed = true;
+          // The one the pane is open on: it says so, rather than going on reading Running for ever.
+          if (state.selected && state.selected.uid === goneRow.uid) {
+            state.selected.status = 'Deleted';
+            state.selected.health = 'idle';
+            state.selected.gone = true;
+            state.watch.pane = true;
+          }
+        }
       } else if (at >= 0) {
         /*
          * Carried across, because the API server does not know about them: CPU
@@ -2318,6 +2527,8 @@
         state.watch.draw = 0;
         // Never over an editor, and never while a question is open.
         if (state.editing || document.getElementById('prompt')) return;
+        // A button is being pressed: rebuilt now, it would never get its click.
+        if (drawHeld) { drawOwed = { options: { keepDock: true } }; return; }
         var pane = state.watch.pane;
         state.watch.pane = false;
         drawTable();
@@ -2331,12 +2542,352 @@
   }
 
   /* ---------------------------------------------------------------------- *
+   * Which cluster.
+   *
+   * Chosen from the header, where the cluster is named, rather than from a
+   * list down the side of the app. Choosing one points this tab at it; the
+   * arrow on a row, or the command key, opens it in a tab of its own, which is
+   * still how two clusters are looked at together.
+   *
+   * The tab is not pointed elsewhere while it is holding something that
+   * belongs to the cluster it is on — an edit that is kept, a port held open,
+   * a log being followed. Then the other cluster gets its own tab, and says so.
+   * ---------------------------------------------------------------------- */
+  var clusters = { names: null, current: null, reach: {}, askedAt: 0, asking: 0, error: null, on: 0, filter: '', stale: false };
+
+  /** What tells two contexts with the same short name apart: the region of an EKS ARN, or that it is the alias. */
+  function clusterNote(name, names) {
+    var short = shortContext(name);
+    var clash = names.some(function (other) { return other !== name && shortContext(other) === short; });
+    if (!clash) return '';
+    var eks = /^arn:aws:eks:([^:]+):/.exec(name);
+    if (eks) return eks[1];
+    return name === short ? 'alias' : '';
+  }
+
+  /** Answered, said no, did not answer, not asked yet: four things, and the third is not the second. */
+  function clusterDot(name) {
+    var reach = clusters.reach[name];
+    if (!reach) return 'unknown';
+    if (reach.up) return 'ok';
+    return reach.slow ? 'warn' : 'bad';
+  }
+
+  function readClusters(fresh) {
+    clusters.error = null;
+    return call('kube.contexts', fresh ? { fresh: true } : {}).then(function (result) {
+      clusters.names = (result.contexts || []).map(function (one) { return one.name; });
+      if (clusters.current !== (result.current || null)) { var drawn = document.querySelector('#cluster-menu .cl-list'); if (drawn) drawn.dataset.rows = '\u0000'; }
+      clusters.current = result.current || null;
+      // The app keeps its own count of the ones not answering, on its button: asked to look again too.
+      if (fresh) host.emit('clustersCheck', {});
+      clusters.stale = false;
+      // Until somebody has moved, the mark sits on the cluster this tab is on.
+      if (!clusters.moved) clusters.on = Math.max(0, clustersShown().indexOf(state.context));
+      drawClusterList();
+      askClusters(fresh);
+    }, function (error) {
+      clusters.error = String(error.message || error);
+      drawClusterList();
+    });
+  }
+
+  /** Each one asked whether it answers; a minute old is recent enough for a dot. */
+  function askClusters(again) {
+    if (!again && Date.now() - clusters.askedAt < 60000) return;
+    clusters.askedAt = Date.now();
+    (clusters.names || []).forEach(function (name) {
+      clusters.asking += 1;
+      call('kube.reachable', { context: name }).then(function (answer) {
+        clusters.reach[name] = { up: Boolean(answer.up), slow: Boolean(answer.slow), error: answer.error || null };
+      }, function (error) {
+        clusters.reach[name] = { up: false, slow: false, error: String(error.message || error) };
+      }).then(function () {
+        clusters.asking -= 1;
+        drawClusterList();
+      });
+    });
+    drawClusterList();
+  }
+
+  function clustersShown() {
+    var words = clusters.filter.trim().toLowerCase();
+    return (clusters.names || []).filter(function (name) { return !words || name.toLowerCase().indexOf(words) >= 0; });
+  }
+
+  var ICON_NEW_TAB = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h4v4M13 3 7.5 8.5M11 9.5V12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h2.5"/></svg>';
+  var ICON_MORE = '<svg viewBox="0 0 16 16" fill="currentColor"><circle cx="3.5" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12.5" cy="8" r="1.2"/></svg>';
+
+  function drawClusterList() {
+    var menu = document.getElementById('cluster-menu');
+    if (!menu) return;
+    var list = menu.querySelector('.cl-list');
+    var shown = clustersShown();
+    if (clusters.on >= shown.length) clusters.on = Math.max(0, shown.length - 1);
+    var names = clusters.names || [];
+    if (clusters.error || !clusters.names || !shown.length) list.dataset.rows = '\u0000';
+    if (clusters.error) list.innerHTML = '<div class="cl-empty">' + esc(clusters.error) + '</div>';
+    else if (!clusters.names) list.innerHTML = '<div class="cl-empty">Reading kubeconfig…</div>';
+    else if (!names.length) list.innerHTML = '<div class="cl-empty">No clusters in kubeconfig. Add one below.</div>';
+    else if (!shown.length) list.innerHTML = '<div class="cl-empty">Nothing called that.</div>';
+    else if (list.dataset.rows === shown.join('\n')) {
+      /*
+       * The same rows as are there: only what changed about them is touched.
+       * Each cluster answers in its own time in the seconds after the list
+       * opens, and rebuilding it under a pointer that was about to press, or
+       * under a button that had the focus, loses the press and the focus.
+       */
+      var rows = list.querySelectorAll('.cl-row');
+      shown.forEach(function (name, at) {
+        var row = rows[at];
+        var reach = clusters.reach[name];
+        row.classList.toggle('on', at === clusters.on);
+        row.querySelector('.cl-dot').className = 'cl-dot is-' + clusterDot(name);
+        row.title = name + (reach && reach.error ? '\n' + reach.error : '');
+      });
+    } else {
+      list.dataset.rows = shown.join('\n');
+      list.innerHTML = shown.map(function (name, at) {
+        var reach = clusters.reach[name];
+        var note = clusterNote(name, names);
+        var here = name === state.context;
+        var tip = name + (reach && reach.error ? '\n' + reach.error : '');
+        return '<div class="cl-row' + (at === clusters.on ? ' on' : '') + (here ? ' here' : '') + '" role="option" aria-selected="' + (here ? 'true' : 'false') + '" data-cluster="' + esc(name) + '" title="' + esc(tip) + '">' +
+          '<span class="cl-dot is-' + clusterDot(name) + '"></span>' +
+          '<span class="cl-label">' + esc(shortContext(name)) + '</span>' +
+          (note ? '<span class="cl-note">' + esc(note) + '</span>' : '') +
+          (name === clusters.current ? '<span class="cl-badge" title="What a plain kubectl uses">default</span>' : '') +
+          '<span class="cl-check">' + (here ? '✓' : '') + '</span>' +
+          '<button class="cl-tool" data-cluster-tab="1" title="Open in a tab of its own" aria-label="Open ' + esc(shortContext(name)) + ' in a tab of its own">' + ICON_NEW_TAB + '</button>' +
+          '<button class="cl-tool" data-cluster-more="1" title="Check it, make it the default, remove it…" aria-label="More for ' + esc(shortContext(name)) + '">' + ICON_MORE + '</button>' +
+          '</div>';
+      }).join('');
+      var on = list.querySelector('.cl-row.on');
+      if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest' });
+    }
+    var again = menu.querySelector('[data-cluster-again] span');
+    if (again) again.textContent = clusters.asking > 0 ? 'Asking each one…' : 'Check again';
+  }
+
+  function closeClusterMenu() {
+    var menu = document.getElementById('cluster-menu');
+    if (!menu) return false;
+    menu.remove();
+    $('cluster').setAttribute('aria-expanded', 'false');
+    return true;
+  }
+
+  function openClusterMenu() {
+    if (closeClusterMenu()) return;
+    closeRowMenu();
+    var button = $('cluster');
+    var at = button.getBoundingClientRect();
+    var menu = document.createElement('div');
+    menu.id = 'cluster-menu';
+    menu.className = 'cluster-menu';
+    menu.innerHTML =
+      '<input type="text" placeholder="Find a cluster…" aria-label="Find a cluster" spellcheck="false" />' +
+      '<div class="cl-list" role="listbox" aria-label="Clusters"></div>' +
+      '<div class="cl-foot">' +
+        '<button data-cluster-again="1" title="Read kubeconfig again and ask each cluster whether it answers"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8a5 5 0 1 1-1.6-3.7M13 3v2.6h-2.6"/></svg><span>Check again</span></button>' +
+        '<span class="spacer"></span>' +
+        '<button data-cluster-add="1" title="Put another cluster in kubeconfig"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg><span>Add a cluster…</span></button>' +
+      '</div>';
+    document.body.appendChild(menu);
+    menu.style.left = Math.max(8, Math.min(at.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+    menu.style.top = (at.bottom + 4) + 'px';
+    button.setAttribute('aria-expanded', 'true');
+    clusters.filter = '';
+    clusters.moved = false;
+    var shown = clusters.names || [];
+    clusters.on = Math.max(0, shown.indexOf(state.context));
+    drawClusterList();
+    readClusters(clusters.stale);
+
+    var input = menu.querySelector('input');
+    input.focus();
+    input.addEventListener('input', function () {
+      clusters.filter = input.value;
+      clusters.moved = true;
+      clusters.on = 0;
+      drawClusterList();
+    });
+    menu.addEventListener('keydown', function (event) {
+      var rows = clustersShown();
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        if (!rows.length) return;
+        clusters.moved = true;
+        clusters.on = (clusters.on + (event.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length;
+        drawClusterList();
+      } else if (event.key === 'Enter') {
+        // On one of the two small buttons Enter is that button's.
+        if (event.target.closest && event.target.closest('button')) return;
+        event.preventDefault();
+        if (rows[clusters.on]) chooseCluster(rows[clusters.on], event.metaKey || event.ctrlKey);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        closeClusterMenu();
+        button.focus();
+      }
+    });
+    menu.addEventListener('mousemove', function (event) {
+      var row = event.target.closest && event.target.closest('.cl-row');
+      if (!row) return;
+      var at = clustersShown().indexOf(row.dataset.cluster);
+      if (at < 0 || at === clusters.on) return;
+      // Only the mark is moved: the row under the pointer must still be the row that is pressed.
+      var was = menu.querySelector('.cl-row.on');
+      if (was) was.classList.remove('on');
+      row.classList.add('on');
+      clusters.moved = true;
+      clusters.on = at;
+    });
+    menu.addEventListener('click', function (event) {
+      var target = event.target;
+      if (target.closest('[data-cluster-again]')) { readClusters(true); return; }
+      if (target.closest('[data-cluster-add]')) { closeClusterMenu(); addClusterSheet(); return; }
+      var row = target.closest('.cl-row');
+      if (!row) return;
+      var name = row.dataset.cluster;
+      if (target.closest('[data-cluster-more]')) {
+        var where = target.closest('[data-cluster-more]').getBoundingClientRect();
+        closeClusterMenu();
+        host.emit('clusterMenu', { context: name, x: where.left, y: where.bottom + 2 });
+        return;
+      }
+      chooseCluster(name, Boolean(target.closest('[data-cluster-tab]')) || event.metaKey || event.ctrlKey);
+    });
+  }
+
+  /** What this tab is holding that belongs to the cluster it is on, in words; or nothing. */
+  function heldHere() {
+    // A pool being drained is driven from here, node by node: pointed elsewhere, it would stop half way.
+    if (mapDraining) return 'a drain in progress';
+    var edits = pendingEdits().length;
+    if (edits) return edits === 1 ? 'an edit kept' : edits + ' edits kept';
+    if (state.forwards && state.forwards.length) return state.forwards.length === 1 ? 'a port held open' : state.forwards.length + ' ports held open';
+    var following = (state.logs || []).filter(function (log) { return log.following; }).length;
+    if (following) return 'a log being followed';
+    return '';
+  }
+
+  function chooseCluster(name, newTab) {
+    closeClusterMenu();
+    if (!name || (name === state.context && !newTab)) return;
+    var held = newTab ? '' : heldHere();
+    if (held) {
+      say(shortContext(state.context || '') + ' has ' + held + ' in this tab, so ' + shortContext(name) + ' opened in a tab of its own.');
+      newTab = true;
+    }
+    host.emit('openCluster', { context: name, newTab: Boolean(newTab) });
+  }
+
+  /* ---------------------------------------------------------------------- *
+   * Another cluster in kubeconfig.
+   *
+   * Each cloud has one command that does this with the login already on the
+   * machine, and that command is what is run — in a terminal, where it can ask
+   * for whatever it asks for and where what it said stays readable. The app
+   * builds the line from these fields and shows it before running it; what is
+   * drawn here is the same line, so the question is not a surprise.
+   * ---------------------------------------------------------------------- */
+  var NEW_CLUSTER = {
+    eks: { title: 'Amazon EKS', fields: [['name', 'Cluster name', 'kubrik-k8s'], ['region', 'Region', 'sa-east-1'], ['profile', 'AWS profile', 'optional']],
+      line: function (v) { return 'aws eks update-kubeconfig --name ' + v.name + ' --region ' + v.region + (v.profile ? ' --profile ' + v.profile : ''); } },
+    doks: { title: 'DigitalOcean', fields: [['name', 'Cluster name', 'my-cluster']],
+      line: function (v) { return 'doctl kubernetes cluster kubeconfig save ' + v.name; } },
+    gke: { title: 'Google GKE', fields: [['name', 'Cluster name', 'prod'], ['region', 'Location', 'southamerica-east1'], ['project', 'Project', 'optional']],
+      line: function (v) { return 'gcloud container clusters get-credentials ' + v.name + ' --location ' + v.region + (v.project ? ' --project ' + v.project : ''); } },
+    aks: { title: 'Azure AKS', fields: [['name', 'Cluster name', 'prod'], ['group', 'Resource group', 'my-group']],
+      line: function (v) { return 'az aks get-credentials --name ' + v.name + ' --resource-group ' + v.group; } },
+  };
+  var newCluster = { provider: 'eks', values: {} };
+
+  function addClusterSheet() {
+    var box = sheet('Add a cluster', '');
+    var body = box.querySelector('.sheet-body');
+    box.querySelector('.sheet-box').style.width = 'min(520px, 92vw)';
+
+    function wanted() {
+      var kind = NEW_CLUSTER[newCluster.provider];
+      var out = { provider: newCluster.provider };
+      kind.fields.forEach(function (field) { out[field[0]] = String(newCluster.values[field[0]] || '').trim(); });
+      return out;
+    }
+    function missing() {
+      var kind = NEW_CLUSTER[newCluster.provider];
+      var values = wanted();
+      return kind.fields.filter(function (field) { return field[2] !== 'optional' && !values[field[0]]; }).map(function (field) { return field[1].toLowerCase(); });
+    }
+    function drawLine() {
+      var line = body.querySelector('.add-line');
+      var lacks = missing();
+      line.classList.toggle('is-short', lacks.length > 0);
+      line.textContent = lacks.length ? 'Needs the ' + lacks.join(' and the ') + '.' : NEW_CLUSTER[newCluster.provider].line(wanted());
+      body.querySelector('[data-add-run]').disabled = lacks.length > 0;
+      body.querySelector('[data-add-copy]').disabled = lacks.length > 0;
+    }
+    function draw() {
+      var kind = NEW_CLUSTER[newCluster.provider];
+      body.innerHTML =
+        '<div class="dim sheet-sub">Puts a context in your kubeconfig with the cloud’s own command, using the login you already have there. Nothing is created in the cloud.</div>' +
+        '<div class="add-cluster"><label for="add-provider">Where it runs</label><select id="add-provider">' +
+        Object.keys(NEW_CLUSTER).map(function (id) { return '<option value="' + id + '"' + (id === newCluster.provider ? ' selected' : '') + '>' + NEW_CLUSTER[id].title + '</option>'; }).join('') +
+        '</select>' +
+        kind.fields.map(function (field) {
+          return '<label for="add-' + field[0] + '">' + esc(field[1]) + '</label><input id="add-' + field[0] + '" data-add-field="' + field[0] + '" spellcheck="false" autocomplete="off" placeholder="' + esc(field[2]) + '" value="' + esc(newCluster.values[field[0]] || '') + '" />';
+        }).join('') +
+        '</div><div class="add-line"></div>' +
+        '<div class="sheet-foot"><button class="btn go" data-add-run="1">Run in a terminal</button><button class="btn" data-add-copy="1">Copy the command</button>' +
+        '<span class="dim">It is in the list once the command has finished.</span></div>';
+      drawLine();
+    }
+    draw();
+    var first = body.querySelector('[data-add-field]');
+    if (first) first.focus();
+
+    body.addEventListener('change', function (event) {
+      if (event.target.id !== 'add-provider') return;
+      newCluster.provider = event.target.value;
+      draw();
+      var input = body.querySelector('[data-add-field]');
+      if (input) input.focus();
+    });
+    body.addEventListener('input', function (event) {
+      var field = event.target.dataset && event.target.dataset.addField;
+      if (!field) return;
+      newCluster.values[field] = event.target.value;
+      drawLine();
+    });
+    function run() {
+      if (missing().length) return;
+      call('kube.addCluster', wanted()).then(function () {
+        clusters.stale = true;
+        box.remove();
+        say('Running it in a terminal. Open the cluster list again when it has finished.');
+      }, function (error) { say(String(error.message || error), true); });
+    }
+    body.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter' && event.target.dataset && event.target.dataset.addField) { event.preventDefault(); run(); }
+    });
+    body.addEventListener('click', function (event) {
+      if (event.target.closest('[data-add-run]')) run();
+      else if (event.target.closest('[data-add-copy]') && !missing().length) {
+        host.emit('copy', { text: NEW_CLUSTER[newCluster.provider].line(wanted()) });
+        say('Copied the command.');
+      }
+    });
+  }
+
+  /* ---------------------------------------------------------------------- *
    * The header.
    * ---------------------------------------------------------------------- */
   function drawTop() {
     var head = $('cluster');
-    head.textContent = shortContext(state.context || '');
-    head.title = state.context || '';
+    head.querySelector('.cl-name').textContent = shortContext(state.context || '') || 'Choose a cluster';
+    head.title = (state.context ? state.context + '\n' : '') + 'Choose the cluster this tab is on';
 
     var namespaces = ['<option value="">All namespaces</option>'].concat(
       state.namespaces.map(function (name) {
@@ -2345,6 +2896,7 @@
     ).join('');
     $('namespace').innerHTML = namespaces;
     $('live').className = 'btn with-icon' + (state.live ? ' on' : '');
+    $('live').setAttribute('aria-pressed', state.live ? 'true' : 'false');
     drawFresh();
   }
 
@@ -2383,15 +2935,27 @@
     if (found[0]) { mapTrail = []; mapFollow(found[0].id); }
     else say('Nothing on the map is called that.', true);
   });
+  // Enter in the question sends it: it is a line of text with a button beside it.
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Enter' || !event.target || event.target.id !== 'question' || event.isComposing) return;
+    event.preventDefault();
+    act('ask');
+  });
   $('search').addEventListener('input', function (event) {
     state.search = event.target.value.trim().toLowerCase();
-    remember();
-    draw();
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(function () {
+      remember();
+      // The table or the map, and what counts them. Not the pane and not the logs: neither is filtered by this.
+      if (state.view.type === 'kind' || state.view.type === 'helm') { drawCrumb(); drawTable(); drawPicked(); }
+      else draw({ keepDock: true });
+    }, 110);
   });
+  var searchTimer = 0;
   // In place: what is there stays there until the new answer replaces it, and
   // the arrow turning is what says it is being asked.
   $('reload').addEventListener('click', function () {
-    if (state.error || !(state.view.type === 'overview' ? state.overview : state.view.type === 'map' ? state.map : state.table)) load();
+    if (state.error || !(state.view.type === 'overview' || state.view.type === 'stats' ? state.overview : state.view.type === 'map' ? state.map : state.table)) load();
     else load(true);
   });
   $('live').addEventListener('click', function () {
@@ -2504,6 +3068,16 @@
      * can be found again: the ones not applied are counted here, wherever the
      * panel is, and the count is the way back to each.
      */
+    // What the rows on show are being complained about, in one number, and the way to put all of it aside.
+    if (listing && state.table && state.view.name !== 'events') {
+      var warnedRows = 0;
+      var warnedSum = 0;
+      visible().forEach(function (row) { var n = warnedCount(mapKnown(row)); if (n) { warnedRows += 1; warnedSum += n; } });
+      if (warnedSum) {
+        bits.push('<button class="link" data-do="warnings-clear-shown" title="Put aside the warnings of the ' + warnedRows + ' shown here that have any. Nothing is deleted in the cluster, and anything said again is counted again.">' +
+          warnedSum + ' warning' + (warnedSum === 1 ? '' : 's') + ' · clear</button>');
+      }
+    }
     var pending = pendingEdits();
     if (pending.length) {
       bits.push('<button class="link pending-edits" data-pending="1" title="Edits that have not been applied to the cluster">' +
@@ -2537,8 +3111,15 @@
       rows = rows.filter(function (row) {
         // Every part guarded: a node has no namespace, and the word "undefined"
         // in the haystack is a search term that matches every row there is.
-        return (row.name + ' ' + (row.namespace || '') + ' ' + (row.status || '') + ' ' +
-          (row.message || '') + ' ' + (row.nodegroup || '')).toLowerCase().indexOf(term) >= 0;
+        var hay = row.name + ' ' + (row.namespace || '') + ' ' + (row.status || '') + ' ' +
+          (row.message || '') + ' ' + (row.nodegroup || '');
+        // And whatever else the table is showing of it: a node's name, an address, a zone.
+        var shown = (state.table && state.table.columns) || [];
+        for (var c = 0; c < shown.length; c += 1) {
+          var part = row[shown[c]];
+          if (part != null && typeof part !== 'object' && shown[c] !== 'age') hay += ' ' + part;
+        }
+        return hay.toLowerCase().indexOf(term) >= 0;
       });
     }
     if (state.sort.column) {
@@ -2550,13 +3131,45 @@
           var young = bornAt(a), old = bornAt(b);
           if (young != null && old != null) return (old - young) * dir;
         }
-        var left = a[column];
-        var right = b[column];
-        if (typeof left === 'number' && typeof right === 'number') return (left - right) * dir;
-        return String(left == null ? '' : left).localeCompare(String(right == null ? '' : right)) * dir;
+        var left = sortKey(a, column);
+        var right = sortKey(b, column);
+        var order = typeof left === 'number' && typeof right === 'number'
+          ? left - right
+          : String(left == null ? '' : left).localeCompare(String(right == null ? '' : right), undefined, { numeric: true });
+        // The same in this column: by name, so the order does not shuffle between two draws.
+        if (!order) order = String(a.name || '').localeCompare(String(b.name || ''), undefined, { numeric: true }) * dir;
+        return order * dir;
       });
     }
     return rows;
+  }
+
+  /**
+   * What a column is ordered by, which is not always what it prints: "10/10"
+   * before "2/3" and "100m" before "12m" are orders of the letters, not of the
+   * things.
+   */
+  function sortKey(row, column) {
+    var value = row[column];
+    if (value == null || value === '') return column === 'cpu' || column === 'memory' || column === 'ready' ? -1 : '';
+    if (typeof value === 'number') return value;
+    var text = String(value);
+    if (column === 'ready') {
+      var parts = /^(\d+)\/(\d+)/.exec(text);
+      // Least ready first: the share that is up, then how many there are.
+      if (parts) return (Number(parts[2]) ? Number(parts[1]) / Number(parts[2]) : 1) * 1e6 + Number(parts[2]);
+    }
+    if (column === 'cpu') {
+      var cores = /^([\d.]+)(m?)$/.exec(text);
+      if (cores) return Number(cores[1]) * (cores[2] ? 1 : 1000);
+    }
+    if (column === 'memory' || column === 'capacity') {
+      var size = /^([\d.]+)\s*(Ki|Mi|Gi|Ti|K|M|G|T|KiB|MiB|GiB|TiB)?$/.exec(text);
+      var scale = { Ki: 1024, K: 1000, KiB: 1024, Mi: 1048576, M: 1e6, MiB: 1048576, Gi: 1073741824, G: 1e9, GiB: 1073741824, Ti: 1099511627776, T: 1e12, TiB: 1099511627776 };
+      if (size) return Number(size[1]) * (scale[size[2]] || 1);
+    }
+    if (column === 'restarts') return Number(text) || 0;
+    return text;
   }
 
   var HEADINGS = {
@@ -2614,6 +3227,8 @@
     // Asked for late — a forward changing, a selection let go — while the map is what is showing.
     if (state.view.type === 'map') return;
     if (selectingIn($('table'))) { heldBack.table = true; return; }
+    // A row's menu is open: the table under it waits. Redrawn, the menu went and its row stayed selected, unseen.
+    if (menuRow) { heldBack.table = true; return; }
     closeRowMenu();
     if (state.error) {
       $('table').innerHTML = '<div class="note error">' + esc(state.error) + '</div>' + advice(state.error);
@@ -2626,6 +3241,10 @@
       return;
     }
 
+    // On every draw rather than once: a pod that arrives by the watch is a new row, and has a node too.
+    if (state.zones && state.view.name === 'pods' && state.table.columns.indexOf('zone') >= 0) {
+      state.table.rows.forEach(function (row) { row.zone = state.zones[row.node] || ''; });
+    }
     var rows = visible();
     if (!rows.length) {
       $('table').innerHTML = '<div class="note">' +
@@ -2638,11 +3257,12 @@
       return !(column === 'namespace' && state.namespace);
     });
 
-    var head = '<tr><th class="tick"><input type="checkbox" id="tick-all"' +
+    var head = '<tr><th class="tick"><input type="checkbox" aria-label="Tick all shown" id="tick-all"' +
       (state.picked.length && state.picked.length === rows.length ? ' checked' : '') + ' /></th>' +
       columns.map(function (column) {
       var arrow = state.sort.column === column ? '<span class="arrow">' + (state.sort.dir > 0 ? '↑' : '↓') + '</span>' : '';
-      return '<th data-column="' + esc(column) + '">' + esc(HEADINGS[column] || column) + arrow + '</th>';
+      var sorted = state.sort.column === column ? (state.sort.dir > 0 ? 'ascending' : 'descending') : 'none';
+      return '<th scope="col" tabindex="0" role="columnheader" aria-sort="' + sorted + '" data-column="' + esc(column) + '" title="Sort by ' + esc(HEADINGS[column] || column) + '">' + esc(HEADINGS[column] || column) + arrow + '</th>';
     }).join('') + '<th class="more"></th></tr>';
 
     var body = '';
@@ -2651,7 +3271,7 @@
       var row = rows[i];
       var on = state.selected && state.selected.uid === row.uid;
       body += '<tr data-uid="' + esc(row.uid) + '" class="' + (on ? 'on' : '') + '">';
-      body += '<td class="tick"><input type="checkbox" data-tick="' + esc(row.uid) + '"' +
+      body += '<td class="tick"><input type="checkbox" aria-label="Tick ' + esc(row.name) + '" data-tick="' + esc(row.uid) + '"' +
         (state.picked.indexOf(row.uid) >= 0 ? ' checked' : '') + ' /></td>';
       for (var c = 0; c < columns.length; c += 1) body += cell(row, columns[c]);
       // What you can do to this one, without opening it first.
@@ -2708,8 +3328,10 @@
     }
     if (event.target.id === 'tick-all') {
       event.stopPropagation();
-      var all = visible().map(function (row) { return row.uid; });
-      state.picked = state.picked.length === all.length ? [] : all;
+      // Only what is drawn: past the cap a row cannot be seen, and must not be acted on unseen.
+      var all = visible().slice(0, CAP).map(function (row) { return row.uid; });
+      var every = all.length > 0 && all.every(function (uid) { return state.picked.indexOf(uid) >= 0; });
+      state.picked = every ? [] : all;
       drawTable();
       drawPicked();
       return;
@@ -3328,8 +3950,10 @@
     if (open) open.remove();
     // The click-away of a menu that is gone must not act on the next one.
     if (menuAway) { document.removeEventListener('click', menuAway); menuAway = null; }
+    var owed = menuRow && heldBack.table;
     menuRow = null;
     menuWas = null;
+    if (owed) setTimeout(function () { if (heldBack.table && !menuRow) { heldBack.table = false; if (state.table) drawTable(); } }, 0);
   }
 
   /**
@@ -3574,7 +4198,7 @@
     o = o || {};
     var ui = mapUi();
     // What the cluster has complained about it lately — and, for a workload, about its pods — as a number in the corner.
-    var warned = o.more ? 0 : (node.warnings || 0) + (node.podWarnings || 0);
+    var warned = o.more ? 0 : warnedCount(node);
     var cls = 'mcard c-' + (MAP_CAT[node.kind] || 'wk') + ' h-' + (o.health || node.health || 'ok') +
       (ui.sel && ui.sel === node.id && !o.more ? ' sel' : '') + (o.cls ? ' ' + o.cls : '');
     return '<button class="' + cls + '" style="left:' + x + 'px;top:' + y + 'px' +
@@ -3645,8 +4269,8 @@
 
   /** Whether the cluster has complained lately about a unit or anything of it. */
   function mapUnitWarned(unit) {
-    if (unit.root.warnings || unit.root.podWarnings) return true;
-    return unit.pods.some(function (pod) { return pod.warnings > 0; });
+    if (warnedCount(unit.root)) return true;
+    return unit.pods.some(function (pod) { return stillSaid(pod) > 0; });
   }
 
   function mapUnitBad(unit) {
@@ -3698,7 +4322,19 @@
         if (ui.bad && !mapUnitBad(unit) && !mapUnitWarned(unit)) return false;
         return true;
       });
-      if (!mine.length) return;
+      /*
+       * What belongs to nothing, found before deciding whether the namespace
+       * is worth drawing: a namespace holding only a service that selects no
+       * pods was skipped whole, with the one thing in it this exists to show.
+       */
+      var strays = state.map.nodes.filter(function (node) {
+        if (node.namespace !== ns.name) return false;
+        if (text && node.name.toLowerCase().indexOf(text) < 0 && ns.name.toLowerCase().indexOf(text) < 0) return false;
+        if (node.kind === 'Service') return ui.net !== false && node.selects === 0;
+        if (node.kind === 'PersistentVolumeClaim') return ui.storage !== false && !ui.bad && !mapFrom(node.id, 'mounts').length;
+        return false;
+      });
+      if (!mine.length && !strays.length) return;
       drawn += 1;
       var open = text || ui.bad ? true : ui.open[ns.name] != null ? ui.open[ns.name] : small && !ns.system;
       var pods = 0;
@@ -3714,7 +4350,8 @@
       var top = y;
       html += '<button class="mband-h" aria-expanded="' + (open ? 'true' : 'false') + '" data-map-ns="' + esc(ns.name) + '" style="top:' + (y + 5) + 'px">' +
         '<span class="twist">' + (open ? '▾' : '▸') + '</span><b>' + esc(ns.name) + '</b>' +
-        '<span>' + mapPlural(mine.length, 'workload') + ' · ' + mapPlural(pods, 'pod') + '</span>' +
+        '<span>' + (mine.length ? mapPlural(mine.length, 'workload') + ' · ' + mapPlural(pods, 'pod') : 'nothing running') +
+          (strays.length ? ' · ' + strays.length + ' attached to nothing' : '') + '</span>' +
         Object.keys(techs).map(function (tech) { return '<span class="mtag inf">' + esc(tech) + '</span>'; }).join('') +
         (troubled ? '<span class="mtag bad">' + troubled + ' not well</span>' : '') +
         (warnedHere ? '<span class="mtag warn" title="Workloads the cluster has raised warnings about lately">' + warnedHere + ' with warnings</span>' : '') + '</button>';
@@ -3844,13 +4481,6 @@
          * is a disk being paid for; neither hangs off a workload, so neither
          * would otherwise be drawn at all.
          */
-        var strays = state.map.nodes.filter(function (node) {
-          if (node.namespace !== ns.name) return false;
-          if (text && node.name.toLowerCase().indexOf(text) < 0 && ns.name.toLowerCase().indexOf(text) < 0) return false;
-          if (node.kind === 'Service') return ui.net !== false && node.selects === 0;
-          if (node.kind === 'PersistentVolumeClaim') return ui.storage !== false && !ui.bad && !mapFrom(node.id, 'mounts').length;
-          return false;
-        });
         strays.forEach(function (node) {
           var cy = y + mid;
           if (node.kind === 'Service') {
@@ -3936,13 +4566,13 @@
   function mapTile(pod, ui, text) {
     var claims = mapTo(pod.id, 'mounts');
     var off = (text && (pod.name + ' ' + pod.namespace + ' ' + pod.owner).toLowerCase().indexOf(text) < 0) ||
-      (ui.bad && pod.health !== 'warn' && pod.health !== 'bad' && !pod.warnings);
+      (ui.bad && pod.health !== 'warn' && pod.health !== 'bad' && !stillSaid(pod));
     var size = [mapCpu(pod.cpuReq), mapMem(pod.memReq)].filter(Boolean).join(' · ');
     return '<button class="mtile h-' + pod.health + (ui.hl && pod.owner === ui.hl ? ' hl' : '') + (ui.sel === pod.id ? ' sel' : '') +
       (off ? ' off' : '') + '" data-map-id="' + esc(pod.id) + '" title="' + esc(mapTip(pod)) + '">' +
       '<i class="mdot"></i><span class="mtext"><b>' + esc(pod.name) + '</b><small>' +
       esc(pod.health === 'ok' ? pod.namespace + (size ? ' · ' + size : '') : pod.status + (pod.restarts ? ' · ' + mapPlural(pod.restarts, 'restart') : '')) +
-      '</small></span>' + (pod.warnings ? '<span class="mwarn is-inline" title="' + esc(pod.warning || '') + '">' + (pod.warnings > 99 ? '99+' : pod.warnings) + '</span>' : '') +
+      '</small></span>' + (stillSaid(pod) ? '<span class="mwarn is-inline" title="' + esc(pod.warning || '') + '">' + (stillSaid(pod) > 99 ? '99+' : stillSaid(pod)) + '</span>' : '') +
       (claims.length ? '<i class="mplug" title="Mounts ' + esc(claims.map(function (c) { return c.name; }).join(', ')) + '"></i>' : '') +
       '</button>';
   }
@@ -3978,19 +4608,30 @@
     var html = '<span class="map-drop"><button class="btn icon" data-map-menu="legend" title="What the colours and lines mean" aria-label="Legend">?</button>';
     if (mapMenuOpen !== 'legend') return html + '</span>';
     var row = function (mark, words) { return '<div class="mleg"><span class="mleg-mark">' + mark + '</span><span>' + words + '</span></div>'; };
-    return html + '<div class="map-menu right">' +
-      row('<i class="msq"></i>', 'Workloads and pods') +
-      row('<i class="msq c-nw"></i>', 'Network: ingresses, services, policies') +
-      row('<i class="msq c-st"></i>', 'Storage: claims, volumes, classes') +
-      row('<i class="mdot"></i>', 'Well') +
+    var mode = state.view.mode || 'topology';
+    var rows = row('<i class="mdot"></i>', 'Well') +
       row('<i class="mdot" style="background:var(--warn)"></i>', 'Degraded, pending, or cordoned') +
       row('<i class="mdot" style="background:var(--danger)"></i>', 'Failing') +
-      row('<svg width="34" height="8"><path class="medge" d="M0 4H34"/></svg>', 'Stated by the Kubernetes API: an owner, a selector, a binding') +
-      row('<svg width="34" height="8"><path class="medge inf" d="M0 4H34"/></svg>', 'Inferred: a service named in a pod template, a data service known by its image') +
-      row('<svg width="34" height="8"><path class="medge vol on" d="M0 4H34"/></svg>', 'A pod mounting a volume that lives in the storage backend') +
-      row('<span class="mwarn is-inline">3</span>', 'Warnings the cluster raised about it lately. Click the number for its events') +
-      row('<span class="mtag warn">spof</span>', 'Amber, thick border: every replica depends on it') +
-      row('<span class="mtag bad">lost</span>', 'Red fill: gone in the failure being tried') +
+      row('<span class="mwarn is-inline">3</span>', 'Warnings the cluster is raising about it now. Click the number for its events');
+    // Only what this way of looking at it actually draws.
+    if (mode === 'physical') {
+      rows += row('<span class="mtag warn">spot</span>', 'A machine the cloud can take back at short notice') +
+        row('<span class="mtag">taint</span>', 'A node that only takes pods which tolerate it') +
+        row('<i class="msq" style="border-style:dashed"></i>', 'A pod of the system: kube-system and the like') +
+        row('<svg width="34" height="8"><path class="medge vol on" d="M0 4H34"/></svg>', 'A pod mounting a volume that lives in the storage backend') +
+        row('<span class="mtag bad">lost</span>', 'Red fill: gone in the failure being tried');
+    } else {
+      rows = row('<i class="msq"></i>', 'Workloads and pods') +
+        row('<i class="msq c-nw"></i>', 'Network: ingresses, services, policies') +
+        row('<i class="msq c-st"></i>', 'Storage: claims, volumes, classes') + rows +
+        row('<svg width="34" height="8"><path class="medge" d="M0 4H34"/></svg>', 'Stated by the Kubernetes API: an owner, a selector, a binding') +
+        row('<svg width="34" height="8"><path class="medge inf" d="M0 4H34"/></svg>', 'Inferred: a service named in a pod template, a data service known by its image');
+      if (mode === 'graph') {
+        rows += row('<span class="mtag warn">spof</span>', 'Amber, thick border: every replica depends on it') +
+          row('<span class="mtag bad">lost</span>', 'Red fill: gone in the failure being tried');
+      }
+    }
+    return html + '<div class="map-menu right">' + rows +
       '<div class="mleg dim" style="margin-top:6px">Point at a card to light everything it reaches and everything that reaches it. Right-click a card for more. ⌘ and the wheel zooms.</div>' +
       '</div></span>';
   }
@@ -4107,7 +4748,7 @@
           esc([node.status, node.instance, byZone ? node.pool : node.zone].filter(Boolean).join(' · ')) + '</small>' +
           '<span class="mnode-tags">' + (node.capacity === 'spot' ? '<span class="mtag warn" title="A spot machine: the cloud can take it back at short notice">spot</span>' : '') +
           (node.taintList && node.taintList.length ? '<span class="mtag" title="' + esc(node.taintList.join('\n')) + '">' + mapPlural(node.taintList.length, 'taint') + '</span>' : '') +
-          (node.warnings ? '<span class="mtag bad" title="' + esc(node.warning || '') + '">' + mapPlural(node.warnings, 'warning') + '</span>' : '') +
+          (stillSaid(node) ? '<span class="mtag bad" title="' + esc(node.warning || '') + '">' + mapPlural(stillSaid(node), 'warning') + '</span>' : '') +
           '<span class="mtag" title="Pods running on it">' + pods.length + '</span></span></span>' +
           '<span class="mbars" title="' + esc(askedWhy + '\nCPU: ' + cpuSays + '\nMemory: ' + memSays) + '"><span>' + asked + 'CPU ' + cpu.pct + '%</span><span>' + asked + 'memory ' + mem.pct + '%</span>' +
           cpu.html + mem.html + used + '</span></button><div class="mtiles">' +
@@ -4392,11 +5033,19 @@
       var still = mapPodsOf(id).filter(function (pod) { return !lostPods[pod.id] && pod.ready; }).length;
       if (still) thinner += 1; else down.push(owner.name);
     });
+    // Made by nothing: no controller will start it again anywhere. A mirror pod is the node's own and goes with it.
+    var bare = Object.keys(lostPods).map(function (id) { return lostPods[id]; }).filter(function (pod) {
+      return !pod.owner && !pod.mirror && !focusIds[pod.id];
+    });
+    var forGood = bare.length
+      ? ' ' + mapPlural(bare.length, 'pod') + ' made by no controller ' + (bare.length === 1 ? 'is' : 'are') + ' gone for good: ' +
+        bare.slice(0, 3).map(function (pod) { return pod.name; }).join(', ') + (bare.length > 3 ? ' and ' + (bare.length - 3) + ' more' : '') + '.'
+      : '';
     var others = !down.length && !thinner
-      ? 'Nothing else is affected.'
+      ? (bare.length ? forGood.trim() : 'Nothing else is affected.')
       : (down.length ? mapPlural(down.length, 'other workload') + ' left with no ready pod: ' + down.slice(0, 4).join(', ') +
           (down.length > 4 ? ' and ' + (down.length - 4) + ' more' : '') + '. ' : '') +
-        (thinner ? mapPlural(thinner, 'workload') + ' lose some replicas and stay up.' : '');
+        (thinner ? mapPlural(thinner, 'workload') + ' lose some replicas and stay up.' : '') + forGood;
 
     var local = lostVolumes.filter(function (volume) { return volume.local; }).length;
     var remote = lostVolumes.length - local;
@@ -4488,7 +5137,7 @@
       if (node.kind === 'Pod') return Boolean(sim.pods[node.id]);
       if (node.kind === 'Node') return Boolean(sim.nodes[node.name]);
       if (node.kind === 'Pool') return ui.sim === node.id;
-      if (node.kind === 'PersistentVolume') return ui.sim === 'StorageClass//' + node.className || Boolean(sim.nodes[node.attachedTo]);
+      if (node.kind === 'PersistentVolume') return ui.sim === 'StorageClass//' + node.className || Boolean(sim.nodes[node.attachedTo]) || Boolean(sim.nodes[node.pinnedTo]);
       return false;
     };
 
@@ -4704,19 +5353,119 @@
     }).join('');
   }
 
+  /* ---------------------------------------------------------------------- *
+   * Warnings that are over.
+   *
+   * The cluster goes on repeating what it said for about an hour, whether or
+   * not it is still true, and a number in red on a row that has been healthy
+   * for fifty minutes teaches people not to look at numbers in red. So there
+   * are two ways out of the count. One is the cluster's own evidence: a pod
+   * that became ready after it was last complained about got over it, and the
+   * map reader counts that apart. The other is the reader's: "Clear" puts what
+   * has been said about one thing aside as of now. Nothing is deleted from the
+   * cluster, and anything said again afterwards is counted again.
+   * ---------------------------------------------------------------------- */
+  function mapNow() {
+    if (state.map && state.mapFor === mapKey()) return state.map;
+    return (mapCache[mapKey()] || mapCache[(state.context || '') + '/'] || {}).result || null;
+  }
+  /** Anything the map drew, by its id; indexed once per reading of the map. */
+  function mapNode(id) {
+    var data = mapNow();
+    if (!data) return null;
+    if (!data.byIdAll) { data.byIdAll = {}; (data.nodes || []).forEach(function (one) { data.byIdAll[one.id] = one; }); }
+    return data.byIdAll[id] || null;
+  }
+  /** The pods each workload made, worked out once per reading of the map. */
+  function podsOf(id) {
+    var data = mapNow();
+    if (!data) return [];
+    if (!data.podsOf) {
+      data.podsOf = {};
+      (data.nodes || []).forEach(function (node) {
+        if (node.kind === 'Pod' && node.owner) (data.podsOf[node.owner] || (data.podsOf[node.owner] = [])).push(node);
+      });
+    }
+    return data.podsOf[id] || [];
+  }
+  function stillSaid(node) {
+    if (!node || !node.warnings) return 0;
+    var since = state.cleared[node.id] || 0;
+    if (!since) return node.warnings;
+    // A map read by an older reader has the count and not the times: then the latest one decides for all.
+    if (!node.warnTimes) return (Date.parse(node.warnedAt) || 0) > since ? node.warnings : 0;
+    return node.warnTimes.filter(function (at) { return (Date.parse(at) || 0) > since; }).length;
+  }
+  /** What is being complained about now: its own, and for a workload its pods'. */
+  function warnedCount(node) {
+    if (!node) return 0;
+    var count = stillSaid(node);
+    if (node.podWarnings) podsOf(node.id).forEach(function (pod) { count += stillSaid(pod); });
+    return count;
+  }
+  /** What was complained about and is over: got over by the pod, or put aside here. */
+  function warnedPast(node) {
+    if (!node) return 0;
+    var all = (node.warnings || 0) + (node.podWarnings || 0) + (node.warningsPast || 0);
+    return Math.max(0, all - warnedCount(node));
+  }
+  function clearWarnings(node) {
+    if (!node) return;
+    // As of now by this clock — and no earlier than the last thing the cluster said, whose clock may be ahead.
+    var now = Date.now();
+    [node].concat(podsOf(node.id)).forEach(function (one) {
+      (one.warnTimes || [one.warnedAt]).forEach(function (at) { now = Math.max(now, Date.parse(at) || 0); });
+    });
+    state.cleared[node.id] = now;
+    podsOf(node.id).forEach(function (pod) { state.cleared[pod.id] = now; });
+    remember();
+  }
+  function unclearWarnings(node) {
+    if (!node) return;
+    delete state.cleared[node.id];
+    podsOf(node.id).forEach(function (pod) { delete state.cleared[pod.id]; });
+    remember();
+  }
+  function wasCleared(node) {
+    if (!node) return false;
+    return Boolean(state.cleared[node.id]) || podsOf(node.id).some(function (pod) { return Boolean(state.cleared[pod.id]); });
+  }
+  /** Whether one event in the pane is over, and why: '' while it still counts. */
+  function eventOver(event) {
+    if (event.type !== 'Warning') return '';
+    var at = Date.parse(event.at);
+    if (isNaN(at)) return '';
+    var id = event.objectKind + '/' + (event.objectKind === 'Node' ? '' : event.namespace || '') + '/' + event.objectName;
+    var node = mapNode(id);
+    var row = state.selected;
+    var own = row ? row.kind + '/' + (row.namespace || '') + '/' + row.name : '';
+    if ((state.cleared[id] || 0) >= at || (own && (state.cleared[own] || 0) >= at)) return 'cleared';
+    if (node && node.kind === 'Pod' && node.ready && node.readyAt && at <= Date.parse(node.readyAt)) return 'before it was ready';
+    return '';
+  }
+
   /** In a table: the same count the map puts on a card, for the same reason. */
   function warnMark(row) {
     if (!row || !row.kind || row.kind === 'Event') return '';
     var node = mapKnown(row);
-    var count = node ? (node.warnings || 0) + (node.podWarnings || 0) : 0;
+    var count = warnedCount(node);
     return count ? '<span class="row-warn" title="' + esc(node.warning || '') + '">' + (count > 99 ? '99+' : count) + '</span>' : '';
   }
 
   function mapWarned(node) {
-    var count = (node.warnings || 0) + (node.podWarnings || 0);
-    if (!count) return '';
+    var count = warnedCount(node);
+    var past = warnedPast(node);
+    if (!count && !past) return '';
+    if (!count) {
+      // Nothing is wrong now. Said quietly, because it is still worth knowing that something was.
+      return block('Warnings', '<div class="events"><div class="event is-past"><div class="event-head"><span class="dot idle"></span><b>' +
+        'None now</b><span class="dim">· ' + past + ' earlier, ' + (wasCleared(node) ? 'cleared' : 'before it was ready') + '</span><span class="spacer"></span>' +
+        (wasCleared(node) ? '<button class="btn" data-do="warnings-unclear" title="Count them again">Show again</button>' : '') +
+        '<button class="btn" data-tab="events">Open Events</button></div></div></div>');
+    }
     return block('Warnings', '<div class="events"><div class="event is-warn"><div class="event-head"><span class="dot bad"></span><b>' +
-      count + ' lately</b><span class="spacer"></span>' +
+      count + ' lately</b>' + (past ? '<span class="dim">· ' + past + ' earlier</span>' : '') + '<span class="spacer"></span>' +
+      '<button class="btn" data-do="warnings-clear" title="Put these aside. Nothing is deleted in the cluster, and anything said again is counted again.">Clear</button>' +
       '<button class="btn" data-tab="events">Open Events</button></div><div class="event-text">' + esc(node.warning || '') + '</div></div></div>');
   }
 
@@ -4746,7 +5495,13 @@
     if (node.pdb) facts.push(['Disruption budget', node.pdb + (node.pdbAllowed != null ? ' · ' + node.pdbAllowed + ' may go right now' : '')]);
     if (node.tech) facts.push(['Runs', node.tech + (node.techVersion ? ' ' + node.techVersion : '') + ' (by its image)']);
     if (node.helm) facts.push(['Installed by', node.helm]);
-    if (node.kind === 'Pod' && node.node) facts.push(['On', node.node]);
+    if (node.kind === 'Pod' && node.node) {
+      facts.push(['On', node.node]);
+      // Where that machine is: from the nodes the pod list already read, or from the map's own.
+      var machine = mapNode('Node//' + node.node);
+      var zone = (state.zones && state.zones[node.node]) || (machine && machine.zone) || '';
+      if (zone) facts.push(['Zone', zone]);
+    }
     if (facts.length) {
       html += block('From the map', '<dl class="facts">' + facts.map(function (fact) { return '<dt>' + esc(fact[0]) + '</dt><dd>' + esc(fact[1]) + '</dd>'; }).join('') + '</dl>');
     }
@@ -5297,7 +6052,12 @@
 
     box.innerHTML = '<div class="map"><div class="map-bar">' + bar + '</div>' +
       '<div>' + (missing.length ? '<div class="map-note">Not drawn, because the cluster would not list them: ' + esc(missing.join('; ')) + '.</div>' : '') +
-      (mode === 'physical' && ui.by !== 'zone' ? mapPoolBar() : '') + '</div>' +
+      (mode === 'physical' && ui.by !== 'zone' ? mapPoolBar() : '') +
+      // A drain in hand is said, and can be stopped, from whichever way the map is being looked at.
+      (mapDraining && !(mode === 'physical' && ui.by !== 'zone' && mapLitPools().names.length)
+        ? '<div class="map-acts"><span class="mtag warn">draining ' + esc(mapDraining.pool) + ': node ' + (mapDraining.at + 1) + ' of ' + mapDraining.names.length +
+          '</span><button class="btn" data-map-act="stop-drain" title="Finish the node in hand and go no further">Stop after this node</button></div>' : '') +
+      '</div>' +
       '<div class="map-view" id="map-view" data-mode="' + mode + '">' +
       /*
        * The column headings ride at the top of the pane: forty rows down, "which
@@ -5340,6 +6100,9 @@
       document.getElementById('map-head-in').style.transform = 'scale(' + zoom + ')';
     }
     view.dataset.drawn = drawn;
+    // New cards under the same pointer: what was lit is forgotten, so the next move lights it again.
+    mapHovered = null;
+    mapEdges = null;
     var kept = mapScroll[mode];
     if (kept) { view.scrollLeft = kept.x; view.scrollTop = kept.y; }
     // A view arriving is shown arriving; a refresh of the one already there is not.
@@ -5830,10 +6593,10 @@
       { value: data.podsRunning + ' / ' + data.pods,
         label: 'pods running' + (data.podsDone ? ' · ' + data.podsDone + ' finished' : ''), go: 'pods' },
       { value: data.podsFailing, label: 'pods failing', bad: data.podsFailing > 0, go: 'pods', only: 'bad' },
-      { value: data.restarts, label: 'restarts', warn: data.restarts > 0, go: 'pods', sort: 'restarts' },
+      { value: data.restarts, label: 'restarts, in all', warn: false, go: 'pods', sort: 'restarts' },
       { value: data.warnings, label: 'warning events', warn: data.warnings > 0, go: 'events' },
     ].map(function (card) {
-      return '<div class="card is-link ' + (card.bad ? 'bad' : card.warn ? 'warn' : '') + '"' +
+      return '<div tabindex="0" role="link" class="card is-link ' + (card.bad ? 'bad' : card.warn ? 'warn' : '') + '"' +
         ' data-go="' + esc(card.go) + '"' +
         (card.only ? ' data-only="' + esc(card.only) + '"' : '') +
         (card.sort ? ' data-sort="' + esc(card.sort) + '"' : '') +
@@ -5858,7 +6621,7 @@
       recent = '<div class="crumb"><strong>Recent warnings</strong></div><table><tbody>' +
         data.recent.slice(0, 20).map(function (row) {
           var nav = row.objectKind ? navFor(row.objectKind) : null;
-          return '<tr' + (nav ? ' class="is-link" data-open="' + esc(row.objectName) + '" data-open-kind="' + esc(nav) + '" data-open-namespace="' + esc(row.namespace || '') + '" title="Open ' + esc(row.object) + '"' : '') +
+          return '<tr' + (nav ? ' class="is-link" tabindex="0" role="link" data-open="' + esc(row.objectName) + '" data-open-kind="' + esc(nav) + '" data-open-namespace="' + esc(row.namespace || '') + '" title="Open ' + esc(row.object) + '"' : '') +
             '><td class="dim age">' + ageHtml(row) + '</td>' +
             '<td class="warn-text">' + esc(row.status) + '</td>' +
             '<td class="dim">' + esc(row.object) + '</td>' +
@@ -5908,19 +6671,23 @@
 
     var bar = function (title, of, format) {
       var pct = function (n) { return Math.max(0, Math.min(100, (n / of.allocatable) * 100)); };
-      var over = of.used > of.requested;
-      return '<div class="gauge is-link" data-stat="' + title.toLowerCase() + '">' +
+      // Nothing measured is not nothing used: "0% in use" over a busy cluster was a false number.
+      var measured = data.metrics !== false;
+      var over = measured && of.used > of.requested;
+      return '<div tabindex="0" role="link" class="gauge is-link" data-stat="' + title.toLowerCase() + '">' +
         '<div class="gauge-head"><span>' + title + '</span>' +
-          '<b>' + format(of.used) + '</b><span class="dim"> used of ' + format(of.allocatable) + '</span></div>' +
+          (measured ? '<b>' + format(of.used) + '</b><span class="dim"> used of ' + format(of.allocatable) + '</span>'
+            : '<b>' + format(of.allocatable) + '</b><span class="dim"> · usage not measured</span>') + '</div>' +
         '<div class="gauge-bar">' +
           '<span class="gauge-req" style="width:' + pct(of.requested).toFixed(1) + '%"></span>' +
-          '<span class="gauge-use' + (over ? ' is-over' : '') + '" style="width:' + pct(of.used).toFixed(1) + '%"></span>' +
+          (measured ? '<span class="gauge-use' + (over ? ' is-over' : '') + '" style="width:' + pct(of.used).toFixed(1) + '%"></span>' : '') +
         '</div>' +
         '<div class="gauge-foot">' +
           '<span><i class="key-req"></i>' + format(of.requested) + ' promised to pods · ' +
             Math.round((of.requested / of.allocatable) * 100) + '%</span>' +
-          '<span><i class="key-use' + (over ? ' is-over' : '') + '"></i>' +
-            Math.round((of.used / of.allocatable) * 100) + '% in use</span>' +
+          (measured ? '<span><i class="key-use' + (over ? ' is-over' : '') + '"></i>' +
+            Math.round((of.used / of.allocatable) * 100) + '% in use</span>'
+            : '<span class="dim" title="kubectl top answered nothing: the cluster has no metrics-server, or it is not ready">no metrics-server</span>') +
         '</div>' +
         '</div>';
     };
@@ -5936,7 +6703,7 @@
       var used = state.disk.used;
       var pct = (used / state.disk.total) * 100;
       var vols = data.volumes;
-      gauges += '<div class="gauge is-link" data-stat="disk">' +
+      gauges += '<div tabindex="0" role="link" class="gauge is-link" data-stat="disk">' +
         '<div class="gauge-head"><span>Disk</span><b>' + gigs(used) + '</b>' +
           '<span class="dim"> used of ' + gigs(state.disk.total) + '</span></div>' +
         '<div class="gauge-bar"><span class="gauge-use ' + (pct >= 85 ? 'is-over' : '') + '" style="width:' +
@@ -6110,7 +6877,7 @@
     return '<div class="panel-block"><h4>Needs attention <span class="dim">· healthy to look at, and not doing what it was set up to do</span></h4>' +
       '<table><tbody>' + rows.slice(0, 12).map(function (row) {
         var nav = navFor(row.node.kind);
-        return '<tr' + (nav ? ' class="is-link" data-open="' + esc(row.node.name) + '" data-open-kind="' + esc(nav) + '" data-open-namespace="' + esc(row.node.namespace || '') + '"' : '') + '>' +
+        return '<tr' + (nav ? ' class="is-link" tabindex="0" role="link" data-open="' + esc(row.node.name) + '" data-open-kind="' + esc(nav) + '" data-open-namespace="' + esc(row.node.namespace || '') + '"' : '') + '>' +
           '<td class="name"><span class="dot warn"></span>' + esc(row.node.name) + '</td>' +
           '<td class="dim">' + esc(row.node.namespace || '') + '</td>' +
           '<td class="warn-text">' + esc(row.finding.title) + '</td>' +
@@ -6128,7 +6895,7 @@
     if (!rows.length) return '';
     return '<div class="panel-block"><h4>What the cluster is complaining about</h4>' +
       '<table><tbody>' + rows.map(function (row) {
-        return '<tr class="is-link" data-reason="' + esc(row.reason) + '" title="The events that say ' + esc(row.reason) + '"><td class="warn-text">' + esc(row.reason) + '</td>' +
+        return '<tr class="is-link" tabindex="0" role="link" data-reason="' + esc(row.reason) + '" title="The events that say ' + esc(row.reason) + '"><td class="warn-text">' + esc(row.reason) + '</td>' +
           '<td class="dim">' + many(row.count) + '×</td>' +
           '<td class="dim">' + esc(row.newest) + '</td>' +
           '<td class="grow dim">' + esc(String(row.example || '').slice(0, 120)) + '</td></tr>';
@@ -6173,7 +6940,10 @@
       ? '<div class="charts one">' + chart(series, format, STAT_TITLES[focus], true) + '</div>'
       : focus === 'disk'
         ? '<p class="note">Disk is measured now rather than over time — the node exporter reports what is there, not a history of it.</p>'
-        : '<p class="note">No Prometheus in this cluster, so there is no history to draw.</p>';
+        : '<p class="note">' + (!state.prom.checked || (state.prom.found && (!state.prom.series[key] || state.prom.series[key].loading))
+          ? '<span class="spin" aria-hidden="true">◐</span> Reading its history…'
+          : state.prom.found ? 'Prometheus has nothing about this for that span.'
+          : 'No Prometheus in this cluster, so there is no history to draw.') + '</p>';
 
     $('table').innerHTML = head + statNumbers(data, focus) + over +
       '<div class="split">' + statNodes(data, focus) + statConsumers(data, focus) + '</div>';
@@ -6401,6 +7171,12 @@
     if (holdingEdit() && !force) return;
     if (!force && state.selected && selectingIn(document.querySelector('aside .detail-body'))) { heldBack.detail = true; return; }
     var chosen = state.selected;
+    // Where the reader was, if this is the same thing on the same tab drawn again.
+    var bodyWas = document.querySelector('aside .detail-body');
+    var paneKey = chosen ? chosen.uid + '|' + state.detail.tab : '';
+    var paneTop = bodyWas && paneKey && drawDetail.key === paneKey ? bodyWas.scrollTop : 0;
+    drawDetail.key = paneKey;
+    if (paneTop) setTimeout(function () { var body = document.querySelector('aside .detail-body'); if (body && drawDetail.key === paneKey && !body.scrollTop) body.scrollTop = paneTop; }, 0);
     $('body').className = 'body' + (chosen ? ' with-detail' : '');
     applyColumns();
     var existing = document.querySelector('aside');
@@ -6546,6 +7322,8 @@
 
   function actionsFor(row) {
     var buttons = [];
+    // Deleted while it was being read: there is nothing left to act on, and every button would fail saying so.
+    if (row.gone) return '<span class="dim">It is gone from the cluster. What is shown is the last that was read of it.</span>';
     if (row.kind === 'Event') return eventActions(row);
     if (row.kind === 'Release') {
       return '<button class="btn" data-do="helm-diff" title="What this revision put in the cluster">Manifest</button>' +
@@ -6553,7 +7331,8 @@
     }
     if (row.kind === 'Pod') {
       buttons.push('<button class="btn" data-do="logs">Logs</button>');
-      buttons.push('<button class="btn" data-do="shell">Shell</button>');
+      var up = row.status === 'Running';
+      buttons.push('<button class="btn" data-do="shell"' + (up ? '' : ' disabled title="It is ' + esc(row.status || 'not running') + ': there is no container to open a shell in"') + '>Shell</button>');
     }
     if (row.scalable) buttons.push('<button class="btn" data-do="scale">Scale…</button>');
     if (row.restartable) buttons.push('<button class="btn" data-do="restart">Restart</button>');
@@ -6600,9 +7379,34 @@
    * where its log and its shell are, which is where the answer was always going
    * to be.
    */
+  /**
+   * The pane's own list of pods, kept true alongside the table.
+   *
+   * It was read once per selection, so after a restart or a scale it went on
+   * listing the pods that had just been replaced, and clicking one said it was
+   * not in the list. Asked again with each refresh, and drawn only if it differs.
+   */
+  function refreshPanePods() {
+    var row = state.selected;
+    var data = state.detailData;
+    if (!row || state.detail.tab !== 'pods' || !data.pods || data.podsBusy || !row.selector) return;
+    data.podsBusy = true;
+    call('kube.list', { context: state.context, kind: 'pods', namespace: row.namespace, selector: row.selector }).then(function (result) {
+      data.podsBusy = false;
+      if (state.selected !== row || state.detailData !== data) return;
+      var mark = function (rows) { return rows.map(function (pod) { return pod.uid + pod.status + pod.ready + pod.restarts; }).join('|'); };
+      var rows = result.rows || [];
+      var same = mark(rows) === mark(data.pods);
+      data.pods = rows;
+      data.podsError = '';
+      if (!same) drawDetail();
+    }, function () { data.podsBusy = false; });
+  }
+
   function podsBody(row) {
     var pods = state.detailData.pods;
     if (!pods) return '<pre>reading…</pre>';
+    if (!pods.length && state.detailData.podsError) return '<div class="edit-note is-bad"><div class="edit-note-text">Its pods could not be read: ' + esc(state.detailData.podsError) + '</div></div>';
     if (!pods.length) return '<div class="dim">It is running no pods at all.</div>';
     var restarts = pods.reduce(function (sum, pod) { return sum + (Number(pod.restarts) || 0); }, 0);
     var unwell = pods.filter(function (pod) { return pod.health === 'bad'; }).length;
@@ -6610,7 +7414,7 @@
         (unwell ? ' · <span class="bad-text">' + unwell + ' unhealthy</span>' : ' · all healthy') +
         (restarts ? ' · ' + restarts + ' restarts between them' : '') + '</p>' +
       '<table><tbody>' + pods.map(function (pod) {
-        return '<tr class="is-link" data-open="' + esc(pod.name) + '" data-open-kind="pods"' +
+        return '<tr class="is-link" tabindex="0" role="link" data-open="' + esc(pod.name) + '" data-open-kind="pods"' +
             ' data-open-namespace="' + esc(pod.namespace || '') + '">' +
           '<td><span class="dot ' + esc(pod.health) + '"></span></td>' +
           '<td class="grow">' + esc(pod.name) + warnMark(assign({ kind: 'Pod' }, pod)) + '</td>' +
@@ -6639,7 +7443,7 @@
     return '<p class="all-well">' + jobs.length + (jobs.length === 1 ? ' run kept' : ' runs kept') +
         (failed ? ' · <span class="bad-text">' + failed + ' failed</span>' : ' · none failed') + '</p>' +
       '<table><tbody>' + jobs.map(function (job) {
-        return '<tr class="is-link" data-open="' + esc(job.name) + '" data-open-kind="jobs"' +
+        return '<tr class="is-link" tabindex="0" role="link" data-open="' + esc(job.name) + '" data-open-kind="jobs"' +
             ' data-open-namespace="' + esc(job.namespace || '') + '">' +
           '<td><span class="dot ' + esc(job.health) + '"></span></td>' +
           '<td class="grow">' + esc(job.name) + '</td>' +
@@ -7802,10 +8606,15 @@
   /** Warnings known without asking again: from the events if they are read, else from the description's own table. */
   function warningsKnown() {
     var events = state.detailData.events;
-    if (events) return events.filter(function (event) { return event.type === 'Warning'; }).length;
+    if (events) return events.filter(function (event) { return event.type === 'Warning' && !eventOver(event); }).length;
+    // Before the events are read, the map's count is the one that knows which of them are over.
+    var known = mapKnown(state.selected);
     var text = state.detailData.describe;
-    if (typeof text !== 'string') return 0;
-    return text.split('\n').filter(function (line) { return /^\s+Warning\s/.test(line); }).length;
+    var said = typeof text === 'string' ? text.split('\n').filter(function (line) { return /^\s+Warning\s/.test(line); }).length : 0;
+    if (!known) return said;
+    // The map is a few minutes old at worst. Of something that is not well, the description may know more.
+    var unwell = state.selected && (state.selected.health === 'bad' || state.selected.health === 'warn');
+    return unwell && !state.cleared[known.id] ? Math.max(warnedCount(known), said) : warnedCount(known);
   }
 
   function eventCard(event, withObject) {
@@ -7821,7 +8630,9 @@
     }
     if (event.from) meta.push('from ' + esc(event.from));
     if (!isNaN(first)) meta.push('first ' + esc(ageText(first)) + ' ago');
-    return '<div class="event' + (warn ? ' is-warn' : '') + '">' +
+    var over = eventOver(event);
+    if (over) { warn = false; meta.push(esc(over)); }
+    return '<div class="event' + (warn ? ' is-warn' : '') + (over ? ' is-past' : '') + '">' +
       '<div class="event-head"><span class="dot ' + (warn ? 'bad' : 'idle') + '"></span>' +
         '<b>' + esc(event.status || event.type) + '</b>' +
         (event.count > 1 ? '<span class="event-count" title="Said ' + event.count + ' times">×' + event.count + '</span>' : '') +
@@ -7879,13 +8690,18 @@
     var events = state.detailData.events;
     var failed = state.detailData.eventsError;
     var wide = makesThings(row);
-    var warnings = (events || []).filter(function (event) { return event.type === 'Warning'; });
-    var shown = state.eventsOnly ? warnings : (events || []);
+    var everyWarning = (events || []).filter(function (event) { return event.type === 'Warning'; });
+    var warnings = everyWarning.filter(function (event) { return !eventOver(event); });
+    var over = everyWarning.length - warnings.length;
+    var known = mapKnown(row);
+    var shown = state.eventsOnly ? everyWarning : (events || []);
     var tools = '<div class="yaml-tools is-stuck">' +
       '<span class="dim">' + (events
-        ? (warnings.length ? warnings.length + ' warning' + (warnings.length === 1 ? '' : 's') + ' · ' : '') + events.length + ' event' + (events.length === 1 ? '' : 's')
+        ? (warnings.length ? warnings.length + ' warning' + (warnings.length === 1 ? '' : 's') + ' · ' : '') + (over ? over + ' over · ' : '') + events.length + ' event' + (events.length === 1 ? '' : 's')
         : failed ? 'not read' : 'reading…') + '</span>' +
-      '<button class="btn' + (state.eventsOnly ? ' on' : '') + '" data-do="events-only" title="Only what went wrong"' + (warnings.length || state.eventsOnly ? '' : ' disabled') + '>Warnings</button>' +
+      '<button class="btn' + (state.eventsOnly ? ' on' : '') + '" data-do="events-only" title="Only what went wrong"' + (everyWarning.length || state.eventsOnly ? '' : ' disabled') + '>Warnings</button>' +
+      (warnings.length ? '<button class="btn" data-do="warnings-clear" title="Put these warnings aside. Nothing is deleted in the cluster, and anything said again is counted again.">Clear</button>' : '') +
+      (!warnings.length && wasCleared(known || { id: row.kind + '/' + (row.namespace || '') + '/' + row.name }) ? '<button class="btn" data-do="warnings-unclear" title="Count the cleared warnings again">Show again</button>' : '') +
       '<button class="btn' + (state.eventsGroup ? ' on' : '') + '" data-do="events-group" title="One line per problem, from when it began to when it was last said"' + (events && events.length ? '' : ' disabled') + '>Timeline</button>' +
       (wide ? '<button class="btn' + (state.eventsWide ? ' on' : '') + '" data-do="events-wide" ' +
         'title="Also the events of what it made — its pods, replica sets, jobs and claims — found by their names">What it made</button>' : '') +
@@ -7958,6 +8774,8 @@
     call('kube.events', at).then(function (result) {
       data.eventsBusy = false;
       if (state.selected !== row || state.detailData !== data) return;
+      // "What it made" was switched while this was on its way: this is the answer to the other question.
+      if (Boolean(at.related) !== Boolean(makesThings(row) && state.eventsWide)) { loadEvents(); return; }
       var rows = result.rows || [];
       var same = quiet && data.events && JSON.stringify(rows.map(eventKey)) === JSON.stringify(data.events.map(eventKey));
       data.events = rows;
@@ -8182,8 +9000,9 @@
         context: state.context, kind: 'pods', namespace: row.namespace, selector: row.selector,
       }).then(function (result) {
         if (state.selected === row) { state.detailData.pods = result.rows || []; drawDetail(); }
-      }).catch(function () {
-        if (state.selected === row) { state.detailData.pods = []; drawDetail(); }
+      }).catch(function (error) {
+        // Not read is not the same as none: "it is running no pods" under a refusal was a false statement.
+        if (state.selected === row) { state.detailData.pods = []; state.detailData.podsError = String(error.message || error); drawDetail(); }
       });
     }
     if (state.detail.tab === 'jobs' && !state.detailData.jobs) {
@@ -8311,6 +9130,8 @@
     if (log.id) call('kube.stopFollow', { id: log.id }).catch(function () {});
     log.id = null;
     log.following = false;
+    // Whatever is still on its way for this tab was asked for before this.
+    log.token = (log.token || 0) + 1;
   }
 
   function currentLog() { return state.logs[state.logAt] || null; }
@@ -8345,12 +9166,15 @@
     log.showingPrevious = Boolean(previous);
     log.loading = true;
     stopFollowing(log);
+    var mine = (log.token = (log.token || 0) + 1);
     log.unseen = 0;
     drawDock();
     call('kube.logs', {
       context: log.context, namespace: log.namespace, pod: log.name,
       container: log.container || undefined, tail: log.tail, previous: previous || false, timestamps: log.times,
     }).then(function (result) {
+      // Asked for something else since: this answer is about what is no longer shown.
+      if (log.token !== mine) return;
       log.loading = false;
       var text = String(result.text || '');
       log.lines = text ? text.replace(/\n$/, '').split('\n').map(function (line) { return { text: line }; }) : [];
@@ -8358,6 +9182,7 @@
       if (previous && !text.trim()) say('That container has no previous run to show.');
       drawDock(true);
     }).catch(function (error) {
+      if (log.token !== mine) return;
       log.loading = false;
       log.lines = [{ text: String(error.message || error), err: true }];
       drawDock();
@@ -8368,15 +9193,24 @@
     if (log.following) { stopFollowing(log); drawDock(); return; }
     log.following = true;
     log.showingPrevious = false;
-    log.lines = [];
+    // After a stream that ended, what it said stays: it is usually the reason it ended.
+    if (log.ended && log.lines.length) log.lines.push({ text: '— following again —', note: true });
+    else log.lines = [];
+    log.ended = false;
     log.pending = '';
     log.unseen = 0;
+    var mine = (log.token = (log.token || 0) + 1);
     drawDock(true);
     call('kube.follow', {
       context: log.context, namespace: log.namespace, pod: log.name,
       container: log.container || undefined, tail: log.tail, timestamps: log.times,
-    }).then(function (result) { log.id = result.id; })
+    }).then(function (result) {
+      // Stopped, closed or pointed elsewhere before the stream had a name: it is stopped by that name now.
+      if (log.token !== mine || !log.following || state.logs.indexOf(log) < 0) { call('kube.stopFollow', { id: result.id }).catch(function () {}); return; }
+      log.id = result.id;
+    })
       .catch(function (error) {
+        if (log.token !== mine) return;
         log.following = false;
         say(String(error.message || error), true);
         drawDock();
@@ -8492,18 +9326,21 @@
 
   /** The search term, marked where it was found. Everything else is escaped first. */
   function markUp(text, term) {
-    var safe = esc(text);
-    if (!term) return safe;
-    var needle = esc(term);
+    if (!term) return esc(text);
+    // Found in the text as it is, and escaped piece by piece: looked for in the
+    // escaped form, "amp" and "quot" were found inside every & and ".
+    var raw = String(text);
+    var low = raw.toLowerCase();
+    var needle = String(term).toLowerCase();
     var out = '';
-    var rest = safe;
-    var at = rest.toLowerCase().indexOf(needle.toLowerCase());
+    var from = 0;
+    var at = low.indexOf(needle);
     while (at >= 0) {
-      out += rest.slice(0, at) + '<mark class="hit">' + rest.slice(at, at + needle.length) + '</mark>';
-      rest = rest.slice(at + needle.length);
-      at = rest.toLowerCase().indexOf(needle.toLowerCase());
+      out += esc(raw.slice(from, at)) + '<mark class="hit">' + esc(raw.slice(at, at + needle.length)) + '</mark>';
+      from = at + needle.length;
+      at = low.indexOf(needle, from);
     }
-    return out + rest;
+    return out + esc(raw.slice(from));
   }
 
   /** Put the current hit in view and say which it is. `step` moves it first. */
@@ -8544,7 +9381,7 @@
 
     var log = currentLog();
     var tabs = state.logs.map(function (entry, at) {
-      return '<span class="dock-tab' + (at === state.logAt ? ' on' : '') + '" data-log="' + at + '">' +
+      return '<span class="dock-tab' + (at === state.logAt ? ' on' : '') + '" tabindex="0" role="tab" aria-selected="' + (at === state.logAt) + '" data-log="' + at + '">' +
         '<span class="dot ' + (entry.following ? 'ok' : 'idle') + '" title="' + (entry.following ? 'Following' : 'Not following') + '"></span>' +
         '<span class="what" title="' + esc((entry.namespace ? entry.namespace + '/' : '') + entry.name + (entry.container ? ' · ' + entry.container : '')) + '">' + esc(entry.name) + '</span>' +
         '<button class="x" data-close="' + at + '" title="Close this log" aria-label="Close">✕</button></span>';
@@ -8946,8 +9783,9 @@
     var range = event.target.closest('[data-range]');
     if (!range) return;
     state.prom.minutes = Number(range.dataset.range);
-    loadCharts(state.selected);
-    draw();
+    if (state.selected) loadCharts(state.selected);
+    if (state.view.type === 'overview' || state.view.type === 'stats') loadCharts(null);
+    draw({ keepDock: true });
   });
 
   document.addEventListener('mousedown', function (event) {
@@ -9022,7 +9860,9 @@
         log.following = false;
         log.id = null;
         if (log.pending) { log.lines.push({ text: log.pending }); log.pending = ''; }
-        log.lines.push({ text: '— the log ended —', note: true });
+        log.ended = true;
+        // Ended and failed are different things to read at the bottom of a log.
+        log.lines.push({ text: payload.code ? '— stopped (exit ' + payload.code + ') —' : '— the log ended —', note: true, err: Boolean(payload.code) });
         drawDock();
         return;
       }
@@ -9191,6 +10031,13 @@
       say('Copied ' + text.split('\n').length + ' lines.');
       return;
     }
+    if (what === 'warnings-clear-shown') {
+      var cleared = 0;
+      visible().forEach(function (row) { var node = mapKnown(row); if (warnedCount(node)) { clearWarnings(node); cleared += 1; } });
+      say('Cleared the warnings of ' + cleared + '. They are counted again if the cluster says them again.');
+      draw();
+      return;
+    }
     if (what === 'copy-table') {
       var rows = visible();
       if (!rows.length) return;
@@ -9238,24 +10085,42 @@
       var batch = 'batch-' + Date.now() + '-' + Math.random().toString(36).slice(2);
       var spread = chosen.map(function (row) { return row.namespace || ''; })
         .filter(function (ns, at, all) { return all.indexOf(ns) === at; }).length;
-      call(verb, {
-        context: state.context, namespace: first.namespace, kind: first.kind,
-        name: first.name, count: chosen.length, spread: spread, batch: batch,
-      }).then(function () {
-        var rest = chosen.slice(1).map(function (row) {
-          return call(verb, { context: state.context, namespace: row.namespace, kind: row.kind, name: row.name, count: chosen.length, spread: spread, batch: batch })
-            .then(function () { return null; })
-            .catch(function (error) { return row.name + ': ' + String(error.message || error); });
-        });
-        return Promise.all(rest).then(function (failed) {
-          var bad = failed.filter(Boolean);
-          say(bad.length
-            ? (chosen.length - bad.length) + ' of ' + chosen.length + ' done. ' + bad[0]
-            : 'All ' + chosen.length + ' done.', bad.length > 0);
-          state.picked = [];
+      if (state.bulkBusy) return;
+      state.bulkBusy = (what === 'pick-delete' ? 'Deleting ' : 'Restarting ') + chosen.length + '…';
+      drawPicked();
+      var failed = [];
+      var done = 0;
+      var askOf = function (row) {
+        return call(verb, { context: state.context, namespace: row.namespace, kind: row.kind, name: row.name, count: chosen.length, spread: spread, batch: batch });
+      };
+      var finish = function () {
+        state.bulkBusy = '';
+        state.picked = [];
+        drawPicked();
+        if (failed.length || done) {
+          say(failed.length
+            ? done + ' of ' + chosen.length + ' done. Failed: ' + failed.slice(0, 3).join('; ') + (failed.length > 3 ? ' and ' + (failed.length - 3) + ' more' : '')
+            : 'All ' + chosen.length + ' done.', failed.length > 0);
           setTimeout(function () { load(true); }, 1200);
-        });
-      }).catch(function (error) { say(String(error.message || error), true); });
+        }
+      };
+      // The first carries the question. Said no to, nothing else is asked of the cluster.
+      askOf(first).then(function () { done += 1; }, function (error) {
+        var why = String(error.message || error);
+        if (/the person said no/.test(why)) { state.bulkBusy = ''; drawPicked(); return Promise.reject(null); }
+        failed.push(first.name + ': ' + why);
+      }).then(function () {
+        // Then the rest, four at a time: forty kubectl processes at once is its own outage.
+        var rest = chosen.slice(1);
+        var next = 0;
+        var worker = function () {
+          if (next >= rest.length) return Promise.resolve();
+          var row = rest[next];
+          next += 1;
+          return askOf(row).then(function () { done += 1; }, function (error) { failed.push(row.name + ': ' + String(error.message || error)); }).then(worker);
+        };
+        return Promise.all([worker(), worker(), worker(), worker()]);
+      }).then(finish, function (stopped) { if (stopped !== null) finish(); });
       return;
     }
 
@@ -9403,6 +10268,16 @@
     if (what === 'secret-show') { state.showSecret = !state.showSecret; drawDetail(true); return; }
     if (what === 'events-group') { state.eventsGroup = !state.eventsGroup; drawDetail(); return; }
     if (what === 'events-only') { state.eventsOnly = !state.eventsOnly; drawDetail(); return; }
+    if (what === 'warnings-clear' || what === 'warnings-unclear') {
+      var about = state.selected;
+      if (!about) return;
+      // The map may not know it — a kind it does not draw — and the events in the pane are still its own.
+      var aboutNode = mapKnown(about) || { id: about.kind + '/' + (about.namespace || '') + '/' + about.name };
+      if (what === 'warnings-clear') clearWarnings(aboutNode); else unclearWarnings(aboutNode);
+      if (state.view.type === 'map') drawMap(); else drawTable();
+      drawDetail();
+      return;
+    }
     if (what === 'events-wide') {
       state.eventsWide = !state.eventsWide;
       state.detailData.events = null;
@@ -9440,8 +10315,7 @@
       call('helm.uninstall', { context: state.context, namespace: row.namespace, name: row.name })
         .then(function (result) {
           say(result.text || ('Uninstalled ' + row.name + '.'));
-          state.selected = null;
-          draw();
+          if (state.selected === row) { state.selected = null; draw(); }
           setTimeout(function () { load(true); }, 1200);
         })
         .catch(function (error) { say(String(error.message || error), true); });
@@ -9520,10 +10394,14 @@
     if (what === 'ask') {
       var input = document.getElementById('question');
       var asked = input ? input.value.trim() : '';
+      // Twice in a second is a double press, not two questions.
+      if (act.askedAt && Date.now() - act.askedAt < 1500) return;
+      act.askedAt = Date.now();
       // An event is not something to describe; the thing it is about is, with what the event said as the question.
       if (row.kind === 'Event') {
         askAbout({ kind: row.objectKind, name: row.objectName, namespace: row.namespace },
           (asked ? asked + ' — ' : 'Why did this happen, and what fixes it? ') + 'The event: ' + row.status + ': ' + row.message);
+        if (input) input.value = '';
         return;
       }
       askAbout(assign({ kind: row.kind, name: row.name, namespace: row.namespace }, {}), asked);
@@ -9954,7 +10832,11 @@
   /** The name column shows forwards; redrawn when one starts, comes up, drops or ends — not per line kubectl prints. */
   function drawTableSoon() {
     if (tableTimer) return;
-    tableTimer = setTimeout(function () { tableTimer = 0; if (state.table) drawTable(); }, 120);
+    tableTimer = setTimeout(function () {
+      tableTimer = 0;
+      if (drawHeld) { drawTableSoon(); return; }
+      if (state.table) drawTable();
+    }, 120);
   }
 
   /** `⇄ :54321` beside a name that is reachable from here right now. */
@@ -10118,15 +11000,22 @@
     if (!rows.length) { bar.innerHTML = ''; return; }
     var kind = rows[0].kind || 'object';
     var restartable = rows.every(function (row) { return row.restartable; });
-    bar.innerHTML = '<span>' + rows.length + ' ' + esc(kind) + (rows.length === 1 ? '' : 's') + ' ticked</span>' +
-      (restartable ? '<button class="btn" data-do="pick-restart">Restart them</button>' : '') +
-      '<button class="btn bad" data-do="pick-delete">Delete them</button>' +
+    // While the lot is being done, the bar says so and offers nothing: a second press was a second batch.
+    if (state.bulkBusy) {
+      bar.innerHTML = '<span role="status"><span class="spin" aria-hidden="true">◐</span> ' + esc(state.bulkBusy) + '</span>';
+      return;
+    }
+    var hidden = state.picked.length - rows.length;
+    bar.innerHTML = '<span>' + rows.length + ' ' + esc(kind) + (rows.length === 1 ? '' : 's') + ' ticked' +
+      (hidden > 0 ? ' <span class="dim" title="Ticked, and not in what is shown now. They are left alone.">· ' + hidden + ' more not shown</span>' : '') + '</span>' +
+      (restartable ? '<button class="btn" data-do="pick-restart">Restart them…</button>' : '') +
+      '<button class="btn bad" data-do="pick-delete">Delete them…</button>' +
       '<button class="btn" data-do="pick-none">Clear</button>';
   }
 
   function pickedRows() {
-    var rows = (state.table && state.table.rows) || [];
-    return rows.filter(function (row) { return state.picked.indexOf(row.uid) >= 0; });
+    // Of the rows on show: one ticked and then filtered away is not something to delete by a button that says "them".
+    return visible().slice(0, CAP).filter(function (row) { return state.picked.indexOf(row.uid) >= 0; });
   }
 
   /**
@@ -10354,6 +11243,18 @@
       }
       return;
     }
+    if (event.key === 'Escape' && document.querySelector('.row-menu')) {
+      // A menu is the nearest thing open: it goes, and what was selected before it comes back.
+      dismissMenu();
+      event.preventDefault();
+      return;
+    }
+    if (event.key === 'Escape' && event.target && event.target.id === 'search') {
+      // In the filter, Escape is about the filter: empty it, then leave it.
+      if (event.target.value) { event.target.value = ''; event.target.dispatchEvent(new Event('input', { bubbles: true })); }
+      else event.target.blur();
+      return;
+    }
     if (event.key === 'Escape') {
       // The question closes itself; this is only for what is behind it.
       if (state.selected && state.detail.tab === 'yaml' && state.editingYaml && state.yamlView !== 'edit' && !document.getElementById('prompt')) {
@@ -10378,7 +11279,8 @@
      */
     var typing = event.target && /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName || '') || (event.target && event.target.isContentEditable);
     if (typing) return;
-    if (document.getElementById('prompt')) return;
+    // Nothing behind a question, a sheet or a form answers to keys meant for it.
+    if (document.getElementById('prompt') || document.getElementById('sheet') || document.getElementById('map-form') || document.getElementById('cluster-menu')) return;
     if (event.key === '/') {
       event.preventDefault();
       $('search').focus();
@@ -10484,7 +11386,142 @@
     // the room there is now, and the handles are told where they ended up.
     applyColumns();
     drawGrips();
+    // The map is laid out for the width it had: given another, it is laid out again, once the dragging stops.
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function () { if (state.view.type === 'map' && state.map) { var view = document.getElementById('map-view'); if (view) view.dataset.drawn = ''; draw({ keepDock: true }); } }, 160);
   });
+  var resizeTimer = 0;
+
+  $('cluster').addEventListener('click', openClusterMenu);
+  // A press anywhere else, or outside the frame altogether, puts the list away.
+  document.addEventListener('mousedown', function (event) {
+    if (!document.getElementById('cluster-menu')) return;
+    if (event.target.closest && (event.target.closest('#cluster-menu') || event.target.closest('#cluster'))) return;
+    closeClusterMenu();
+  });
+  window.addEventListener('blur', closeClusterMenu);
+  // Escape puts it away wherever the focus has got to, and gives the focus back to what opened it.
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape' || !document.getElementById('cluster-menu')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeClusterMenu();
+    $('cluster').focus();
+  }, true);
+  // The app changed kubeconfig — a context removed, another made the default.
+  host.on('clusters', function () {
+    clusters.stale = true;
+    if (document.getElementById('cluster-menu')) readClusters(true);
+  });
+
+
+  /* ---------------------------------------------------------------------- *
+   * The keyboard, for everything that is pressed.
+   *
+   * A row that opens something, a heading that sorts, a card that leads
+   * somewhere: each is a thing to press, and Enter or Space presses whatever
+   * has the focus. One listener, so a new clickable thing needs only a
+   * tabindex and a role to be reachable.
+   * ---------------------------------------------------------------------- */
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    var target = event.target;
+    if (!target || !target.matches || !target.matches('[tabindex][role="link"], [tabindex][role="button"], [tabindex][role="tab"], th[tabindex]')) return;
+    event.preventDefault();
+    target.click();
+  });
+
+  /**
+   * Menus and sheets, as they appear.
+   *
+   * Every menu here is a box of buttons put on the page by whoever opens it,
+   * and there are a dozen of them. Rather than teach each one, the page is
+   * watched: a menu that arrives is given its role, kept on screen, its first
+   * item focused and its arrows wired; a sheet is made modal for the Tab key.
+   * When either goes, the focus returns to what opened it.
+   */
+  function withinView(box) {
+    var at = box.getBoundingClientRect();
+    if (at.bottom > window.innerHeight - 6) box.style.top = Math.max(6, window.innerHeight - at.height - 6) + 'px';
+    if (at.top < 6) box.style.top = '6px';
+    if (at.right > window.innerWidth - 6) box.style.left = Math.max(6, window.innerWidth - at.width - 6) + 'px';
+  }
+  var overlayOpener = null;
+  new MutationObserver(function (changes) {
+    changes.forEach(function (change) {
+      Array.prototype.forEach.call(change.addedNodes, function (node) {
+        if (node.nodeType !== 1) return;
+        if (node.classList.contains('row-menu')) {
+          var opener = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
+          node.setAttribute('role', 'menu');
+          Array.prototype.forEach.call(node.querySelectorAll('button'), function (item) { item.setAttribute('role', 'menuitem'); });
+          // Placed by whoever made it, a moment from now; then pulled back inside the frame if it fell out.
+          setTimeout(function () {
+            if (!node.isConnected) return;
+            withinView(node);
+            // Opened from the keyboard, the keyboard goes into it. Opened by the pointer, the focus is left alone.
+            if (opener && opener.matches && opener.matches(':focus-visible')) {
+              overlayOpener = opener;
+              var first = node.querySelector('button:not([disabled])');
+              if (first) first.focus();
+            }
+          }, 0);
+          node.addEventListener('keydown', function (event) {
+            if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') return;
+            var items = Array.prototype.filter.call(node.querySelectorAll('button'), function (item) { return !item.disabled; });
+            if (!items.length) return;
+            event.preventDefault();
+            var at = items.indexOf(document.activeElement);
+            var next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+              : (at + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length;
+            items[at < 0 && event.key === 'ArrowUp' ? items.length - 1 : next].focus();
+          });
+        }
+        if (node.id === 'sheet' || node.id === 'prompt') {
+          var from = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
+          var card = node.querySelector('[role="dialog"]') || node.firstElementChild || node;
+          card.setAttribute('role', 'dialog');
+          card.setAttribute('aria-modal', 'true');
+          node.sheetOpener = from;
+          node.addEventListener('keydown', function (event) {
+            if (event.key !== 'Tab') return;
+            var stops = Array.prototype.filter.call(node.querySelectorAll('button, input, select, textarea, [tabindex]'), function (one) {
+              return !one.disabled && one.tabIndex >= 0 && one.offsetParent !== null;
+            });
+            if (!stops.length) return;
+            var first = stops[0];
+            var last = stops[stops.length - 1];
+            if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+            else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+          });
+        }
+      });
+      Array.prototype.forEach.call(change.removedNodes, function (node) {
+        if (node.nodeType !== 1) return;
+        var back = node.classList.contains('row-menu') ? overlayOpener : (node.id === 'sheet' || node.id === 'prompt') ? node.sheetOpener : null;
+        if (node.classList.contains('row-menu')) overlayOpener = null;
+        // Only if the focus fell out with it; somebody who has moved on is not pulled back.
+        if (back && back.isConnected && (document.activeElement === document.body || !document.activeElement)) back.focus();
+      });
+    });
+  }).observe(document.body, { childList: true });
+
+  /** A menu put away without choosing: what was selected before it comes back. */
+  function dismissMenu() {
+    if (!document.querySelector('.row-menu')) return false;
+    var before = menuRow ? menuWas : state.selected;
+    var hadRow = Boolean(menuRow);
+    closeRowMenu();
+    if (hadRow) { state.selected = before; draw({ keepDock: true }); }
+    return true;
+  }
+  // A menu is fixed to the window; what it was opened on is not. Scrolled, resized or left, it goes.
+  document.addEventListener('scroll', function (event) {
+    if (event.target && event.target.closest && event.target.closest('.row-menu, #cluster-menu')) return;
+    dismissMenu();
+  }, { passive: true, capture: true });
+  window.addEventListener('resize', function () { dismissMenu(); closeClusterMenu(); });
+  window.addEventListener('blur', dismissMenu);
 
   host.on('theme', function () { /* the app rebuilds the frame; nothing to do here */ });
 
